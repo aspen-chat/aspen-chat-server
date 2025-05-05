@@ -1,0 +1,25 @@
+[package]
+name = "aspen-chat-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"
+argon2 = "0.5.3"
+chrono = "0.4.41"
+ciborium = "0.2.2"
+clap = { version = "4.5.37", features = ["derive"] }
+diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2"] }
+directories-next = "2.0.0"
+dotenvy = "0.15.7"
+quinn = "0.11.7"
+quinn-proto = "0.11.11"
+rcgen = "0.13.2"
+rustls = "0.23.26"
+rustls-pemfile = "2.2.0"
+serde = { version = "1.0.219", features = ["derive"] }
+tokio = { version = "1.44.2", features = ["io-util", "macros", "rt-multi-thread"] }
+tracing = "0.1.41"
+tracing-futures = "0.2.5"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.16.0", features = ["serde", "v7"] }
