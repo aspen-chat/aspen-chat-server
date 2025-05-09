@@ -1,11 +1,16 @@
+use std::sync::Arc;
+
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use server_event::ServerEvent;
+use tokio::sync::broadcast;
 
 pub mod client_event;
 pub mod server_event;
 
 macro_rules! id_type {
     ($type_name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Copy, Deserialize, Serialize, Hash)]
         #[serde(transparent)]
         pub struct $type_name(uuid::Uuid);
 
@@ -64,5 +69,39 @@ mod timestamp_serde {
         S: Serializer,
     {
         s.serialize_i64(t.timestamp_micros())
+    }
+}
+
+/// If a client misses this many messages at once it will be forcefully disconnected.
+const MAILBOX_SIZE: usize = 512;
+
+#[derive(Clone)]
+pub struct CommunityMailboxManager {
+    map: Arc<DashMap<CommunityId, broadcast::Sender<Arc<ServerEvent>>>>,
+}
+
+impl CommunityMailboxManager {
+    pub fn new() -> Self {
+        Self {
+            map: Arc::new(DashMap::default()),
+        }
+    }
+
+    pub fn subscribe_mailbox(&self, id: &CommunityId) -> broadcast::Receiver<Arc<ServerEvent>> {
+        // First try to obtain in a read-only manner.
+        let first_attempt = self.map.get(id);
+        if let Some(s) = first_attempt {
+            return s.subscribe();
+        }
+        // Someone else could have beat us to it, check again to see if it's initialized.
+        let write_lock = self.map.entry(*id);
+        match write_lock {
+            dashmap::Entry::Occupied(occupied_entry) => occupied_entry.get().subscribe(),
+            dashmap::Entry::Vacant(vacant_entry) => {
+                let (sender, receiver) = broadcast::channel(MAILBOX_SIZE);
+                vacant_entry.insert(sender);
+                receiver
+            }
+        }
     }
 }

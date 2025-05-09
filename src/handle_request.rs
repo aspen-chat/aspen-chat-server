@@ -1,32 +1,51 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::bail;
 use anyhow::{Result, anyhow};
 use argon2::PasswordVerifier;
-use diesel::{r2d2::{ConnectionManager, Pool, PooledConnection}, ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl};
-use tokio::sync::RwLock;
-use tokio::sync::broadcast;
+use diesel::{
+    ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl,
+    r2d2::{ConnectionManager, Pool, PooledConnection},
+};
+use tokio::sync::{RwLock, mpsc};
 use tracing::error;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{aspen_protocol::{client_event::{ClientEvent, Error, Login, LoginFailed, LoginSuccess, RegisterUser, ServerResponse}, server_event::ServerEvent, CommunityId, UserId}, database::schema};
+use crate::{
+    aspen_protocol::{
+        CommunityId, UserId,
+        client_event::{
+            ClientEvent, Error, Login, LoginFailed, LoginSuccess, RegisterUser, ServerResponse,
+        },
+    },
+    database::schema,
+};
 
 pub struct SessionContext {
     pub signed_in_user: Option<UserId>,
-    pub community_mail_boxes: HashMap<CommunityId, broadcast::Receiver<ServerEvent>>,
+    pub community_mailbox_subscribe_commands: mpsc::Sender<Vec<SubscribeCommand>>,
     pub connection_pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl SessionContext {
-    pub fn new(connection_pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(
+        connection_pool: Pool<ConnectionManager<PgConnection>>,
+        cm_subscribe_commands: mpsc::Sender<Vec<SubscribeCommand>>,
+    ) -> Self {
         Self {
             signed_in_user: None,
-            community_mail_boxes: HashMap::new(),
             connection_pool,
+            community_mailbox_subscribe_commands: cm_subscribe_commands,
         }
     }
+}
+
+pub struct SubscribeCommand {
+    pub community: CommunityId,
+    /// True means a subscription should be made. False means it should be
+    /// unsubscribed.
+    pub desire_subscribed: bool,
 }
 
 pub async fn handle_request(
@@ -110,10 +129,23 @@ async fn message_handling_logic(
                         .is_ok()
                     {
                         // Subscribe to relevant community mailboxes.
-                        let community_mail_boxes = todo!();
-                        let sess_context_write = session_context.write().await;
+                        use schema::community_user;
+                        let mailbox_subscriptions = community_user::table
+                            .select(community_user::community)
+                            .filter(community_user::user.eq(user_id))
+                            .load(&mut conn)?
+                            .into_iter()
+                            .map(|c: Uuid| SubscribeCommand {
+                                community: CommunityId::from(c),
+                                desire_subscribed: true,
+                            })
+                            .collect();
+                        let mut sess_context_write = session_context.write().await;
                         sess_context_write.signed_in_user = Some(user_id.into());
-                        sess_context_write.community_mail_boxes = community_mail_boxes;
+                        sess_context_write
+                            .community_mailbox_subscribe_commands
+                            .send(mailbox_subscriptions)
+                            .await;
                         ServerResponse::LoginSuccess(LoginSuccess {
                             user_id: user_id.into(),
                         })
@@ -140,6 +172,12 @@ async fn message_handling_logic(
         ClientEvent::CreateCommunity(create_community) => todo!(),
         ClientEvent::JoinCommunity(join_community) => todo!(),
         ClientEvent::LeaveCommunity(leave_community) => todo!(),
+        ClientEvent::DeleteUser(delete_user) => todo!(),
+        ClientEvent::DeleteMessage(delete_message) => todo!(),
+        ClientEvent::DeleteReact(delete_react) => todo!(),
+        ClientEvent::DeleteChannel(delete_channel) => todo!(),
+        ClientEvent::DeleteCategory(delete_category) => todo!(),
+        ClientEvent::DeleteCommunity(delete_community) => todo!(),
     };
     Ok(resp)
 }

@@ -5,18 +5,25 @@ use super::{
     UserId,
 };
 
-/// Describes events that the client notifies the server of.
+/// Describes events that the client notifies the server of. These are reliable events and will
+/// always be delivered in order.
 #[derive(Deserialize)]
 #[serde(tag = "clientEvent")]
 pub enum ClientEvent {
     Login(Login),
     RegisterUser(RegisterUser),
+    DeleteUser(DeleteUser),
     ChangePassword(ChangePassword),
     SendMessage(Message),
+    DeleteMessage(DeleteMessage),
     SendReact(React),
+    DeleteReact(DeleteReact),
     CreateChannel(CreateChannel),
+    DeleteChannel(DeleteChannel),
     CreateCategory(CreateCategory),
+    DeleteCategory(DeleteCategory),
     CreateCommunity(CreateCommunity),
+    DeleteCommunity(DeleteCommunity),
     JoinCommunity(JoinCommunity),
     LeaveCommunity(LeaveCommunity),
 }
@@ -35,6 +42,11 @@ pub struct RegisterUser {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteUser {
+    pub user_id: UserId,
+}
+
+#[derive(Deserialize)]
 pub struct ChangePassword {
     pub old_password: String,
     pub new_password: String,
@@ -48,9 +60,21 @@ pub struct Message {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteMessage {
+    pub message_id: MessageId,
+}
+
+#[derive(Deserialize)]
 pub struct React {
     pub message_id: MessageId,
     pub emoji: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteReact {
+    pub message_id: MessageId,
+    pub emoji: String,
+    pub user_id: UserId,
 }
 
 #[derive(Deserialize)]
@@ -63,13 +87,28 @@ pub struct CreateChannel {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteChannel {
+    pub channel_id: ChannelId,
+}
+
+#[derive(Deserialize)]
 pub struct CreateCategory {
     pub community: CommunityId,
 }
 
 #[derive(Deserialize)]
+pub struct DeleteCategory {
+    pub category_id: CategoryId,
+}
+
+#[derive(Deserialize)]
 pub struct CreateCommunity {
     pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteCommunity {
+    pub community_id: CommunityId,
 }
 
 #[derive(Deserialize)]

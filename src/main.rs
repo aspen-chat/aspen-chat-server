@@ -2,18 +2,25 @@
 //!
 //! Checkout the `README.md` for guidance.
 
-use std::{collections::HashMap, env, error::Error, fs, io, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    env, error::Error, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
+use aspen_protocol::CommunityMailboxManager;
 use clap::Parser;
 use diesel::{
     PgConnection,
     r2d2::{ConnectionManager, Pool},
 };
-use handle_request::SessionContext;
+use handle_request::{SessionContext, SubscribeCommand};
 use quinn_proto::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::{pin, sync::RwLock, task::JoinSet};
+use tokio::{
+    runtime,
+    sync::{RwLock, mpsc, oneshot},
+};
+use tokio_stream::{StreamExt as _, StreamMap, wrappers::BroadcastStream};
 use tracing::{error, info, info_span};
 use tracing_futures::Instrument as _;
 
@@ -88,19 +95,24 @@ fn main() {
             .finish(),
     )
     .unwrap();
+    panic::set_hook(Box::new(tracing_panic::panic_hook));
     let opt = Opt::parse();
+    let runtime = runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("unable to init tokio runtime");
     let code = {
-        if let Err(e) = run(opt) {
-            eprintln!("ERROR: {e}");
+        if let Err(e) = runtime.block_on(run(opt)) {
+            error!("ERROR: {e}");
             1
         } else {
             0
         }
     };
+    runtime.shutdown_timeout(Duration::from_secs(5));
     ::std::process::exit(code);
 }
 
-#[tokio::main]
 async fn run(options: Opt) -> Result<()> {
     let _ = dotenvy::dotenv();
     let conn_manager = ConnectionManager::<PgConnection>::new(
@@ -128,7 +140,8 @@ async fn run(options: Opt) -> Result<()> {
 
         (cert_chain, key)
     } else {
-        let dirs = directories_next::ProjectDirs::from("org", "aspen-chat", "aspen-server").unwrap();
+        let dirs =
+            directories_next::ProjectDirs::from("org", "aspen-chat", "aspen-server").unwrap();
         let path = dirs.data_local_dir();
         let cert_path = path.join("cert.der");
         let key_path = path.join("key.der");
@@ -169,8 +182,7 @@ async fn run(options: Opt) -> Result<()> {
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(0_u8.into());
 
-    let community_mailboxes = HashMap::new();
-    for community in 
+    let community_mailbox_manager = CommunityMailboxManager::new();
 
     let endpoint = quinn::Endpoint::server(server_config, options.listen)?;
     eprintln!("listening on {}", endpoint.local_addr()?);
@@ -190,9 +202,16 @@ async fn run(options: Opt) -> Result<()> {
             conn.retry().unwrap();
         } else {
             info!("accepting connection");
-            let session_context = Arc::new(RwLock::new(SessionContext::new(conn_pool.clone())));
+            let (subscribe_cmd_send, subscribe_cmd_receive) = mpsc::channel(16);
+            let session_context = Arc::new(RwLock::new(SessionContext::new(
+                conn_pool.clone(),
+                subscribe_cmd_send,
+            )));
+            let cmm = community_mailbox_manager.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(conn, session_context).await {
+                if let Err(e) =
+                    handle_connection(conn, cmm, subscribe_cmd_receive, session_context).await
+                {
                     error!("connection failed: {reason}", reason = e.to_string())
                 }
             });
@@ -204,6 +223,8 @@ async fn run(options: Opt) -> Result<()> {
 
 async fn handle_connection(
     conn: quinn::Incoming,
+    community_mailbox_manager: CommunityMailboxManager,
+    mut subscribe_cmd_recv: mpsc::Receiver<Vec<SubscribeCommand>>,
     session_context: Arc<RwLock<SessionContext>>,
 ) -> Result<()> {
     let connection = conn.await?;
@@ -217,48 +238,85 @@ async fn handle_connection(
             .protocol
             .map_or_else(|| "<none>".into(), |x| String::from_utf8_lossy(&x).into_owned())
     );
-    let mut connection_tasks = JoinSet::new();
     info!("established");
+    let (lagged_send, mut lagged_recv) = oneshot::channel();
+    // Setup event stream
+    tokio::spawn({
+        let connection = connection.clone();
+        async move {
+            let mut subscriptions = StreamMap::new();
+            loop {
+                tokio::select! {
+                    cmds = subscribe_cmd_recv.recv() => {
+                        let Some(cmds) = cmds else { break; };
+                        for cmd in cmds {
+                            if cmd.desire_subscribed {
+                                subscriptions.insert(
+                                    cmd.community,
+                                    BroadcastStream::new(community_mailbox_manager.subscribe_mailbox(&cmd.community))
+                                );
+                            } else {
+                                subscriptions.remove(&cmd.community);
+                            }
+                        }
+                    }
+                    event = subscriptions.next() => {
+                        let Some((_community, event)) = event else { break; };
+                        let Ok(event) = event else { let _ = lagged_send.send(()); break; };
+                        match connection.open_uni().await {
+                            Ok(mut send) => {
+                                let mut to_send = Vec::new();
+                                match ciborium::into_writer(&*event, &mut to_send) {
+                                    Ok(()) => {
+                                        // Send along
+                                        if let Err(e) = send.write_all(&to_send).await {
+                                            error!("failed to write server event to client {e}"); 
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("failed to serialize server event {e}");
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                error!("sending server event to client failed {e}");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
     let conn_result = async {
-        // Each stream initiated by the client constitutes a new request.
+        // Each stream initiated by the client constitutes a new request. We intentionally only
+        // process one stream at a time in the hopes that this will make delivery more in order.
         loop {
-            let stream = match connection.accept_bi().await {
-                Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                    info!("connection closed");
-                    break Ok(());
+            tokio::select! {
+                stream = connection.accept_bi() => {
+                    let stream = match stream {
+                        Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                            info!("connection closed");
+                            break Ok(());
+                        }
+                        Err(e) => {
+                            break Err(e.into());
+                        }
+                        Ok(s) => s,
+                    };
+                    let fut = handle_request::handle_request(Arc::clone(&session_context), stream);
+                    if let Err(e) = fut.await {
+                        error!("failed: {reason}", reason = e.to_string());
+                    }
                 }
-                Err(e) => {
-                    break Err(e);
+                _ = &mut lagged_recv => {
+                    break Err(anyhow!("connection not keeping up with server events, disconnecting"));
                 }
-                Ok(s) => s,
-            };
-            let fut = handle_request::handle_request(Arc::clone(&session_context), stream);
-            connection_tasks.spawn(async {
-                if let Err(e) = fut.await {
-                    error!("failed: {reason}", reason = e.to_string());
-                }
-            });
-            // Empty completed tasks from the join set to prevent uncontrolled memory growth
-            while let Some(_) = connection_tasks.try_join_next() {}
+            }
         }
     }
     .instrument(span)
     .await;
-    // Allow up to 5 seconds to complete outstanding tasks
-    let timeout = tokio::time::sleep(Duration::from_secs(5));
-    pin!(timeout);
-    loop {
-        tokio::select! {
-            _ = &mut timeout => {
-                break;
-            }
-            t = connection_tasks.join_next() => {
-                if t.is_none() {
-                    break;
-                }
-            }
-        }
-    }
     match &conn_result {
         Ok(()) => connection.close(VarInt::from_u32(0), b""),
         Err(e) => {
