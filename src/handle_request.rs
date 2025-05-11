@@ -7,6 +7,7 @@ use diesel::{
     ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl,
     r2d2::{ConnectionManager, Pool, PooledConnection},
 };
+use tokio::io::{AsyncWriteExt, AsyncWrite, AsyncRead, AsyncReadExt};
 use tokio::sync::{RwLock, mpsc};
 use tracing::error;
 use tracing::info;
@@ -48,16 +49,17 @@ pub struct SubscribeCommand {
     pub desire_subscribed: bool,
 }
 
-pub async fn handle_request(
+pub async fn handle_request<S, R>(
     session_context: Arc<RwLock<SessionContext>>,
-    (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
-) -> Result<()> {
+    (mut send, mut recv): (S, R),
+) -> Result<()> where S: AsyncWrite + Unpin, R: AsyncRead + Unpin{
+    let mut buf = Vec::new();
     let req = recv
-        .read_to_end(64 * 1024)
+        .read_to_end(64 * 1024, &mut buf)
         .await
         .map_err(|e| anyhow!("failed reading request: {}", e))?;
     // Execute the request
-    make_response(session_context, &req, &mut send)
+    make_response(session_context, &buf, &mut send)
         .await
         .unwrap_or_else(|e| {
             error!("request failed: {}", e);
@@ -67,12 +69,14 @@ pub async fn handle_request(
     Ok(())
 }
 
-pub async fn make_response(
+pub async fn make_response<S>(
     session_context: Arc<RwLock<SessionContext>>,
     input: &[u8],
-    send_stream: &mut quinn::SendStream,
-) -> Result<()> {
-    let client_event = ciborium::from_reader::<ClientEvent, _>(input)
+    send_stream: &mut S,
+) -> Result<()> 
+    where S: AsyncWrite + Unpin,
+{
+    let client_event = serde_json::from_reader::<_, ClientEvent>(input)
         .map_err(|e| anyhow!("client event read error {e}"))?;
     let conn = session_context.read().await.connection_pool.get()?;
     let resp = match message_handling_logic(session_context, client_event, conn).await {
@@ -87,8 +91,8 @@ pub async fn make_response(
             })
         }
     };
-    let mut response = Vec::new();
-    ciborium::into_writer(&resp, &mut response)?;
+    let response = 
+    serde_json::to_vec(&resp)?;
     send_stream.write_all(&response).await?;
     Ok(())
 }

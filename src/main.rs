@@ -3,7 +3,7 @@
 //! Checkout the `README.md` for guidance.
 
 use std::{
-    env, error::Error, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
+    env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,7 +14,6 @@ use diesel::{
     r2d2::{ConnectionManager, Pool},
 };
 use handle_request::{SessionContext, SubscribeCommand};
-use quinn_proto::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::{
     runtime,
@@ -24,43 +23,10 @@ use tokio_stream::{StreamExt as _, StreamMap, wrappers::BroadcastStream};
 use tracing::{error, info, info_span};
 use tracing_futures::Instrument as _;
 
-use quinn::{Endpoint, ServerConfig, VarInt};
-
 mod aspen_protocol;
+mod api;
 mod database;
 mod handle_request;
-
-/// Constructs a QUIC endpoint configured to listen for incoming connections on a certain address
-/// and port.
-///
-/// ## Returns
-///
-/// - a stream of incoming QUIC connections
-/// - server certificate serialized into DER format
-pub fn make_server_endpoint(
-    bind_addr: SocketAddr,
-) -> Result<(Endpoint, CertificateDer<'static>), Box<dyn Error + Send + Sync + 'static>> {
-    let (server_config, server_cert) = configure_server()?;
-    let endpoint = Endpoint::server(server_config, bind_addr)?;
-    Ok((endpoint, server_cert))
-}
-
-/// Returns default server configuration along with its certificate.
-fn configure_server()
--> Result<(ServerConfig, CertificateDer<'static>), Box<dyn Error + Send + Sync + 'static>> {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-    let cert_der = CertificateDer::from(cert.cert);
-    let priv_key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
-
-    let mut server_config =
-        ServerConfig::with_single_cert(vec![cert_der.clone()], priv_key.into())?;
-    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
-    transport_config.max_concurrent_uni_streams(0_u8.into());
-
-    Ok((server_config, cert_der))
-}
-
-pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"hq-29"];
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -172,20 +138,17 @@ async fn run(options: Opt) -> Result<()> {
     let mut server_crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
-    server_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
     if options.keylog {
         server_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
     }
 
-    let mut server_config =
-        quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server_crypto)?));
-    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
-    transport_config.max_concurrent_uni_streams(0_u8.into());
 
     let community_mailbox_manager = CommunityMailboxManager::new();
+    let app = api::make_router();
 
-    let endpoint = quinn::Endpoint::server(server_config, options.listen)?;
-    eprintln!("listening on {}", endpoint.local_addr()?);
+    let listener = tokio::net::TcpListener::bind(options.listen).await?;
+    info!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
 
     while let Some(conn) = endpoint.accept().await {
         if options
@@ -222,7 +185,6 @@ async fn run(options: Opt) -> Result<()> {
 }
 
 async fn handle_connection(
-    conn: quinn::Incoming,
     community_mailbox_manager: CommunityMailboxManager,
     mut subscribe_cmd_recv: mpsc::Receiver<Vec<SubscribeCommand>>,
     session_context: Arc<RwLock<SessionContext>>,
@@ -231,13 +193,7 @@ async fn handle_connection(
     let span = info_span!(
         "connection",
         remote = %connection.remote_address(),
-        protocol = %connection
-            .handshake_data()
-            .unwrap()
-            .downcast::<quinn::crypto::rustls::HandshakeData>().unwrap()
-            .protocol
-            .map_or_else(|| "<none>".into(), |x| String::from_utf8_lossy(&x).into_owned())
-    );
+            );
     info!("established");
     let (lagged_send, mut lagged_recv) = oneshot::channel();
     // Setup event stream
@@ -265,9 +221,8 @@ async fn handle_connection(
                         let Ok(event) = event else { let _ = lagged_send.send(()); break; };
                         match connection.open_uni().await {
                             Ok(mut send) => {
-                                let mut to_send = Vec::new();
-                                match ciborium::into_writer(&*event, &mut to_send) {
-                                    Ok(()) => {
+                                match serde_json::to_vec(&*event) {
+                                    Ok(to_send) => {
                                         // Send along
                                         if let Err(e) = send.write_all(&to_send).await {
                                             error!("failed to write server event to client {e}"); 
@@ -295,10 +250,6 @@ async fn handle_connection(
             tokio::select! {
                 stream = connection.accept_bi() => {
                     let stream = match stream {
-                        Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
-                            info!("connection closed");
-                            break Ok(());
-                        }
                         Err(e) => {
                             break Err(e.into());
                         }
