@@ -1,0 +1,13 @@
+[package]
+name = "message_gen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+proc-macro-error = "1.0.4"
+proc-macro2 = "1.0.95"
+quote = "1.0.40"
+syn = { version = "2.0.101", features = ["full", "parsing"] }
+
+[lib]
+proc-macro = true
