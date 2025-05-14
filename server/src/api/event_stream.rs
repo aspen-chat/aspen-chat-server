@@ -1,9 +1,19 @@
+use std::sync::Arc;
+
 use anyhow::Error;
-use axum::response::{sse::{Event, KeepAlive}, Sse};
-use futures_util::Stream;
+use axum::response::{
+    Sse,
+    sse::{Event, KeepAlive},
+};
+use futures_util::{Stream, StreamExt};
+use tokio_stream::{StreamMap, wrappers::BroadcastStream};
+
+use crate::aspen_protocol::CommunityId;
+
+use super::message_enum::server_event::ServerEvent;
 
 pub async fn event_stream() -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream = todo!();
+    let stream: StreamMap<CommunityId, BroadcastStream<Arc<ServerEvent>>> = StreamMap::new();
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream.map(|e| todo!())).keep_alive(KeepAlive::default())
 }

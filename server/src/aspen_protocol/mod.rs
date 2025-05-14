@@ -14,6 +14,12 @@ macro_rules! id_type {
         #[serde(transparent)]
         pub struct $type_name(uuid::Uuid);
 
+        impl $type_name {
+            pub fn new() -> Self {
+                Self(uuid::Uuid::now_v7())
+            }
+        }
+
         impl From<uuid::Uuid> for $type_name {
             fn from(value: uuid::Uuid) -> Self {
                 Self(value)

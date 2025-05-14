@@ -1,4 +1,8 @@
-use axum::{http::StatusCode, routing::{get, post}, Json};
+use axum::{
+    Json,
+    http::StatusCode,
+    routing::{get, post},
+};
 
 mod command_response;
 mod event_stream;
@@ -7,7 +11,9 @@ mod message_enum;
 
 use command_response::CommandResponse;
 use login::{Login, LoginResponse};
-use message_enum::{CategoryCommand, ChannelCommand, CommunityCommand, MessageCommand, ReactCommand, UserCommand};
+use message_enum::command::{
+    CategoryCommand, ChannelCommand, CommunityCommand, MessageCommand, ReactCommand, UserCommand,
+};
 
 pub(crate) fn make_router() -> axum::Router {
     axum::Router::new()
@@ -41,9 +47,17 @@ async fn user(Json(command): Json<UserCommand>) -> (StatusCode, Json<CommandResp
 
 async fn message(Json(command): Json<MessageCommand>) -> (StatusCode, Json<CommandResponse>) {
     match command {
-        MessageCommand::Create { channel_id, content, attachments } => todo!(),
+        MessageCommand::Create {
+            channel_id,
+            content,
+            attachments,
+        } => todo!(),
         MessageCommand::Read { id } => todo!(),
-        MessageCommand::Update { id, content, attachments } => todo!(),
+        MessageCommand::Update {
+            id,
+            content,
+            attachments,
+        } => todo!(),
         MessageCommand::Delete { id } => todo!(),
     }
 }
@@ -51,15 +65,29 @@ async fn message(Json(command): Json<MessageCommand>) -> (StatusCode, Json<Comma
 async fn react(Json(command): Json<ReactCommand>) -> (StatusCode, Json<CommandResponse>) {
     match command {
         ReactCommand::Create { message_id, emoji } => todo!(),
-        ReactCommand::Delete { message_id, emoji, user_id } => todo!(),
+        ReactCommand::Delete {
+            message_id,
+            emoji,
+            user_id,
+        } => todo!(),
     }
 }
 
 async fn channel(Json(command): Json<ChannelCommand>) -> (StatusCode, Json<CommandResponse>) {
     match command {
-        ChannelCommand::Create { parent_category, name, permissions, ty } => todo!(),
+        ChannelCommand::Create {
+            parent_category,
+            name,
+            permissions,
+            ty,
+        } => todo!(),
         ChannelCommand::Read { id } => todo!(),
-        ChannelCommand::Update { id, parent_category, name, permissions } => todo!(),
+        ChannelCommand::Update {
+            id,
+            parent_category,
+            name,
+            permissions,
+        } => todo!(),
         ChannelCommand::Delete { id } => todo!(),
     }
 }

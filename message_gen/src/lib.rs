@@ -1,6 +1,8 @@
 use proc_macro_error::{abort, proc_macro_error};
-use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, spanned::Spanned, Attribute, Field, Fields, ItemEnum, LitStr, MetaList};
+use quote::{ToTokens, format_ident, quote};
+use syn::{
+    Attribute, Field, Fields, ItemEnum, LitStr, MetaList, parse_macro_input, spanned::Spanned,
+};
 
 extern crate proc_macro;
 /// Based on this enum we are going to generate multiple types, none of which are the input enum.
@@ -8,12 +10,15 @@ extern crate proc_macro;
 /// *Command, these are create, read, update, and delete commands sent via HTTPS REST.
 ///
 /// ServerEvent, these describe to the client actions taken by other clients (or maybe the server)
-/// 
+///
 /// The purpose of this macro is to keep the *Command and ServerEvent types in sync, as well as reduce the toil
 /// surrounding managing four different enum variants for every record.
 #[proc_macro_attribute]
 #[proc_macro_error]
-pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn message_enum_source(
+    _attr: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let en: ItemEnum = parse_macro_input!(input);
     let mut command_enums = Vec::new();
     let mut event_variants = Vec::new();
@@ -22,15 +27,21 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
         let mut command_variants = Vec::new();
         let mut event_sub_variants = Vec::new();
         let Fields::Named(fields) = variant.fields else {
-            abort!(variant.ident.span(), "expected all enum variants to use named fields, {} does not use named fields", variant.ident);
+            abort!(
+                variant.ident.span(),
+                "expected all enum variants to use named fields, {} does not use named fields",
+                variant.ident
+            );
         };
         // At least one id field is mandatory, for some records like `react` and `community_user`, all fields could be id fields.
         let mut id_fields = Vec::new();
         let mut other_fields = Vec::new();
         let mut other_permanent_fields = Vec::new();
+        let mut server_authoritative_fields = Vec::new();
         for field in fields.named {
             let mut is_id = false;
             let mut is_permanent = false;
+            let mut is_server_authoritative = false;
             let mut is_other = true;
             for attr in our_attrs(field.attrs.iter()) {
                 let r = attr.parse_nested_meta(|meta| {
@@ -48,13 +59,16 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
                                     abort!(v.span(), "must be \"client_authoritative\" or unspecified for default server authority")
                                 }
                             }).is_ok()
-                        }); 
+                        });
                         if is_permanent {
                             abort!(meta.path.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
                         }
+                        if is_server_authoritative {
+                            abort!(meta.path.span(), "ids are implicitly server_authoritative, do not explicitly declare them server_authoritative");
+                        }
                         is_other = false;
                         is_id = true;
-                    } 
+                    }
                     if meta.path.is_ident("permanent") {
                         other_permanent_fields.push(Field {
                             attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
@@ -63,13 +77,34 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
                         if is_id {
                             abort!(meta.path.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
                         }
+                        if is_server_authoritative {
+                            abort!(meta.path.span(), "server_authoritative implies permanent, you don't need both")
+                        }
                         is_other = false;
                         is_permanent = true;
+                    }
+                    if meta.path.is_ident("server_authoritative") {
+                        server_authoritative_fields.push(Field {
+                            attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                            ..field.clone()
+                        });
+                        if is_id {
+                            abort!(meta.path.span(), "ids are implicitly server_authoritative, do not explicitly declare them server_authoritative");
+                        }
+                        if is_permanent {
+                            abort!(meta.path.span(), "server_authoritative implies permanent, you don't need both")
+                        }
+                        is_other = false;
+                        is_server_authoritative = true;
                     }
                     Ok(())
                 });
                 if let Err(e) = r {
-                    abort!(attr.span(), "message_enum_source attribute parse failed {}", e);
+                    abort!(
+                        attr.span(),
+                        "message_enum_source attribute parse failed {}",
+                        e
+                    );
                 }
             }
             if is_other {
@@ -77,20 +112,27 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
             }
         }
         if id_fields.is_empty() {
-            abort!(variant.ident.span(), "no id field found, at least one field in each variant must be annotated with #[message_enum_source(id)]")
+            abort!(
+                variant.ident.span(),
+                "no id field found, at least one field in each variant must be annotated with #[message_enum_source(id)]"
+            )
         }
 
         // TODO: Can we annotate/gather the id fields for parent records to be sent in server events? This might make
         // updating client UI easier. It can probably be managed without, though the client would likely need to retain
         // an omni-list of every ID currently in its memory to do an efficient lookup.
-        let id_fields_all = id_fields.iter().map(|id_field| { 
-            id_field.field.clone()
-        }).collect::<Vec<_>>();
+        let id_fields_all = id_fields
+            .iter()
+            .map(|id_field| id_field.field.clone())
+            .collect::<Vec<_>>();
         // Generate create variant with all fields except id fields which are server authoritative
         let client_auth_ids = id_fields.iter().filter_map(|id_field| {
-            id_field.client_authoritative.then_some(id_field.field.clone())
+            id_field
+                .client_authoritative
+                .then_some(id_field.field.clone())
         });
         command_variants.push(quote! {
+            #[serde(rename_all = "camelCase")]
             Create {
                 #(#client_auth_ids,)*
                 #(#other_fields,)*
@@ -98,8 +140,10 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
             }
         });
         event_sub_variants.push(quote! {
+            #[serde(rename_all = "camelCase")]
             Create {
                 #(#id_fields_all,)*
+                #(#server_authoritative_fields,)*
                 #(#other_fields,)*
                 #(#other_permanent_fields,)*
             }
@@ -107,35 +151,45 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
         // Generate read and update variants however, skip it if the variant has no other fields.
         if !other_fields.is_empty() {
             command_variants.push(quote! {
+                #[serde(rename_all = "camelCase")]
                 Read {
                     #(#id_fields_all,)*
                 }
             });
             // No need for a Read server event, we simply don't broadcast this.
 
-            // Generate update variant, which makes all fields optional except the id values. 
-            let other_field_attrs = other_fields.iter().map(|field| {
-                let field_attrs = &field.attrs;
-                quote! {
-                    #(#field_attrs)*
-                }
-            }).collect::<Vec<_>>();
-            let other_field_idents = other_fields.iter().map(|field| {
-                field.ident.as_ref().expect("only named fields supported")
-            }).collect::<Vec<_>>();
-            let other_field_types = other_fields.iter().map(|field| {
-                let ty = &field.ty;
-                quote! {
-                    Option<#ty>
-                }
-            }).collect::<Vec<_>>();
+            // Generate update variant, which makes all fields optional except the id values.
+            let other_field_attrs = other_fields
+                .iter()
+                .map(|field| {
+                    let field_attrs = &field.attrs;
+                    quote! {
+                        #(#field_attrs)*
+                    }
+                })
+                .collect::<Vec<_>>();
+            let other_field_idents = other_fields
+                .iter()
+                .map(|field| field.ident.as_ref().expect("only named fields supported"))
+                .collect::<Vec<_>>();
+            let other_field_types = other_fields
+                .iter()
+                .map(|field| {
+                    let ty = &field.ty;
+                    quote! {
+                        Option<#ty>
+                    }
+                })
+                .collect::<Vec<_>>();
             command_variants.push(quote! {
+                #[serde(rename_all = "camelCase")]
                 Update {
                     #(#id_fields_all,)*
                     #(#other_field_attrs #other_field_idents: #other_field_types,)*
                 }
             });
             event_sub_variants.push(quote! {
+                #[serde(rename_all = "camelCase")]
                 Update {
                     #(#id_fields_all,)*
                     #(#other_field_attrs #other_field_idents: #other_field_types,)*
@@ -144,11 +198,13 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
         }
         // Generate delete variant
         command_variants.push(quote! {
+            #[serde(rename_all = "camelCase")]
             Delete {
                 #(#id_fields_all,)*
             }
         });
         event_sub_variants.push(quote! {
+            #[serde(rename_all = "camelCase")]
             Delete {
                 #(#id_fields_all,)*
             }
@@ -156,6 +212,7 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
         let enum_ident = format_ident!("{}Command", variant.ident);
         command_enums.push(quote! {
             #[derive(::serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
             pub enum #enum_ident {
                 #(#command_variants,)*
             }
@@ -166,35 +223,54 @@ pub fn message_enum_source(_attr: proc_macro::TokenStream, input: proc_macro::To
         });
         event_variant_types.push(quote! {
             #[derive(::serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
             pub enum #variant_ident {
                 #(#event_sub_variants,)*
-            } 
+            }
         });
     }
     quote! {
-        #(#command_enums)*
-
-        #[derive(::serde::Serialize)]
-        #[serde(rename_all = "camelCase")]
-        pub enum ServerEvent {
-           #(#event_variants),* 
+        pub mod command {
+            use super::*;
+            #(#command_enums)*
         }
 
-        #(#event_variant_types)*
-    }.into_token_stream().into()
+        pub mod server_event {
+            use super::*;
+            use sub_variant::*;
+            pub mod sub_variant {
+                use super::*;
+                #(#event_variant_types)*
+            }
+            #[derive(::serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            #[serde(tag = "serverEvent")]
+            pub enum ServerEvent {
+                #(#event_variants),*
+            }
+        }
+    }
+    .into_token_stream()
+    .into()
 }
 
-fn our_attrs<'a>(attrs: impl Iterator<Item=&'a Attribute>) -> impl Iterator<Item=&'a MetaList> {
+fn our_attrs<'a>(attrs: impl Iterator<Item = &'a Attribute>) -> impl Iterator<Item = &'a MetaList> {
     attrs.filter_map(|a| {
-       a.path().is_ident("message_gen").then(|| 
-            a.meta.require_list().unwrap_or_else(|_| abort!(a.span(), "message_enum_source parameters must be a list, i.e. #[message_enum_source(id)]")))
+        a.path().is_ident("message_gen").then(|| {
+            a.meta.require_list().unwrap_or_else(|_| {
+                abort!(
+                    a.span(),
+                    "message_enum_source parameters must be a list, i.e. #[message_enum_source(id)]"
+                )
+            })
+        })
     })
 }
 
-fn not_our_attrs<'a>(attrs: impl Iterator<Item=&'a Attribute>) -> impl Iterator<Item=&'a Attribute> {
-    attrs.filter(|a| {
-        !a.path().is_ident("message_gen")
-    })
+fn not_our_attrs<'a>(
+    attrs: impl Iterator<Item = &'a Attribute>,
+) -> impl Iterator<Item = &'a Attribute> {
+    attrs.filter(|a| !a.path().is_ident("message_gen"))
 }
 
 struct IdField {

@@ -7,7 +7,7 @@ use diesel::{
     ExpressionMethods, PgConnection, QueryDsl, RunQueryDsl,
     r2d2::{ConnectionManager, Pool, PooledConnection},
 };
-use tokio::io::{AsyncWriteExt, AsyncWrite, AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{RwLock, mpsc};
 use tracing::error;
 use tracing::info;
@@ -47,54 +47,6 @@ pub struct SubscribeCommand {
     /// True means a subscription should be made. False means it should be
     /// unsubscribed.
     pub desire_subscribed: bool,
-}
-
-pub async fn handle_request<S, R>(
-    session_context: Arc<RwLock<SessionContext>>,
-    (mut send, mut recv): (S, R),
-) -> Result<()> where S: AsyncWrite + Unpin, R: AsyncRead + Unpin{
-    let mut buf = Vec::new();
-    let req = recv
-        .read_to_end(64 * 1024, &mut buf)
-        .await
-        .map_err(|e| anyhow!("failed reading request: {}", e))?;
-    // Execute the request
-    make_response(session_context, &buf, &mut send)
-        .await
-        .unwrap_or_else(|e| {
-            error!("request failed: {}", e);
-        });
-    send.finish().unwrap();
-    info!("complete");
-    Ok(())
-}
-
-pub async fn make_response<S>(
-    session_context: Arc<RwLock<SessionContext>>,
-    input: &[u8],
-    send_stream: &mut S,
-) -> Result<()> 
-    where S: AsyncWrite + Unpin,
-{
-    let client_event = serde_json::from_reader::<_, ClientEvent>(input)
-        .map_err(|e| anyhow!("client event read error {e}"))?;
-    let conn = session_context.read().await.connection_pool.get()?;
-    let resp = match message_handling_logic(session_context, client_event, conn).await {
-        Ok(value) => value,
-        Err(e) => {
-            let uuid = Uuid::now_v7().to_string();
-            error!(id = uuid, "request error {e}");
-            ServerResponse::Error(Error {
-                cause: Some(format!(
-                    "Error occurred. Error logged for server admin to review. Error ID: {uuid}"
-                )),
-            })
-        }
-    };
-    let response = 
-    serde_json::to_vec(&resp)?;
-    send_stream.write_all(&response).await?;
-    Ok(())
 }
 
 async fn message_handling_logic(

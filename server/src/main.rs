@@ -2,9 +2,7 @@
 //!
 //! Checkout the `README.md` for guidance.
 
-use std::{
-    env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
-};
+use std::{env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use aspen_protocol::CommunityMailboxManager;
@@ -17,8 +15,8 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::runtime;
 use tracing::{error, info};
 
-mod aspen_protocol;
 mod api;
+mod aspen_protocol;
 mod database;
 mod handle_request;
 
@@ -135,7 +133,6 @@ async fn run(options: Opt) -> Result<()> {
     if options.keylog {
         server_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
     }
-
 
     let community_mailbox_manager = CommunityMailboxManager::new();
     let app = api::make_router();
