@@ -60,12 +60,6 @@ pub fn message_enum_source(
                                 }
                             }).is_ok()
                         });
-                        if is_permanent {
-                            abort!(meta.path.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
-                        }
-                        if is_server_authoritative {
-                            abort!(meta.path.span(), "ids are implicitly server_authoritative, do not explicitly declare them server_authoritative");
-                        }
                         is_other = false;
                         is_id = true;
                     }
@@ -74,12 +68,6 @@ pub fn message_enum_source(
                             attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
                             ..field.clone()
                         });
-                        if is_id {
-                            abort!(meta.path.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
-                        }
-                        if is_server_authoritative {
-                            abort!(meta.path.span(), "server_authoritative implies permanent, you don't need both")
-                        }
                         is_other = false;
                         is_permanent = true;
                     }
@@ -88,12 +76,6 @@ pub fn message_enum_source(
                             attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
                             ..field.clone()
                         });
-                        if is_id {
-                            abort!(meta.path.span(), "ids are implicitly server_authoritative, do not explicitly declare them server_authoritative");
-                        }
-                        if is_permanent {
-                            abort!(meta.path.span(), "server_authoritative implies permanent, you don't need both")
-                        }
                         is_other = false;
                         is_server_authoritative = true;
                     }
@@ -106,6 +88,17 @@ pub fn message_enum_source(
                         e
                     );
                 }
+            }
+            if is_id && is_server_authoritative {
+                abort!(field.span(), "ids are implicitly server_authoritative, do not explicitly \
+                declare them server_authoritative. If you want a client_authoritative id then you \
+                can do so with `id = \"client_authoritative\"");
+            }
+            if is_permanent && is_id {
+                abort!(field.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
+            }
+            if is_permanent && is_server_authoritative {
+                abort!(field.span(), "server_authoritative implies permanent, you don't need both")
             }
             if is_other {
                 other_fields.push(field);
