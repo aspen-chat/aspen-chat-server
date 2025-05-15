@@ -141,51 +141,32 @@ pub fn message_enum_source(
                 #(#other_permanent_fields,)*
             }
         });
-        // Generate read and update variants however, skip it if the variant has no other fields.
-        if !other_fields.is_empty() {
+        // Generate Read variant for command if we have any field that isn't an ID field
+        if !other_fields.is_empty() || !server_authoritative_fields.is_empty() || !other_permanent_fields.is_empty() {
             command_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]
                 Read {
                     #(#id_fields_all,)*
                 }
             });
+        }
+        // Generate update variants however, skip it if the variant has no other fields.
+        if !other_fields.is_empty() {
             // No need for a Read server event, we simply don't broadcast this.
 
-            // Generate update variant, which makes all fields optional except the id values.
-            let other_field_attrs = other_fields
-                .iter()
-                .map(|field| {
-                    let field_attrs = &field.attrs;
-                    quote! {
-                        #(#field_attrs)*
-                    }
-                })
-                .collect::<Vec<_>>();
-            let other_field_idents = other_fields
-                .iter()
-                .map(|field| field.ident.as_ref().expect("only named fields supported"))
-                .collect::<Vec<_>>();
-            let other_field_types = other_fields
-                .iter()
-                .map(|field| {
-                    let ty = &field.ty;
-                    quote! {
-                        Option<#ty>
-                    }
-                })
-                .collect::<Vec<_>>();
+            // Generate update variant
             command_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]
                 Update {
                     #(#id_fields_all,)*
-                    #(#other_field_attrs #other_field_idents: #other_field_types,)*
+                    #(#other_fields,)*
                 }
             });
             event_sub_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]
                 Update {
                     #(#id_fields_all,)*
-                    #(#other_field_attrs #other_field_idents: #other_field_types,)*
+                    #(#other_fields,)*
                 }
             })
         }

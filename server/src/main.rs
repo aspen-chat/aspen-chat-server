@@ -5,7 +5,7 @@
 use std::{env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use aspen_protocol::CommunityMailboxManager;
+use api::CommunityMailboxManager;
 use clap::Parser;
 use diesel::{
     PgConnection,
@@ -16,7 +16,6 @@ use tokio::runtime;
 use tracing::{error, info};
 
 mod api;
-mod aspen_protocol;
 mod database;
 mod handle_request;
 
@@ -47,6 +46,7 @@ struct Opt {
 }
 
 fn main() {
+    let _ = dotenvy::dotenv();
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -72,7 +72,6 @@ fn main() {
 }
 
 async fn run(options: Opt) -> Result<()> {
-    let _ = dotenvy::dotenv();
     let conn_manager = ConnectionManager::<PgConnection>::new(
         &env::var("DATABASE_URL").expect("DATABASE_URL must be set in environment or .env file"),
     );

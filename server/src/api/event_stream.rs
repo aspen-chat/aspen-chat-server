@@ -7,8 +7,7 @@ use axum::response::{
 };
 use futures_util::{Stream, StreamExt};
 use tokio_stream::{StreamMap, wrappers::BroadcastStream};
-
-use crate::aspen_protocol::CommunityId;
+use crate::api::CommunityId;
 
 use super::message_enum::server_event::ServerEvent;
 

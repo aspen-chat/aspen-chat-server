@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::aspen_protocol::UserId;
+use crate::api::UserId;
 
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]

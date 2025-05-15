@@ -14,7 +14,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::{
-    aspen_protocol::{
+    api::{
         CommunityId, UserId,
         client_event::{
             ClientEvent, Error, Login, LoginFailed, LoginSuccess, RegisterUser, ServerResponse,

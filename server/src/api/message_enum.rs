@@ -1,10 +1,7 @@
 use chrono::Utc;
 use message_gen::message_enum_source;
-
-use crate::aspen_protocol::{
-    Attachment, CategoryId, ChannelId, ChannelPermissions, ChannelType, CommunityId, MessageId,
-    UserId,
-};
+use crate::api::{Attachment, ChannelPermissions, ChannelType};
+use crate::api::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 
 // WARNING: message_enum_source is a special macro. The below enum will not appear in the final program, but this is responsible
 // for generating all Command types, and Server events. This comment is not a doc comment. This is intentional.
@@ -14,6 +11,7 @@ enum MessageEnumSource {
         #[message_gen(id)]
         id: UserId,
         name: String,
+        icon: Option<IconId>,
     },
     Message {
         #[message_gen(id)]
@@ -56,6 +54,7 @@ enum MessageEnumSource {
         #[message_gen(id)]
         id: CommunityId,
         name: String,
+        icon: Option<IconId>,
     },
     UserCommunity {
         #[message_gen(id = "client_authoritative")]
@@ -63,6 +62,14 @@ enum MessageEnumSource {
         #[message_gen(id)]
         user: UserId,
     },
+    Icon {
+        #[message_gen(id)]
+        icon: IconId,
+        #[message_gen(permanent)]
+        data: Vec<u8>,
+        #[message_gen(permanent)]
+        mime_type: String,
+    }
 }
 
 mod timestamp_serde {
@@ -81,7 +88,7 @@ mod timestamp_serde {
 mod tests {
     use serde_json::json;
 
-    use crate::aspen_protocol::{MessageId, UserId};
+    use crate::api::{MessageId, UserId};
 
     use super::server_event::ServerEvent;
 
