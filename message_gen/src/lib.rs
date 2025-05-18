@@ -38,46 +38,61 @@ pub fn message_enum_source(
         let mut other_fields = Vec::new();
         let mut other_permanent_fields = Vec::new();
         let mut server_authoritative_fields = Vec::new();
+        // Basically exists just for the user password.
+        let mut secret_fields = Vec::new();
         for field in fields.named {
             let mut is_id = false;
             let mut is_permanent = false;
             let mut is_server_authoritative = false;
+            let mut is_secret = false;
             let mut is_other = true;
             for attr in our_attrs(field.attrs.iter()) {
                 let r = attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("id") {
-                        id_fields.push(IdField {
-                            field: Field {
+                    let ident = meta.path.get_ident().expect("unrecognized value");
+                    match ident.to_string().as_str() {
+                        "id" => {
+                            id_fields.push(IdField {
+                                field: Field {
+                                    attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                    ..field.clone()
+                                },
+                                client_authoritative: meta.value().map(|v| {
+                                    let Ok(s) = v.parse::<LitStr>() else {
+                                        abort!(v.span(), "id value must be unspecified, or \"client_authoritative\"");
+                                    };
+                                    if s.value() != "client_authoritative" {
+                                        abort!(v.span(), "must be \"client_authoritative\" or unspecified for default server authority")
+                                    }
+                                }).is_ok()
+                            });
+                            is_other = false;
+                            is_id = true;
+                        }
+                        "permanent" => {
+                            other_permanent_fields.push(Field {
                                 attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
                                 ..field.clone()
-                            },
-                            client_authoritative: meta.value().map(|v| {
-                                let Ok(s) = v.parse::<LitStr>() else {
-                                    abort!(v.span(), "id value must be unspecified, or \"client_authoritative\"");
-                                };
-                                if s.value() != "client_authoritative" {
-                                    abort!(v.span(), "must be \"client_authoritative\" or unspecified for default server authority")
-                                }
-                            }).is_ok()
-                        });
-                        is_other = false;
-                        is_id = true;
-                    }
-                    if meta.path.is_ident("permanent") {
-                        other_permanent_fields.push(Field {
-                            attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                            ..field.clone()
-                        });
-                        is_other = false;
-                        is_permanent = true;
-                    }
-                    if meta.path.is_ident("server_authoritative") {
-                        server_authoritative_fields.push(Field {
-                            attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                            ..field.clone()
-                        });
-                        is_other = false;
-                        is_server_authoritative = true;
+                            });
+                            is_other = false;
+                            is_permanent = true;
+                        }
+                        "server_authoritative" => {
+                            server_authoritative_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_server_authoritative = true;
+                        }
+                        "secret" => {
+                            secret_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_secret = true;
+                        }
+                        _ => {}
                     }
                     Ok(())
                 });
@@ -90,15 +105,42 @@ pub fn message_enum_source(
                 }
             }
             if is_id && is_server_authoritative {
-                abort!(field.span(), "ids are implicitly server_authoritative, do not explicitly \
+                abort!(
+                    field.span(),
+                    "ids are implicitly server_authoritative, do not explicitly \
                 declare them server_authoritative. If you want a client_authoritative id then you \
-                can do so with `id = \"client_authoritative\"");
+                can do so with `id = \"client_authoritative\""
+                );
             }
             if is_permanent && is_id {
-                abort!(field.span(), "ids are implicitly permanent, do not explicitly declare them permanent");
+                abort!(
+                    field.span(),
+                    "ids are implicitly permanent, do not explicitly declare them permanent"
+                );
             }
             if is_permanent && is_server_authoritative {
-                abort!(field.span(), "server_authoritative implies permanent, you don't need both")
+                abort!(
+                    field.span(),
+                    "server_authoritative implies permanent, you don't need both"
+                )
+            }
+            if is_secret && is_server_authoritative {
+                abort!(
+                    field.span(),
+                    "secret fields are always client authoritative"
+                )
+            }
+            if is_secret && is_id {
+                abort!(
+                    field.span(),
+                    "id fields are widely distributed and thus cannot be secret"
+                )
+            }
+            if is_secret && is_permanent {
+                abort!(
+                    field.span(),
+                    "the combination of secret and permanent is not implemented"
+                )
             }
             if is_other {
                 other_fields.push(field);
@@ -130,6 +172,7 @@ pub fn message_enum_source(
                 #(#client_auth_ids,)*
                 #(#other_fields,)*
                 #(#other_permanent_fields,)*
+                #(#secret_fields,)*
             }
         });
         event_sub_variants.push(quote! {
@@ -142,7 +185,10 @@ pub fn message_enum_source(
             }
         });
         // Generate Read variant for command if we have any field that isn't an ID field
-        if !other_fields.is_empty() || !server_authoritative_fields.is_empty() || !other_permanent_fields.is_empty() {
+        if !other_fields.is_empty()
+            || !server_authoritative_fields.is_empty()
+            || !other_permanent_fields.is_empty()
+        {
             command_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]
                 Read {
@@ -183,15 +229,46 @@ pub fn message_enum_source(
                 #(#id_fields_all,)*
             }
         });
-        let enum_ident = format_ident!("{}Command", variant.ident);
+        let variant_ident = &variant.ident;
+        let command_ident = format_ident!("{}Command", variant.ident);
+        let response_ident = format_ident!("{}CommandResponse", variant.ident);
+        let enum_ident = format_ident!("{}SubCommand", variant.ident);
         command_enums.push(quote! {
+            #[derive(::serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            pub struct #command_ident {
+                pub session_token: String,
+                pub subcommand: #enum_ident,
+            }
+
             #[derive(::serde::Deserialize)]
             #[serde(rename_all = "camelCase")]
             pub enum #enum_ident {
                 #(#command_variants,)*
             }
+
+            #[derive(::serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            pub enum #response_ident {
+                /// Sent in response to a Create command
+                CreateOk {
+                    #(#id_fields_all,)*
+                },
+                /// Sent in response to a Read command
+                #variant_ident {
+                    #(#server_authoritative_fields,)*
+                    #(#other_fields,)*
+                    #(#other_permanent_fields,)*
+                },
+                NotAllowed {
+                    reason: Option<String>,
+                },
+                Error {
+                    cause: Option<String>,
+                }
+            }
+
         });
-        let variant_ident = &variant.ident;
         event_variants.push(quote! {
             #variant_ident(#variant_ident)
         });

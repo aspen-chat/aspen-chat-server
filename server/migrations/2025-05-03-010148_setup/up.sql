@@ -1,7 +1,7 @@
 -- Your SQL goes here
 CREATE TABLE "user"(
 	"id" UUID NOT NULL PRIMARY KEY,
-	"name" TEXT NOT NULL
+	"name" TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE "community"(

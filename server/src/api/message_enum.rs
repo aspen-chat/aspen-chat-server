@@ -1,7 +1,7 @@
-use chrono::Utc;
-use message_gen::message_enum_source;
 use crate::api::{Attachment, ChannelPermissions, ChannelType};
 use crate::api::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
+use chrono::Utc;
+use message_gen::message_enum_source;
 
 // WARNING: message_enum_source is a special macro. The below enum will not appear in the final program, but this is responsible
 // for generating all Command types, and Server events. This comment is not a doc comment. This is intentional.
@@ -11,6 +11,8 @@ enum MessageEnumSource {
         #[message_gen(id)]
         id: UserId,
         name: String,
+        #[message_gen(secret)]
+        password: String,
         icon: Option<IconId>,
     },
     Message {
@@ -69,7 +71,7 @@ enum MessageEnumSource {
         data: Vec<u8>,
         #[message_gen(permanent)]
         mime_type: String,
-    }
+    },
 }
 
 mod timestamp_serde {

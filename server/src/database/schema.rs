@@ -60,6 +60,22 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    session (token) {
+        token -> Text,
+        expires -> Timestamp,
+        refresh_token -> Text,
+    }
+}
+
+diesel::table! {
+    refresh_token (token) {
+        token -> Text,
+        expires -> Timestamp,
+        user -> Uuid,
+    }
+}
+
 diesel::joinable!(category -> community (community));
 diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
@@ -69,6 +85,8 @@ diesel::joinable!(message -> channel (channel));
 diesel::joinable!(message -> user (author));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
+diesel::joinable!(session -> refresh_token (refresh_token));
+diesel::joinable!(refresh_token -> user (user));
 
 diesel::allow_tables_to_appear_in_same_query!(
     category,

@@ -2,22 +2,25 @@
 //!
 //! Checkout the `README.md` for guidance.
 
-use std::{env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell, env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
-use api::CommunityMailboxManager;
+use api::{CONNECTION_POOL, CommunityMailboxManager};
 use clap::Parser;
 use diesel::{
     PgConnection,
     r2d2::{ConnectionManager, Pool},
 };
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::runtime;
 use tracing::{error, info};
 
 mod api;
 mod database;
-mod handle_request;
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -43,6 +46,10 @@ struct Opt {
     /// Maximum number of concurrent connections to allow
     #[clap(long = "connection-limit")]
     connection_limit: Option<usize>,
+}
+
+thread_local! {
+    pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::from_os_rng());
 }
 
 fn main() {
@@ -72,11 +79,6 @@ fn main() {
 }
 
 async fn run(options: Opt) -> Result<()> {
-    let conn_manager = ConnectionManager::<PgConnection>::new(
-        &env::var("DATABASE_URL").expect("DATABASE_URL must be set in environment or .env file"),
-    );
-    let conn_pool = Pool::builder().build(conn_manager)?;
-
     let (certs, key) = if let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) {
         let key = fs::read(key_path).context("failed to read private key")?;
         let key = if key_path.extension().is_some_and(|x| x == "der") {

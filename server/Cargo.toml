@@ -29,3 +29,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 
 message_gen = { path = "../message_gen" }
+rand = "0.9.1"
+rand_chacha = "0.9.0"
+base64 = "0.22.1"
+diesel-async = { version = "0.5.2", features = ["deadpool", "postgres", "r2d2"] }
