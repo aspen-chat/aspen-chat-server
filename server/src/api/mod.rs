@@ -27,10 +27,7 @@ use login::{
     TokenRefresh, TokenRefreshResponse, hash_password,
 };
 use message_enum::command::{
-    CategoryCommand, CategoryCommandResponse, CategorySubCommand, ChannelCommand,
-    ChannelCommandResponse, ChannelSubCommand, CommunityCommand, CommunityCommandResponse,
-    CommunitySubCommand, MessageCommand, MessageCommandResponse, MessageSubCommand, ReactCommand,
-    ReactCommandResponse, ReactSubCommand, UserCommand, UserCommandResponse,
+    CategoryCommand, CategoryCommandResponse, CategorySubCommand, ChannelCommand, ChannelCommandResponse, ChannelSubCommand, CommunityCommand, CommunityCommandResponse, CommunitySubCommand, IconCommand, IconCommandResponse, IconSubCommand, MessageCommand, MessageCommandResponse, MessageSubCommand, ReactCommand, ReactCommandResponse, ReactSubCommand, UserCommand, UserCommandResponse
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
@@ -58,6 +55,7 @@ pub(crate) fn make_router() -> axum::Router {
         .route("/channel", post(channel))
         .route("/category", post(category))
         .route("/community", post(community))
+        .route("/icon", post(icon))
         .route("/event_stream", get(event_stream::event_stream))
 }
 
@@ -283,6 +281,14 @@ async fn community(
         CommunitySubCommand::Read { id } => todo!(),
         CommunitySubCommand::Update { id, name, icon } => todo!(),
         CommunitySubCommand::Delete { id } => todo!(),
+    }
+}
+
+async fn icon(Json(command): Json<IconCommand>) -> (StatusCode, Json<IconCommandResponse>) {
+    match command.subcommand {
+        IconSubCommand::Create { data, mime_type } => todo!(),
+        IconSubCommand::Read { id } => todo!(),
+        IconSubCommand::Delete { id } => todo!(),
     }
 }
 

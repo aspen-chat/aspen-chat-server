@@ -22,8 +22,7 @@ diesel::table! {
     community (id) {
         id -> Uuid,
         name -> Text,
-        icon -> Nullable<Bytea>,
-        icon_mime_type -> Nullable<Text>,
+        icon -> Nullable<Uuid>,
     }
 }
 
@@ -57,6 +56,7 @@ diesel::table! {
         id -> Uuid,
         name -> Text,
         password_hash -> Text,
+        icon -> Nullable<Uuid>,
     }
 }
 
@@ -76,6 +76,14 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    icon (id) {
+        id -> Uuid,
+        data -> Bytea,
+        icon_mime_type -> Text,
+    }
+}
+
 diesel::joinable!(category -> community (community));
 diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
@@ -87,6 +95,8 @@ diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(refresh_token -> user (user));
+diesel::joinable!(user -> icon (icon));
+diesel::joinable!(community -> icon (icon));
 
 diesel::allow_tables_to_appear_in_same_query!(
     category,

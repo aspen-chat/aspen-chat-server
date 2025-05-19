@@ -66,7 +66,7 @@ enum MessageEnumSource {
     },
     Icon {
         #[message_gen(id)]
-        icon: IconId,
+        id: IconId,
         #[message_gen(permanent)]
         data: Vec<u8>,
         #[message_gen(permanent)]
