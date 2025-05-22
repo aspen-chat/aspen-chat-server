@@ -8,10 +8,14 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use hyper::{body::Incoming, Request};
+use hyper_util::{rt::{TokioExecutor, TokioIo}, server};
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer}, ServerConfig};
 use tokio::runtime;
+use tokio_rustls::TlsAcceptor;
+use tower::Service as _;
 use tracing::{error, info};
 
 mod api;
@@ -29,15 +33,9 @@ struct Opt {
     /// TLS certificate in PEM format
     #[clap(short = 'c', long = "cert", requires = "key")]
     cert: Option<PathBuf>,
-    /// Enable stateless retries
-    #[clap(long = "stateless-retry")]
-    stateless_retry: bool,
     /// Address to listen on
     #[clap(long = "listen", default_value = "[::1]:4433")]
     listen: SocketAddr,
-    /// Client address to block
-    #[clap(long = "block")]
-    block: Option<SocketAddr>,
     /// Maximum number of concurrent connections to allow
     #[clap(long = "connection-limit")]
     connection_limit: Option<usize>,
@@ -123,19 +121,52 @@ async fn run(options: Opt) -> Result<()> {
         (vec![cert], key)
     };
 
-    let mut server_crypto = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-    if options.keylog {
-        server_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
-    }
+    
 
     let app = api::make_router();
 
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
-    info!("listening on {}", listener.local_addr()?);
-    // TODO: Use configured HTTPS certs/keys
-    axum::serve(listener, app).await?;
 
-    Ok(())
+    // Setup TLS config
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()]; 
+    if options.keylog {
+        server_config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+    info!("listening on {}", listener.local_addr()?);
+    loop {
+        let (socket, _remote_addr) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("TCP I/O error {e}");
+                continue;
+            }
+        };
+        let tls_acceptor = tls_acceptor.clone();
+        let service = app.clone();
+        tokio::spawn(async move {
+            let tls_stream = match tls_acceptor.accept(socket).await {
+                Ok(tls_stream) => tls_stream,
+                Err(e) => {
+                    error!("error establishing TLS {e}");
+                    return;
+                }
+            };
+            let socket = TokioIo::new(tls_stream);
+
+            let hyper_service = hyper::service::service_fn(move |request: Request<Incoming>| {
+                service.clone().call(request)
+            });
+
+            if let Err(e) = server::conn::auto::Builder::new(TokioExecutor::new())
+                .serve_connection_with_upgrades(socket, hyper_service)
+                .await {
+                    error!("failed to serve connection {e}");
+                }
+        });
+    }
 }
