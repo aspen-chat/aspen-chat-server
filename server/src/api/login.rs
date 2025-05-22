@@ -6,7 +6,7 @@ use argon2::{
 use base64::{Engine, prelude::BASE64_STANDARD};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use diesel::{ExpressionMethods as _, QueryDsl};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::StreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,13 @@ use uuid::Uuid;
 
 use crate::{
     CHACHA_RNG,
-    api::{CONNECTION_POOL, UserId},
+    api::{UserId, authenticated_user},
     database::schema,
 };
 
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
+const OTHER_SERVER_AUTH_LIFETIME: Duration = Duration::minutes(10);
 
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -43,14 +44,17 @@ pub struct Login {
     pub password: String,
 }
 
-pub async fn try_login(l: &Login) -> Result<LoginResponse, anyhow::Error> {
+pub async fn try_login(
+    mut conn: impl AsMut<AsyncPgConnection>,
+    l: &Login,
+) -> Result<LoginResponse, anyhow::Error> {
     use schema::user::dsl::*;
     let Login { username, password } = l;
-    let mut conn = CONNECTION_POOL.get().await?;
+    let conn = conn.as_mut();
     let user_entry: Result<(Uuid, String), _> = user
         .select((id, password_hash))
         .filter(name.eq(username))
-        .first(conn.as_mut())
+        .first(conn)
         .await;
     match user_entry {
         Ok((user_id, entry_password_hash)) => {
@@ -66,7 +70,7 @@ pub async fn try_login(l: &Login) -> Result<LoginResponse, anyhow::Error> {
                         refresh_token::dsl::user.eq(user_id),
                         refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
                     ))
-                    .execute(&mut conn)
+                    .execute(conn)
                     .await?;
 
                 diesel::insert_into(session::table)
@@ -75,7 +79,7 @@ pub async fn try_login(l: &Login) -> Result<LoginResponse, anyhow::Error> {
                         session::dsl::refresh_token.eq(&refresh_token),
                         session::dsl::expires.eq(session_token_expires.naive_utc()),
                     ))
-                    .execute(&mut conn)
+                    .execute(conn)
                     .await?;
 
                 Ok(LoginResponse::Ok {
@@ -139,14 +143,17 @@ pub struct TokenRefresh {
     refresh_token: String,
 }
 
-pub async fn try_token_refresh(t: &TokenRefresh) -> Result<TokenRefreshResponse, anyhow::Error> {
+pub async fn try_token_refresh(
+    mut conn: impl AsMut<AsyncPgConnection>,
+    t: &TokenRefresh,
+) -> Result<TokenRefreshResponse, anyhow::Error> {
     use schema::{refresh_token, session};
-    let mut conn = CONNECTION_POOL.get().await?;
+    let conn = conn.as_mut();
     let expires: Option<NaiveDateTime> = refresh_token::table
         .select(refresh_token::expires)
         .filter(refresh_token::dsl::token.eq(&t.refresh_token))
         .limit(1)
-        .load_stream(&mut conn)
+        .load_stream(conn)
         .await?
         .next()
         .await
@@ -171,7 +178,7 @@ pub async fn try_token_refresh(t: &TokenRefresh) -> Result<TokenRefreshResponse,
             session::dsl::expires.eq(Utc::now().naive_utc() + SESSION_TOKEN_LIFETIME),
             session::dsl::refresh_token.eq(&t.refresh_token),
         ))
-        .execute(&mut conn)
+        .execute(conn)
         .await?;
 
     Ok(TokenRefreshResponse::Ok {
@@ -193,19 +200,22 @@ pub struct Logout {
     refresh_token: String,
 }
 
-pub async fn try_logout(t: &Logout) -> Result<LogoutResponse, anyhow::Error> {
+pub async fn try_logout(
+    mut conn: impl AsMut<AsyncPgConnection>,
+    t: &Logout,
+) -> Result<LogoutResponse, anyhow::Error> {
     use schema::{refresh_token, session};
-    let mut conn = CONNECTION_POOL.get().await?;
+    let conn = conn.as_mut();
     diesel::delete(session::table)
         .filter(session::dsl::refresh_token.eq(&t.refresh_token))
-        .execute(conn.as_mut())
+        .execute(conn)
         .await?;
     // TODO: Kill any event streams associated with this refresh token
     // TODO stretch goal: If this server is ever sharded then tell the other shards to kill their event
     // streams too
     let rows_deleted = diesel::delete(refresh_token::table)
         .filter(refresh_token::dsl::token.eq(&t.refresh_token))
-        .execute(conn.as_mut())
+        .execute(conn)
         .await?;
     if rows_deleted > 0 {
         Ok(LogoutResponse::Ok)
@@ -219,8 +229,14 @@ pub async fn try_logout(t: &Logout) -> Result<LogoutResponse, anyhow::Error> {
 pub enum ChangePasswordResponse {
     Ok,
     OldPasswordIncorrect,
-    NewPasswordDoesntMeetRequirements,
+    NewPasswordDoesntMeetRequirements { cause: PasswordRequirement },
     ServerError,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PasswordRequirement {
+    Length,
 }
 
 #[derive(Deserialize)]
@@ -231,24 +247,72 @@ pub struct ChangePassword {
     new_password: String,
 }
 
+const PASSWORD_MIN_LENGTH: usize = 8;
+
 pub async fn try_change_password(
-    t: &ChangePassword,
+    mut conn: impl AsMut<AsyncPgConnection>,
+    c: &ChangePassword,
 ) -> Result<ChangePasswordResponse, anyhow::Error> {
-    let mut conn = CONNECTION_POOL.get().await?;
+    let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
         .select(schema::user::password_hash)
-        .filter(schema::user::id.eq(&t.user_id.0))
-        .first(conn.as_mut())
+        .filter(schema::user::id.eq(&c.user_id.0))
+        .first(conn)
         .await?;
-    if check_password(&t.old_password, &entry_password_hash) {
+    if check_password(&c.old_password, &entry_password_hash) {
+        if c.new_password.len() < PASSWORD_MIN_LENGTH {
+            return Ok(ChangePasswordResponse::NewPasswordDoesntMeetRequirements {
+                cause: PasswordRequirement::Length,
+            });
+        }
         let new_password_hash =
-            hash_password(&t.new_password).map_err(|e| anyhow!("hashing password failed {e}"))?;
-        diesel::update(schema::user::table.filter(schema::user::id.eq(&t.user_id.0)))
+            hash_password(&c.new_password).map_err(|e| anyhow!("hashing password failed {e}"))?;
+        diesel::update(schema::user::table.filter(schema::user::id.eq(&c.user_id.0)))
             .set(schema::user::password_hash.eq(new_password_hash))
-            .execute(conn.as_mut())
+            .execute(conn)
             .await?;
         Ok(ChangePasswordResponse::Ok)
     } else {
         Ok(ChangePasswordResponse::OldPasswordIncorrect)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherServerAuth {
+    session_token: String,
+    other_server_domain: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OtherServerAuthResponse {
+    Ok { other_server_auth_token: String },
+    InvalidToken,
+    Error,
+}
+
+pub async fn try_other_server_auth(
+    mut conn: impl AsMut<AsyncPgConnection>,
+    o: &OtherServerAuth,
+) -> Result<OtherServerAuthResponse, anyhow::Error> {
+    use schema::other_server_auth_token;
+
+    let Some(user) = authenticated_user(&mut conn, o.session_token.clone()).await? else {
+        return Ok(OtherServerAuthResponse::InvalidToken);
+    };
+    let other_server_auth_token = make_token();
+    let expires = (Utc::now() + OTHER_SERVER_AUTH_LIFETIME).naive_utc();
+    diesel::insert_into(other_server_auth_token::table)
+        .values((
+            other_server_auth_token::dsl::token.eq(other_server_auth_token.as_str()),
+            other_server_auth_token::dsl::user.eq(user.0),
+            other_server_auth_token::dsl::expires.eq(expires),
+            other_server_auth_token::dsl::domain.eq(&o.other_server_domain),
+        ))
+        .execute(conn.as_mut())
+        .await?;
+    Ok(OtherServerAuthResponse::Ok {
+        other_server_auth_token,
+    })
 }

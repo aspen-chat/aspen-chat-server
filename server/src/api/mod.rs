@@ -1,18 +1,19 @@
-use crate::{CHACHA_RNG, api::message_enum::command::UserSubCommand, database::schema};
-use argon2::{
-    PasswordHash,
-    password_hash::{Salt, SaltString},
-};
+use crate::{api::message_enum::command::UserSubCommand, database::schema};
 use axum::{
     Json,
+    extract::State,
     http::StatusCode,
     routing::{get, post},
 };
+use chrono::Utc;
 use diesel_async::{
     AsyncPgConnection, RunQueryDsl,
-    pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
+    pooled_connection::{
+        AsyncDieselConnectionManager,
+        deadpool::Pool,
+    },
 };
-use rand::Rng;
+use futures_util::{StreamExt, TryFutureExt};
 use tracing::error;
 
 mod event_stream;
@@ -21,27 +22,21 @@ mod message_enum;
 
 use crate::api::message_enum::server_event::ServerEvent;
 use dashmap::DashMap;
-use diesel::{ExpressionMethods as _, result::DatabaseErrorKind};
+use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl, result::DatabaseErrorKind};
 use login::{
     ChangePassword, ChangePasswordResponse, Login, LoginResponse, Logout, LogoutResponse,
-    TokenRefresh, TokenRefreshResponse, hash_password,
+    OtherServerAuth, OtherServerAuthResponse, TokenRefresh, TokenRefreshResponse, hash_password,
 };
 use message_enum::command::{
-    CategoryCommand, CategoryCommandResponse, CategorySubCommand, ChannelCommand, ChannelCommandResponse, ChannelSubCommand, CommunityCommand, CommunityCommandResponse, CommunitySubCommand, IconCommand, IconCommandResponse, IconSubCommand, MessageCommand, MessageCommandResponse, MessageSubCommand, ReactCommand, ReactCommandResponse, ReactSubCommand, UserCommand, UserCommandResponse
+    CategoryCommand, CategoryCommandResponse, CategorySubCommand, ChannelCommand,
+    ChannelCommandResponse, ChannelSubCommand, CommunityCommand, CommunityCommandResponse,
+    CommunitySubCommand, IconCommand, IconCommandResponse, IconSubCommand, MessageCommand,
+    MessageCommandResponse, MessageSubCommand, ReactCommand, ReactCommandResponse, ReactSubCommand,
+    UserCommand, UserCommandResponse,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
-
-pub static CONNECTION_POOL: LazyLock<Pool<AsyncPgConnection>> = LazyLock::new(|| {
-    let conn_manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(
-        &std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set in environment or .env file"),
-    );
-    Pool::builder(conn_manager)
-        .build()
-        .expect("Failed to init database connection pool")
-});
 
 pub(crate) fn make_router() -> axum::Router {
     axum::Router::new()
@@ -49,6 +44,7 @@ pub(crate) fn make_router() -> axum::Router {
         .route("/logout", post(logout))
         .route("/token_refresh", post(token_refresh))
         .route("/change_password", post(change_password))
+        .route("/other_server_login", post(other_server_login))
         .route("/user", post(user))
         .route("/message", post(message))
         .route("/react", post(react))
@@ -57,10 +53,15 @@ pub(crate) fn make_router() -> axum::Router {
         .route("/community", post(community))
         .route("/icon", post(icon))
         .route("/event_stream", get(event_stream::event_stream))
+        .with_state(GlobalServerContext::new())
 }
 
-async fn login(Json(login): Json<Login>) -> (StatusCode, Json<LoginResponse>) {
-    let resp = match login::try_login(&login).await {
+async fn login(
+    State(state): State<GlobalServerContext>,
+    Json(login): Json<Login>,
+) -> (StatusCode, Json<LoginResponse>) {
+    let conn = state.connection_pool.get().map_err(Into::into);
+    let resp = match conn.and_then(|conn| login::try_login(conn, &login)).await {
         Ok(resp) => resp,
         Err(e) => {
             error!("error during login {e}");
@@ -78,8 +79,14 @@ async fn login(Json(login): Json<Login>) -> (StatusCode, Json<LoginResponse>) {
     (status_code, resp.into())
 }
 
-async fn logout(Json(logout): Json<Logout>) -> (StatusCode, Json<LogoutResponse>) {
-    let resp = match login::try_logout(&logout).await {
+async fn logout(
+    State(state): State<GlobalServerContext>,
+    Json(logout): Json<Logout>,
+) -> (StatusCode, Json<LogoutResponse>) {
+    let conn = state.connection_pool.get().map_err(Into::into);
+    let resp = match conn.and_then(|conn| login::try_logout(conn, &logout))
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => {
             error!("error during logout {e}");
@@ -98,9 +105,13 @@ async fn logout(Json(logout): Json<Logout>) -> (StatusCode, Json<LogoutResponse>
 }
 
 async fn token_refresh(
+    State(state): State<GlobalServerContext>,
     Json(token_refresh): Json<TokenRefresh>,
 ) -> (StatusCode, Json<TokenRefreshResponse>) {
-    let resp = match login::try_token_refresh(&token_refresh).await {
+    let conn = state.connection_pool.get().map_err(Into::into);
+    let resp = match conn.and_then(|conn| login::try_token_refresh(conn, &token_refresh))
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => {
             error!("error during token refresh {e}");
@@ -119,9 +130,13 @@ async fn token_refresh(
 }
 
 async fn change_password(
+    State(state): State<GlobalServerContext>,
     Json(change_password): Json<ChangePassword>,
 ) -> (StatusCode, Json<ChangePasswordResponse>) {
-    let resp = match login::try_change_password(&change_password).await {
+    let conn = state.connection_pool.get().map_err(Into::into);
+    let resp = match conn.and_then(|conn| login::try_change_password(conn, &change_password))
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => {
             error!("error during change password {e}");
@@ -134,14 +149,44 @@ async fn change_password(
     let status_code = match &resp {
         login::ChangePasswordResponse::Ok { .. } => StatusCode::OK,
         login::ChangePasswordResponse::OldPasswordIncorrect => StatusCode::UNAUTHORIZED,
-        login::ChangePasswordResponse::NewPasswordDoesntMeetRequirements => StatusCode::BAD_REQUEST,
+        login::ChangePasswordResponse::NewPasswordDoesntMeetRequirements { .. } => {
+            StatusCode::BAD_REQUEST
+        }
         login::ChangePasswordResponse::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status_code, resp.into())
 }
 
-async fn user(Json(command): Json<UserCommand>) -> (StatusCode, Json<UserCommandResponse>) {
-    let mut conn = match CONNECTION_POOL.get().await {
+async fn other_server_login(
+    State(state): State<GlobalServerContext>,
+    Json(other_server_auth): Json<OtherServerAuth>,
+) -> (StatusCode, Json<OtherServerAuthResponse>) {
+    let conn = state.connection_pool.get().map_err(Into::into);
+    let resp = match conn.and_then(|conn| login::try_other_server_auth(conn, &other_server_auth))
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("error during other_server_auth_token {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                OtherServerAuthResponse::Error.into(),
+            );
+        }
+    };
+    let status_code = match &resp {
+        OtherServerAuthResponse::Ok { .. } => StatusCode::OK,
+        OtherServerAuthResponse::InvalidToken => StatusCode::BAD_REQUEST,
+        OtherServerAuthResponse::Error => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status_code, resp.into())
+}
+
+async fn user(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<UserCommand>,
+) -> (StatusCode, Json<UserCommandResponse>) {
+    let mut conn = match state.connection_pool.get().await {
         Ok(conn) => conn,
         Err(e) => {
             error!("unable to get a database connection from pool {e}");
@@ -212,6 +257,7 @@ async fn user(Json(command): Json<UserCommand>) -> (StatusCode, Json<UserCommand
 }
 
 async fn message(
+    State(state): State<GlobalServerContext>,
     Json(command): Json<MessageCommand>,
 ) -> (StatusCode, Json<MessageCommandResponse>) {
     match command.subcommand {
@@ -230,7 +276,10 @@ async fn message(
     }
 }
 
-async fn react(Json(command): Json<ReactCommand>) -> (StatusCode, Json<ReactCommandResponse>) {
+async fn react(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<ReactCommand>,
+) -> (StatusCode, Json<ReactCommandResponse>) {
     match command.subcommand {
         ReactSubCommand::Create { message_id, emoji } => todo!(),
         ReactSubCommand::Delete {
@@ -242,6 +291,7 @@ async fn react(Json(command): Json<ReactCommand>) -> (StatusCode, Json<ReactComm
 }
 
 async fn channel(
+    State(state): State<GlobalServerContext>,
     Json(command): Json<ChannelCommand>,
 ) -> (StatusCode, Json<ChannelCommandResponse>) {
     match command.subcommand {
@@ -263,6 +313,7 @@ async fn channel(
 }
 
 async fn category(
+    State(state): State<GlobalServerContext>,
     Json(command): Json<CategoryCommand>,
 ) -> (StatusCode, Json<CategoryCommandResponse>) {
     match command.subcommand {
@@ -274,6 +325,7 @@ async fn category(
 }
 
 async fn community(
+    State(state): State<GlobalServerContext>,
     Json(command): Json<CommunityCommand>,
 ) -> (StatusCode, Json<CommunityCommandResponse>) {
     match command.subcommand {
@@ -284,7 +336,10 @@ async fn community(
     }
 }
 
-async fn icon(Json(command): Json<IconCommand>) -> (StatusCode, Json<IconCommandResponse>) {
+async fn icon(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<IconCommand>,
+) -> (StatusCode, Json<IconCommandResponse>) {
     match command.subcommand {
         IconSubCommand::Create { data, mime_type } => todo!(),
         IconSubCommand::Read { id } => todo!(),
@@ -361,6 +416,53 @@ mod timestamp_serde {
         S: Serializer,
     {
         s.serialize_i64(t.timestamp_micros())
+    }
+}
+
+pub async fn authenticated_user(
+    mut conn: impl AsMut<AsyncPgConnection>,
+    session_token: String,
+) -> Result<Option<UserId>, anyhow::Error> {
+    use schema::{refresh_token, session};
+
+    let now = Utc::now().naive_utc();
+    let maybe_user_id = session::table
+        .inner_join(refresh_token::table)
+        .select(refresh_token::dsl::user)
+        .filter(
+            session::token
+                .eq(session_token)
+                .and(session::expires.ge(now))
+                .and(refresh_token::expires.ge(now)),
+        )
+        .limit(1)
+        .load_stream::<uuid::Uuid>(conn.as_mut())
+        .await?
+        .next()
+        .await
+        .transpose()?
+        .map(UserId::from);
+    Ok(maybe_user_id)
+}
+
+#[derive(Clone)]
+pub struct GlobalServerContext {
+    pub connection_pool: Pool<AsyncPgConnection>,
+}
+
+impl GlobalServerContext {
+    pub fn new() -> Self {
+        Self {
+            connection_pool: {
+                let conn_manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(
+                    &std::env::var("DATABASE_URL")
+                        .expect("DATABASE_URL must be set in environment or .env file"),
+                );
+                Pool::builder(conn_manager)
+                    .build()
+                    .expect("Failed to init database connection pool")
+            },
+        }
     }
 }
 

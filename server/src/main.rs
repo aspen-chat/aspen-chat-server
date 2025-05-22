@@ -3,16 +3,11 @@
 //! Checkout the `README.md` for guidance.
 
 use std::{
-    cell::RefCell, env, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
+    cell::RefCell, fs, io, net::SocketAddr, panic, path::PathBuf, sync::Arc, time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use api::{CONNECTION_POOL, CommunityMailboxManager};
 use clap::Parser;
-use diesel::{
-    PgConnection,
-    r2d2::{ConnectionManager, Pool},
-};
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -135,7 +130,6 @@ async fn run(options: Opt) -> Result<()> {
         server_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
     }
 
-    let community_mailbox_manager = CommunityMailboxManager::new();
     let app = api::make_router();
 
     let listener = tokio::net::TcpListener::bind(options.listen).await?;

@@ -77,6 +77,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    other_server_auth_token (token) {
+        token -> Text,
+        expires -> Timestamp,
+        user -> Uuid,
+        domain -> Text,
+    }
+}
+
+diesel::table! {
     icon (id) {
         id -> Uuid,
         data -> Bytea,
@@ -95,6 +104,7 @@ diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(refresh_token -> user (user));
+diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(user -> icon (icon));
 diesel::joinable!(community -> icon (icon));
 
@@ -106,4 +116,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     message,
     react,
     user,
+    session,
+    refresh_token,
+    other_server_auth_token,
+    icon
 );
