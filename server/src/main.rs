@@ -8,11 +8,17 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use hyper::{body::Incoming, Request};
-use hyper_util::{rt::{TokioExecutor, TokioIo}, server};
+use hyper::{Request, body::Incoming};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server,
+};
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-use rustls::{pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer}, ServerConfig};
+use rustls::{
+    ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+};
 use tokio::runtime;
 use tokio_rustls::TlsAcceptor;
 use tower::Service as _;
@@ -121,8 +127,6 @@ async fn run(options: Opt) -> Result<()> {
         (vec![cert], key)
     };
 
-    
-
     let app = api::make_router();
 
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
@@ -131,7 +135,7 @@ async fn run(options: Opt) -> Result<()> {
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()]; 
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
     if options.keylog {
         server_config.key_log = Arc::new(rustls::KeyLogFile::new());
     }
@@ -164,9 +168,10 @@ async fn run(options: Opt) -> Result<()> {
 
             if let Err(e) = server::conn::auto::Builder::new(TokioExecutor::new())
                 .serve_connection_with_upgrades(socket, hyper_service)
-                .await {
-                    error!("failed to serve connection {e}");
-                }
+                .await
+            {
+                error!("failed to serve connection {e}");
+            }
         });
     }
 }

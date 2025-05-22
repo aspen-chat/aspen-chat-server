@@ -8,10 +8,7 @@ use axum::{
 use chrono::Utc;
 use diesel_async::{
     AsyncPgConnection, RunQueryDsl,
-    pooled_connection::{
-        AsyncDieselConnectionManager,
-        deadpool::Pool,
-    },
+    pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
 use futures_util::{StreamExt, TryFutureExt};
 use tracing::error;
@@ -84,9 +81,7 @@ async fn logout(
     Json(logout): Json<Logout>,
 ) -> (StatusCode, Json<LogoutResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);
-    let resp = match conn.and_then(|conn| login::try_logout(conn, &logout))
-        .await
-    {
+    let resp = match conn.and_then(|conn| login::try_logout(conn, &logout)).await {
         Ok(resp) => resp,
         Err(e) => {
             error!("error during logout {e}");
@@ -109,7 +104,8 @@ async fn token_refresh(
     Json(token_refresh): Json<TokenRefresh>,
 ) -> (StatusCode, Json<TokenRefreshResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);
-    let resp = match conn.and_then(|conn| login::try_token_refresh(conn, &token_refresh))
+    let resp = match conn
+        .and_then(|conn| login::try_token_refresh(conn, &token_refresh))
         .await
     {
         Ok(resp) => resp,
@@ -134,7 +130,8 @@ async fn change_password(
     Json(change_password): Json<ChangePassword>,
 ) -> (StatusCode, Json<ChangePasswordResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);
-    let resp = match conn.and_then(|conn| login::try_change_password(conn, &change_password))
+    let resp = match conn
+        .and_then(|conn| login::try_change_password(conn, &change_password))
         .await
     {
         Ok(resp) => resp,
@@ -162,7 +159,8 @@ async fn other_server_login(
     Json(other_server_auth): Json<OtherServerAuth>,
 ) -> (StatusCode, Json<OtherServerAuthResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);
-    let resp = match conn.and_then(|conn| login::try_other_server_auth(conn, &other_server_auth))
+    let resp = match conn
+        .and_then(|conn| login::try_other_server_auth(conn, &other_server_auth))
         .await
     {
         Ok(resp) => resp,
