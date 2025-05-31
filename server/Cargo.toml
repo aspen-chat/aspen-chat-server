@@ -37,3 +37,4 @@ hyper = { version = "1.6.0", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "server-auto", "server-graceful"] }
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }
 tokio-rustls = "0.26.2"
+async-nats = { version = "0.41.0", features = ["aws-lc-rs", "server_2_10", "server_2_11"], default-features = false }
