@@ -114,6 +114,8 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
+    // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
+    // a server reboot to start using the new cert and key.
     let (certs, key) = if let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) {
         let key = fs::read(key_path).context("failed to read private key")?;
         let key = if key_path.extension().is_some_and(|x| x == "der") {
