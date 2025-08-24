@@ -1,4 +1,4 @@
-use crate::{api::message_enum::command::UserSubCommand, database::schema};
+use crate::{api::message_enum::command::UserSubCommand, aspen_config::aspen_config, database::schema, nats_connection_manager::NatsConnectionManager};
 use axum::{
     Json,
     extract::State,
@@ -33,9 +33,9 @@ use message_enum::command::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
-pub(crate) fn make_router() -> axum::Router {
+pub(crate) async fn make_router() -> axum::Router {
     axum::Router::new()
         .route("/login", post(login))
         .route("/logout", post(logout))
@@ -50,7 +50,7 @@ pub(crate) fn make_router() -> axum::Router {
         .route("/community", post(community))
         .route("/icon", post(icon))
         .route("/event_stream", get(event_stream::event_stream))
-        .with_state(GlobalServerContext::new())
+        .with_state(GlobalServerContext::new().await)
 }
 
 async fn login(
@@ -446,20 +446,22 @@ pub async fn authenticated_user(
 #[derive(Clone)]
 pub struct GlobalServerContext {
     pub connection_pool: Pool<AsyncPgConnection>,
+    pub nats_connection_manager: Arc<RwLock<NatsConnectionManager>>,
 }
 
 impl GlobalServerContext {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
+        let config = aspen_config().await;
         Self {
             connection_pool: {
                 let conn_manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(
-                    &std::env::var("DATABASE_URL")
-                        .expect("DATABASE_URL must be set in environment or .env file"),
+                    config.database_url
                 );
                 Pool::builder(conn_manager)
                     .build()
                     .expect("Failed to init database connection pool")
             },
+            nats_connection_manager: Arc::new(RwLock::new(NatsConnectionManager::new(todo!()))),
         }
     }
 }
@@ -467,54 +469,14 @@ impl GlobalServerContext {
 /// If a client misses this many messages at once it will be forcefully disconnected.
 const MAILBOX_SIZE: usize = 512;
 
-#[derive(Clone)]
-pub struct CommunityMailboxManager {
-    map: Arc<DashMap<CommunityId, broadcast::Sender<Arc<ServerEvent>>>>,
-}
-
-impl CommunityMailboxManager {
-    pub fn new() -> Self {
-        Self {
-            map: Arc::new(DashMap::default()),
-        }
-    }
-
-    pub fn subscribe_mailbox(&self, id: &CommunityId) -> broadcast::Receiver<Arc<ServerEvent>> {
-        // First try to obtain in a read-only manner.
-        let first_attempt = self.map.get(id);
-        if let Some(s) = first_attempt {
-            return s.subscribe();
-        }
-        // Someone else could have beat us to it, check again to see if it's initialized.
-        let write_lock = self.map.entry(*id);
-        match write_lock {
-            dashmap::Entry::Occupied(occupied_entry) => occupied_entry.get().subscribe(),
-            dashmap::Entry::Vacant(vacant_entry) => {
-                let (sender, receiver) = broadcast::channel(MAILBOX_SIZE);
-                vacant_entry.insert(sender);
-                receiver
-            }
-        }
-    }
-}
-
 pub struct SessionContext {
     pub signed_in_user: Option<UserId>,
-    pub community_mailbox_subscribe_commands: mpsc::Sender<Vec<SubscribeCommand>>,
 }
 
 impl SessionContext {
-    pub fn new(cm_subscribe_commands: mpsc::Sender<Vec<SubscribeCommand>>) -> Self {
+    pub fn new() -> Self {
         Self {
             signed_in_user: None,
-            community_mailbox_subscribe_commands: cm_subscribe_commands,
         }
     }
-}
-
-pub struct SubscribeCommand {
-    pub community: CommunityId,
-    /// True means a subscription should be made. False means it should be
-    /// unsubscribed.
-    pub desire_subscribed: bool,
 }

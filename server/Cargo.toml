@@ -13,7 +13,6 @@ ctrlc = { version = "3.4.6", features = ["termination"] }
 dashmap = "6.1.0"
 diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2"] }
 directories-next = "2.0.0"
-dotenvy = "0.15.7"
 futures-util = "0.3.31"
 rcgen = "0.13.2"
 rustls = "0.23.26"
@@ -38,3 +37,5 @@ hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "serv
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }
 tokio-rustls = "0.26.2"
 async-nats = { version = "0.41.0", features = ["aws-lc-rs", "server_2_10", "server_2_11"], default-features = false }
+bytes = "1.10.1"
+config = { version = "0.15.14", features = ["toml"] }

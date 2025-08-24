@@ -36,7 +36,9 @@ use tower::Service as _;
 use tracing::{error, info, level_filters::LevelFilter, warn};
 
 mod api;
+mod aspen_config;
 mod database;
+mod nats_connection_manager;
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -73,7 +75,10 @@ thread_local! {
 }
 
 fn main() {
-    let _ = dotenvy::dotenv();
+    if let Err(e) = aspen_config::load_config() {
+        eprintln!("failed to load config from aspen.toml or environment. {e}");
+        ::std::process::exit(2);
+    }
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
             .with_env_filter(
@@ -165,7 +170,7 @@ async fn run(options: Opt) -> Result<()> {
         (vec![cert], key)
     };
 
-    let app = api::make_router();
+    let app = api::make_router().await;
     let tls_acceptor = (!options.no_https)
         .then(|| -> Result<TlsAcceptor> {
             // Setup TLS config
