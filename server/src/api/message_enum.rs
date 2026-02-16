@@ -1,5 +1,5 @@
 use crate::api::{Attachment, ChannelPermissions, ChannelType};
-use crate::api::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
+use crate::app::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
 use message_gen::message_enum_source;
 
@@ -44,6 +44,7 @@ enum MessageEnumSource {
         permissions: ChannelPermissions,
         #[message_gen(permanent)]
         ty: ChannelType,
+        sort_index: u32,
     },
     Category {
         #[message_gen(id)]
@@ -51,6 +52,7 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         community: CommunityId,
         name: String,
+        sort_index: u32,
     },
     Community {
         #[message_gen(id)]
@@ -90,7 +92,7 @@ mod timestamp_serde {
 mod tests {
     use serde_json::json;
 
-    use crate::api::{MessageId, UserId};
+    use crate::app::{MessageId, UserId};
 
     use super::server_event::ServerEvent;
 

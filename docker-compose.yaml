@@ -1,0 +1,21 @@
+# Not appropriate for production use cases
+services:
+  database:
+    image: postgres:alpine
+    volumes:
+      - db:/data/postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: aspen_test
+      PGDATA: /data/postgress
+    ports:
+      - "5432:5432"
+  nats:
+    image: nats:alpine
+    command: --jetstream --auth aspen_test
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+      - "6222:6222"
+volumes:
+  db:

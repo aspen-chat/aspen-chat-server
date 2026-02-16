@@ -20,11 +20,10 @@ pub fn message_enum_source(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let en: ItemEnum = parse_macro_input!(input);
-    let mut command_enums = Vec::new();
+    let mut command_structs = Vec::new();
     let mut event_variants = Vec::new();
     let mut event_variant_types = Vec::new();
     for variant in en.variants {
-        let mut command_variants = Vec::new();
         let mut event_sub_variants = Vec::new();
         let Fields::Named(fields) = variant.fields else {
             abort!(
@@ -166,13 +165,34 @@ pub fn message_enum_source(
                 .client_authoritative
                 .then_some(id_field.field.clone())
         });
-        command_variants.push(quote! {
+        let variant_ident = &variant.ident;
+        let create_command_ident = format_ident!("{}CreateCommand", variant.ident);
+        let create_command_response_ident = format_ident!("{}CreateCommandResponse", variant.ident);
+        command_structs.push(quote! {
+            #[derive(::serde::Deserialize)]
             #[serde(rename_all = "camelCase")]
-            Create {
-                #(#client_auth_ids,)*
-                #(#other_fields,)*
-                #(#other_permanent_fields,)*
-                #(#secret_fields,)*
+            pub struct #create_command_ident {
+                #(pub #client_auth_ids,)*
+                #(pub #other_fields,)*
+                #(pub #other_permanent_fields,)*
+                #(pub #secret_fields,)*
+            }
+
+            #[derive(::serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            pub enum #create_command_response_ident {
+                CreateOk {
+                    #(#id_fields_all,)*
+                    #(#other_fields,)*
+                    #(#other_permanent_fields,)*
+                    #(#server_authoritative_fields,)*
+                },
+                NotAllowed {
+                    reason: Option<String>,
+                },
+                Error {
+                    cause: Option<String>,
+                }
             }
         });
         event_sub_variants.push(quote! {
@@ -189,23 +209,56 @@ pub fn message_enum_source(
             || !server_authoritative_fields.is_empty()
             || !other_permanent_fields.is_empty()
         {
-            command_variants.push(quote! {
+            let read_command_ident = format_ident!("{}ReadCommand", variant.ident);
+            let read_command_response_ident = format_ident!("{}ReadCommandResponse", variant.ident);
+            command_structs.push(quote! {
+                #[derive(::serde::Deserialize)]
                 #[serde(rename_all = "camelCase")]
-                Read {
-                    #(#id_fields_all,)*
+                pub struct #read_command_ident {
+                    #(pub #id_fields_all,)*
+                }
+
+                #[derive(::serde::Serialize)]
+                #[serde(rename_all = "camelCase")]
+                pub enum #read_command_response_ident {
+                    #variant_ident {
+                        #(#server_authoritative_fields,)*
+                        #(#other_fields,)*
+                        #(#other_permanent_fields,)*
+                    },
+                    NotAllowed {
+                        reason: Option<String>,
+                    },
+                    Error {
+                        cause: Option<String>,
+                    }
                 }
             });
         }
         // Generate update variants however, skip it if the variant has no other fields.
         if !other_fields.is_empty() {
             // No need for a Read server event, we simply don't broadcast this.
-
+            let update_command_ident = format_ident!("{}UpdateCommand", variant.ident);
+            let update_command_response_ident = format_ident!("{}UpdateCommandResponse", variant.ident);
             // Generate update variant
-            command_variants.push(quote! {
+            command_structs.push(quote! {
+                #[derive(::serde::Deserialize)]
                 #[serde(rename_all = "camelCase")]
-                Update {
-                    #(#id_fields_all,)*
-                    #(#other_fields,)*
+                pub struct #update_command_ident {
+                    #(pub #id_fields_all,)*
+                    #(pub #other_fields,)*
+                }
+
+                #[derive(::serde::Serialize)]
+                #[serde(rename_all = "camelCase")]
+                pub enum #update_command_response_ident {
+                    UpdateOk,
+                    NotAllowed {
+                        reason: Option<String>,
+                    },
+                    Error {
+                        cause: Option<String>,
+                    }
                 }
             });
             event_sub_variants.push(quote! {
@@ -217,49 +270,19 @@ pub fn message_enum_source(
             })
         }
         // Generate delete variant
-        command_variants.push(quote! {
-            #[serde(rename_all = "camelCase")]
-            Delete {
-                #(#id_fields_all,)*
-            }
-        });
-        event_sub_variants.push(quote! {
-            #[serde(rename_all = "camelCase")]
-            Delete {
-                #(#id_fields_all,)*
-            }
-        });
-        let variant_ident = &variant.ident;
-        let command_ident = format_ident!("{}Command", variant.ident);
-        let response_ident = format_ident!("{}CommandResponse", variant.ident);
-        let enum_ident = format_ident!("{}SubCommand", variant.ident);
-        command_enums.push(quote! {
+        let delete_command_ident = format_ident!("{}DeleteCommand", variant.ident);
+        let delete_command_response_ident = format_ident!("{}DeleteCommandResponse", variant.ident);
+        command_structs.push(quote! {
             #[derive(::serde::Deserialize)]
             #[serde(rename_all = "camelCase")]
-            pub struct #command_ident {
-                pub session_token: String,
-                pub subcommand: #enum_ident,
-            }
-
-            #[derive(::serde::Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            pub enum #enum_ident {
-                #(#command_variants,)*
+            pub struct #delete_command_ident {
+                #(pub #id_fields_all,)*
             }
 
             #[derive(::serde::Serialize)]
             #[serde(rename_all = "camelCase")]
-            pub enum #response_ident {
-                /// Sent in response to a Create command
-                CreateOk {
-                    #(#id_fields_all,)*
-                },
-                /// Sent in response to a Read command
-                #variant_ident {
-                    #(#server_authoritative_fields,)*
-                    #(#other_fields,)*
-                    #(#other_permanent_fields,)*
-                },
+            pub enum #delete_command_response_ident {
+                DeleteOk,
                 NotAllowed {
                     reason: Option<String>,
                 },
@@ -267,7 +290,12 @@ pub fn message_enum_source(
                     cause: Option<String>,
                 }
             }
-
+        });
+        event_sub_variants.push(quote! {
+            #[serde(rename_all = "camelCase")]
+            Delete {
+                #(#id_fields_all,)*
+            }
         });
         event_variants.push(quote! {
             #variant_ident(#variant_ident)
@@ -283,7 +311,7 @@ pub fn message_enum_source(
     quote! {
         pub mod command {
             use super::*;
-            #(#command_enums)*
+            #(#command_structs)*
         }
 
         pub mod server_event {

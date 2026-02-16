@@ -20,6 +20,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server,
 };
+use rand::rngs::SysRng;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rustls::{
@@ -36,6 +37,7 @@ use tower::Service as _;
 use tracing::{error, info, level_filters::LevelFilter, warn};
 
 mod api;
+mod app;
 mod aspen_config;
 mod database;
 mod nats_connection_manager;
@@ -71,7 +73,7 @@ struct Opt {
 }
 
 thread_local! {
-    pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::from_os_rng());
+    pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::try_from_rng(&mut SysRng).expect("failed to initialize system randomness"));
 }
 
 fn main() {
@@ -154,7 +156,7 @@ async fn run(options: Opt) -> Result<()> {
             Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
                 info!("generating self-signed certificate");
                 let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-                let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+                let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
                 let cert = cert.cert.into();
                 fs::create_dir_all(path).context("failed to create certificate directory")?;
                 fs::write(&cert_path, &cert).context("failed to write certificate")?;

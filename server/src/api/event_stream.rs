@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::api::CommunityId;
+use crate::app::CommunityId;
 use anyhow::Error;
 use axum::response::{
     Sse,
