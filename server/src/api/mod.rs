@@ -1,75 +1,104 @@
+use std::fs;
 use crate::app::{AttachmentId, UserId};
-use crate::{aspen_config::aspen_config, nats_connection_manager::NatsConnectionManager};
+use crate::{app, aspen_config::aspen_config, nats_connection_manager::NatsConnectionManager};
 use axum::routing::{get, post};
 use diesel_async::{
-    pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager}, AsyncPgConnection,
+    AsyncPgConnection,
+    pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
-mod event_stream;
-mod message_enum;
-pub(crate) mod login;
-pub(crate) mod user;
 pub(crate) mod category;
-pub(crate) mod community;
 pub(crate) mod channel;
+pub(crate) mod community;
+mod event_stream;
 pub(crate) mod icon;
+pub(crate) mod login;
 pub(crate) mod message;
+pub(crate) mod message_enum;
 pub(crate) mod react;
+pub(crate) mod user;
 
+use crate::api::login::SessionUser;
+use axum::Extension;
+use axum::routing::{delete, patch};
 use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl};
+use futures_util::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use axum::routing::{delete, patch};
 use tokio::sync::RwLock;
-pub(crate) async fn make_router() -> axum::Router {
-    axum::Router::new()
-        // Auth
-        .route("/login", post(login::login))
-        .route("/logout", post(login::logout))
-        .route("/token_refresh", post(login::token_refresh))
-        .route("/change_password", post(login::change_password))
-        .route("/other_server_login", post(login::other_server_login))
-        // Create
-        .route("/user", post(user::create_user))
-        .route("/message", post(message::create_message))
-        .route("/react", post(react::create_react))
-        .route("/channel", post(channel::create_channel))
-        .route("/category", post(category::create_category))
-        .route("/community", post(community::create_community))
-        .route("/icon", post(icon::create_icon))
-        // Read
-        .route("/user", get(user::read_user))
-        .route("/message", get(message::read_message))
-        .route("/channel", get(channel::read_channel))
-        .route("/category", get(category::read_category))
-        .route("/community", get(community::read_community))
-        .route("/icon", get(icon::read_icon))
-        // Update
-        .route("/user", patch(user::update_user))
-        .route("/message", patch(message::update_message))
-        .route("/channel", patch(channel::update_channel))
-        .route("/category", patch(category::update_category))
-        .route("/community", patch(community::update_community))
-        // Delete
-        .route("/user", delete(user::delete_user))
-        .route("/message", delete(message::delete_message))
-        .route("/react", delete(react::delete_react))
-        .route("/channel", delete(channel::delete_channel))
-        .route("/category", delete(category::delete_category))
-        .route("/community", delete(community::delete_community))
-        .route("/icon", delete(icon::delete_icon))
+use tower::{Layer, ServiceBuilder};
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+
+pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
+    let router = OpenApiRouter::new()
+        .routes(routes!(login::login,))
+        .routes(routes!(login::logout,))
+        .routes(routes!(login::token_refresh,))
+        .routes(routes!(login::change_password,))
+        .routes(routes!(login::other_server_login,))
+        .routes(routes!(
+            // User
+            user::create_user,
+            user::read_user,
+            user::update_user,
+            user::delete_user,
+        ))
+        .routes(routes!(
+            // Message
+            message::create_message,
+            message::read_message,
+            message::update_message,
+            message::delete_message,
+        ))
+        .routes(routes!(
+            // Channel
+            channel::create_channel,
+            channel::read_channel,
+            channel::update_channel,
+            channel::delete_channel,
+        ))
+        .routes(routes!(
+            // Category
+            category::create_category,
+            category::read_category,
+            category::update_category,
+            category::delete_category,
+        ))
+        .routes(routes!(
+            // Community
+            community::create_community,
+            community::read_community,
+            community::update_community,
+            community::delete_community,
+        ))
+        .routes(routes!(
+            // Icon
+            icon::create_icon,
+            icon::delete_icon,
+        ))
+        .routes(routes!(
+            // React
+            react::create_react,
+            react::delete_react,
+        ))
         // Events
         .route("/event_stream", get(event_stream::event_stream))
-        .with_state(GlobalServerContext::new().await)
+        .with_state(GlobalServerContext::new().await?);
+    if write_schema {
+        fs::write("openapi.yaml", router.get_openapi().to_yaml()?)?;
+        std::process::exit(0);
+    }
+    Ok(router.into())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct Attachment {
     mime_type: String,
     file_name: String,
     content: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct AttachmentMeta {
     attachment_id: AttachmentId,
     mime_type: String,
@@ -77,13 +106,13 @@ pub struct AttachmentMeta {
     preview: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 pub enum ChannelType {
     Text,
     Voice,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct ChannelPermissions {
     // TODO
 }
@@ -95,33 +124,22 @@ pub struct GlobalServerContext {
 }
 
 impl GlobalServerContext {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self, app::Error> {
         let config = aspen_config().await;
-        Self {
+        Ok(Self {
             connection_pool: {
-                let conn_manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(
-                    config.database_url
-                );
+                let conn_manager =
+                    AsyncDieselConnectionManager::<AsyncPgConnection>::new(config.database_url);
                 Pool::builder(conn_manager)
                     .build()
                     .expect("Failed to init database connection pool")
             },
-            nats_connection_manager: Arc::new(RwLock::new(NatsConnectionManager::new(todo!()))),
-        }
+            nats_connection_manager: Arc::new(RwLock::new(
+                NatsConnectionManager::new(config.nats_url, config.nats_auth_token).await?,
+            )),
+        })
     }
 }
 
 /// If a client misses this many messages at once it will be forcefully disconnected.
 const MAILBOX_SIZE: usize = 512;
-
-pub struct SessionContext {
-    pub signed_in_user: Option<UserId>,
-}
-
-impl SessionContext {
-    pub fn new() -> Self {
-        Self {
-            signed_in_user: None,
-        }
-    }
-}

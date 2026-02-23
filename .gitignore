@@ -1,2 +1,4 @@
 /target
 /.env
+/aspen.toml
+/openapi.yaml

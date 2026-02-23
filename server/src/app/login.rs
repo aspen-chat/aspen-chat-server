@@ -1,30 +1,29 @@
-use anyhow::anyhow;
 use argon2::{
-    password_hash::{Salt, SaltString}, PasswordHash,
-    PasswordVerifier as _,
+    PasswordHash, PasswordVerifier as _,
+    password_hash::{Salt, SaltString},
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{Engine, prelude::BASE64_STANDARD};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use diesel::{ExpressionMethods as _, QueryDsl};
+use diesel::{ExpressionMethods as _, QueryDsl, SelectableHelper};
+use diesel_async::pooled_connection::deadpool;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryFutureExt};
 use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::{
-    app::UserId,
-    database::schema,
-    CHACHA_RNG,
-};
+use crate::api::GlobalServerContext;
 use crate::api::login::authenticated_user;
+use crate::app::Loadable;
+use crate::app::user::User;
+use crate::{CHACHA_RNG, app, app::UserId, database::schema};
 
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
 const OTHER_SERVER_AUTH_LIFETIME: Duration = Duration::minutes(10);
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum LoginResponse {
     Ok {
@@ -37,69 +36,11 @@ pub enum LoginResponse {
     ServerError,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Login {
     pub username: String,
     pub password: String,
-}
-
-pub async fn try_login(
-    mut conn: impl AsMut<AsyncPgConnection>,
-    l: &Login,
-) -> Result<LoginResponse, anyhow::Error> {
-    use schema::user::dsl::*;
-    let Login { username, password } = l;
-    let conn = conn.as_mut();
-    let user_entry: Result<(Uuid, String), _> = user
-        .select((id, password_hash))
-        .filter(name.eq(username))
-        .first(conn)
-        .await;
-    match user_entry {
-        Ok((user_id, entry_password_hash)) => {
-            if check_password(password, &entry_password_hash) {
-                use crate::database::schema::{refresh_token, session};
-                let session_token = make_token();
-                let refresh_token = make_token();
-                let now = chrono::Utc::now();
-                let session_token_expires = now + SESSION_TOKEN_LIFETIME;
-                diesel::insert_into(refresh_token::table)
-                    .values((
-                        refresh_token::dsl::token.eq(&refresh_token),
-                        refresh_token::dsl::user.eq(user_id),
-                        refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
-                    ))
-                    .execute(conn)
-                    .await?;
-
-                diesel::insert_into(session::table)
-                    .values((
-                        session::dsl::token.eq(&session_token),
-                        session::dsl::refresh_token.eq(&refresh_token),
-                        session::dsl::expires.eq(session_token_expires.naive_utc()),
-                    ))
-                    .execute(conn)
-                    .await?;
-
-                Ok(LoginResponse::Ok {
-                    user_id: user_id.into(),
-                    refresh_token,
-                    session_token,
-                    session_token_expires,
-                })
-            } else {
-                Ok(LoginResponse::InvalidCredentials)
-            }
-        }
-        Err(e) => {
-            if let diesel::result::Error::NotFound = e {
-                Ok(LoginResponse::InvalidCredentials)
-            } else {
-                Err(e.into())
-            }
-        }
-    }
 }
 
 pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
@@ -129,7 +70,7 @@ fn make_token() -> String {
     BASE64_STANDARD.encode(CHACHA_RNG.with(|rng| rng.borrow_mut().random::<[u8; 32]>()))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum TokenRefreshResponse {
     Ok { new_session_token: String },
@@ -137,16 +78,75 @@ pub enum TokenRefreshResponse {
     ServerError,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenRefresh {
     refresh_token: String,
 }
 
+pub async fn try_login(
+    state: &GlobalServerContext,
+    login: Login,
+) -> Result<LoginResponse, app::Error> {
+    use schema::user::dsl::*;
+
+    let mut conn = state.connection_pool.get().await?;
+    let conn = conn.as_mut();
+    let Login { username, password } = &login;
+    let user_entry: Result<User, _> = user
+        .select(User::as_select())
+        .filter(name.eq(username))
+        .first(conn)
+        .await;
+    match user_entry {
+        Ok(u) => {
+            if check_password(password, &u.password_hash) {
+                use crate::database::schema::{refresh_token, session};
+                let session_token = make_token();
+                let refresh_token = make_token();
+                let now = chrono::Utc::now();
+                let session_token_expires = now + SESSION_TOKEN_LIFETIME;
+                diesel::insert_into(refresh_token::table)
+                    .values((
+                        refresh_token::dsl::token.eq(&refresh_token),
+                        refresh_token::dsl::user.eq(u.id),
+                        refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
+                    ))
+                    .execute(conn)
+                    .await?;
+
+                diesel::insert_into(session::table)
+                    .values((
+                        session::dsl::token.eq(&session_token),
+                        session::dsl::refresh_token.eq(&refresh_token),
+                        session::dsl::expires.eq(session_token_expires.naive_utc()),
+                    ))
+                    .execute(conn)
+                    .await?;
+                Ok(LoginResponse::Ok {
+                    user_id: u.id,
+                    refresh_token,
+                    session_token,
+                    session_token_expires,
+                })
+            } else {
+                return Ok(LoginResponse::InvalidCredentials);
+            }
+        }
+        Err(e) => {
+            if let diesel::result::Error::NotFound = e {
+                return Ok(LoginResponse::InvalidCredentials);
+            } else {
+                Err(e.into())
+            }
+        }
+    }
+}
+
 pub async fn try_token_refresh(
     mut conn: impl AsMut<AsyncPgConnection>,
     t: &TokenRefresh,
-) -> Result<TokenRefreshResponse, anyhow::Error> {
+) -> Result<TokenRefreshResponse, app::Error> {
     use schema::{refresh_token, session};
     let conn = conn.as_mut();
     let expires: Option<NaiveDateTime> = refresh_token::table
@@ -186,7 +186,7 @@ pub async fn try_token_refresh(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum LogoutResponse {
     Ok,
@@ -194,7 +194,7 @@ pub enum LogoutResponse {
     ServerError,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Logout {
     refresh_token: String,
@@ -203,7 +203,7 @@ pub struct Logout {
 pub async fn try_logout(
     mut conn: impl AsMut<AsyncPgConnection>,
     t: &Logout,
-) -> Result<LogoutResponse, anyhow::Error> {
+) -> Result<LogoutResponse, app::Error> {
     use schema::{refresh_token, session};
     let conn = conn.as_mut();
     diesel::delete(session::table)
@@ -224,7 +224,7 @@ pub async fn try_logout(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum ChangePasswordResponse {
     Ok,
@@ -233,13 +233,13 @@ pub enum ChangePasswordResponse {
     ServerError,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum PasswordRequirement {
     Length,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangePassword {
     user_id: UserId,
@@ -252,7 +252,7 @@ const PASSWORD_MIN_LENGTH: usize = 8;
 pub async fn try_change_password(
     mut conn: impl AsMut<AsyncPgConnection>,
     c: &ChangePassword,
-) -> Result<ChangePasswordResponse, anyhow::Error> {
+) -> Result<ChangePasswordResponse, app::Error> {
     let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
         .select(schema::user::password_hash)
@@ -265,8 +265,7 @@ pub async fn try_change_password(
                 cause: PasswordRequirement::Length,
             });
         }
-        let new_password_hash =
-            hash_password(&c.new_password).map_err(|e| anyhow!("hashing password failed {e}"))?;
+        let new_password_hash = hash_password(&c.new_password)?;
         diesel::update(schema::user::table.filter(schema::user::id.eq(&c.user_id.0)))
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
@@ -277,14 +276,14 @@ pub async fn try_change_password(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OtherServerAuth {
     session_token: String,
     other_server_domain: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum OtherServerAuthResponse {
     Ok { other_server_auth_token: String },
@@ -295,7 +294,7 @@ pub enum OtherServerAuthResponse {
 pub async fn try_other_server_auth(
     mut conn: impl AsMut<AsyncPgConnection>,
     o: &OtherServerAuth,
-) -> Result<OtherServerAuthResponse, anyhow::Error> {
+) -> Result<OtherServerAuthResponse, app::Error> {
     use schema::other_server_auth_token;
 
     let Some(user) = authenticated_user(&mut conn, o.session_token.clone()).await? else {

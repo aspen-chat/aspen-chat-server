@@ -1,6 +1,14 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    attachment (id) {
+        id -> Uuid,
+        mime_type -> Text,
+        file_name -> Text,
+    }
+}
+
+diesel::table! {
     category (id) {
         id -> Uuid,
         community -> Uuid,
@@ -109,6 +117,7 @@ diesel::joinable!(refresh_token -> user (user));
 diesel::joinable!(session -> refresh_token (refresh_token));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    attachment,
     category,
     channel,
     community,

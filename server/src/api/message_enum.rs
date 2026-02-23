@@ -1,4 +1,4 @@
-use crate::api::{Attachment, ChannelPermissions, ChannelType};
+use crate::api::{ChannelPermissions, ChannelType};
 use crate::app::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -21,11 +21,9 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         channel_id: ChannelId,
         content: String,
-        attachments: Vec<Attachment>,
         #[message_gen(server_authoritative)]
         author: UserId,
         #[message_gen(server_authoritative)]
-        #[serde(with = "timestamp_serde")]
         timestamp: chrono::DateTime<Utc>,
     },
     React {
@@ -74,18 +72,6 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         mime_type: String,
     },
-}
-
-mod timestamp_serde {
-    use chrono::{DateTime, Utc};
-    use serde::Serializer;
-
-    pub fn serialize<S>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        s.serialize_i64(t.timestamp_micros())
-    }
 }
 
 #[cfg(test)]

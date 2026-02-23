@@ -1,12 +1,16 @@
 use std::{collections::HashMap, pin::pin, sync::Arc, time::Duration};
 
+use crate::app;
+use crate::aspen_config::aspen_config;
 use async_nats::{
-    client::{DrainError, FlushError, ReconnectError}, connection::State, subject::ToSubject, HeaderMap, Message, PublishError, Request, RequestError, ServerInfo, Statistics, Subject, SubscribeError, Subscriber
+    ConnectOptions, HeaderMap, Message, PublishError, Request, RequestError, ServerInfo,
+    Statistics, Subject, SubscribeError, Subscriber,
+    client::{DrainError, FlushError, ReconnectError},
+    connection::State,
+    subject::ToSubject,
 };
 use futures_util::StreamExt;
 use tokio::sync::broadcast;
-
-use crate::aspen_config::aspen_config;
 
 /// Centralizes NATS Subscribers preventing multiple backhaul connections.
 /// Additionally tracks which of the active user connections are subscribed to each
@@ -19,12 +23,14 @@ pub struct NatsConnectionManager {
 }
 
 impl NatsConnectionManager {
-    pub fn new(client: async_nats::Client) -> Self {
-        Self {
+    pub async fn new(url: String, auth_token: String) -> Result<Self, app::Error> {
+        let client =
+            async_nats::connect_with_options(url, ConnectOptions::new().token(auth_token)).await?;
+        Ok(Self {
             subscriptions: HashMap::default(),
             queue_subscriptions: HashMap::default(),
             client,
-        }
+        })
     }
 
     pub fn timeout(&self) -> Option<Duration> {

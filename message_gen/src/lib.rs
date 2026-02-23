@@ -169,7 +169,7 @@ pub fn message_enum_source(
         let create_command_ident = format_ident!("{}CreateCommand", variant.ident);
         let create_command_response_ident = format_ident!("{}CreateCommandResponse", variant.ident);
         command_structs.push(quote! {
-            #[derive(::serde::Deserialize)]
+            #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
             #[serde(rename_all = "camelCase")]
             pub struct #create_command_ident {
                 #(pub #client_auth_ids,)*
@@ -178,7 +178,7 @@ pub fn message_enum_source(
                 #(pub #secret_fields,)*
             }
 
-            #[derive(::serde::Serialize)]
+            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
             #[serde(rename_all = "camelCase")]
             pub enum #create_command_response_ident {
                 CreateOk {
@@ -188,10 +188,10 @@ pub fn message_enum_source(
                     #(#server_authoritative_fields,)*
                 },
                 NotAllowed {
-                    reason: Option<String>,
+                    reason: Option<Cow<'static, str>>,
                 },
                 Error {
-                    cause: Option<String>,
+                    cause: Option<Cow<'static, str>>,
                 }
             }
         });
@@ -212,13 +212,13 @@ pub fn message_enum_source(
             let read_command_ident = format_ident!("{}ReadCommand", variant.ident);
             let read_command_response_ident = format_ident!("{}ReadCommandResponse", variant.ident);
             command_structs.push(quote! {
-                #[derive(::serde::Deserialize)]
+                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub struct #read_command_ident {
                     #(pub #id_fields_all,)*
                 }
 
-                #[derive(::serde::Serialize)]
+                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub enum #read_command_response_ident {
                     #variant_ident {
@@ -239,17 +239,18 @@ pub fn message_enum_source(
         if !other_fields.is_empty() {
             // No need for a Read server event, we simply don't broadcast this.
             let update_command_ident = format_ident!("{}UpdateCommand", variant.ident);
-            let update_command_response_ident = format_ident!("{}UpdateCommandResponse", variant.ident);
+            let update_command_response_ident =
+                format_ident!("{}UpdateCommandResponse", variant.ident);
             // Generate update variant
             command_structs.push(quote! {
-                #[derive(::serde::Deserialize)]
+                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub struct #update_command_ident {
                     #(pub #id_fields_all,)*
                     #(pub #other_fields,)*
                 }
 
-                #[derive(::serde::Serialize)]
+                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub enum #update_command_response_ident {
                     UpdateOk,
@@ -273,13 +274,13 @@ pub fn message_enum_source(
         let delete_command_ident = format_ident!("{}DeleteCommand", variant.ident);
         let delete_command_response_ident = format_ident!("{}DeleteCommandResponse", variant.ident);
         command_structs.push(quote! {
-            #[derive(::serde::Deserialize)]
+            #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
             #[serde(rename_all = "camelCase")]
             pub struct #delete_command_ident {
                 #(pub #id_fields_all,)*
             }
 
-            #[derive(::serde::Serialize)]
+            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
             #[serde(rename_all = "camelCase")]
             pub enum #delete_command_response_ident {
                 DeleteOk,
@@ -309,6 +310,8 @@ pub fn message_enum_source(
         });
     }
     quote! {
+        use std::borrow::Cow;
+
         pub mod command {
             use super::*;
             #(#command_structs)*

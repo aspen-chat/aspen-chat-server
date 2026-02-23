@@ -1,84 +1,94 @@
-use axum::extract::State;
-use axum::Json;
-use axum::http::StatusCode;
-use tracing::error;
-use diesel::result::DatabaseErrorKind;
-use diesel::ExpressionMethods;
-use diesel_async::RunQueryDsl;
+use crate::api::login::SessionUser;
+use crate::api::message_enum::command::{
+    UserCreateCommand, UserCreateCommandResponse, UserDeleteCommand, UserDeleteCommandResponse,
+    UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse,
+};
 use crate::api::{GlobalServerContext, UserId};
+use crate::app;
+use crate::app::Error;
 use crate::app::login::hash_password;
-use crate::api::message_enum::command::{UserCreateCommand, UserCreateCommandResponse, UserDeleteCommand, UserDeleteCommandResponse, UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse};
+use crate::app::user::User;
 use crate::database::schema;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::{Extension, Json};
+use diesel::result::DatabaseErrorKind;
+use diesel::{ExpressionMethods, QueryResult};
+use diesel_async::RunQueryDsl;
+use rust_i18n::t;
+use tracing::error;
 
+#[utoipa::path(post, path = "/user", responses((status = OK, body=UserCreateCommandResponse)))]
 pub async fn create_user(
     State(state): State<GlobalServerContext>,
     Json(command): Json<UserCreateCommand>,
 ) -> (StatusCode, Json<UserCreateCommandResponse>) {
-    let mut conn = match state.connection_pool.get().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("unable to get a database connection from pool {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                UserCreateCommandResponse::Error { cause: None }.into(),
-            );
-        }
-    };
-    let password_hash_result = hash_password(&command.password);
-    let password_hash = match password_hash_result {
-        Ok(s) => s,
-        Err(e) => {
-            error!("error generating password hash at user creation {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                UserCreateCommandResponse::Error { cause: None }.into(),
-            );
-        }
-    };
-    let new_user_id = UserId::new();
-    let r = diesel::insert_into(schema::user::table)
-        .values((
-            schema::user::columns::id.eq(new_user_id.0),
-            schema::user::columns::password_hash.eq(password_hash),
-            schema::user::columns::name.eq(&command.name),
-        ))
-        .execute(&mut conn)
-        .await;
-    match r {
-        Ok(_) => (
-            StatusCode::OK,
-            UserCreateCommandResponse::CreateOk { id: new_user_id, name: command.name, icon: command.icon }.into(),
-        ),
-        Err(e) => {
-            if let diesel::result::Error::DatabaseError(
-                DatabaseErrorKind::UniqueViolation,
-                e,
-            ) = e
-            {
-                (
-                    StatusCode::BAD_REQUEST,
-                    UserCreateCommandResponse::Error {
-                        cause: Some("usernameAlreadyTaken".to_string()),
-                    }
+    let new_user_id = match app::user::create_user(state, &command).await {
+        Ok(value) => value,
+        Err(err) => {
+            return {
+                if let app::Error::Diesel(diesel::result::Error::DatabaseError(
+                    DatabaseErrorKind::UniqueViolation,
+                    e,
+                )) = err
+                {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        UserCreateCommandResponse::Error {
+                            cause: Some(t!("usernameAlreadyTaken")),
+                        }
                         .into(),
-                )
-            } else {
-                error!("error inserting new user into database {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    UserCreateCommandResponse::Error { cause: None }.into(),
-                )
-            }
+                    )
+                } else {
+                    error!("error inserting new user into database {err}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        UserCreateCommandResponse::Error { cause: None }.into(),
+                    )
+                }
+            };
         }
+    };
+    (
+        StatusCode::OK,
+        UserCreateCommandResponse::CreateOk {
+            id: new_user_id,
+            name: command.name,
+            icon: command.icon,
+        }
+        .into(),
+    )
+}
+
+#[utoipa::path(get, path = "/user", responses((status = OK, body=UserReadCommandResponse)))]
+pub async fn read_user(
+    State(state): State<GlobalServerContext>,
+    Extension(_user): Extension<SessionUser>,
+    Json(command): Json<UserReadCommand>,
+) -> (StatusCode, Json<UserReadCommandResponse>) {
+    match app::user::read_user(state, command.id).await {
+        Ok(user) => (
+            StatusCode::OK,
+            UserReadCommandResponse::User {
+                name: user.name,
+                icon: user.icon,
+            }
+            .into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                UserReadCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                UserReadCommandResponse::Error { cause: None }.into(),
+            ),
+        },
     }
 }
 
-pub async fn read_user(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<UserReadCommand>,
-) -> (StatusCode, Json<UserReadCommandResponse>) {
-    todo!()
-}
+#[utoipa::path(patch, path = "/user", responses((status = OK, body=UserUpdateCommandResponse)))]
 
 pub async fn update_user(
     State(state): State<GlobalServerContext>,
@@ -86,6 +96,8 @@ pub async fn update_user(
 ) -> (StatusCode, Json<UserUpdateCommandResponse>) {
     todo!()
 }
+
+#[utoipa::path(delete, path = "/user", responses((status = OK, body=UserDeleteCommandResponse)))]
 pub async fn delete_user(
     State(state): State<GlobalServerContext>,
     Json(command): Json<UserDeleteCommand>,

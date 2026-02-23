@@ -20,18 +20,15 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server,
 };
-use rand::rngs::SysRng;
 use rand::SeedableRng as _;
+use rand::rngs::SysRng;
 use rand_chacha::ChaCha20Rng;
+use rust_i18n::i18n;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
-use tokio::{
-    net::TcpListener,
-    runtime,
-    sync::oneshot,
-};
+use tokio::{net::TcpListener, runtime, sync::oneshot};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as _;
 use tracing::{error, info, level_filters::LevelFilter, warn};
@@ -70,11 +67,16 @@ struct Opt {
     /// find this useful in a production environment.
     #[clap(long)]
     no_https: bool,
+
+    #[clap(long)]
+    gen_openapi_schema: bool,
 }
 
 thread_local! {
     pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::try_from_rng(&mut SysRng).expect("failed to initialize system randomness"));
 }
+
+i18n!("locales");
 
 fn main() {
     if let Err(e) = aspen_config::load_config() {
@@ -112,6 +114,7 @@ fn main() {
 }
 
 async fn run(options: Opt) -> Result<()> {
+    let app = api::make_router(options.gen_openapi_schema).await?;
     let (exit_tx, mut exit_rx) = oneshot::channel();
     let mut exit_tx = Some(exit_tx);
     ctrlc::set_handler(move || {
@@ -172,7 +175,6 @@ async fn run(options: Opt) -> Result<()> {
         (vec![cert], key)
     };
 
-    let app = api::make_router().await;
     let tls_acceptor = (!options.no_https)
         .then(|| -> Result<TlsAcceptor> {
             // Setup TLS config

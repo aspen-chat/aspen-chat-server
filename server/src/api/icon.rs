@@ -1,9 +1,13 @@
-use axum::extract::State;
-use axum::Json;
-use axum::http::StatusCode;
 use crate::api::GlobalServerContext;
-use crate::api::message_enum::command::{IconCreateCommand, IconCreateCommandResponse, IconDeleteCommand, IconDeleteCommandResponse, IconReadCommand, IconReadCommandResponse, MessageDeleteCommand, MessageDeleteCommandResponse, MessageReadCommand, MessageReadCommandResponse, MessageUpdateCommand, MessageUpdateCommandResponse};
+use crate::api::message_enum::command::{
+    IconCreateCommand, IconCreateCommandResponse, IconDeleteCommand, IconDeleteCommandResponse,
+    IconReadCommand, IconReadCommandResponse,
+};
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
 
+#[utoipa::path(post, path = "/icon", responses((status = OK, body=IconCreateCommandResponse)))]
 pub async fn create_icon(
     State(state): State<GlobalServerContext>,
     Json(command): Json<IconCreateCommand>,
@@ -11,12 +15,15 @@ pub async fn create_icon(
     todo!()
 }
 
+#[utoipa::path(get, path = "/icon", responses((status = OK, body=IconReadCommandResponse)))]
 pub async fn read_icon(
     State(state): State<GlobalServerContext>,
     Json(command): Json<IconReadCommand>,
 ) -> (StatusCode, Json<IconReadCommandResponse>) {
     todo!()
 }
+
+#[utoipa::path(delete, path = "/icon", responses((status = OK, body=IconDeleteCommandResponse)))]
 pub async fn delete_icon(
     State(state): State<GlobalServerContext>,
     Json(command): Json<IconDeleteCommand>,
