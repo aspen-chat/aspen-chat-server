@@ -63,7 +63,7 @@ pub async fn create_user(
 #[utoipa::path(get, path = "/user", responses((status = OK, body=UserReadCommandResponse)))]
 pub async fn read_user(
     State(state): State<GlobalServerContext>,
-    Extension(_user): Extension<SessionUser>,
+    _: SessionUser,
     Json(command): Json<UserReadCommand>,
 ) -> (StatusCode, Json<UserReadCommandResponse>) {
     match app::user::read_user(state, command.id).await {

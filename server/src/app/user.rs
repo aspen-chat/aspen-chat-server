@@ -9,7 +9,7 @@ use diesel::{ExpressionMethods, Queryable, Selectable};
 use diesel::{QueryResult, prelude::*};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
-#[derive(Debug, Clone, Queryable, Selectable)]
+#[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = user)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct User {
@@ -22,12 +22,20 @@ pub struct User {
 impl Loadable for User {
     type Id = UserId;
 
-    fn load_from_db(pg_connection: &AsyncPgConnection, id: Self::Id) -> Result<Self, Error> {
-        todo!()
+    async fn load_from_db(
+        pg_connection: &mut AsyncPgConnection,
+        id: Self::Id,
+    ) -> Result<Self, Error> {
+        let user = schema::user::table
+            .select(User::as_select())
+            .filter(user::dsl::id.eq(id))
+            .first(pg_connection)
+            .await?;
+        Ok(user)
     }
 
-    fn id(&self) -> Self::Id {
-        self.id
+    fn id(&self) -> &Self::Id {
+        &self.id
     }
 }
 pub async fn create_user(
@@ -49,17 +57,19 @@ pub async fn create_user(
     };
     let new_user_id = UserId::new();
     diesel::insert_into(user::table)
-        .values((
-            user::columns::id.eq(new_user_id.0),
-            user::columns::password_hash.eq(password_hash),
-            user::columns::name.eq(&command.name),
-        ))
-        .execute(&mut conn)
+        .values(User {
+            id: new_user_id,
+            name: command.name.clone(),
+            icon: command.icon,
+            password_hash,
+        })
+        .execute(conn.as_mut())
         .await?;
     Ok(new_user_id)
 }
 
 pub async fn read_user(state: GlobalServerContext, id: UserId) -> Result<User, app::Error> {
     let mut conn = state.connection_pool.get().await?;
-    todo!()
+    let user = User::load_from_db(conn.as_mut(), id).await?;
+    Ok(user)
 }

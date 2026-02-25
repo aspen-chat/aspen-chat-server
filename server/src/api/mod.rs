@@ -1,4 +1,3 @@
-use std::fs;
 use crate::app::{AttachmentId, UserId};
 use crate::{app, aspen_config::aspen_config, nats_connection_manager::NatsConnectionManager};
 use axum::routing::{get, post};
@@ -6,6 +5,7 @@ use diesel_async::{
     AsyncPgConnection,
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
+use std::fs;
 pub(crate) mod category;
 pub(crate) mod channel;
 pub(crate) mod community;

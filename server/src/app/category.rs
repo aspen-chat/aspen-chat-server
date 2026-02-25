@@ -12,14 +12,14 @@ pub struct Category {
 impl Loadable for Category {
     type Id = CategoryId;
 
-    fn load_from_db(
-        pg_connection: &AsyncPgConnection,
+    async fn load_from_db(
+        pg_connection: &mut AsyncPgConnection,
         id: Self::Id,
     ) -> Result<Self, diesel::result::Error> {
         todo!()
     }
 
-    fn id(&self) -> Self::Id {
-        self.id
+    fn id(&self) -> &Self::Id {
+        &self.id
     }
 }

@@ -4,13 +4,12 @@ use diesel::expression::AsExpression;
 use diesel::pg::sql_types::Uuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
-use diesel::sql_types::Uuid as DieselUuid;
+use diesel::sql_types::{SingleValue, Uuid as DieselUuid};
 use diesel_async::AsyncPgConnection;
 use heck::ToKebabCase;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 
 pub mod attachment;
 pub mod category;
@@ -93,29 +92,30 @@ id_type!(AttachmentId);
 
 id_type!(IconId);
 
+#[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {
     Loaded(T),
     NotLoaded(T::Id),
 }
 
 impl<T: Loadable> MaybeLoaded<T> {
-    pub fn id(&self) -> T::Id {
+    pub fn id(&self) -> &T::Id {
         match self {
             MaybeLoaded::Loaded(l) => l.id(),
-            MaybeLoaded::NotLoaded(id) => id.clone(),
+            MaybeLoaded::NotLoaded(id) => &id,
         }
     }
 
-    pub fn get(
+    pub async fn get(
         &mut self,
-        pg_connection: &AsyncPgConnection,
+        pg_connection: &mut AsyncPgConnection,
     ) -> Result<&mut T, diesel::result::Error> {
         match self {
             MaybeLoaded::Loaded(v) => Ok(v),
             MaybeLoaded::NotLoaded(id) => {
-                let v = T::load_from_db(pg_connection, id.clone())?;
+                let v = T::load_from_db(pg_connection, id.clone()).await?;
                 *self = MaybeLoaded::Loaded(v);
-                self.get(pg_connection)
+                self.get(pg_connection).await
             }
         }
     }
@@ -124,27 +124,41 @@ impl<T: Loadable> MaybeLoaded<T> {
 pub trait Loadable: Sized {
     type Id: Clone;
     fn load_from_db(
-        pg_connection: &AsyncPgConnection,
+        pg_connection: &mut AsyncPgConnection,
         id: Self::Id,
-    ) -> Result<Self, diesel::result::Error>;
+    ) -> impl Future<Output = Result<Self, diesel::result::Error>> + Send;
 
-    fn id(&self) -> Self::Id;
+    fn id(&self) -> &Self::Id;
 }
 
-impl<T: Loadable> Loadable for Vec<T> {
-    type Id = Vec<T::Id>;
-
-    fn load_from_db(
-        pg_connection: &AsyncPgConnection,
-        ids: Self::Id,
-    ) -> Result<Self, diesel::result::Error> {
-        // Probably a pretty inefficient implementation, but we can address it later if it matters.
-        ids.into_iter()
-            .map(|id| T::load_from_db(pg_connection, id))
-            .try_collect()
+impl<SqlType, T: Loadable> FromSql<SqlType, Pg> for MaybeLoaded<T>
+where
+    T::Id: FromSql<SqlType, Pg>,
+{
+    fn from_sql(v: PgValue) -> Result<Self, Box<dyn StdError + Send + Sync + 'static>> {
+        Ok(Self::NotLoaded(T::Id::from_sql(v)?))
     }
+}
 
-    fn id(&self) -> Self::Id {
-        self.iter().map(|v| v.id()).collect()
+impl<SqlType, T: Loadable + Debug> ToSql<SqlType, Pg> for MaybeLoaded<T>
+where
+    T::Id: Debug + ToSql<SqlType, Pg>,
+{
+    fn to_sql<'b>(
+        &'b self,
+        out: &mut diesel::serialize::Output<'b, '_, Pg>,
+    ) -> diesel::serialize::Result {
+        self.id().to_sql(out)
+    }
+}
+
+impl<SqlType: SingleValue, T: Loadable + Debug> AsExpression<SqlType> for MaybeLoaded<T>
+where
+    T::Id: AsExpression<SqlType>,
+{
+    type Expression = <<T as Loadable>::Id as AsExpression<SqlType>>::Expression;
+
+    fn as_expression(self) -> Self::Expression {
+        self.id().clone().as_expression()
     }
 }
