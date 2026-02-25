@@ -1,8 +1,9 @@
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::command::UserCreateCommand;
 use crate::app;
+use crate::app::icon::Icon;
 use crate::app::login::hash_password;
-use crate::app::{IconId, Loadable, UserId};
+use crate::app::{IconId, Loadable, MaybeLoaded, UserId};
 use crate::database::schema::{self, user};
 use diesel::result::Error;
 use diesel::{ExpressionMethods, Queryable, Selectable};
@@ -15,7 +16,7 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 pub struct User {
     pub id: UserId,
     pub name: String,
-    pub icon: Option<IconId>,
+    pub icon: Option<MaybeLoaded<Icon>>,
     pub password_hash: String,
 }
 
@@ -60,7 +61,7 @@ pub async fn create_user(
         .values(User {
             id: new_user_id,
             name: command.name.clone(),
-            icon: command.icon,
+            icon: command.icon.map(MaybeLoaded::NotLoaded),
             password_hash,
         })
         .execute(conn.as_mut())

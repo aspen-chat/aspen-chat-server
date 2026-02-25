@@ -26,11 +26,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::{Layer, ServiceBuilder};
+use utoipa::openapi;
+use utoipa::openapi::{License, LicenseBuilder};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
-    let router = OpenApiRouter::new()
+    let mut router = OpenApiRouter::new()
         .routes(routes!(login::login,))
         .routes(routes!(login::logout,))
         .routes(routes!(login::token_refresh,))
@@ -85,7 +87,13 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         .route("/event_stream", get(event_stream::event_stream))
         .with_state(GlobalServerContext::new().await?);
     if write_schema {
-        fs::write("openapi.yaml", router.get_openapi().to_yaml()?)?;
+        let mut openapi = router.to_openapi();
+        openapi.info.title = "Aspen API".into();
+        openapi.info.description = Some("API for an Aspen chat service".into());
+        openapi.info.contact = None;
+        openapi.info.license = Some(License::new("GPL-3.0-or-later"));
+        openapi.info.version = env!("CARGO_PKG_VERSION").into();
+        fs::write("openapi.yaml", openapi.to_yaml()?)?;
         std::process::exit(0);
     }
     Ok(router.into())

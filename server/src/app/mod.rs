@@ -4,7 +4,7 @@ use diesel::expression::AsExpression;
 use diesel::pg::sql_types::Uuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
-use diesel::sql_types::{SingleValue, Uuid as DieselUuid};
+use diesel::sql_types::{Nullable, SingleValue, Uuid as DieselUuid};
 use diesel_async::AsyncPgConnection;
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};

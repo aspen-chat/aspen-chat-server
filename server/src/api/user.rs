@@ -71,7 +71,7 @@ pub async fn read_user(
             StatusCode::OK,
             UserReadCommandResponse::User {
                 name: user.name,
-                icon: user.icon,
+                icon: user.icon.map(|i| i.id().clone()),
             }
             .into(),
         ),
