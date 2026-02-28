@@ -26,13 +26,32 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::{Layer, ServiceBuilder};
-use utoipa::openapi;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::openapi::{License, LicenseBuilder};
+use utoipa::{Modify, OpenApi, openapi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+#[derive(OpenApi)]
+#[openapi(modifiers(&SecurityAddon))]
+struct ApiDoc;
+
+struct SecurityAddon;
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut openapi::OpenApi) {
+        openapi
+            .components
+            .get_or_insert(Default::default())
+            .security_schemes
+            .insert(
+                "loginKey".to_string(),
+                SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("Authorization"))),
+            );
+    }
+}
+
 pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
-    let mut router = OpenApiRouter::new()
+    let mut router = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(login::login,))
         .routes(routes!(login::logout,))
         .routes(routes!(login::token_refresh,))
@@ -60,6 +79,14 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             channel::delete_channel,
         ))
         .routes(routes!(
+            // Channel Messages
+            channel::read_channel_messages,
+        ))
+        .routes(routes!(
+            // Channel Pins
+            channel::read_channel_pins,
+        ))
+        .routes(routes!(
             // Category
             category::create_category,
             category::read_category,
@@ -67,11 +94,27 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             category::delete_category,
         ))
         .routes(routes!(
+            // Category Channels
+            category::read_category_channels,
+        ))
+        .routes(routes!(
             // Community
             community::create_community,
             community::read_community,
             community::update_community,
             community::delete_community,
+        ))
+        .routes(routes!(
+            // Community Channels
+            community::read_community_channels,
+        ))
+        .routes(routes!(
+            // Community Categories
+            community::read_community_categories,
+        ))
+        .routes(routes!(
+            // Community Users
+            community::read_community_users,
         ))
         .routes(routes!(
             // Icon
@@ -84,18 +127,14 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             react::delete_react,
         ))
         // Events
-        .route("/event_stream", get(event_stream::event_stream))
-        .with_state(GlobalServerContext::new().await?);
+        .route("/event_stream", get(event_stream::event_stream));
     if write_schema {
-        let mut openapi = router.to_openapi();
-        openapi.info.title = "Aspen API".into();
-        openapi.info.description = Some("API for an Aspen chat service".into());
-        openapi.info.contact = None;
-        openapi.info.license = Some(License::new("GPL-3.0-or-later"));
-        openapi.info.version = env!("CARGO_PKG_VERSION").into();
+        let openapi = router.to_openapi();
         fs::write("openapi.yaml", openapi.to_yaml()?)?;
         std::process::exit(0);
     }
+    let router = router.with_state(GlobalServerContext::new().await?);
+
     Ok(router.into())
 }
 

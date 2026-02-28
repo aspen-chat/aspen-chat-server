@@ -26,6 +26,13 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
     },
+    Pin {
+        #[message_gen(id = "client_authoritative")]
+        message_id: MessageId,
+        #[message_gen(server_authoritative)]
+        timestamp: chrono::DateTime<Utc>,
+        sort_index: u32,
+    },
     React {
         #[message_gen(id = "client_authoritative")]
         message_id: MessageId,
@@ -43,6 +50,10 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         ty: ChannelType,
         sort_index: u32,
+        #[message_gen(associated)]
+        messages: Message,
+        #[message_gen(associated)]
+        pins: Pin,
     },
     Category {
         #[message_gen(id)]
@@ -51,12 +62,20 @@ enum MessageEnumSource {
         community: CommunityId,
         name: String,
         sort_index: u32,
+        #[message_gen(associated)]
+        channels: Channel,
     },
     Community {
         #[message_gen(id)]
         id: CommunityId,
         name: String,
         icon: Option<IconId>,
+        #[message_gen(associated)]
+        channels: Channel,
+        #[message_gen(associated)]
+        categories: Category,
+        #[message_gen(associated)]
+        users: User,
     },
     UserCommunity {
         #[message_gen(id = "client_authoritative")]

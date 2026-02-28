@@ -1,3 +1,4 @@
+use heck::ToPascalCase;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::{ToTokens, format_ident, quote};
 use syn::{
@@ -37,6 +38,7 @@ pub fn message_enum_source(
         let mut other_fields = Vec::new();
         let mut other_permanent_fields = Vec::new();
         let mut server_authoritative_fields = Vec::new();
+        let mut associated_fields = Vec::new();
         // Basically exists just for the user password.
         let mut secret_fields = Vec::new();
         for field in fields.named {
@@ -45,6 +47,7 @@ pub fn message_enum_source(
             let mut is_server_authoritative = false;
             let mut is_secret = false;
             let mut is_other = true;
+            let mut is_associated = false;
             for attr in our_attrs(field.attrs.iter()) {
                 let r = attr.parse_nested_meta(|meta| {
                     let ident = meta.path.get_ident().expect("unrecognized value");
@@ -90,6 +93,14 @@ pub fn message_enum_source(
                             });
                             is_other = false;
                             is_secret = true;
+                        }
+                        "associated" => {
+                            associated_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_associated = true;
                         }
                         _ => {}
                     }
@@ -139,6 +150,30 @@ pub fn message_enum_source(
                 abort!(
                     field.span(),
                     "the combination of secret and permanent is not implemented"
+                )
+            }
+            if is_associated && is_id {
+                abort!(
+                    field.span(),
+                    "associated fields describe foreign relationships and thus cannot be an id value"
+                )
+            }
+            if is_associated && is_permanent {
+                abort!(
+                    field.span(),
+                    "associated fields are derived and thus not permanent or user specified"
+                )
+            }
+            if is_associated && is_server_authoritative {
+                abort!(
+                    field.span(),
+                    "associated fields are derived and thus necessarily server authoritative, you don't need both"
+                )
+            }
+            if is_associated && is_secret {
+                abort!(
+                    field.span(),
+                    "associated fields are derived, and thus cannot contain a user secret"
                 )
             }
             if is_other {
@@ -235,6 +270,36 @@ pub fn message_enum_source(
                 }
             });
         }
+        // Generate Read variants for associated relationships
+        for associated in associated_fields {
+            let read_command_ident = format_ident!("{}{}ReadCommand", variant.ident, associated.ident.as_ref().unwrap().to_string().to_pascal_case());
+            let read_command_response_ident = format_ident!("{}{}ReadCommandResponse", variant.ident, associated.ident.as_ref().unwrap().to_string().to_pascal_case());
+            let field_ty = associated.ty;
+            command_structs.push(quote! {
+                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub struct #read_command_ident {
+                    #(pub #id_fields_all,)*
+                    pub page_size: u32,
+                    pub page: u32,
+                }
+
+                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub enum #read_command_response_ident {
+                    #variant_ident {
+                        data: Vec<#field_ty>,
+                        page_count: u32,
+                    },
+                    NotAllowed {
+                        reason: Option<String>,
+                    },
+                    Error {
+                        cause: Option<String>,
+                    }
+                }
+            });
+        }
         // Generate update variants however, skip it if the variant has no other fields.
         if !other_fields.is_empty() {
             // No need for a Read server event, we simply don't broadcast this.
@@ -306,6 +371,17 @@ pub fn message_enum_source(
             #[serde(rename_all = "camelCase")]
             pub enum #variant_ident {
                 #(#event_sub_variants,)*
+            }
+        });
+        // Structure definition for use in associations
+        command_structs.push(quote! {
+            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+            #[serde(rename_all = "camelCase")]
+            pub struct #variant_ident {
+                #(#id_fields_all,)*
+                #(#server_authoritative_fields,)*
+                #(#other_fields,)*
+                #(#other_permanent_fields,)*
             }
         });
     }

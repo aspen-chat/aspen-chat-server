@@ -1,9 +1,5 @@
 use crate::api::GlobalServerContext;
-use crate::api::message_enum::command::{
-    CategoryCreateCommand, CategoryCreateCommandResponse, CategoryDeleteCommand,
-    CategoryDeleteCommandResponse, CategoryReadCommand, CategoryReadCommandResponse,
-    CategoryUpdateCommand, CategoryUpdateCommandResponse,
-};
+use crate::api::message_enum::command::{CategoryChannelsReadCommand, CategoryChannelsReadCommandResponse, CategoryCreateCommand, CategoryCreateCommandResponse, CategoryDeleteCommand, CategoryDeleteCommandResponse, CategoryReadCommand, CategoryReadCommandResponse, CategoryUpdateCommand, CategoryUpdateCommandResponse};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -24,6 +20,15 @@ pub async fn read_category(
 ) -> (StatusCode, Json<CategoryReadCommandResponse>) {
     todo!()
 }
+
+#[utoipa::path(get, path = "/category/channels", responses((status = OK, body=CategoryChannelsReadCommandResponse)))]
+pub async fn read_category_channels(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<CategoryChannelsReadCommand>,
+) -> (StatusCode, Json<CategoryChannelsReadCommandResponse>) {
+    todo!()
+}
+
 
 #[utoipa::path(patch, path = "/category", responses((status = OK, body=CategoryUpdateCommandResponse)))]
 pub async fn update_category(

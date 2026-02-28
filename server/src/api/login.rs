@@ -44,9 +44,10 @@ pub async fn login(
     (status_code, resp.into())
 }
 
-#[utoipa::path(post, path = "/logout", responses((status = OK, body=LogoutResponse)))]
+#[utoipa::path(post, path = "/logout", security(("loginKey" = [])), responses((status = OK, body=LogoutResponse)))]
 pub async fn logout(
     State(state): State<GlobalServerContext>,
+    _: SessionUser,
     Json(logout): Json<Logout>,
 ) -> (StatusCode, Json<LogoutResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);

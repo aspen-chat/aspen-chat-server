@@ -1,10 +1,6 @@
 use crate::api::GlobalServerContext;
 use crate::api::login::SessionUser;
-use crate::api::message_enum::command::{
-    CommunityCreateCommand, CommunityCreateCommandResponse, CommunityDeleteCommand,
-    CommunityDeleteCommandResponse, CommunityReadCommand, CommunityReadCommandResponse,
-    CommunityUpdateCommand, CommunityUpdateCommandResponse,
-};
+use crate::api::message_enum::command::{CommunityCategoriesReadCommand, CommunityCategoriesReadCommandResponse, CommunityChannelsReadCommand, CommunityChannelsReadCommandResponse, CommunityCreateCommand, CommunityCreateCommandResponse, CommunityDeleteCommand, CommunityDeleteCommandResponse, CommunityReadCommand, CommunityReadCommandResponse, CommunityUpdateCommand, CommunityUpdateCommandResponse, CommunityUsersReadCommand, CommunityUsersReadCommandResponse};
 use crate::app;
 use axum::Json;
 use axum::extract::State;
@@ -51,6 +47,32 @@ pub async fn read_community(
 ) -> (StatusCode, Json<CommunityReadCommandResponse>) {
     todo!()
 }
+
+#[utoipa::path(get, path = "/community/users", responses((status = OK, body=CommunityUsersReadCommandResponse)))]
+pub async fn read_community_users(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<CommunityUsersReadCommand>,
+) -> (StatusCode, Json<CommunityUsersReadCommandResponse>) {
+    todo!()
+}
+
+#[utoipa::path(get, path = "/community/categories", responses((status = OK, body=CommunityCategoriesReadCommandResponse)))]
+pub async fn read_community_categories(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<CommunityCategoriesReadCommand>,
+) -> (StatusCode, Json<CommunityCategoriesReadCommandResponse>) {
+    todo!()
+}
+
+#[utoipa::path(get, path = "/community/channels", responses((status = OK, body=CommunityChannelsReadCommandResponse)))]
+pub async fn read_community_channels(
+    State(state): State<GlobalServerContext>,
+    Json(command): Json<CommunityChannelsReadCommand>,
+) -> (StatusCode, Json<CommunityChannelsReadCommandResponse>) {
+    todo!()
+}
+
+
 
 #[utoipa::path(patch, path = "/community", responses((status = OK, body=CommunityUpdateCommandResponse)))]
 pub async fn update_community(
