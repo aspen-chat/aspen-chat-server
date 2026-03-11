@@ -15,10 +15,10 @@ pub struct Message {
 }
 
 pub fn create_message(
-    author: UserId,
-    channel_id: ChannelId,
-    content: String,
-    attachment: Vec<AttachmentInput>,
+    _author: UserId,
+    _channel_id: ChannelId,
+    _content: String,
+    _attachment: Vec<AttachmentInput>,
 ) {
-    let id = MessageId::new();
+    let _id = MessageId::new();
 }

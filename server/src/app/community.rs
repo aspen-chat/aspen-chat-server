@@ -3,7 +3,7 @@ use crate::api::message_enum::command::CommunityCreateCommand;
 use crate::app;
 use crate::app::icon::Icon;
 use crate::app::{CommunityId, Loadable, MaybeLoaded};
-use crate::database::schema::{self, community};
+use crate::database::schema::community;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
@@ -23,9 +23,9 @@ impl Loadable for Community {
         pg_connection: &mut AsyncPgConnection,
         id: CommunityId,
     ) -> Result<Self, diesel::result::Error> {
-        Ok(schema::community::table
+        Ok(community::table
             .select(Community::as_select())
-            .filter(schema::community::dsl::id.eq(id))
+            .filter(community::dsl::id.eq(id))
             .first(pg_connection)
             .await?)
     }
@@ -45,7 +45,7 @@ pub(crate) async fn create_community(
         icon: command.icon.map(MaybeLoaded::NotLoaded),
         name: command.name.clone(),
     };
-    diesel::insert_into(schema::community::table)
+    diesel::insert_into(community::table)
         .values(community.clone())
         .execute(conn.as_mut())
         .await?;

@@ -1,7 +1,13 @@
 use crate::api::GlobalServerContext;
 use crate::api::login::SessionUser;
-use crate::api::message_enum::command::{CommunityCategoriesReadCommand, CommunityCategoriesReadCommandResponse, CommunityChannelsReadCommand, CommunityChannelsReadCommandResponse, CommunityCreateCommand, CommunityCreateCommandResponse, CommunityDeleteCommand, CommunityDeleteCommandResponse, CommunityReadCommand, CommunityReadCommandResponse, CommunityUpdateCommand, CommunityUpdateCommandResponse, CommunityUsersReadCommand, CommunityUsersReadCommandResponse};
-use crate::app;
+use crate::api::message_enum::command::{
+    CommunityCategoriesReadCommand, CommunityCategoriesReadCommandResponse,
+    CommunityChannelsReadCommand, CommunityChannelsReadCommandResponse, CommunityCreateCommand,
+    CommunityCreateCommandResponse, CommunityDeleteCommand, CommunityDeleteCommandResponse,
+    CommunityReadCommand, CommunityReadCommandResponse, CommunityUpdateCommand,
+    CommunityUpdateCommandResponse, CommunityUsersReadCommand, CommunityUsersReadCommandResponse,
+};
+use crate::{api, app};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -31,11 +37,11 @@ pub async fn create_community(
     };
     (
         StatusCode::OK,
-        CommunityCreateCommandResponse::CreateOk {
+        CommunityCreateCommandResponse::CreateOk(api::message_enum::Community {
             id: new_community.id,
             name: new_community.name,
             icon: new_community.icon.map(|i| i.id().clone()),
-        }
+        })
         .into(),
     )
 }
@@ -71,8 +77,6 @@ pub async fn read_community_channels(
 ) -> (StatusCode, Json<CommunityChannelsReadCommandResponse>) {
     todo!()
 }
-
-
 
 #[utoipa::path(patch, path = "/community", responses((status = OK, body=CommunityUpdateCommandResponse)))]
 pub async fn update_community(

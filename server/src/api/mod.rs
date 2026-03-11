@@ -1,6 +1,6 @@
 use crate::app::{AttachmentId, UserId};
 use crate::{app, aspen_config::aspen_config, nats_connection_manager::NatsConnectionManager};
-use axum::routing::{get, post};
+use axum::routing::{any, get};
 use diesel_async::{
     AsyncPgConnection,
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
@@ -17,17 +17,15 @@ pub(crate) mod message_enum;
 pub(crate) mod react;
 pub(crate) mod user;
 
-use crate::api::login::SessionUser;
-use axum::Extension;
-use axum::routing::{delete, patch};
+use crate::api::message_enum::server_event::ServerEvent;
 use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl};
 use futures_util::TryFutureExt;
+use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower::{Layer, ServiceBuilder};
+use tower::Layer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
-use utoipa::openapi::{License, LicenseBuilder};
 use utoipa::{Modify, OpenApi, openapi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -127,10 +125,15 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             react::delete_react,
         ))
         // Events
-        .route("/event_stream", get(event_stream::event_stream));
+        .route("/event_stream", any(event_stream::event_stream));
     if write_schema {
         let openapi = router.to_openapi();
         fs::write("openapi.yaml", openapi.to_yaml()?)?;
+        let event_schema = schema_for!(ServerEvent);
+        fs::write(
+            "event_schema.json",
+            serde_json::to_string_pretty(&event_schema)?,
+        )?;
         std::process::exit(0);
     }
     let router = router.with_state(GlobalServerContext::new().await?);
@@ -138,14 +141,7 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     Ok(router.into())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
-pub struct Attachment {
-    mime_type: String,
-    file_name: String,
-    content: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
 pub struct AttachmentMeta {
     attachment_id: AttachmentId,
     mime_type: String,
@@ -153,13 +149,13 @@ pub struct AttachmentMeta {
     preview: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
 pub enum ChannelType {
     Text,
     Voice,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
 pub struct ChannelPermissions {
     // TODO
 }

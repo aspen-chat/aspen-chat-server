@@ -22,9 +22,33 @@ pub fn message_enum_source(
 ) -> proc_macro::TokenStream {
     let en: ItemEnum = parse_macro_input!(input);
     let mut command_structs = Vec::new();
+    let mut subvariant_type_names = Vec::new();
     let mut event_variants = Vec::new();
     let mut event_variant_types = Vec::new();
+    let mut record_types = Vec::new();
     for variant in en.variants {
+        let mut events = true;
+        for attr in our_attrs(variant.attrs.iter()) {
+            let r = attr.parse_nested_meta(|meta| {
+                let ident = meta.path.get_ident().expect("unrecognized value");
+                match ident.to_string().as_str() {
+                    "no_events" => {
+                        events = false;
+                    }
+                    _ => {
+                        proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
+                    }
+                }
+                Ok(())
+            });
+            if let Err(e) = r {
+                abort!(
+                    attr.span(),
+                    "message_enum_source attribute parse failed {}",
+                    e
+                );
+            }
+        }
         let mut event_sub_variants = Vec::new();
         let Fields::Named(fields) = variant.fields else {
             abort!(
@@ -102,7 +126,9 @@ pub fn message_enum_source(
                             is_other = false;
                             is_associated = true;
                         }
-                        _ => {}
+                        _ => {
+                            proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
+                        }
                     }
                     Ok(())
                 });
@@ -200,7 +226,7 @@ pub fn message_enum_source(
                 .client_authoritative
                 .then_some(id_field.field.clone())
         });
-        let variant_ident = &variant.ident;
+        let variant_ident = &variant.ident.clone();
         let create_command_ident = format_ident!("{}CreateCommand", variant.ident);
         let create_command_response_ident = format_ident!("{}CreateCommandResponse", variant.ident);
         command_structs.push(quote! {
@@ -216,12 +242,7 @@ pub fn message_enum_source(
             #[derive(::serde::Serialize, ::utoipa::ToSchema)]
             #[serde(rename_all = "camelCase")]
             pub enum #create_command_response_ident {
-                CreateOk {
-                    #(#id_fields_all,)*
-                    #(#other_fields,)*
-                    #(#other_permanent_fields,)*
-                    #(#server_authoritative_fields,)*
-                },
+                CreateOk(super::#variant_ident),
                 NotAllowed {
                     reason: Option<Cow<'static, str>>,
                 },
@@ -230,15 +251,12 @@ pub fn message_enum_source(
                 }
             }
         });
-        event_sub_variants.push(quote! {
-            #[serde(rename_all = "camelCase")]
-            Create {
-                #(#id_fields_all,)*
-                #(#server_authoritative_fields,)*
-                #(#other_fields,)*
-                #(#other_permanent_fields,)*
-            }
-        });
+        if events {
+            event_sub_variants.push(quote! {
+                #[serde(rename_all = "camelCase")]
+                Create(super::#variant_ident)
+            });
+        }
         // Generate Read variant for command if we have any field that isn't an ID field
         if !other_fields.is_empty()
             || !server_authoritative_fields.is_empty()
@@ -256,11 +274,7 @@ pub fn message_enum_source(
                 #[derive(::serde::Serialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub enum #read_command_response_ident {
-                    #variant_ident {
-                        #(#server_authoritative_fields,)*
-                        #(#other_fields,)*
-                        #(#other_permanent_fields,)*
-                    },
+                    #variant_ident(super::#variant_ident),
                     NotAllowed {
                         reason: Option<String>,
                     },
@@ -272,8 +286,26 @@ pub fn message_enum_source(
         }
         // Generate Read variants for associated relationships
         for associated in associated_fields {
-            let read_command_ident = format_ident!("{}{}ReadCommand", variant.ident, associated.ident.as_ref().unwrap().to_string().to_pascal_case());
-            let read_command_response_ident = format_ident!("{}{}ReadCommandResponse", variant.ident, associated.ident.as_ref().unwrap().to_string().to_pascal_case());
+            let read_command_ident = format_ident!(
+                "{}{}ReadCommand",
+                variant.ident,
+                associated
+                    .ident
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .to_pascal_case()
+            );
+            let read_command_response_ident = format_ident!(
+                "{}{}ReadCommandResponse",
+                variant.ident,
+                associated
+                    .ident
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .to_pascal_case()
+            );
             let field_ty = associated.ty;
             command_structs.push(quote! {
                 #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
@@ -327,13 +359,15 @@ pub fn message_enum_source(
                     }
                 }
             });
-            event_sub_variants.push(quote! {
-                #[serde(rename_all = "camelCase")]
-                Update {
-                    #(#id_fields_all,)*
-                    #(#other_fields,)*
-                }
-            })
+            if events {
+                event_sub_variants.push(quote! {
+                    #[serde(rename_all = "camelCase")]
+                    Update {
+                        #(#id_fields_all,)*
+                        #(#other_fields,)*
+                    }
+                })
+            }
         }
         // Generate delete variant
         let delete_command_ident = format_ident!("{}DeleteCommand", variant.ident);
@@ -357,36 +391,43 @@ pub fn message_enum_source(
                 }
             }
         });
-        event_sub_variants.push(quote! {
-            #[serde(rename_all = "camelCase")]
-            Delete {
-                #(#id_fields_all,)*
-            }
-        });
-        event_variants.push(quote! {
-            #variant_ident(#variant_ident)
-        });
-        event_variant_types.push(quote! {
-            #[derive(::serde::Serialize)]
-            #[serde(rename_all = "camelCase")]
-            pub enum #variant_ident {
-                #(#event_sub_variants,)*
-            }
-        });
-        // Structure definition for use in associations
-        command_structs.push(quote! {
-            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+        if events {
+            event_sub_variants.push(quote! {
+                #[serde(rename_all = "camelCase")]
+                Delete {
+                    #(#id_fields_all,)*
+                }
+            });
+            let event_variant_ident = format_ident!("{}Event", variant.ident);
+            event_variants.push(quote! {
+                #variant_ident(#event_variant_ident)
+            });
+            event_variant_types.push(quote! {
+                #[derive(::serde::Serialize, ::schemars::JsonSchema)]
+                #[serde(rename_all = "camelCase")]
+                #[serde(tag = "type")]
+                pub enum #event_variant_ident {
+                    #(#event_sub_variants,)*
+                }
+            });
+            subvariant_type_names.push(variant.ident.clone());
+        }
+        // Structure definition for use in associations (pub fields so app layer can construct these)
+        record_types.push(quote! {
+            #[derive(::serde::Serialize, ::utoipa::ToSchema, ::schemars::JsonSchema)]
             #[serde(rename_all = "camelCase")]
             pub struct #variant_ident {
-                #(#id_fields_all,)*
-                #(#server_authoritative_fields,)*
-                #(#other_fields,)*
-                #(#other_permanent_fields,)*
+                #(pub #id_fields_all,)*
+                #(pub #server_authoritative_fields,)*
+                #(pub #other_fields,)*
+                #(pub #other_permanent_fields,)*
             }
         });
     }
     quote! {
         use std::borrow::Cow;
+
+        #(#record_types)*
 
         pub mod command {
             use super::*;
@@ -395,14 +436,13 @@ pub fn message_enum_source(
 
         pub mod server_event {
             use super::*;
-            use sub_variant::*;
-            pub mod sub_variant {
-                use super::*;
-                #(#event_variant_types)*
-            }
-            #[derive(::serde::Serialize)]
+
+            #(#event_variant_types)*
+
+            #[derive(::serde::Serialize, ::schemars::JsonSchema)]
             #[serde(rename_all = "camelCase")]
             #[serde(tag = "serverEvent")]
+            #[schemars(inline)]
             pub enum ServerEvent {
                 #(#event_variants),*
             }

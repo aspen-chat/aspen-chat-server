@@ -2,3 +2,6 @@
 /.env
 /aspen.toml
 /openapi.yaml
+/event_schema.json
+.idea/
+.vscode/

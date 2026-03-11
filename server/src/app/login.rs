@@ -54,7 +54,7 @@ pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Er
 
 pub fn check_password(password: &str, entry_password_hash: &str) -> bool {
     let argon2 = argon2::Argon2::default();
-    let entry_hash = match argon2::PasswordHash::try_from(entry_password_hash) {
+    let entry_hash = match PasswordHash::try_from(entry_password_hash) {
         Ok(v) => v,
         Err(e) => {
             error!("user entry password hash malformed in database {e}");
@@ -104,7 +104,7 @@ pub async fn try_login(
                 use crate::database::schema::{refresh_token, session};
                 let session_token = make_token();
                 let refresh_token = make_token();
-                let now = chrono::Utc::now();
+                let now = Utc::now();
                 let session_token_expires = now + SESSION_TOKEN_LIFETIME;
                 diesel::insert_into(refresh_token::table)
                     .values((
@@ -130,12 +130,12 @@ pub async fn try_login(
                     session_token_expires,
                 })
             } else {
-                return Ok(LoginResponse::InvalidCredentials);
+                Ok(LoginResponse::InvalidCredentials)
             }
         }
         Err(e) => {
             if let diesel::result::Error::NotFound = e {
-                return Ok(LoginResponse::InvalidCredentials);
+                Ok(LoginResponse::InvalidCredentials)
             } else {
                 Err(e.into())
             }

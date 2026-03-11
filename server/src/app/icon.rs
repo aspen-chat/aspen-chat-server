@@ -12,8 +12,8 @@ impl Loadable for Icon {
     type Id = IconId;
 
     async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: IconId,
+        _pg_connection: &mut AsyncPgConnection,
+        _id: IconId,
     ) -> Result<Self, diesel::result::Error> {
         todo!()
     }

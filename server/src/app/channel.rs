@@ -18,8 +18,8 @@ impl Loadable for Channel {
     type Id = ChannelId;
 
     async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: Self::Id,
+        _pg_connection: &mut AsyncPgConnection,
+        _id: Self::Id,
     ) -> Result<Self, diesel::result::Error> {
         todo!()
     }

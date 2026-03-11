@@ -12,6 +12,8 @@ pub enum Error {
     NatsConnectError(#[from] async_nats::ConnectError),
     #[error("error serializing as YAML {0}")]
     SerdeNorway(#[from] serde_norway::Error),
+    #[error("error serializing as JSON {0}")]
+    SerdeJson(#[from] serde_json::Error),
     #[error("I/O error {0}")]
     Io(#[from] std::io::Error),
 }

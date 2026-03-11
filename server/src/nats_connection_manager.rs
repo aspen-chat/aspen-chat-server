@@ -17,8 +17,8 @@ use tokio::sync::broadcast;
 /// NATS subject. If all interest in a particular NATS subject has vanished, the subscriber
 /// is dropped. Otherwise, this is just a transparent wrapper around `async_nats::Client`
 pub struct NatsConnectionManager {
-    subscriptions: HashMap<String, broadcast::WeakSender<async_nats::Message>>,
-    queue_subscriptions: HashMap<(String, String), broadcast::WeakSender<async_nats::Message>>,
+    subscriptions: HashMap<String, broadcast::WeakSender<Message>>,
+    queue_subscriptions: HashMap<(String, String), broadcast::WeakSender<Message>>,
     client: async_nats::Client,
 }
 

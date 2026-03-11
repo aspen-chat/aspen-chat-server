@@ -1,37 +1,25 @@
-use std::sync::Arc;
-
-use crate::app::CommunityId;
-use anyhow::Error;
-use axum::response::{
-    Sse,
-    sse::{Event, KeepAlive},
-};
-use futures_util::{Stream, StreamExt};
-use tokio_stream::{StreamMap, wrappers::BroadcastStream};
+use axum::extract::WebSocketUpgrade;
+use axum::extract::ws::WebSocket;
+use axum::response::Response;
 
 use super::message_enum::server_event::ServerEvent;
 
-pub async fn event_stream() -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream: StreamMap<CommunityId, BroadcastStream<Arc<ServerEvent>>> = StreamMap::new();
+pub async fn event_stream(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(handle_socket_conn)
+}
 
-    // Subscribe to relevant community mailboxes.
-    // use schema::community_user;
-    // let mailbox_subscriptions = community_user::table
-    //     .select(community_user::community)
-    //     .filter(community_user::user.eq(user_id))
-    //     .load(&mut conn)?
-    //     .into_iter()
-    //     .map(|c: Uuid| SubscribeCommand {
-    //         community: CommunityId::from(c),
-    //         desire_subscribed: true,
-    //     })
-    //     .collect();
-    // let mut sess_context_write = session_context.write().await;
-    // sess_context_write.signed_in_user = Some(user_id.into());
-    // sess_context_write
-    //     .community_mailbox_subscribe_commands
-    //     .send(mailbox_subscriptions)
-    //     .await;
+async fn handle_socket_conn(mut socket: WebSocket) {
+    while let Some(msg) = socket.recv().await {
+        let msg = if let Ok(msg) = msg {
+            msg
+        } else {
+            // client disconnected
+            return;
+        };
 
-    Sse::new(stream.map(|e| todo!())).keep_alive(KeepAlive::default())
+        if socket.send(msg).await.is_err() {
+            // client disconnected
+            return;
+        }
+    }
 }

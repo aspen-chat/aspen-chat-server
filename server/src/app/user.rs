@@ -3,11 +3,11 @@ use crate::api::message_enum::command::UserCreateCommand;
 use crate::app;
 use crate::app::icon::Icon;
 use crate::app::login::hash_password;
-use crate::app::{IconId, Loadable, MaybeLoaded, UserId};
-use crate::database::schema::{self, user};
+use crate::app::{Loadable, MaybeLoaded, UserId};
+use crate::database::schema::user;
+use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::{ExpressionMethods, Queryable, Selectable};
-use diesel::{QueryResult, prelude::*};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -27,7 +27,7 @@ impl Loadable for User {
         pg_connection: &mut AsyncPgConnection,
         id: Self::Id,
     ) -> Result<Self, Error> {
-        let user = schema::user::table
+        let user = user::table
             .select(User::as_select())
             .filter(user::dsl::id.eq(id))
             .first(pg_connection)

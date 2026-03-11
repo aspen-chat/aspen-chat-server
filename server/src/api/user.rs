@@ -4,11 +4,11 @@ use crate::api::message_enum::command::{
     UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse,
 };
 use crate::api::{GlobalServerContext, UserId};
-use crate::app;
 use crate::app::Error;
 use crate::app::login::hash_password;
 use crate::app::user::User;
 use crate::database::schema;
+use crate::{api, app};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
@@ -27,7 +27,7 @@ pub async fn create_user(
         Ok(value) => value,
         Err(err) => {
             return {
-                if let app::Error::Diesel(diesel::result::Error::DatabaseError(
+                if let Error::Diesel(diesel::result::Error::DatabaseError(
                     DatabaseErrorKind::UniqueViolation,
                     e,
                 )) = err
@@ -51,11 +51,11 @@ pub async fn create_user(
     };
     (
         StatusCode::OK,
-        UserCreateCommandResponse::CreateOk {
+        UserCreateCommandResponse::CreateOk(api::message_enum::User {
             id: new_user_id,
             name: command.name,
             icon: command.icon,
-        }
+        })
         .into(),
     )
 }
@@ -69,10 +69,11 @@ pub async fn read_user(
     match app::user::read_user(state, command.id).await {
         Ok(user) => (
             StatusCode::OK,
-            UserReadCommandResponse::User {
+            UserReadCommandResponse::User(api::message_enum::User {
+                id: user.id,
                 name: user.name,
                 icon: user.icon.map(|i| i.id().clone()),
-            }
+            })
             .into(),
         ),
         Err(e) => match e {

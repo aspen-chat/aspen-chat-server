@@ -6,7 +6,7 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
-axum = { version = "0.8.4", features = ["macros"] }
+axum = { version = "0.8.4", features = ["macros", "ws"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive"] }
 ctrlc = { version = "3.4.6", features = ["termination"] }
@@ -37,7 +37,6 @@ tokio-rustls = "0.26.2"
 async-nats = { version = "0.46.0", features = ["aws-lc-rs", "server_2_10", "server_2_11"], default-features = false }
 bytes = "1.10.1"
 config = { version = "0.15.14", features = ["toml"] }
-itertools = "0.14.0"
 rust-i18n = "3.1.5"
 heck = "0.5.0"
 thiserror = "2.0.18"
@@ -45,3 +44,4 @@ anyhow = "1.0.102"
 utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid", "yaml"] }
 utoipa-axum = "0.2.0"
 serde_norway = "0.9.42"
+schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }

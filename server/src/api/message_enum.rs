@@ -1,5 +1,5 @@
 use crate::api::{ChannelPermissions, ChannelType};
-use crate::app::{CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
+use crate::app::{AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
 use message_gen::message_enum_source;
 
@@ -25,6 +25,19 @@ enum MessageEnumSource {
         author: UserId,
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
+        #[message_gen(associated)]
+        attachments: Attachment,
+    },
+    #[message_gen(no_events)]
+    Attachment {
+        #[message_gen(id)]
+        id: AttachmentId,
+        #[message_gen(permanent)]
+        file_name: String,
+        #[message_gen(permanent)]
+        data: Vec<u8>,
+        #[message_gen(permanent)]
+        mime_type: String,
     },
     Pin {
         #[message_gen(id = "client_authoritative")]
@@ -95,19 +108,21 @@ enum MessageEnumSource {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
+    use crate::api;
     use crate::app::{MessageId, UserId};
+    use serde_json::json;
 
     use super::server_event::ServerEvent;
 
     #[test]
     fn server_event_transparent() {
-        let e = ServerEvent::React(super::server_event::sub_variant::React::Create {
-            message_id: MessageId::new(),
-            emoji: "😁".to_string(),
-            user_id: UserId::new(),
-        });
+        let e = ServerEvent::React(super::server_event::ReactEvent::Create(
+            api::message_enum::React {
+                message_id: MessageId::new(),
+                emoji: "😁".to_string(),
+                user_id: UserId::new(),
+            },
+        ));
         let mut json_value = serde_json::to_value(e).unwrap();
         let object_mut = json_value.as_object_mut().unwrap();
         let create_obj = object_mut

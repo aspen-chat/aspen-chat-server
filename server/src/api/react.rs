@@ -1,7 +1,6 @@
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::command::{
     ReactCreateCommand, ReactCreateCommandResponse, ReactDeleteCommand, ReactDeleteCommandResponse,
-    UserDeleteCommand, UserDeleteCommandResponse,
 };
 use axum::Json;
 use axum::extract::State;

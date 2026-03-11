@@ -81,7 +81,7 @@ i18n!("locales");
 fn main() {
     if let Err(e) = aspen_config::load_config() {
         eprintln!("failed to load config from aspen.toml or environment. {e}");
-        ::std::process::exit(2);
+        std::process::exit(2);
     }
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
@@ -110,7 +110,7 @@ fn main() {
         }
     };
     runtime.shutdown_timeout(Duration::from_secs(5));
-    ::std::process::exit(code);
+    std::process::exit(code);
 }
 
 async fn run(options: Opt) -> Result<()> {
@@ -158,7 +158,7 @@ async fn run(options: Opt) -> Result<()> {
             ),
             Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
                 info!("generating self-signed certificate");
-                let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+                let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
                 let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
                 let cert = cert.cert.into();
                 fs::create_dir_all(path).context("failed to create certificate directory")?;
