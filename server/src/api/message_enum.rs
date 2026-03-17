@@ -1,4 +1,4 @@
-use crate::api::{ChannelPermissions, ChannelType};
+use crate::api::{ChannelPermissions, ChannelType, user::UserOnlineStatus};
 use crate::app::{AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -7,6 +7,7 @@ use message_gen::message_enum_source;
 // for generating all Command types, and Server events. This comment is not a doc comment. This is intentional.
 #[message_enum_source]
 enum MessageEnumSource {
+    #[message_gen(no_events)]
     User {
         #[message_gen(id)]
         id: UserId,
@@ -14,6 +15,11 @@ enum MessageEnumSource {
         #[message_gen(secret)]
         password: String,
         icon: Option<IconId>,
+    },
+    #[message_gen(no_commands)]
+    UserStatus {
+        id: UserId,
+        status: UserOnlineStatus,
     },
     Message {
         #[message_gen(id)]
@@ -25,6 +31,7 @@ enum MessageEnumSource {
         author: UserId,
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
+        attachments: Vec<AttachmentId>,
         #[message_gen(associated)]
         attachments: Attachment,
     },
@@ -96,6 +103,7 @@ enum MessageEnumSource {
         #[message_gen(id)]
         user: UserId,
     },
+    #[message_gen(no_events)]
     Icon {
         #[message_gen(id)]
         id: IconId,

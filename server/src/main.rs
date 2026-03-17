@@ -37,7 +37,6 @@ mod api;
 mod app;
 mod aspen_config;
 mod database;
-mod nats_connection_manager;
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]

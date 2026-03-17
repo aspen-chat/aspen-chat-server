@@ -1,10 +1,10 @@
 use diesel::QueryId;
 use diesel::deserialize::{FromSql, FromSqlRow};
-use diesel::expression::AsExpression;
+use diesel::expression::{AsExpression, TypedExpressionType};
 use diesel::pg::sql_types::Uuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
-use diesel::sql_types::{SingleValue, Uuid as DieselUuid};
+use diesel::sql_types::{SingleValue, SqlType, Uuid as DieselUuid};
 use diesel_async::AsyncPgConnection;
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,10 @@ impl<T: Loadable> MaybeLoaded<T> {
         }
     }
 
+    pub fn from_id(id: T::Id) -> Self {
+        MaybeLoaded::NotLoaded(id)
+    }
+
     pub async fn get(
         &mut self,
         pg_connection: &mut AsyncPgConnection,
@@ -153,13 +157,37 @@ where
     }
 }
 
-impl<SqlType: SingleValue, T: Loadable + Debug> AsExpression<SqlType> for MaybeLoaded<T>
+impl<SqlTy: SqlType + TypedExpressionType, T: Loadable> AsExpression<SqlTy> for MaybeLoaded<T>
 where
-    T::Id: AsExpression<SqlType>,
+    T::Id: AsExpression<SqlTy>,
 {
-    type Expression = <<T as Loadable>::Id as AsExpression<SqlType>>::Expression;
+    type Expression = <<T as Loadable>::Id as AsExpression<SqlTy>>::Expression;
 
     fn as_expression(self) -> Self::Expression {
         self.id().clone().as_expression()
     }
 }
+
+impl<SqlTy: SqlType + TypedExpressionType, T: Loadable> AsExpression<SqlTy> for &MaybeLoaded<T>
+where
+    T::Id: AsExpression<SqlTy>,
+{
+    type Expression = <<T as Loadable>::Id as AsExpression<SqlTy>>::Expression;
+
+    fn as_expression(self) -> Self::Expression {
+        self.id().clone().as_expression()
+    }
+}
+
+impl<SqlTy: SqlType + TypedExpressionType, T: Loadable> AsExpression<SqlTy> for &mut MaybeLoaded<T>
+where
+    T::Id: AsExpression<SqlTy>,
+{
+    type Expression = <<T as Loadable>::Id as AsExpression<SqlTy>>::Expression;
+
+    fn as_expression(self) -> Self::Expression {
+        self.id().clone().as_expression()
+    }
+}
+
+pub const ASPEN_NATS_STREAM_NAME: &str = "aspen_omni_stream";

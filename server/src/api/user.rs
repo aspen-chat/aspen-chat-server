@@ -16,7 +16,16 @@ use diesel::result::DatabaseErrorKind;
 use diesel::{ExpressionMethods, QueryResult};
 use diesel_async::RunQueryDsl;
 use rust_i18n::t;
+use serde::{Deserialize, Serialize};
 use tracing::error;
+
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UserOnlineStatus {
+    Online,
+    Offline,
+    Away,
+}
 
 #[utoipa::path(post, path = "/user", responses((status = OK, body=UserCreateCommandResponse)))]
 pub async fn create_user(

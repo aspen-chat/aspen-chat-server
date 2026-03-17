@@ -28,12 +28,16 @@ pub fn message_enum_source(
     let mut record_types = Vec::new();
     for variant in en.variants {
         let mut events = true;
+        let mut commands = true;
         for attr in our_attrs(variant.attrs.iter()) {
             let r = attr.parse_nested_meta(|meta| {
                 let ident = meta.path.get_ident().expect("unrecognized value");
                 match ident.to_string().as_str() {
                     "no_events" => {
                         events = false;
+                    }
+                    "no_commands" => {
+                        commands = false;
                     }
                     _ => {
                         proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
@@ -206,7 +210,7 @@ pub fn message_enum_source(
                 other_fields.push(field);
             }
         }
-        if id_fields.is_empty() {
+        if id_fields.is_empty() && commands {
             abort!(
                 variant.ident.span(),
                 "no id field found, at least one field in each variant must be annotated with #[message_enum_source(id)]"
@@ -227,30 +231,33 @@ pub fn message_enum_source(
                 .then_some(id_field.field.clone())
         });
         let variant_ident = &variant.ident.clone();
-        let create_command_ident = format_ident!("{}CreateCommand", variant.ident);
-        let create_command_response_ident = format_ident!("{}CreateCommandResponse", variant.ident);
-        command_structs.push(quote! {
-            #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
-            #[serde(rename_all = "camelCase")]
-            pub struct #create_command_ident {
-                #(pub #client_auth_ids,)*
-                #(pub #other_fields,)*
-                #(pub #other_permanent_fields,)*
-                #(pub #secret_fields,)*
-            }
-
-            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
-            #[serde(rename_all = "camelCase")]
-            pub enum #create_command_response_ident {
-                CreateOk(super::#variant_ident),
-                NotAllowed {
-                    reason: Option<Cow<'static, str>>,
-                },
-                Error {
-                    cause: Option<Cow<'static, str>>,
+        if commands {
+            let create_command_ident = format_ident!("{}CreateCommand", variant.ident);
+            let create_command_response_ident =
+                format_ident!("{}CreateCommandResponse", variant.ident);
+            command_structs.push(quote! {
+                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub struct #create_command_ident {
+                    #(pub #client_auth_ids,)*
+                    #(pub #other_fields,)*
+                    #(pub #other_permanent_fields,)*
+                    #(pub #secret_fields,)*
                 }
-            }
-        });
+
+                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub enum #create_command_response_ident {
+                    CreateOk(super::#variant_ident),
+                    NotAllowed {
+                        reason: Option<Cow<'static, str>>,
+                    },
+                    Error {
+                        cause: Option<Cow<'static, str>>,
+                    }
+                }
+            });
+        }
         if events {
             event_sub_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]
@@ -258,9 +265,10 @@ pub fn message_enum_source(
             });
         }
         // Generate Read variant for command if we have any field that isn't an ID field
-        if !other_fields.is_empty()
-            || !server_authoritative_fields.is_empty()
-            || !other_permanent_fields.is_empty()
+        if commands
+            && (!other_fields.is_empty()
+                || !server_authoritative_fields.is_empty()
+                || !other_permanent_fields.is_empty())
         {
             let read_command_ident = format_ident!("{}ReadCommand", variant.ident);
             let read_command_response_ident = format_ident!("{}ReadCommandResponse", variant.ident);
@@ -285,52 +293,54 @@ pub fn message_enum_source(
             });
         }
         // Generate Read variants for associated relationships
-        for associated in associated_fields {
-            let read_command_ident = format_ident!(
-                "{}{}ReadCommand",
-                variant.ident,
-                associated
-                    .ident
-                    .as_ref()
-                    .unwrap()
-                    .to_string()
-                    .to_pascal_case()
-            );
-            let read_command_response_ident = format_ident!(
-                "{}{}ReadCommandResponse",
-                variant.ident,
-                associated
-                    .ident
-                    .as_ref()
-                    .unwrap()
-                    .to_string()
-                    .to_pascal_case()
-            );
-            let field_ty = associated.ty;
-            command_structs.push(quote! {
-                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
-                #[serde(rename_all = "camelCase")]
-                pub struct #read_command_ident {
-                    #(pub #id_fields_all,)*
-                    pub page_size: u32,
-                    pub page: u32,
-                }
-
-                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
-                #[serde(rename_all = "camelCase")]
-                pub enum #read_command_response_ident {
-                    #variant_ident {
-                        data: Vec<#field_ty>,
-                        page_count: u32,
-                    },
-                    NotAllowed {
-                        reason: Option<String>,
-                    },
-                    Error {
-                        cause: Option<String>,
+        if commands {
+            for associated in associated_fields {
+                let read_command_ident = format_ident!(
+                    "{}{}ReadCommand",
+                    variant.ident,
+                    associated
+                        .ident
+                        .as_ref()
+                        .unwrap()
+                        .to_string()
+                        .to_pascal_case()
+                );
+                let read_command_response_ident = format_ident!(
+                    "{}{}ReadCommandResponse",
+                    variant.ident,
+                    associated
+                        .ident
+                        .as_ref()
+                        .unwrap()
+                        .to_string()
+                        .to_pascal_case()
+                );
+                let field_ty = associated.ty;
+                command_structs.push(quote! {
+                    #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                    #[serde(rename_all = "camelCase")]
+                    pub struct #read_command_ident {
+                        #(pub #id_fields_all,)*
+                        pub page_size: u32,
+                        pub page: u32,
                     }
-                }
-            });
+
+                    #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+                    #[serde(rename_all = "camelCase")]
+                    pub enum #read_command_response_ident {
+                        #variant_ident {
+                            data: Vec<#field_ty>,
+                            page_count: u32,
+                        },
+                        NotAllowed {
+                            reason: Option<String>,
+                        },
+                        Error {
+                            cause: Option<String>,
+                        }
+                    }
+                });
+            }
         }
         // Generate update variants however, skip it if the variant has no other fields.
         if !other_fields.is_empty() {
@@ -370,27 +380,30 @@ pub fn message_enum_source(
             }
         }
         // Generate delete variant
-        let delete_command_ident = format_ident!("{}DeleteCommand", variant.ident);
-        let delete_command_response_ident = format_ident!("{}DeleteCommandResponse", variant.ident);
-        command_structs.push(quote! {
-            #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
-            #[serde(rename_all = "camelCase")]
-            pub struct #delete_command_ident {
-                #(pub #id_fields_all,)*
-            }
-
-            #[derive(::serde::Serialize, ::utoipa::ToSchema)]
-            #[serde(rename_all = "camelCase")]
-            pub enum #delete_command_response_ident {
-                DeleteOk,
-                NotAllowed {
-                    reason: Option<String>,
-                },
-                Error {
-                    cause: Option<String>,
+        if commands {
+            let delete_command_ident = format_ident!("{}DeleteCommand", variant.ident);
+            let delete_command_response_ident =
+                format_ident!("{}DeleteCommandResponse", variant.ident);
+            command_structs.push(quote! {
+                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub struct #delete_command_ident {
+                    #(pub #id_fields_all,)*
                 }
-            }
-        });
+
+                #[derive(::serde::Serialize, ::utoipa::ToSchema)]
+                #[serde(rename_all = "camelCase")]
+                pub enum #delete_command_response_ident {
+                    DeleteOk,
+                    NotAllowed {
+                        reason: Option<String>,
+                    },
+                    Error {
+                        cause: Option<String>,
+                    }
+                }
+            });
+        }
         if events {
             event_sub_variants.push(quote! {
                 #[serde(rename_all = "camelCase")]

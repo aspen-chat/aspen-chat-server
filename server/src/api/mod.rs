@@ -1,5 +1,5 @@
-use crate::app::{AttachmentId, UserId};
-use crate::{app, aspen_config::aspen_config, nats_connection_manager::NatsConnectionManager};
+use crate::app;
+use crate::app::{ASPEN_NATS_STREAM_NAME, AttachmentId, UserId};
 use axum::routing::{any, get};
 use diesel_async::{
     AsyncPgConnection,
@@ -18,11 +18,15 @@ pub(crate) mod react;
 pub(crate) mod user;
 
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::aspen_config::{AspenConfig, load_config};
+use async_nats::ConnectOptions;
+use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
 use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl};
 use futures_util::TryFutureExt;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tower::Layer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
@@ -163,26 +167,46 @@ pub struct ChannelPermissions {
 #[derive(Clone)]
 pub struct GlobalServerContext {
     pub connection_pool: Pool<AsyncPgConnection>,
-    pub nats_connection_manager: Arc<RwLock<NatsConnectionManager>>,
+    pub nats_context: Arc<async_nats::jetstream::Context>,
+    pub config: Arc<AspenConfig>,
 }
 
 impl GlobalServerContext {
     pub async fn new() -> Result<Self, app::Error> {
-        let config = aspen_config().await;
+        let config = load_config()?;
+        let client = async_nats::connect_with_options(
+            &config.nats_url,
+            ConnectOptions::new().token(config.nats_auth_token.clone()),
+        )
+        .await?;
+        let context = async_nats::jetstream::new(client);
+        context
+            .create_or_update_stream(async_nats::jetstream::stream::Config {
+                name: ASPEN_NATS_STREAM_NAME.to_string(),
+                discard: DiscardPolicy::Old,
+                max_messages: 1_000_000_000,
+                max_bytes: 8 * 1024 * 1024 * 1024,
+                max_age: MAX_EVENT_AGE,
+                storage: StorageType::Memory,
+                consumer_limits: Some(ConsumerLimits {
+                    max_ack_pending: 1000,
+                    inactive_threshold: Duration::from_secs(60),
+                }),
+                ..Default::default()
+            })
+            .await?;
         Ok(Self {
             connection_pool: {
                 let conn_manager =
-                    AsyncDieselConnectionManager::<AsyncPgConnection>::new(config.database_url);
+                    AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
                 Pool::builder(conn_manager)
                     .build()
                     .expect("Failed to init database connection pool")
             },
-            nats_connection_manager: Arc::new(RwLock::new(
-                NatsConnectionManager::new(config.nats_url, config.nats_auth_token).await?,
-            )),
+            nats_context: context.into(),
+            config: config.into(),
         })
     }
 }
 
-/// If a client misses this many messages at once it will be forcefully disconnected.
-const MAILBOX_SIZE: usize = 512;
+const MAX_EVENT_AGE: Duration = Duration::from_secs(60);

@@ -5,6 +5,7 @@ diesel::table! {
         id -> Uuid,
         mime_type -> Text,
         file_name -> Text,
+        timestamp -> Timestamptz,
     }
 }
 
@@ -48,6 +49,7 @@ diesel::table! {
         id -> Uuid,
         data -> Bytea,
         icon_mime_type -> Text,
+        timestamp -> Timestamptz,
     }
 }
 
@@ -56,8 +58,15 @@ diesel::table! {
         id -> Uuid,
         author -> Uuid,
         channel -> Uuid,
-        time -> Timestamp,
         content -> Text,
+        timestamp -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    message_attachment (message_id, attachment_id) {
+        message_id -> Uuid,
+        attachment_id -> Uuid,
     }
 }
 
@@ -75,6 +84,7 @@ diesel::table! {
         emoji -> Text,
         author -> Uuid,
         message -> Uuid,
+        timestamp -> Timestamptz,
     }
 }
 
@@ -100,6 +110,8 @@ diesel::table! {
         name -> Text,
         password_hash -> Text,
         icon -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        last_seen_at -> Timestamptz,
     }
 }
 
@@ -124,6 +136,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_user,
     icon,
     message,
+    message_attachment,
     other_server_auth_token,
     react,
     refresh_token,
