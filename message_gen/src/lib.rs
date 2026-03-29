@@ -66,7 +66,6 @@ pub fn message_enum_source(
         let mut other_fields = Vec::new();
         let mut other_permanent_fields = Vec::new();
         let mut server_authoritative_fields = Vec::new();
-        let mut associated_fields = Vec::new();
         // Basically exists just for the user password.
         let mut secret_fields = Vec::new();
         for field in fields.named {
@@ -75,7 +74,6 @@ pub fn message_enum_source(
             let mut is_server_authoritative = false;
             let mut is_secret = false;
             let mut is_other = true;
-            let mut is_associated = false;
             for attr in our_attrs(field.attrs.iter()) {
                 let r = attr.parse_nested_meta(|meta| {
                     let ident = meta.path.get_ident().expect("unrecognized value");
@@ -121,14 +119,6 @@ pub fn message_enum_source(
                             });
                             is_other = false;
                             is_secret = true;
-                        }
-                        "associated" => {
-                            associated_fields.push(Field {
-                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                                ..field.clone()
-                            });
-                            is_other = false;
-                            is_associated = true;
                         }
                         _ => {
                             proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
@@ -180,30 +170,6 @@ pub fn message_enum_source(
                 abort!(
                     field.span(),
                     "the combination of secret and permanent is not implemented"
-                )
-            }
-            if is_associated && is_id {
-                abort!(
-                    field.span(),
-                    "associated fields describe foreign relationships and thus cannot be an id value"
-                )
-            }
-            if is_associated && is_permanent {
-                abort!(
-                    field.span(),
-                    "associated fields are derived and thus not permanent or user specified"
-                )
-            }
-            if is_associated && is_server_authoritative {
-                abort!(
-                    field.span(),
-                    "associated fields are derived and thus necessarily server authoritative, you don't need both"
-                )
-            }
-            if is_associated && is_secret {
-                abort!(
-                    field.span(),
-                    "associated fields are derived, and thus cannot contain a user secret"
                 )
             }
             if is_other {
@@ -292,69 +258,30 @@ pub fn message_enum_source(
                 }
             });
         }
-        // Generate Read variants for associated relationships
-        if commands {
-            for associated in associated_fields {
-                let read_command_ident = format_ident!(
-                    "{}{}ReadCommand",
-                    variant.ident,
-                    associated
-                        .ident
-                        .as_ref()
-                        .unwrap()
-                        .to_string()
-                        .to_pascal_case()
-                );
-                let read_command_response_ident = format_ident!(
-                    "{}{}ReadCommandResponse",
-                    variant.ident,
-                    associated
-                        .ident
-                        .as_ref()
-                        .unwrap()
-                        .to_string()
-                        .to_pascal_case()
-                );
-                let field_ty = associated.ty;
-                command_structs.push(quote! {
-                    #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
-                    #[serde(rename_all = "camelCase")]
-                    pub struct #read_command_ident {
-                        #(pub #id_fields_all,)*
-                        pub page_size: u32,
-                        pub page: u32,
-                    }
 
-                    #[derive(::serde::Serialize, ::utoipa::ToSchema)]
-                    #[serde(rename_all = "camelCase")]
-                    pub enum #read_command_response_ident {
-                        #variant_ident {
-                            data: Vec<#field_ty>,
-                            page_count: u32,
-                        },
-                        NotAllowed {
-                            reason: Option<String>,
-                        },
-                        Error {
-                            cause: Option<String>,
-                        }
-                    }
-                });
-            }
-        }
         // Generate update variants however, skip it if the variant has no other fields.
         if !other_fields.is_empty() {
             // No need for a Read server event, we simply don't broadcast this.
             let update_command_ident = format_ident!("{}UpdateCommand", variant.ident);
             let update_command_response_ident =
                 format_ident!("{}UpdateCommandResponse", variant.ident);
+            let other_fields_ident = other_fields.iter().map(|f| {
+                f.ident.clone()
+            }).collect::<Vec<_>>();
+            let other_fields_ty = other_fields.iter().map(|f| {
+                f.ty.clone()
+            }).collect::<Vec<_>>();
+            let other_fields_attr = other_fields.iter().map(|f| {
+                let attrs = f.attrs.clone();
+                quote!(#(#attrs)*)
+            }).collect::<Vec<_>>();
             // Generate update variant
             command_structs.push(quote! {
                 #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub struct #update_command_ident {
                     #(pub #id_fields_all,)*
-                    #(pub #other_fields,)*
+                    #(#other_fields_attr pub #other_fields_ident: Option<#other_fields_ty>,)*
                 }
 
                 #[derive(::serde::Serialize, ::utoipa::ToSchema)]
@@ -374,7 +301,7 @@ pub fn message_enum_source(
                     #[serde(rename_all = "camelCase")]
                     Update {
                         #(#id_fields_all,)*
-                        #(#other_fields,)*
+                        #(#other_fields_attr #other_fields_ident: Option<#other_fields_ty>,)*
                     }
                 })
             }
@@ -487,4 +414,9 @@ fn not_our_attrs<'a>(
 struct IdField {
     field: Field,
     client_authoritative: bool,
+}
+
+struct AssociatedField {
+    field: Field,
+    no_paginated: bool,
 }

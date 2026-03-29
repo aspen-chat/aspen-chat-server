@@ -1,15 +1,16 @@
-use diesel::QueryId;
 use diesel::deserialize::{FromSql, FromSqlRow};
 use diesel::expression::{AsExpression, TypedExpressionType};
-use diesel::pg::sql_types::Uuid;
+use diesel::pg::sql_types::Uuid as PgUuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
 use diesel::sql_types::{SingleValue, SqlType, Uuid as DieselUuid};
-use diesel_async::AsyncPgConnection;
+use diesel::{QueryId, Queryable};
+use diesel_async::{AsyncPgConnection, TransactionManager};
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
 use std::fmt::{Debug, Display, Formatter};
+use std::result::Result as StdResult;
 
 pub mod attachment;
 pub mod category;
@@ -21,7 +22,10 @@ pub mod login;
 pub mod message;
 pub mod react;
 pub mod user;
+use crate::api::GlobalServerContext;
+use crate::api::message_enum::server_event::ServerEvent;
 pub use error::Error;
+pub use error::Result;
 
 macro_rules! id_type {
     ($type_name:ident) => {
@@ -41,7 +45,7 @@ macro_rules! id_type {
             schemars::JsonSchema,
         )]
         #[serde(transparent)]
-        #[diesel(sql_type = Uuid)]
+        #[diesel(sql_type = PgUuid)]
         pub struct $type_name(pub uuid::Uuid);
 
         impl $type_name {
@@ -63,7 +67,7 @@ macro_rules! id_type {
         }
 
         impl FromSql<DieselUuid, Pg> for $type_name {
-            fn from_sql(v: PgValue) -> Result<Self, Box<dyn StdError + Send + Sync + 'static>> {
+            fn from_sql(v: PgValue) -> StdResult<Self, Box<dyn StdError + Send + Sync + 'static>> {
                 uuid::Uuid::from_sql(v).map(|u| $type_name(u))
             }
         }
@@ -114,7 +118,7 @@ impl<T: Loadable> MaybeLoaded<T> {
     pub async fn get(
         &mut self,
         pg_connection: &mut AsyncPgConnection,
-    ) -> Result<&mut T, diesel::result::Error> {
+    ) -> StdResult<&mut T, diesel::result::Error> {
         match self {
             MaybeLoaded::Loaded(v) => Ok(v),
             MaybeLoaded::NotLoaded(id) => {
@@ -131,16 +135,27 @@ pub trait Loadable: Sized {
     fn load_from_db(
         pg_connection: &mut AsyncPgConnection,
         id: Self::Id,
-    ) -> impl Future<Output = Result<Self, diesel::result::Error>> + Send;
+    ) -> impl Future<Output = StdResult<Self, diesel::result::Error>> + Send;
 
     fn id(&self) -> &Self::Id;
+}
+
+impl<T: Loadable> Queryable<PgUuid, Pg> for MaybeLoaded<T>
+where
+    T::Id: From<uuid::Uuid>,
+{
+    type Row = uuid::Uuid;
+
+    fn build(row: Self::Row) -> diesel::deserialize::Result<Self> {
+        Ok(MaybeLoaded::NotLoaded(row.into()))
+    }
 }
 
 impl<SqlType, T: Loadable> FromSql<SqlType, Pg> for MaybeLoaded<T>
 where
     T::Id: FromSql<SqlType, Pg>,
 {
-    fn from_sql(v: PgValue) -> Result<Self, Box<dyn StdError + Send + Sync + 'static>> {
+    fn from_sql(v: PgValue) -> StdResult<Self, Box<dyn StdError + Send + Sync + 'static>> {
         Ok(Self::NotLoaded(T::Id::from_sql(v)?))
     }
 }
@@ -191,3 +206,15 @@ where
 }
 
 pub const ASPEN_NATS_STREAM_NAME: &str = "aspen_omni_stream";
+
+async fn publish_event(state: &GlobalServerContext, event: &ServerEvent) -> Result<()> {
+    state
+        .nats_context
+        .publish(
+            ASPEN_NATS_STREAM_NAME,
+            serde_json::to_string(&event)?.into_bytes().into(),
+        )
+        .await?
+        .await?;
+    Ok(())
+}

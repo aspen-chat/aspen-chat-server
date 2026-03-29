@@ -21,6 +21,17 @@ pub struct Message {
     pub timestamp: chrono::DateTime<Utc>,
 }
 
+pub struct MessageWithAttachments {
+    pub message: Message,
+    pub attachments: Vec<AttachmentId>,
+}
+
+impl Message {
+    pub(crate) async fn attachments(&self) {
+        todo!()
+    }
+}
+
 #[derive(Selectable, Queryable, Insertable)]
 #[diesel(table_name=message_attachment)]
 pub struct MessageAttachment {
@@ -33,7 +44,7 @@ pub async fn create_message(
     author: UserId,
     channel_id: ChannelId,
     content: String,
-    attachment: Vec<AttachmentId>,
+    attachments: Vec<AttachmentId>,
 ) -> Result<Message, app::Error> {
     let id = MessageId::new();
     let timestamp = Utc::now();
@@ -45,12 +56,11 @@ pub async fn create_message(
         author: MaybeLoaded::from_id(author),
         timestamp,
     };
-    AnsiTransactionManager::begin_transaction(conn.as_mut()).await?;
     diesel::insert_into(message::table)
         .values(&message)
         .execute(conn.as_mut())
         .await?;
-    for attachment in &attachment {
+    for attachment in &attachments {
         diesel::insert_into(message_attachment::table)
             .values(&MessageAttachment {
                 message_id: id,
@@ -64,17 +74,9 @@ pub async fn create_message(
         author,
         timestamp,
         content,
-        attachments: attachment,
+        attachments,
         channel_id,
     }));
-    state
-        .nats_context
-        .publish(
-            ASPEN_NATS_STREAM_NAME,
-            serde_json::to_string(&event)?.into_bytes().into(),
-        )
-        .await?
-        .await?;
-    AnsiTransactionManager::commit_transaction(conn.as_mut()).await?;
+    app::publish_event(state, &event).await?;
     Ok(message)
 }

@@ -6,6 +6,8 @@ use diesel_async::{
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
 use std::fs;
+use std::io::Write;
+
 pub(crate) mod category;
 pub(crate) mod channel;
 pub(crate) mod community;
@@ -21,7 +23,11 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::aspen_config::{AspenConfig, load_config};
 use async_nats::ConnectOptions;
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
-use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl};
+use diesel::deserialize::FromSql;
+use diesel::expression::AsExpression;
+use diesel::pg::Pg;
+use diesel::serialize::{IsNull, Output, ToSql};
+use diesel::{BoolExpressionMethods, ExpressionMethods as _, FromSqlRow, QueryDsl};
 use futures_util::TryFutureExt;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
@@ -107,6 +113,11 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             community::delete_community,
         ))
         .routes(routes!(
+            // UserCommunity
+            community::join_community,
+            community::leave_community,
+        ))
+        .routes(routes!(
             // Community Channels
             community::read_community_channels,
         ))
@@ -153,15 +164,47 @@ pub struct AttachmentMeta {
     preview: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Deserialize,
+    Serialize,
+    utoipa::ToSchema,
+    schemars::JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = crate::database::schema::sql_types::ChannelType)]
 pub enum ChannelType {
     Text,
     Voice,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
-pub struct ChannelPermissions {
-    // TODO
+impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
+        out.write_all(match self {
+            ChannelType::Text => b"text",
+            ChannelType::Voice => b"voice",
+        })?;
+        Ok(IsNull::No)
+    }
+}
+
+impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+    fn from_sql(
+        bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
+    ) -> diesel::deserialize::Result<Self> {
+        match bytes.as_bytes() {
+            b"voice" => Ok(ChannelType::Voice),
+            b"text" => Ok(ChannelType::Text),
+            _ => Err(format!(
+                "Unrecognized enum variant: {:?}",
+                String::from_utf8_lossy(bytes.as_bytes())
+            )
+            .into()),
+        }
+    }
 }
 
 #[derive(Clone)]

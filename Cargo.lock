@@ -209,6 +209,7 @@ dependencies = [
  "utoipa",
  "utoipa-axum",
  "uuid",
+ "vecmap-rs",
 ]
 
 [[package]]
@@ -3533,6 +3534,12 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "vecmap-rs"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9758649b51083aa8008666f41c23f05abca1766aad4cc447b195dd83ef1297b"
 
 [[package]]
 name = "version_check"

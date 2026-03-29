@@ -104,7 +104,17 @@ pub async fn update_user(
     State(state): State<GlobalServerContext>,
     Json(command): Json<UserUpdateCommand>,
 ) -> (StatusCode, Json<UserUpdateCommandResponse>) {
-    todo!()
+    match app::user::update_user(state, command).await {
+        Ok(_) => {
+            (StatusCode::OK, UserUpdateCommandResponse::UpdateOk.into())
+        }
+        Err(e) => {
+            error!(error = e.to_string(), "user update command error");
+            (StatusCode::INTERNAL_SERVER_ERROR, UserUpdateCommandResponse::Error {
+                cause: None
+            }.into())
+        }
+    }
 }
 
 #[utoipa::path(delete, path = "/user", responses((status = OK, body=UserDeleteCommandResponse)))]

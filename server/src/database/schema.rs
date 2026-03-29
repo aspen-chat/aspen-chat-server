@@ -1,5 +1,11 @@
 // @generated automatically by Diesel CLI.
 
+pub mod sql_types {
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "channel_type"))]
+    pub struct ChannelType;
+}
+
 diesel::table! {
     attachment (id) {
         id -> Uuid,
@@ -19,12 +25,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::ChannelType;
+
     channel (id) {
         id -> Uuid,
         community -> Nullable<Uuid>,
         parent_category -> Nullable<Uuid>,
         name -> Text,
-        ty -> Int4,
+        ty -> ChannelType,
         sort_index -> Int4,
     }
 }
@@ -122,6 +131,8 @@ diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
 diesel::joinable!(message -> channel (channel));
 diesel::joinable!(message -> user (author));
+diesel::joinable!(message_attachment -> attachment (attachment_id));
+diesel::joinable!(message_attachment -> message (message_id));
 diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));

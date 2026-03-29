@@ -1,4 +1,4 @@
-use crate::api::{ChannelPermissions, ChannelType, user::UserOnlineStatus};
+use crate::api::{ChannelType, user::UserOnlineStatus};
 use crate::app::{AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -7,7 +7,6 @@ use message_gen::message_enum_source;
 // for generating all Command types, and Server events. This comment is not a doc comment. This is intentional.
 #[message_enum_source]
 enum MessageEnumSource {
-    #[message_gen(no_events)]
     User {
         #[message_gen(id)]
         id: UserId,
@@ -32,8 +31,6 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
         attachments: Vec<AttachmentId>,
-        #[message_gen(associated)]
-        attachments: Attachment,
     },
     #[message_gen(no_events)]
     Attachment {
@@ -51,7 +48,7 @@ enum MessageEnumSource {
         message_id: MessageId,
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
-        sort_index: u32,
+        sort_index: i32,
     },
     React {
         #[message_gen(id = "client_authoritative")]
@@ -65,15 +62,11 @@ enum MessageEnumSource {
         #[message_gen(id)]
         id: ChannelId,
         parent_category: Option<CategoryId>,
+        community: Option<CommunityId>,
         name: String,
-        permissions: ChannelPermissions,
         #[message_gen(permanent)]
         ty: ChannelType,
-        sort_index: u32,
-        #[message_gen(associated)]
-        messages: Message,
-        #[message_gen(associated)]
-        pins: Pin,
+        sort_index: i32,
     },
     Category {
         #[message_gen(id)]
@@ -81,21 +74,13 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         community: CommunityId,
         name: String,
-        sort_index: u32,
-        #[message_gen(associated)]
-        channels: Channel,
+        sort_index: i32,
     },
     Community {
         #[message_gen(id)]
         id: CommunityId,
         name: String,
         icon: Option<IconId>,
-        #[message_gen(associated)]
-        channels: Channel,
-        #[message_gen(associated)]
-        categories: Category,
-        #[message_gen(associated)]
-        users: User,
     },
     UserCommunity {
         #[message_gen(id = "client_authoritative")]

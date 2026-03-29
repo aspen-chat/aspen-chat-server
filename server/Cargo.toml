@@ -48,3 +48,4 @@ schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }
 log = "0.4.27"
 time = "0.3.47"
 tungstenite = "0.28.0"
+vecmap-rs = "0.2.4"

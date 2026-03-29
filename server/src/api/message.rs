@@ -7,12 +7,13 @@ use crate::api::message_enum::command::{
     MessageUpdateCommand, MessageUpdateCommandResponse,
 };
 use crate::app;
-use crate::app::Error;
+use crate::app::{AttachmentId, Error};
 use crate::database::schema::user::dsl;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use rust_i18n::t;
+use tracing::error;
 
 #[utoipa::path(post, path = "/message", responses((status = OK, body=MessageCreateCommandResponse)))]
 
@@ -32,23 +33,29 @@ pub async fn create_message(
     match r {
         Ok(msg) => (
             StatusCode::OK,
-            MessageCreateCommandResponse::CreateOk(Message {
-                id: msg.id,
-                author: *msg.author.id(),
-                timestamp: msg.timestamp,
-                content: msg.content,
-                attachments: command.attachments,
-                channel_id: *msg.channel.id(),
-            })
-            .into(),
+            MessageCreateCommandResponse::CreateOk(message_to_api(msg, command.attachments)).into(),
         ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            MessageCreateCommandResponse::Error {
-                cause: t!("internalServerError").into(),
-            }
-            .into(),
-        ),
+        Err(e) => {
+            error!(error = e.to_string(), "message create command error");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                MessageCreateCommandResponse::Error {
+                    cause: None,
+                }
+                .into(),
+            )
+        }
+    }
+}
+
+pub fn message_to_api(msg: app::message::Message, attachments: Vec<AttachmentId>) -> Message {
+    Message {
+        id: msg.id,
+        author: *msg.author.id(),
+        timestamp: msg.timestamp,
+        content: msg.content,
+        attachments,
+        channel_id: *msg.channel.id(),
     }
 }
 
@@ -62,7 +69,6 @@ pub async fn read_message(
 }
 
 #[utoipa::path(patch, path = "/message", responses((status = OK, body=MessageUpdateCommandResponse)))]
-
 pub async fn update_message(
     State(state): State<GlobalServerContext>,
     Json(command): Json<MessageUpdateCommand>,

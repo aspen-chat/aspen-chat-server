@@ -1,14 +1,15 @@
-use crate::api::GlobalServerContext;
-use crate::api::message_enum::command::UserCreateCommand;
+use crate::api::{message_enum, GlobalServerContext};
+use crate::api::message_enum::command::{UserCreateCommand, UserUpdateCommand};
 use crate::app;
 use crate::app::icon::Icon;
 use crate::app::login::hash_password;
-use crate::app::{Loadable, MaybeLoaded, UserId};
+use crate::app::{publish_event, IconId, Loadable, MaybeLoaded, UserId};
 use crate::database::schema::user;
 use diesel::prelude::*;
-use diesel::result::Error;
 use diesel::{ExpressionMethods, Queryable, Selectable};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use crate::api::message_enum::server_event::UserEvent;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = user)]
@@ -20,13 +21,22 @@ pub struct User {
     pub password_hash: String,
 }
 
+#[derive(Debug, Clone, AsChangeset)]
+#[diesel(table_name = user)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct UserChangeset {
+    pub name: Option<String>,
+    pub icon: Option<Option<IconId>>,
+    pub password_hash: Option<String>,
+}
+
 impl Loadable for User {
     type Id = UserId;
 
     async fn load_from_db(
         pg_connection: &mut AsyncPgConnection,
         id: Self::Id,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, diesel::result::Error> {
         let user = user::table
             .select(User::as_select())
             .filter(user::dsl::id.eq(id))
@@ -73,4 +83,32 @@ pub async fn read_user(state: GlobalServerContext, id: UserId) -> Result<User, a
     let mut conn = state.connection_pool.get().await?;
     let user = User::load_from_db(conn.as_mut(), id).await?;
     Ok(user)
+}
+
+pub(crate) async fn update_user(
+    state: GlobalServerContext,
+    command: UserUpdateCommand,
+) -> Result<User, app::Error> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| async move {
+        let user = diesel::update(user::table)
+            .set(UserChangeset {
+                name: command.name.clone(),
+                icon: command.icon,
+                password_hash: None,
+            })
+            .filter(user::id.eq(command.id))
+            .returning(User::as_select())
+            .load(conn.as_mut())
+            .await?;
+        if user.len() == 0 {
+            return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+        }
+        publish_event(&state, &message_enum::server_event::ServerEvent::User(UserEvent::Update{
+            id: command.id,
+            name: command.name,
+            icon: command.icon,
+        })).await?;
+        Ok(user.into_iter().next().unwrap())
+    }.scope_boxed()).await
 }
