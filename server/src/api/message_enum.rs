@@ -87,6 +87,20 @@ enum MessageEnumSource {
         community: CommunityId,
         #[message_gen(id)]
         user: UserId,
+        #[message_gen(secret)]
+        invite_code: String,
+    },
+    #[message_gen(no_commands)]
+    Invite {
+        #[message_gen(id = "client_authoritative")]
+        code: String,
+        #[message_gen(permanent)]
+        community: CommunityId,
+        #[message_gen(server_authoritative)]
+        created_by: UserId,
+        #[message_gen(server_authoritative)]
+        created_at: chrono::DateTime<Utc>,
+        expires_at: Option<chrono::DateTime<Utc>>,
     },
     #[message_gen(no_events)]
     Icon {

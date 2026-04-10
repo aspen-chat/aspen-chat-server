@@ -44,7 +44,7 @@ async fn prepare_event_stream(
                     if let async_nats::Event::SlowConsumer(_) = event {
                         // Intentionally ignore errors, if the remote is already shutdown
                         // then our objective is already accomplished.
-                        let _ = force_shutdown_tx.send(());
+                        std::mem::drop(force_shutdown_tx.send(()));
                     }
                 }
             }),
@@ -68,63 +68,60 @@ async fn prepare_event_stream(
     Ok(ws.on_upgrade(|ws| handle_socket_conn(ws, messages, force_shutdown_rx)))
 }
 
-fn handle_socket_conn(
+async fn handle_socket_conn(
     mut socket: WebSocket,
     mut nats_consumer: Ordered,
     mut force_shutdown_rx: mpsc::Receiver<()>,
-) -> impl Future<Output = ()> {
-    async move {
-        loop {
-            tokio::select! {
-                msg = nats_consumer.next() => {
-                    let Some(msg) = msg else {
-                        break;
-                    };
-                    match msg {
-                        Ok(msg) => {
-                            let async_nats::jetstream::Message {
-                                message: async_nats::message::Message { payload, .. },
-                                ..
-                            } = msg;
-                            match payload.try_into() {
-                                Ok(v) => {
-                                    let ws_result = socket.send(Message::Text(v)).await;
-                                    if let Err(e) = ws_result {
-                                        let Some(e) = e
-                                            .source()
-                                            .map(|e| e.downcast_ref::<tungstenite::Error>())
-                                            .flatten()
-                                        else {
-                                            error!("unexpected error type on websocket send {e}");
+) {
+    loop {
+        tokio::select! {
+            msg = nats_consumer.next() => {
+                let Some(msg) = msg else {
+                    break;
+                };
+                match msg {
+                    Ok(msg) => {
+                        let async_nats::jetstream::Message {
+                            message: async_nats::message::Message { payload, .. },
+                            ..
+                        } = msg;
+                        match payload.try_into() {
+                            Ok(v) => {
+                                let ws_result = socket.send(Message::Text(v)).await;
+                                if let Err(e) = ws_result {
+                                    let Some(e) = e
+                                        .source()
+                                        .and_then(|e| e.downcast_ref::<tungstenite::Error>())
+                                    else {
+                                        error!("unexpected error type on websocket send {e}");
+                                        return;
+                                    };
+                                    match e {
+                                        tungstenite::Error::ConnectionClosed
+                                        | tungstenite::Error::AlreadyClosed => {
                                             return;
-                                        };
-                                        match e {
-                                            tungstenite::Error::ConnectionClosed
-                                            | tungstenite::Error::AlreadyClosed => {
-                                                return;
-                                            }
-                                            other => {
-                                                error!("websocket error on event stream {other}");
-                                                return;
-                                            }
+                                        }
+                                        other => {
+                                            error!("websocket error on event stream {other}");
+                                            return;
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    error!("NATS stream message contained invalid UTF-8 {e}");
-                                }
+                            }
+                            Err(e) => {
+                                error!("NATS stream message contained invalid UTF-8 {e}");
                             }
                         }
-                        Err(e) => {
-                            error!("NATS OrderedError {e}");
-                            return;
-                        }
                     }
-                },
-                _ = force_shutdown_rx.recv() => {
-                    error!("forcefully disconnecting user due to slow events download");
-                    break;
+                    Err(e) => {
+                        error!("NATS OrderedError {e}");
+                        return;
+                    }
                 }
+            },
+            _ = force_shutdown_rx.recv() => {
+                error!("forcefully disconnecting user due to slow events download");
+                break;
             }
         }
     }

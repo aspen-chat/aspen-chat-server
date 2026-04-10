@@ -4,18 +4,15 @@ use crate::api::message_enum::command::{
     ChannelDeleteCommandResponse, ChannelReadCommand, ChannelReadCommandResponse,
     ChannelUpdateCommand, ChannelUpdateCommandResponse,
 };
-use crate::api::message_enum::{Category, Message, Pin};
+use crate::api::message_enum::{Message, Pin};
 use crate::api::{GlobalServerContext, message_enum};
-use crate::app::{ChannelId, CommunityId, MaybeLoaded, MessageId};
-use crate::database::schema::message::channel;
-use crate::{api, app};
+use crate::app;
+use crate::app::{ChannelId, Error, MaybeLoaded, MessageId};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use futures_util::stream;
-use futures_util::{StreamExt, TryStreamExt};
-use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use tracing::error;
 use utoipa::ToSchema;
 
@@ -42,10 +39,7 @@ pub async fn create_channel(
             error!(error = e.to_string(), "channel create command error");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ChannelCreateCommandResponse::Error {
-                    cause: None,
-                }
-                .into(),
+                ChannelCreateCommandResponse::Error { cause: None }.into(),
             )
         }
     }
@@ -72,16 +66,19 @@ pub async fn read_channel(
             StatusCode::OK,
             ChannelReadCommandResponse::Channel(channel_to_api(c)).into(),
         ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading channel");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ChannelReadCommandResponse::Error {
-                    cause: None,
-                }
-                .into(),
-            )
-        }
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                ChannelReadCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error reading channel");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ChannelReadCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
     }
 }
 
@@ -116,8 +113,8 @@ pub enum ChannelViewDescription {
 #[serde(rename_all = "camelCase")]
 pub enum ChannelMessagesReadCommandResponse {
     Messages { data: Vec<Message> },
-    NotAllowed { reason: Option<String> },
-    Error { cause: Option<String> },
+    NotAllowed { reason: Option<Cow<'static, str>> },
+    Error { cause: Option<Cow<'static, str>> },
 }
 
 #[utoipa::path(get, path = "/channel/messages", responses((status = OK, body=ChannelMessagesReadCommandResponse)))]
@@ -138,16 +135,19 @@ pub async fn read_channel_messages(
             }
             .into(),
         ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading channel messages");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ChannelMessagesReadCommandResponse::Error {
-                    cause: None,
-                }
-                .into(),
-            )
-        }
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                ChannelMessagesReadCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error reading channel messages");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ChannelMessagesReadCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
     }
 }
 
@@ -161,8 +161,8 @@ pub struct ChannelPinsReadCommand {
 #[serde(rename_all = "camelCase")]
 pub enum ChannelPinsReadCommandResponse {
     Pins { data: Vec<Pin> },
-    NotAllowed { reason: Option<String> },
-    Error { cause: Option<String> },
+    NotAllowed { reason: Option<Cow<'static, str>> },
+    Error { cause: Option<Cow<'static, str>> },
 }
 
 #[utoipa::path(get, path = "/channel/pins", responses((status = OK, body=ChannelPinsReadCommandResponse)))]
@@ -170,7 +170,35 @@ pub async fn read_channel_pins(
     State(state): State<GlobalServerContext>,
     Json(command): Json<ChannelPinsReadCommand>,
 ) -> (StatusCode, Json<ChannelPinsReadCommandResponse>) {
-    todo!()
+    match app::channel::read_channel_pins(&state, command.channel).await {
+        Ok(pins) => (
+            StatusCode::OK,
+            ChannelPinsReadCommandResponse::Pins {
+                data: pins
+                    .into_iter()
+                    .map(|p| Pin {
+                        message_id: p.message_id,
+                        timestamp: p.timestamp,
+                        sort_index: p.sort_index,
+                    })
+                    .collect(),
+            }
+            .into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                ChannelPinsReadCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error reading channel pins");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ChannelPinsReadCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }
 
 #[utoipa::path(patch, path = "/channel", responses((status = OK, body=ChannelUpdateCommandResponse)))]
@@ -178,7 +206,25 @@ pub async fn update_channel(
     State(state): State<GlobalServerContext>,
     Json(command): Json<ChannelUpdateCommand>,
 ) -> (StatusCode, Json<ChannelUpdateCommandResponse>) {
-    todo!()
+    match app::channel::update_channel(&state, command).await {
+        Ok(_) => (
+            StatusCode::OK,
+            ChannelUpdateCommandResponse::UpdateOk.into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                ChannelUpdateCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error updating channel");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ChannelUpdateCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }
 
 #[utoipa::path(delete, path = "/channel", responses((status = OK, body=ChannelDeleteCommandResponse)))]
@@ -186,5 +232,23 @@ pub async fn delete_channel(
     State(state): State<GlobalServerContext>,
     Json(command): Json<ChannelDeleteCommand>,
 ) -> (StatusCode, Json<ChannelDeleteCommandResponse>) {
-    todo!()
+    match app::channel::delete_channel(&state, command.id).await {
+        Ok(()) => (
+            StatusCode::OK,
+            ChannelDeleteCommandResponse::DeleteOk.into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                ChannelDeleteCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error deleting channel");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ChannelDeleteCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }

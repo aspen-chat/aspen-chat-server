@@ -1,15 +1,15 @@
-use crate::api::{message_enum, GlobalServerContext};
 use crate::api::message_enum::command::{UserCreateCommand, UserUpdateCommand};
+use crate::api::message_enum::server_event::UserEvent;
+use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::icon::Icon;
 use crate::app::login::hash_password;
-use crate::app::{publish_event, IconId, Loadable, MaybeLoaded, UserId};
+use crate::app::{IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::user;
 use diesel::prelude::*;
-use diesel::{ExpressionMethods, Queryable, Selectable};
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel::{BoolExpressionMethods, ExpressionMethods, Queryable, Selectable};
 use diesel_async::scoped_futures::ScopedFutureExt;
-use crate::api::message_enum::server_event::UserEvent;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = user)]
@@ -19,6 +19,7 @@ pub struct User {
     pub name: String,
     pub icon: Option<MaybeLoaded<Icon>>,
     pub password_hash: String,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, AsChangeset)]
@@ -39,7 +40,7 @@ impl Loadable for User {
     ) -> Result<Self, diesel::result::Error> {
         let user = user::table
             .select(User::as_select())
-            .filter(user::dsl::id.eq(id))
+            .filter(user::dsl::id.eq(id).and(user::dsl::deleted_at.is_null()))
             .first(pg_connection)
             .await?;
         Ok(user)
@@ -73,6 +74,7 @@ pub async fn create_user(
             name: command.name.clone(),
             icon: command.icon.map(MaybeLoaded::NotLoaded),
             password_hash,
+            deleted_at: None,
         })
         .execute(conn.as_mut())
         .await?;
@@ -90,25 +92,59 @@ pub(crate) async fn update_user(
     command: UserUpdateCommand,
 ) -> Result<User, app::Error> {
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| async move {
-        let user = diesel::update(user::table)
-            .set(UserChangeset {
-                name: command.name.clone(),
-                icon: command.icon,
-                password_hash: None,
-            })
-            .filter(user::id.eq(command.id))
-            .returning(User::as_select())
-            .load(conn.as_mut())
+    conn.transaction(|conn| {
+        async move {
+            let Some(user) = diesel::update(user::table)
+                .set(UserChangeset {
+                    name: command.name.clone(),
+                    icon: command.icon,
+                    password_hash: None,
+                })
+                .filter(user::id.eq(command.id).and(user::deleted_at.is_null()))
+                .returning(User::as_select())
+                .load(conn.as_mut())
+                .await?
+                .into_iter()
+                .next()
+            else {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            };
+            publish_event(
+                &state,
+                &message_enum::server_event::ServerEvent::User(UserEvent::Update {
+                    id: command.id,
+                    name: command.name,
+                    icon: command.icon,
+                }),
+            )
             .await?;
-        if user.len() == 0 {
-            return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            Ok(user)
         }
-        publish_event(&state, &message_enum::server_event::ServerEvent::User(UserEvent::Update{
-            id: command.id,
-            name: command.name,
-            icon: command.icon,
-        })).await?;
-        Ok(user.into_iter().next().unwrap())
-    }.scope_boxed()).await
+        .scope_boxed()
+    })
+    .await
+}
+
+pub(crate) async fn delete_user(state: GlobalServerContext, id: UserId) -> Result<(), app::Error> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let deleted = diesel::update(user::table)
+                .set(user::deleted_at.eq(diesel::dsl::now))
+                .filter(user::id.eq(id).and(user::deleted_at.is_null()))
+                .execute(conn.as_mut())
+                .await?;
+            if deleted == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            publish_event(
+                &state,
+                &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
+            )
+            .await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }

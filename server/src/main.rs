@@ -69,6 +69,11 @@ struct Opt {
 
     #[clap(long)]
     gen_openapi_schema: bool,
+    /// Run a one-off companion migration task and exit.
+    /// Current supported values:
+    /// - icon-storage-key-backfill-v1
+    #[clap(long)]
+    run_companion_migration: Option<String>,
 }
 
 thread_local! {
@@ -255,7 +260,6 @@ async fn run(options: Opt) -> Result<()> {
                     }
                     Err(e) => {
                         error!("error establishing TLS {e}");
-                        return;
                     }
                 },
                 None => {

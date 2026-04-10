@@ -4,18 +4,15 @@ use argon2::{
 };
 use base64::{Engine, prelude::BASE64_STANDARD};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use diesel::{ExpressionMethods as _, QueryDsl, SelectableHelper};
-use diesel_async::pooled_connection::deadpool;
+use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use futures_util::{StreamExt, TryFutureExt};
-use rand::{Rng, RngExt};
+use futures_util::StreamExt;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tracing::error;
-use uuid::Uuid;
 
 use crate::api::GlobalServerContext;
 use crate::api::login::authenticated_user;
-use crate::app::Loadable;
 use crate::app::user::User;
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
 
@@ -96,6 +93,7 @@ pub async fn try_login(
     let user_entry: Result<User, _> = user
         .select(User::as_select())
         .filter(name.eq(username))
+        .filter(deleted_at.is_null())
         .first(conn)
         .await;
     match user_entry {
@@ -256,7 +254,11 @@ pub async fn try_change_password(
     let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
         .select(schema::user::password_hash)
-        .filter(schema::user::id.eq(&c.user_id.0))
+        .filter(
+            schema::user::id
+                .eq(&c.user_id.0)
+                .and(schema::user::deleted_at.is_null()),
+        )
         .first(conn)
         .await?;
     if check_password(&c.old_password, &entry_password_hash) {
@@ -266,10 +268,16 @@ pub async fn try_change_password(
             });
         }
         let new_password_hash = hash_password(&c.new_password)?;
-        diesel::update(schema::user::table.filter(schema::user::id.eq(&c.user_id.0)))
-            .set(schema::user::password_hash.eq(new_password_hash))
-            .execute(conn)
-            .await?;
+        diesel::update(
+            schema::user::table.filter(
+                schema::user::id
+                    .eq(&c.user_id.0)
+                    .and(schema::user::deleted_at.is_null()),
+            ),
+        )
+        .set(schema::user::password_hash.eq(new_password_hash))
+        .execute(conn)
+        .await?;
         Ok(ChangePasswordResponse::Ok)
     } else {
         Ok(ChangePasswordResponse::OldPasswordIncorrect)

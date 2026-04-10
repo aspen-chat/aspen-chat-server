@@ -1,6 +1,6 @@
 use crate::app;
-use crate::app::{ASPEN_NATS_STREAM_NAME, AttachmentId, UserId};
-use axum::routing::{any, get};
+use crate::app::ASPEN_NATS_STREAM_NAME;
+use axum::routing::any;
 use diesel_async::{
     AsyncPgConnection,
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
@@ -8,11 +8,13 @@ use diesel_async::{
 use std::fs;
 use std::io::Write;
 
+pub(crate) mod attachment;
 pub(crate) mod category;
 pub(crate) mod channel;
 pub(crate) mod community;
 mod event_stream;
 pub(crate) mod icon;
+pub(crate) mod invite;
 pub(crate) mod login;
 pub(crate) mod message;
 pub(crate) mod message_enum;
@@ -23,18 +25,15 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::aspen_config::{AspenConfig, load_config};
 use async_nats::ConnectOptions;
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
+use diesel::FromSqlRow;
 use diesel::deserialize::FromSql;
 use diesel::expression::AsExpression;
 use diesel::pg::Pg;
 use diesel::serialize::{IsNull, Output, ToSql};
-use diesel::{BoolExpressionMethods, ExpressionMethods as _, FromSqlRow, QueryDsl};
-use futures_util::TryFutureExt;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tower::Layer;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
 use utoipa_axum::router::OpenApiRouter;
@@ -130,14 +129,28 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             community::read_community_users,
         ))
         .routes(routes!(
+            // Attachment
+            attachment::create_attachment,
+            attachment::read_attachment,
+            attachment::delete_attachment,
+        ))
+        .routes(routes!(
             // Icon
             icon::create_icon,
+            icon::read_icon,
             icon::delete_icon,
         ))
         .routes(routes!(
             // React
             react::create_react,
             react::delete_react,
+        ))
+        .routes(routes!(
+            // Invite
+            invite::create_invite,
+            invite::read_community_invites,
+            invite::update_invite,
+            invite::revoke_invite,
         ))
         // Events
         .route("/event_stream", any(event_stream::event_stream));
@@ -154,14 +167,6 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     let router = router.with_state(GlobalServerContext::new().await?);
 
     Ok(router.into())
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
-pub struct AttachmentMeta {
-    attachment_id: AttachmentId,
-    mime_type: String,
-    file_name: String,
-    preview: Vec<u8>,
 }
 
 #[derive(
@@ -211,6 +216,8 @@ impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelTyp
 pub struct GlobalServerContext {
     pub connection_pool: Pool<AsyncPgConnection>,
     pub nats_context: Arc<async_nats::jetstream::Context>,
+    pub valkey: fred::clients::Client,
+    pub media_store: Arc<app::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
 }
 
@@ -238,15 +245,29 @@ impl GlobalServerContext {
                 ..Default::default()
             })
             .await?;
+        let valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
+        let valkey = fred::prelude::Client::new(valkey_config, None, None, None);
+        fred::prelude::ClientLike::init(&valkey).await?;
+
+        // Enable expired key notifications and subscribe
+        use fred::interfaces::ConfigInterface;
+        use fred::prelude::PubsubInterface;
+        valkey.config_set("notify-keyspace-events", "Ex").await?;
+        valkey.psubscribe("__keyevent@*__:expired").await?;
+
+        let nats_arc: Arc<async_nats::jetstream::Context> = context.into();
+        app::user_status::spawn_expiry_listener(valkey.clone(), nats_arc.clone());
+        let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
+
         Ok(Self {
             connection_pool: {
                 let conn_manager =
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-                Pool::builder(conn_manager)
-                    .build()
-                    .expect("Failed to init database connection pool")
+                Pool::builder(conn_manager).build()?
             },
-            nats_context: context.into(),
+            nats_context: nats_arc,
+            valkey,
+            media_store,
             config: config.into(),
         })
     }

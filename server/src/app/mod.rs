@@ -3,9 +3,9 @@ use diesel::expression::{AsExpression, TypedExpressionType};
 use diesel::pg::sql_types::Uuid as PgUuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
-use diesel::sql_types::{SingleValue, SqlType, Uuid as DieselUuid};
+use diesel::sql_types::{SqlType, Uuid as DieselUuid};
 use diesel::{QueryId, Queryable};
-use diesel_async::{AsyncPgConnection, TransactionManager};
+use diesel_async::AsyncPgConnection;
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
@@ -18,10 +18,13 @@ pub mod channel;
 pub mod community;
 mod error;
 pub mod icon;
+pub mod invite;
 pub mod login;
+pub mod media_store;
 pub mod message;
 pub mod react;
 pub mod user;
+pub mod user_status;
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
 pub use error::Error;
@@ -107,7 +110,7 @@ impl<T: Loadable> MaybeLoaded<T> {
     pub fn id(&self) -> &T::Id {
         match self {
             MaybeLoaded::Loaded(l) => l.id(),
-            MaybeLoaded::NotLoaded(id) => &id,
+            MaybeLoaded::NotLoaded(id) => id,
         }
     }
 

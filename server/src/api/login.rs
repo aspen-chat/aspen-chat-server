@@ -1,24 +1,21 @@
-use crate::api::{GlobalServerContext, UserId};
-use crate::app;
+use crate::api::GlobalServerContext;
 use crate::app::login::{
     ChangePassword, ChangePasswordResponse, Login, LoginResponse, Logout, LogoutResponse,
     OtherServerAuth, OtherServerAuthResponse, TokenRefresh, TokenRefreshResponse,
 };
 use crate::app::user::User;
-use crate::database::schema::refresh_token;
+use crate::app::{self, UserId};
 use axum::Json;
-use axum::extract::{FromRequest, FromRequestParts, Request, State};
+use axum::extract::{FromRequestParts, State};
 use axum::http::StatusCode;
-use axum::http::header::ToStrError;
 use axum::http::request::Parts;
 use chrono::Utc;
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
-use diesel_async::return_futures::GetResult;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::TryFutureExt;
 use hyper::header::AUTHORIZATION;
-use std::task::{Context, Poll};
-use tower::Service;
+use rust_i18n::t;
+use std::borrow::Cow;
 use tracing::error;
 
 #[utoipa::path(post, path = "/login", responses((status = OK, body=LoginResponse)))]
@@ -119,7 +116,7 @@ pub async fn change_password(
         }
     };
     let status_code = match &resp {
-        ChangePasswordResponse::Ok { .. } => StatusCode::OK,
+        ChangePasswordResponse::Ok => StatusCode::OK,
         ChangePasswordResponse::OldPasswordIncorrect => StatusCode::UNAUTHORIZED,
         ChangePasswordResponse::NewPasswordDoesntMeetRequirements { .. } => StatusCode::BAD_REQUEST,
         ChangePasswordResponse::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
@@ -158,21 +155,22 @@ pub async fn authenticated_user(
     mut conn: impl AsMut<AsyncPgConnection>,
     session_token: String,
 ) -> Result<Option<UserId>, app::Error> {
-    use crate::database::schema::{refresh_token, session};
+    use crate::database::schema::{refresh_token, session, user};
     use chrono::Utc;
     use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl};
     use diesel_async::RunQueryDsl;
     use futures_util::StreamExt;
 
     let now = Utc::now().naive_utc();
-    let maybe_user_id = session::table
-        .inner_join(refresh_token::table)
-        .select(refresh_token::dsl::user)
+    let maybe_user_id = user::table
+        .inner_join(refresh_token::table.inner_join(session::table))
+        .select(user::dsl::id)
         .filter(
             session::token
                 .eq(session_token)
                 .and(session::expires.ge(now))
-                .and(refresh_token::expires.ge(now)),
+                .and(refresh_token::expires.ge(now))
+                .and(user::deleted_at.is_null()),
         )
         .limit(1)
         .load_stream::<uuid::Uuid>(conn.as_mut())
@@ -187,7 +185,7 @@ pub async fn authenticated_user(
 #[derive(Clone)]
 pub struct SessionUser(pub User);
 impl FromRequestParts<GlobalServerContext> for SessionUser {
-    type Rejection = (StatusCode, &'static str);
+    type Rejection = (StatusCode, Cow<'static, str>);
 
     fn from_request_parts(
         parts: &mut Parts,
@@ -195,27 +193,26 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         use crate::database::schema::{self, refresh_token, session};
         async move {
-            const INVALID_AUTH: (StatusCode, &'static str) =
-                (StatusCode::UNAUTHORIZED, "invalid auth token");
+            let invalid_auth = || (StatusCode::UNAUTHORIZED, t!("invalidAuthToken"));
             let Some(auth) = parts.headers.get(AUTHORIZATION) else {
-                return Err(INVALID_AUTH);
+                return Err(invalid_auth());
             };
             let auth = match auth.to_str() {
                 Ok(s) => s,
-                Err(_) => return Err(INVALID_AUTH),
+                Err(_) => return Err(invalid_auth()),
             };
             let token = auth
                 .strip_prefix("Token ")
                 .or_else(|| auth.strip_prefix("TOKEN "))
                 .or_else(|| auth.strip_prefix("token "));
             let Some(token) = token else {
-                return Err(INVALID_AUTH);
+                return Err(invalid_auth());
             };
             let mut conn = match state.connection_pool.get().await {
                 Ok(conn) => conn,
                 Err(e) => {
                     error!("error getting database connection from pool {e}");
-                    return Err((StatusCode::INTERNAL_SERVER_ERROR, "Please try again later."));
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, t!("tryAgainLater")));
                 }
             };
             let now = Utc::now().naive_utc();
@@ -226,18 +223,67 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
                     session::dsl::token
                         .eq(&token)
                         .and(session::dsl::expires.ge(now))
-                        .and(refresh_token::dsl::expires.ge(now)),
+                        .and(refresh_token::dsl::expires.ge(now))
+                        .and(schema::user::deleted_at.is_null()),
                 )
                 .first(conn.as_mut())
                 .await;
             match select_result {
-                Ok(user) => Ok(SessionUser(user)),
+                Ok(user) => {
+                    let valkey = state.valkey.clone();
+                    let nats = state.nats_context.clone();
+                    let user_id = user.id;
+                    tokio::spawn(async move {
+                        use fred::prelude::KeysInterface;
+                        let key = format!("user:{}:online", user_id);
+                        // SET NX: only succeeds if the key doesn't exist (user was offline)
+                        let became_online: bool = match valkey
+                            .set::<fred::types::Value, _, _>(
+                                &key,
+                                "1",
+                                Some(fred::types::Expiration::EX(60)),
+                                Some(fred::types::SetOptions::NX),
+                                false,
+                            )
+                            .await
+                        {
+                            Ok(v) => !v.is_null(),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to update user online status in Valkey");
+                                return;
+                            }
+                        };
+                        if became_online {
+                            // User just came online — publish event
+                            if let Err(e) =
+                                crate::app::user_status::publish_online(&nats, user_id).await
+                            {
+                                tracing::warn!(error = %e, "failed to publish user online event");
+                            }
+                        } else {
+                            // Already online — just refresh the TTL
+                            if let Err(e) = valkey
+                                .set::<(), _, _>(
+                                    &key,
+                                    "1",
+                                    Some(fred::types::Expiration::EX(60)),
+                                    None,
+                                    false,
+                                )
+                                .await
+                            {
+                                tracing::warn!(error = %e, "failed to refresh user online TTL in Valkey");
+                            }
+                        }
+                    });
+                    Ok(SessionUser(user))
+                }
                 Err(e) => {
                     if let diesel::result::Error::NotFound = e {
-                        Err(INVALID_AUTH)
+                        Err(invalid_auth())
                     } else {
                         error!("error during authentication {e}");
-                        Err((StatusCode::INTERNAL_SERVER_ERROR, "Please try again later."))
+                        Err((StatusCode::INTERNAL_SERVER_ERROR, t!("tryAgainLater")))
                     }
                 }
             }

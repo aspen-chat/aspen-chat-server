@@ -1,4 +1,5 @@
 use crate::api::channel::ChannelViewDescription;
+use crate::api::message_enum::command::ChannelUpdateCommand;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
@@ -7,13 +8,16 @@ use crate::app::community::Community;
 use crate::app::message::{Message, MessageWithAttachments};
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, Loadable, MaybeLoaded, MessageId,
+    publish_event,
 };
 use crate::database::schema::message_attachment;
 use crate::database::schema::{channel, message};
 use diesel::{
-    CombineDsl, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, CombineDsl, ExpressionMethods, Insertable, QueryDsl,
+    Queryable, Selectable, SelectableHelper,
 };
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use vecmap::VecMap;
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
@@ -26,16 +30,26 @@ pub struct Channel {
     pub name: String,
     pub ty: ChannelType,
     pub sort_index: i32,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Loadable for Channel {
     type Id = ChannelId;
 
     async fn load_from_db(
-        _pg_connection: &mut AsyncPgConnection,
-        _id: Self::Id,
+        pg_connection: &mut AsyncPgConnection,
+        id: Self::Id,
     ) -> Result<Self, diesel::result::Error> {
-        todo!()
+        let channel = channel::table
+            .select(Channel::as_select())
+            .filter(
+                channel::dsl::id
+                    .eq(id)
+                    .and(channel::dsl::deleted_at.is_null()),
+            )
+            .first(pg_connection)
+            .await?;
+        Ok(channel)
     }
 
     fn id(&self) -> &Self::Id {
@@ -60,6 +74,7 @@ pub async fn create_channel(
         ty,
         sort_index,
         name: name.clone(),
+        deleted_at: None,
     };
     diesel::insert_into(channel::table)
         .values(&channel)
@@ -84,7 +99,7 @@ pub(crate) async fn read_channel(
     let mut conn = state.connection_pool.get().await?;
     let channel = channel::table
         .select(Channel::as_select())
-        .filter(channel::id.eq(id))
+        .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
     Ok(channel)
@@ -98,9 +113,14 @@ pub(crate) async fn read_channel_messages(
     channel_view_description: ChannelViewDescription,
 ) -> app::error::Result<Vec<MessageWithAttachments>> {
     let mut conn = state.connection_pool.get().await?;
+    channel::table
+        .select(Channel::as_select())
+        .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
     let query = message::table
         .select(Message::as_select())
-        .filter(message::channel.eq(id));
+        .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
     let messages: Vec<Message> = match channel_view_description {
         ChannelViewDescription::Before { message, count } => {
             query
@@ -163,4 +183,119 @@ pub(crate) async fn read_channel_messages(
         }
     }
     Ok(ret.into_values().collect())
+}
+
+use crate::database::schema::pin;
+
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = pin)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Pin {
+    pub message_id: MessageId,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub sort_index: i32,
+}
+
+pub(crate) async fn read_channel_pins(
+    state: &GlobalServerContext,
+    channel_id: ChannelId,
+) -> app::error::Result<Vec<Pin>> {
+    let mut conn = state.connection_pool.get().await?;
+    channel::table
+        .select(Channel::as_select())
+        .filter(
+            channel::id
+                .eq(channel_id)
+                .and(channel::deleted_at.is_null()),
+        )
+        .first(conn.as_mut())
+        .await?;
+    let pins = pin::table
+        .inner_join(message::table)
+        .select(Pin::as_select())
+        .filter(
+            pin::channel
+                .eq(channel_id)
+                .and(message::deleted_at.is_null()),
+        )
+        .order_by(pin::sort_index.asc())
+        .load(conn.as_mut())
+        .await?;
+    Ok(pins)
+}
+
+#[derive(Debug, Clone, AsChangeset)]
+#[diesel(table_name = channel)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct ChannelChangeset {
+    pub parent_category: Option<Option<CategoryId>>,
+    pub community: Option<Option<CommunityId>>,
+    pub name: Option<String>,
+    pub sort_index: Option<i32>,
+}
+
+pub(crate) async fn update_channel(
+    state: &GlobalServerContext,
+    command: ChannelUpdateCommand,
+) -> app::error::Result<Channel> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let rows = diesel::update(channel::table)
+                .set(ChannelChangeset {
+                    parent_category: command.parent_category,
+                    community: command.community,
+                    name: command.name.clone(),
+                    sort_index: command.sort_index,
+                })
+                .filter(
+                    channel::id
+                        .eq(command.id)
+                        .and(channel::deleted_at.is_null()),
+                )
+                .returning(Channel::as_select())
+                .load(conn.as_mut())
+                .await?;
+            if rows.is_empty() {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            publish_event(
+                state,
+                &ServerEvent::Channel(ChannelEvent::Update {
+                    id: command.id,
+                    parent_category: command.parent_category,
+                    community: command.community,
+                    name: command.name,
+                    sort_index: command.sort_index,
+                }),
+            )
+            .await?;
+            Ok(rows.into_iter().next().unwrap())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+pub(crate) async fn delete_channel(
+    state: &GlobalServerContext,
+    id: ChannelId,
+) -> app::error::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let deleted = diesel::update(channel::table)
+                .set(channel::deleted_at.eq(diesel::dsl::now))
+                .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
+                .execute(conn.as_mut())
+                .await?;
+            if deleted == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            publish_event(state, &ServerEvent::Channel(ChannelEvent::Delete { id })).await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }

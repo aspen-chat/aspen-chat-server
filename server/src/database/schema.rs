@@ -12,6 +12,7 @@ diesel::table! {
         mime_type -> Text,
         file_name -> Text,
         timestamp -> Timestamptz,
+        storage_key -> Text,
     }
 }
 
@@ -21,6 +22,7 @@ diesel::table! {
         community -> Uuid,
         name -> Text,
         sort_index -> Int4,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -35,6 +37,7 @@ diesel::table! {
         name -> Text,
         ty -> ChannelType,
         sort_index -> Int4,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -43,6 +46,7 @@ diesel::table! {
         id -> Uuid,
         name -> Text,
         icon -> Nullable<Uuid>,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -56,9 +60,20 @@ diesel::table! {
 diesel::table! {
     icon (id) {
         id -> Uuid,
-        data -> Bytea,
         icon_mime_type -> Text,
         timestamp -> Timestamptz,
+        storage_key -> Text,
+    }
+}
+
+diesel::table! {
+    invite (code) {
+        code -> Text,
+        community -> Uuid,
+        created_by -> Uuid,
+        created_at -> Timestamptz,
+        expires_at -> Nullable<Timestamptz>,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -69,6 +84,7 @@ diesel::table! {
         channel -> Uuid,
         content -> Text,
         timestamp -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -85,6 +101,15 @@ diesel::table! {
         expires -> Timestamp,
         user -> Uuid,
         domain -> Text,
+    }
+}
+
+diesel::table! {
+    pin (message_id) {
+        message_id -> Uuid,
+        channel -> Uuid,
+        timestamp -> Timestamptz,
+        sort_index -> Int4,
     }
 }
 
@@ -121,6 +146,7 @@ diesel::table! {
         icon -> Nullable<Uuid>,
         created_at -> Timestamptz,
         last_seen_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -129,11 +155,15 @@ diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
 diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
+diesel::joinable!(invite -> community (community));
+diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(message -> channel (channel));
 diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
 diesel::joinable!(other_server_auth_token -> user (user));
+diesel::joinable!(pin -> channel (channel));
+diesel::joinable!(pin -> message (message_id));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(refresh_token -> user (user));
@@ -146,9 +176,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     community,
     community_user,
     icon,
+    invite,
     message,
     message_attachment,
     other_server_auth_token,
+    pin,
     react,
     refresh_token,
     session,

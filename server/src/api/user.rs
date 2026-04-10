@@ -1,20 +1,15 @@
+use crate::api::GlobalServerContext;
 use crate::api::login::SessionUser;
 use crate::api::message_enum::command::{
     UserCreateCommand, UserCreateCommandResponse, UserDeleteCommand, UserDeleteCommandResponse,
     UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse,
 };
-use crate::api::{GlobalServerContext, UserId};
 use crate::app::Error;
-use crate::app::login::hash_password;
-use crate::app::user::User;
-use crate::database::schema;
 use crate::{api, app};
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::{Extension, Json};
 use diesel::result::DatabaseErrorKind;
-use diesel::{ExpressionMethods, QueryResult};
-use diesel_async::RunQueryDsl;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use tracing::error;
@@ -38,7 +33,7 @@ pub async fn create_user(
             return {
                 if let Error::Diesel(diesel::result::Error::DatabaseError(
                     DatabaseErrorKind::UniqueViolation,
-                    e,
+                    _,
                 )) = err
                 {
                     (
@@ -81,7 +76,7 @@ pub async fn read_user(
             UserReadCommandResponse::User(api::message_enum::User {
                 id: user.id,
                 name: user.name,
-                icon: user.icon.map(|i| i.id().clone()),
+                icon: user.icon.map(|i| *i.id()),
             })
             .into(),
         ),
@@ -105,15 +100,20 @@ pub async fn update_user(
     Json(command): Json<UserUpdateCommand>,
 ) -> (StatusCode, Json<UserUpdateCommandResponse>) {
     match app::user::update_user(state, command).await {
-        Ok(_) => {
-            (StatusCode::OK, UserUpdateCommandResponse::UpdateOk.into())
-        }
-        Err(e) => {
-            error!(error = e.to_string(), "user update command error");
-            (StatusCode::INTERNAL_SERVER_ERROR, UserUpdateCommandResponse::Error {
-                cause: None
-            }.into())
-        }
+        Ok(_) => (StatusCode::OK, UserUpdateCommandResponse::UpdateOk.into()),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                UserUpdateCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "user update command error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    UserUpdateCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
     }
 }
 
@@ -122,5 +122,20 @@ pub async fn delete_user(
     State(state): State<GlobalServerContext>,
     Json(command): Json<UserDeleteCommand>,
 ) -> (StatusCode, Json<UserDeleteCommandResponse>) {
-    todo!()
+    match app::user::delete_user(state, command.id).await {
+        Ok(()) => (StatusCode::OK, UserDeleteCommandResponse::DeleteOk.into()),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                UserDeleteCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "user delete command error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    UserDeleteCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }

@@ -1,4 +1,3 @@
-use heck::ToPascalCase;
 use proc_macro_error::{abort, proc_macro_error};
 use quote::{ToTokens, format_ident, quote};
 use syn::{
@@ -265,16 +264,21 @@ pub fn message_enum_source(
             let update_command_ident = format_ident!("{}UpdateCommand", variant.ident);
             let update_command_response_ident =
                 format_ident!("{}UpdateCommandResponse", variant.ident);
-            let other_fields_ident = other_fields.iter().map(|f| {
-                f.ident.clone()
-            }).collect::<Vec<_>>();
-            let other_fields_ty = other_fields.iter().map(|f| {
-                f.ty.clone()
-            }).collect::<Vec<_>>();
-            let other_fields_attr = other_fields.iter().map(|f| {
-                let attrs = f.attrs.clone();
-                quote!(#(#attrs)*)
-            }).collect::<Vec<_>>();
+            let other_fields_ident = other_fields
+                .iter()
+                .map(|f| f.ident.clone())
+                .collect::<Vec<_>>();
+            let other_fields_ty = other_fields
+                .iter()
+                .map(|f| f.ty.clone())
+                .collect::<Vec<_>>();
+            let other_fields_attr = other_fields
+                .iter()
+                .map(|f| {
+                    let attrs = f.attrs.clone();
+                    quote!(#(#attrs)*)
+                })
+                .collect::<Vec<_>>();
             // Generate update variant
             command_structs.push(quote! {
                 #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
@@ -393,14 +397,12 @@ pub fn message_enum_source(
 }
 
 fn our_attrs<'a>(attrs: impl Iterator<Item = &'a Attribute>) -> impl Iterator<Item = &'a MetaList> {
-    attrs.filter_map(|a| {
-        a.path().is_ident("message_gen").then(|| {
-            a.meta.require_list().unwrap_or_else(|_| {
-                abort!(
-                    a.span(),
-                    "message_enum_source parameters must be a list, i.e. #[message_enum_source(id)]"
-                )
-            })
+    attrs.filter(|a| a.path().is_ident("message_gen")).map(|a| {
+        a.meta.require_list().unwrap_or_else(|_| {
+            abort!(
+                a.span(),
+                "message_enum_source parameters must be a list, i.e. #[message_enum_source(id)]"
+            )
         })
     })
 }
@@ -414,9 +416,4 @@ fn not_our_attrs<'a>(
 struct IdField {
     field: Field,
     client_authoritative: bool,
-}
-
-struct AssociatedField {
-    field: Field,
-    no_paginated: bool,
 }

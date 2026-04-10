@@ -8,11 +8,9 @@ use crate::api::message_enum::command::{
 };
 use crate::app;
 use crate::app::{AttachmentId, Error};
-use crate::database::schema::user::dsl;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use rust_i18n::t;
 use tracing::error;
 
 #[utoipa::path(post, path = "/message", responses((status = OK, body=MessageCreateCommandResponse)))]
@@ -39,10 +37,7 @@ pub async fn create_message(
             error!(error = e.to_string(), "message create command error");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                MessageCreateCommandResponse::Error {
-                    cause: None,
-                }
-                .into(),
+                MessageCreateCommandResponse::Error { cause: None }.into(),
             )
         }
     }
@@ -65,7 +60,25 @@ pub async fn read_message(
     State(state): State<GlobalServerContext>,
     Json(command): Json<MessageReadCommand>,
 ) -> (StatusCode, Json<MessageReadCommandResponse>) {
-    todo!()
+    match app::message::read_message(&state, command.id).await {
+        Ok(m) => (
+            StatusCode::OK,
+            MessageReadCommandResponse::Message(message_to_api(m.message, m.attachments)).into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                MessageReadCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error reading message");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    MessageReadCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }
 
 #[utoipa::path(patch, path = "/message", responses((status = OK, body=MessageUpdateCommandResponse)))]
@@ -73,7 +86,25 @@ pub async fn update_message(
     State(state): State<GlobalServerContext>,
     Json(command): Json<MessageUpdateCommand>,
 ) -> (StatusCode, Json<MessageUpdateCommandResponse>) {
-    todo!()
+    match app::message::update_message(&state, command).await {
+        Ok(_) => (
+            StatusCode::OK,
+            MessageUpdateCommandResponse::UpdateOk.into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                MessageUpdateCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error updating message");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    MessageUpdateCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }
 
 #[utoipa::path(delete, path = "/message", responses((status = OK, body=MessageDeleteCommandResponse)))]
@@ -81,5 +112,23 @@ pub async fn delete_message(
     State(state): State<GlobalServerContext>,
     Json(command): Json<MessageDeleteCommand>,
 ) -> (StatusCode, Json<MessageDeleteCommandResponse>) {
-    todo!()
+    match app::message::delete_message(&state, command.id).await {
+        Ok(()) => (
+            StatusCode::OK,
+            MessageDeleteCommandResponse::DeleteOk.into(),
+        ),
+        Err(e) => match e {
+            Error::Diesel(diesel::result::Error::NotFound) => (
+                StatusCode::NOT_FOUND,
+                MessageDeleteCommandResponse::Error { cause: None }.into(),
+            ),
+            _ => {
+                error!(error = e.to_string(), "error deleting message");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    MessageDeleteCommandResponse::Error { cause: None }.into(),
+                )
+            }
+        },
+    }
 }
