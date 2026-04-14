@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+src/aspen_client/generated/
+aspen_chat_client.egg-info/
+src/aspen_chat_client.egg-info/

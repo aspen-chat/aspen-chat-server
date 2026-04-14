@@ -19,6 +19,8 @@ pub struct User {
     pub name: String,
     pub icon: Option<MaybeLoaded<Icon>>,
     pub password_hash: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -68,12 +70,15 @@ pub async fn create_user(
         }
     };
     let new_user_id = UserId::new();
+    let now = chrono::Utc::now();
     diesel::insert_into(user::table)
         .values(User {
             id: new_user_id,
             name: command.name.clone(),
             icon: command.icon.map(MaybeLoaded::NotLoaded),
             password_hash,
+            created_at: now,
+            last_seen_at: now,
             deleted_at: None,
         })
         .execute(conn.as_mut())
@@ -85,6 +90,27 @@ pub async fn read_user(state: GlobalServerContext, id: UserId) -> Result<User, a
     let mut conn = state.connection_pool.get().await?;
     let user = User::load_from_db(conn.as_mut(), id).await?;
     Ok(user)
+}
+
+pub async fn read_user_communities(
+    state: GlobalServerContext,
+    user_id: UserId,
+) -> Result<Vec<app::community::Community>, app::Error> {
+    use crate::database::schema::{community, community_user};
+
+    let mut conn = state.connection_pool.get().await?;
+    let communities = community_user::table
+        .inner_join(community::table)
+        .select(app::community::Community::as_select())
+        .filter(
+            community_user::user
+                .eq(user_id)
+                .and(community::deleted_at.is_null()),
+        )
+        .order_by(community::name.asc())
+        .load(conn.as_mut())
+        .await?;
+    Ok(communities)
 }
 
 pub(crate) async fn update_user(

@@ -72,6 +72,10 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             user::delete_user,
         ))
         .routes(routes!(
+            // User Communities
+            user::read_user_communities,
+        ))
+        .routes(routes!(
             // Message
             message::create_message,
             message::read_message,

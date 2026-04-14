@@ -4,6 +4,7 @@ use crate::api::message_enum::command::{
     UserCreateCommand, UserCreateCommandResponse, UserDeleteCommand, UserDeleteCommandResponse,
     UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse,
 };
+use crate::api::message_enum::Community;
 use crate::app::Error;
 use crate::{api, app};
 use axum::Json;
@@ -12,7 +13,9 @@ use axum::http::StatusCode;
 use diesel::result::DatabaseErrorKind;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use tracing::error;
+use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +93,48 @@ pub async fn read_user(
                 UserReadCommandResponse::Error { cause: None }.into(),
             ),
         },
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UserCommunitiesReadCommandResponse {
+    Communities { data: Vec<Community> },
+    Error { cause: Option<Cow<'static, str>> },
+}
+
+#[utoipa::path(
+    get,
+    path = "/user/communities",
+    security(("loginKey" = [])),
+    responses((status = OK, body=UserCommunitiesReadCommandResponse))
+)]
+pub async fn read_user_communities(
+    State(state): State<GlobalServerContext>,
+    SessionUser(user): SessionUser,
+) -> (StatusCode, Json<UserCommunitiesReadCommandResponse>) {
+    match app::user::read_user_communities(state, user.id).await {
+        Ok(communities) => (
+            StatusCode::OK,
+            UserCommunitiesReadCommandResponse::Communities {
+                data: communities
+                    .into_iter()
+                    .map(|community| Community {
+                        id: community.id,
+                        name: community.name,
+                        icon: community.icon.map(|i| *i.id()),
+                    })
+                    .collect(),
+            }
+            .into(),
+        ),
+        Err(e) => {
+            error!(error = e.to_string(), "error reading user communities");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                UserCommunitiesReadCommandResponse::Error { cause: None }.into(),
+            )
+        }
     }
 }
 
