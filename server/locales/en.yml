@@ -22,3 +22,6 @@ reactMustBeSingleEmoji: "React must be a single emoji."
 
 # Event stream
 eventStreamError: "An error occurred while setting up the event stream."
+
+firstTextChannelName: "general"
+firstVoiceChannelName: "lobby"

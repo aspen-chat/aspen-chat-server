@@ -22,10 +22,10 @@ use utoipa::ToSchema;
 #[utoipa::path(post, path = "/community", responses((status = OK, body=CommunityCreateCommandResponse)))]
 pub async fn create_community(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    user: SessionUser,
     Json(command): Json<CommunityCreateCommand>,
 ) -> (StatusCode, Json<CommunityCreateCommandResponse>) {
-    let new_community = match app::community::create_community(state, &command).await {
+    let new_community = match app::community::create_community(state, user.0.id, &command).await {
         Ok(value) => value,
         Err(e) => {
             return {
@@ -258,8 +258,13 @@ pub async fn join_community(
     SessionUser(user): SessionUser,
     Json(command): Json<UserCommunityCreateCommand>,
 ) -> (StatusCode, Json<UserCommunityCreateCommandResponse>) {
-    match app::community::join_community(&state, user.id, command.community, command.invite_code)
-        .await
+    match app::community::join_community(
+        &state,
+        user.id,
+        command.community,
+        app::community::Invitation::Code(command.invite_code),
+    )
+    .await
     {
         Ok(_) => (
             StatusCode::OK,

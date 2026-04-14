@@ -1,7 +1,8 @@
 use crate::api::message_enum::command::{CommunityCreateCommand, CommunityUpdateCommand};
 use crate::api::message_enum::server_event::{CommunityEvent, ServerEvent, UserCommunityEvent};
-use crate::api::{GlobalServerContext, message_enum};
+use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::channel::create_channel;
 use crate::app::icon::Icon;
 use crate::app::{CommunityId, IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::channel;
@@ -58,6 +59,7 @@ impl Loadable for Community {
 
 pub(crate) async fn create_community(
     state: GlobalServerContext,
+    user: UserId,
     command: &CommunityCreateCommand,
 ) -> Result<Community, app::Error> {
     let mut conn = state.connection_pool.get().await?;
@@ -71,6 +73,34 @@ pub(crate) async fn create_community(
         .values(community.clone())
         .execute(conn.as_mut())
         .await?;
+    join_community(&state, user, community.id, Invitation::AccessGranted).await?;
+    publish_event(
+        &state,
+        &ServerEvent::Community(CommunityEvent::Create(message_enum::Community {
+            id: community.id,
+            name: community.name.clone(),
+            icon: command.icon,
+        })),
+    )
+    .await?;
+    create_channel(
+        &state,
+        t!("firstTextChannelName").to_string(),
+        0,
+        ChannelType::Text,
+        Some(community.id),
+        None,
+    )
+    .await?;
+    create_channel(
+        &state,
+        t!("firstVoiceChannelName").to_string(),
+        0,
+        ChannelType::Voice,
+        Some(community.id),
+        None,
+    )
+    .await?;
     Ok(community)
 }
 
@@ -158,18 +188,26 @@ pub(crate) async fn delete_community(
     .await
 }
 
+pub enum Invitation {
+    Code(String),
+    // Bypass the need for an invite code. Currently only used for adding the first user to a community.
+    AccessGranted,
+}
+
 pub(crate) async fn join_community(
     state: &GlobalServerContext,
     user: UserId,
     community: CommunityId,
-    invite_code: String,
+    invitation: Invitation,
 ) -> app::error::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let invite_community = app::invite::validate_invite(conn, &invite_code).await?;
-            if invite_community != community {
-                return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
+            if let Invitation::Code(invite_code) = invitation {
+                let invite_community = app::invite::validate_invite(conn, &invite_code).await?;
+                if invite_community != community {
+                    return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
+                }
             }
             diesel::insert_into(community_user::table)
                 .values(&CommunityUser { user, community })
