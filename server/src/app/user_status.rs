@@ -1,5 +1,4 @@
-use crate::api::message_enum;
-use crate::api::message_enum::server_event::{ServerEvent, UserStatusEvent};
+use crate::api::message_enum::server_event::ServerEvent;
 use crate::api::user::UserOnlineStatus;
 use crate::app::{self, ASPEN_NATS_STREAM_NAME, UserId};
 use std::sync::Arc;
@@ -10,10 +9,10 @@ async fn publish_status_event(
     user_id: UserId,
     status: UserOnlineStatus,
 ) -> app::error::Result<()> {
-    let event = ServerEvent::UserStatus(UserStatusEvent::Create(message_enum::UserStatus {
+    let event = ServerEvent::UserStatus {
         id: user_id,
         status,
-    }));
+    };
     nats.publish(
         ASPEN_NATS_STREAM_NAME,
         serde_json::to_string(&event)?.into_bytes().into(),

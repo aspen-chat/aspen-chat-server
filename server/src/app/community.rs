@@ -73,16 +73,8 @@ pub(crate) async fn create_community(
         .values(community.clone())
         .execute(conn.as_mut())
         .await?;
+    // Don't publish create community event, it's not needed.
     join_community(&state, user, community.id, Invitation::AccessGranted).await?;
-    publish_event(
-        &state,
-        &ServerEvent::Community(CommunityEvent::Create(message_enum::Community {
-            id: community.id,
-            name: community.name.clone(),
-            icon: command.icon,
-        })),
-    )
-    .await?;
     create_channel(
         &state,
         t!("firstTextChannelName").to_string(),

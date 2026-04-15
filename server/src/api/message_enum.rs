@@ -15,7 +15,7 @@ enum MessageEnumSource {
         password: String,
         icon: Option<IconId>,
     },
-    #[message_gen(no_commands)]
+    #[message_gen(custom_event)]
     UserStatus {
         id: UserId,
         status: UserOnlineStatus,

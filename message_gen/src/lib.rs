@@ -1,7 +1,8 @@
 use proc_macro_error::{abort, proc_macro_error};
 use quote::{ToTokens, format_ident, quote};
 use syn::{
-    Attribute, Field, Fields, ItemEnum, LitStr, MetaList, parse_macro_input, spanned::Spanned,
+    Attribute, Field, Fields, FieldsNamed, ItemEnum, LitStr, MetaList, parse_macro_input,
+    spanned::Spanned,
 };
 
 extern crate proc_macro;
@@ -28,15 +29,23 @@ pub fn message_enum_source(
     for variant in en.variants {
         let mut events = true;
         let mut commands = true;
+        let mut custom_event = false;
         for attr in our_attrs(variant.attrs.iter()) {
             let r = attr.parse_nested_meta(|meta| {
-                let ident = meta.path.get_ident().expect("unrecognized value");
+                let Some(ident) = meta.path.get_ident() else {
+                    return Ok(());
+                };
                 match ident.to_string().as_str() {
                     "no_events" => {
                         events = false;
                     }
                     "no_commands" => {
                         commands = false;
+                    }
+                    "custom_event" => {
+                        custom_event = true;
+                        commands = false;
+                        events = false;
                     }
                     _ => {
                         proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
@@ -51,6 +60,13 @@ pub fn message_enum_source(
                     e
                 );
             }
+        }
+        if custom_event {
+            let mut event_variant = variant.clone();
+            let new_attrs = not_our_attrs(event_variant.attrs.iter());
+            event_variant.attrs = new_attrs.cloned().collect();
+            event_variants.push(event_variant.into_token_stream());
+            continue;
         }
         let mut event_sub_variants = Vec::new();
         let Fields::Named(fields) = variant.fields else {
@@ -67,115 +83,15 @@ pub fn message_enum_source(
         let mut server_authoritative_fields = Vec::new();
         // Basically exists just for the user password.
         let mut secret_fields = Vec::new();
-        for field in fields.named {
-            let mut is_id = false;
-            let mut is_permanent = false;
-            let mut is_server_authoritative = false;
-            let mut is_secret = false;
-            let mut is_other = true;
-            for attr in our_attrs(field.attrs.iter()) {
-                let r = attr.parse_nested_meta(|meta| {
-                    let ident = meta.path.get_ident().expect("unrecognized value");
-                    match ident.to_string().as_str() {
-                        "id" => {
-                            id_fields.push(IdField {
-                                field: Field {
-                                    attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                                    ..field.clone()
-                                },
-                                client_authoritative: meta.value().map(|v| {
-                                    let Ok(s) = v.parse::<LitStr>() else {
-                                        abort!(v.span(), "id value must be unspecified, or \"client_authoritative\"");
-                                    };
-                                    if s.value() != "client_authoritative" {
-                                        abort!(v.span(), "must be \"client_authoritative\" or unspecified for default server authority")
-                                    }
-                                }).is_ok()
-                            });
-                            is_other = false;
-                            is_id = true;
-                        }
-                        "permanent" => {
-                            other_permanent_fields.push(Field {
-                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                                ..field.clone()
-                            });
-                            is_other = false;
-                            is_permanent = true;
-                        }
-                        "server_authoritative" => {
-                            server_authoritative_fields.push(Field {
-                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                                ..field.clone()
-                            });
-                            is_other = false;
-                            is_server_authoritative = true;
-                        }
-                        "secret" => {
-                            secret_fields.push(Field {
-                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
-                                ..field.clone()
-                            });
-                            is_other = false;
-                            is_secret = true;
-                        }
-                        _ => {
-                            proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
-                        }
-                    }
-                    Ok(())
-                });
-                if let Err(e) = r {
-                    abort!(
-                        attr.span(),
-                        "message_enum_source attribute parse failed {}",
-                        e
-                    );
-                }
-            }
-            if is_id && is_server_authoritative {
-                abort!(
-                    field.span(),
-                    "ids are implicitly server_authoritative, do not explicitly \
-                declare them server_authoritative. If you want a client_authoritative id then you \
-                can do so with `id = \"client_authoritative\""
-                );
-            }
-            if is_permanent && is_id {
-                abort!(
-                    field.span(),
-                    "ids are implicitly permanent, do not explicitly declare them permanent"
-                );
-            }
-            if is_permanent && is_server_authoritative {
-                abort!(
-                    field.span(),
-                    "server_authoritative implies permanent, you don't need both"
-                )
-            }
-            if is_secret && is_server_authoritative {
-                abort!(
-                    field.span(),
-                    "secret fields are always client authoritative"
-                )
-            }
-            if is_secret && is_id {
-                abort!(
-                    field.span(),
-                    "id fields are widely distributed and thus cannot be secret"
-                )
-            }
-            if is_secret && is_permanent {
-                abort!(
-                    field.span(),
-                    "the combination of secret and permanent is not implemented"
-                )
-            }
-            if is_other {
-                other_fields.push(field);
-            }
-        }
-        if id_fields.is_empty() && commands {
+        populate_field_types(
+            fields,
+            &mut id_fields,
+            &mut other_fields,
+            &mut other_permanent_fields,
+            &mut server_authoritative_fields,
+            &mut secret_fields,
+        );
+        if id_fields.is_empty() && commands && !custom_event {
             abort!(
                 variant.ident.span(),
                 "no id field found, at least one field in each variant must be annotated with #[message_enum_source(id)]"
@@ -416,4 +332,122 @@ fn not_our_attrs<'a>(
 struct IdField {
     field: Field,
     client_authoritative: bool,
+}
+
+fn populate_field_types(
+    fields: FieldsNamed,
+    id_fields: &mut Vec<IdField>,
+    other_fields: &mut Vec<Field>,
+    other_permanent_fields: &mut Vec<Field>,
+    server_authoritative_fields: &mut Vec<Field>,
+    secret_fields: &mut Vec<Field>,
+) {
+    for field in fields.named {
+        let mut is_id = false;
+        let mut is_permanent = false;
+        let mut is_server_authoritative = false;
+        let mut is_secret = false;
+        let mut is_other = true;
+        for attr in our_attrs(field.attrs.iter()) {
+            let r = attr.parse_nested_meta(|meta| {
+                    let ident = meta.path.get_ident().expect("unrecognized value");
+                    match ident.to_string().as_str() {
+                        "id" => {
+                            id_fields.push(IdField {
+                                field: Field {
+                                    attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                    ..field.clone()
+                                },
+                                client_authoritative: meta.value().map(|v| {
+                                    let Ok(s) = v.parse::<LitStr>() else {
+                                        abort!(v.span(), "id value must be unspecified, or \"client_authoritative\"");
+                                    };
+                                    if s.value() != "client_authoritative" {
+                                        abort!(v.span(), "must be \"client_authoritative\" or unspecified for default server authority")
+                                    }
+                                }).is_ok()
+                            });
+                            is_other = false;
+                            is_id = true;
+                        }
+                        "permanent" => {
+                            other_permanent_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_permanent = true;
+                        }
+                        "server_authoritative" => {
+                            server_authoritative_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_server_authoritative = true;
+                        }
+                        "secret" => {
+                            secret_fields.push(Field {
+                                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                                ..field.clone()
+                            });
+                            is_other = false;
+                            is_secret = true;
+                        }
+                        _ => {
+                            proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
+                        }
+                    }
+                    Ok(())
+                });
+            if let Err(e) = r {
+                abort!(
+                    attr.span(),
+                    "message_enum_source attribute parse failed {}",
+                    e
+                );
+            }
+        }
+        if is_id && is_server_authoritative {
+            abort!(
+                field.span(),
+                "ids are implicitly server_authoritative, do not explicitly \
+                declare them server_authoritative. If you want a client_authoritative id then you \
+                can do so with `id = \"client_authoritative\""
+            );
+        }
+        if is_permanent && is_id {
+            abort!(
+                field.span(),
+                "ids are implicitly permanent, do not explicitly declare them permanent"
+            );
+        }
+        if is_permanent && is_server_authoritative {
+            abort!(
+                field.span(),
+                "server_authoritative implies permanent, you don't need both"
+            )
+        }
+        if is_secret && is_server_authoritative {
+            abort!(
+                field.span(),
+                "secret fields are always client authoritative"
+            )
+        }
+        if is_secret && is_id {
+            abort!(
+                field.span(),
+                "id fields are widely distributed and thus cannot be secret"
+            )
+        }
+        if is_secret && is_permanent {
+            abort!(
+                field.span(),
+                "the combination of secret and permanent is not implemented"
+            )
+        }
+        if is_other {
+            other_fields.push(field);
+        }
+    }
 }
