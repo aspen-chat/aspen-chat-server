@@ -5,6 +5,7 @@ use diesel_async::{
     AsyncPgConnection,
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
+use fred::prelude::ClientLike;
 use std::fs;
 use std::io::Write;
 
@@ -250,17 +251,24 @@ impl GlobalServerContext {
             })
             .await?;
         let valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
-        let valkey = fred::prelude::Client::new(valkey_config, None, None, None);
-        fred::prelude::ClientLike::init(&valkey).await?;
+        let valkey = fred::prelude::Client::new(valkey_config.clone(), None, None, None);
+        valkey.init().await?;
+
+        let valkey_subscribe = fred::prelude::Client::new(valkey_config, None, None, None);
+        valkey_subscribe.init().await?;
 
         // Enable expired key notifications and subscribe
         use fred::interfaces::ConfigInterface;
         use fred::prelude::PubsubInterface;
-        valkey.config_set("notify-keyspace-events", "Ex").await?;
-        valkey.psubscribe("__keyevent@*__:expired").await?;
+        valkey_subscribe
+            .config_set("notify-keyspace-events", "Ex")
+            .await?;
+        valkey_subscribe
+            .psubscribe("__keyevent@*__:expired")
+            .await?;
 
         let nats_arc: Arc<async_nats::jetstream::Context> = context.into();
-        app::user_status::spawn_expiry_listener(valkey.clone(), nats_arc.clone());
+        app::user_status::spawn_expiry_listener(valkey_subscribe.clone(), nats_arc.clone());
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
 
         Ok(Self {

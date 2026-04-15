@@ -1,10 +1,10 @@
 use crate::api::GlobalServerContext;
 use crate::api::login::SessionUser;
+use crate::api::message_enum::Community;
 use crate::api::message_enum::command::{
     UserCreateCommand, UserCreateCommandResponse, UserDeleteCommand, UserDeleteCommandResponse,
     UserReadCommand, UserReadCommandResponse, UserUpdateCommand, UserUpdateCommandResponse,
 };
-use crate::api::message_enum::Community;
 use crate::app::Error;
 use crate::{api, app};
 use axum::Json;
