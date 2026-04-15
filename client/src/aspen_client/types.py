@@ -37,3 +37,10 @@ class Message:
     timestamp: datetime
     content: str
     attachments: list[str]
+
+
+@dataclass(slots=True)
+class UserProfile:
+    id: str
+    name: str
+    icon: str | None

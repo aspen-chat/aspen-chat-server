@@ -7,7 +7,7 @@ import httpx
 
 from aspen_client.config import ClientConfig
 from aspen_client.generated import openapi_models as gen
-from aspen_client.types import Channel, Community, LoginSession, Message
+from aspen_client.types import Channel, Community, LoginSession, Message, UserProfile
 
 
 class AspenApiError(Exception):
@@ -113,6 +113,47 @@ class AspenApiClient:
                 raise AspenApiError(str(cause))
         raise AspenApiError("Failed to create community")
 
+    def read_community_users(self, community_id: str) -> list[UserProfile]:
+        response = self._authorized_request(
+            "GET",
+            "/community/users",
+            gen.CommunityUsersReadCommand(community=community_id),
+        )
+        data = self._expect_json(response)
+        parsed = gen.CommunityUsersReadCommandResponse.model_validate(data).root
+        if not hasattr(parsed, "users"):
+            raise AspenApiError("Failed to load community users")
+        return [
+            UserProfile(
+                id=str(user.id.root),
+                name=str(user.name),
+                icon=(str(user.icon.root) if user.icon is not None else None),
+            )
+            for user in parsed.users.data
+        ]
+
+    def create_invite(self, community_id: str) -> str:
+        response = self._authorized_request(
+            "POST",
+            "/invite",
+            gen.InviteCreateCommand(
+                community=community_id,
+                customCode=None,
+                expiresAt=None,
+            ),
+        )
+        data = self._expect_json(response)
+        parsed = gen.InviteCreateCommandResponse.model_validate(data).root
+        if hasattr(parsed, "invite"):
+            return str(parsed.invite.code)
+        if parsed == "codeAlreadyTaken":
+            raise AspenApiError("Invite code collision, try again")
+        if hasattr(parsed, "error"):
+            cause = parsed.error.cause
+            if cause:
+                raise AspenApiError(str(cause))
+        raise AspenApiError("Failed to create invite")
+
     def read_community_channels(self, community_id: str) -> list[Channel]:
         response = self._authorized_request(
             "GET",
@@ -127,6 +168,9 @@ class AspenApiClient:
         return sorted(channels, key=lambda c: c.sort_index)
 
     def read_user_name(self, user_id: str) -> str:
+        return self.read_user_profile(user_id).name
+
+    def read_user_profile(self, user_id: str) -> UserProfile:
         response = self._authorized_request(
             "GET",
             "/user",
@@ -135,7 +179,11 @@ class AspenApiClient:
         data = self._expect_json(response)
         parsed = gen.UserReadCommandResponse.model_validate(data).root
         if hasattr(parsed, "user"):
-            return str(parsed.user.name)
+            return UserProfile(
+                id=str(parsed.user.id.root),
+                name=str(parsed.user.name),
+                icon=(str(parsed.user.icon.root) if parsed.user.icon is not None else None),
+            )
         raise AspenApiError("Failed to read user")
 
     def create_channel(self, community_id: str, name: str, sort_index: int = 0) -> Channel:
@@ -183,6 +231,18 @@ class AspenApiClient:
             raise AspenApiError("Failed to load messages")
         messages = [self._parse_message(item.model_dump()) for item in parsed.messages.data]
         return sorted(messages, key=lambda m: m.timestamp)
+
+    def read_icon_bytes(self, icon_id: str) -> bytes:
+        response = self._authorized_request(
+            "GET",
+            "/icon",
+            gen.IconReadCommand(id=icon_id),
+        )
+        data = self._expect_json(response)
+        parsed = gen.IconReadCommandResponse.model_validate(data).root
+        if not hasattr(parsed, "icon"):
+            raise AspenApiError("Failed to load icon")
+        return bytes(int(value.root) for value in parsed.icon.data)
 
     def send_message(self, channel_id: str, content: str) -> Message:
         response = self._authorized_request(
