@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import httpx
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from aspen_client.config import ClientConfig
 from aspen_client.generated import openapi_models as gen
 from aspen_client.types import Channel, Community, LoginSession, Message, UserProfile
+
+T = TypeVar("T")
 
 
 class AspenApiError(Exception):
@@ -208,21 +211,65 @@ class AspenApiClient:
                 raise AspenApiError(str(cause))
         raise AspenApiError("Failed to create channel")
 
-    def read_channel_messages(self, channel_id: str, limit: int = 100) -> list[Message]:
-        # The API currently requires an anchor message id for reads. Using max UUID
-        # requests the most recent messages by id ordering.
+    # Max UUID anchor used when the caller wants the most recent page with no
+    # prior context; the server's Before query treats this as "return the
+    # newest N messages" since every real UUID v7 sorts below it.
+    _MAX_UUID_ANCHOR = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+    def read_channel_messages(
+        self,
+        channel_id: str,
+        *,
+        before: str | None = None,
+        after: str | None = None,
+        around: str | None = None,
+        count: int = 50,
+    ) -> list[Message]:
+        """Read a bounded page of messages in a channel.
+
+        Exactly zero or one of ``before`` / ``after`` / ``around`` may be set;
+        when all are ``None`` the request defaults to the most recent page
+        (``before = max UUID``). ``count`` is clamped to the server's [1, 200]
+        range to match ``MAX_MESSAGES_QUERIED`` in the Rust handler.
+        """
+        anchors_set = sum(1 for anchor in (before, after, around) if anchor is not None)
+        if anchors_set > 1:
+            raise AspenApiError("read_channel_messages accepts at most one of before/after/around")
+
+        clamped_count = max(1, min(count, 200))
+
+        if after is not None:
+            view = gen.ChannelViewDescription(
+                root=gen.ChannelViewDescription2(
+                    adjective="after",
+                    message=after,
+                    count=clamped_count,
+                )
+            )
+        elif around is not None:
+            view = gen.ChannelViewDescription(
+                root=gen.ChannelViewDescription3(
+                    adjective="around",
+                    message=around,
+                    radius=clamped_count,
+                )
+            )
+        else:
+            anchor = before if before is not None else self._MAX_UUID_ANCHOR
+            view = gen.ChannelViewDescription(
+                root=gen.ChannelViewDescription1(
+                    adjective="before",
+                    message=anchor,
+                    count=clamped_count,
+                )
+            )
+
         response = self._authorized_request(
             "GET",
             "/channel/messages",
             gen.ChannelMessagesReadCommand(
                 channel=channel_id,
-                viewDescription=gen.ChannelViewDescription(
-                    root=gen.ChannelViewDescription1(
-                        adjective="before",
-                        message="ffffffff-ffff-ffff-ffff-ffffffffffff",
-                        count=max(1, min(limit, 200)),
-                    )
-                ),
+                viewDescription=view,
             ),
         )
         data = self._expect_json(response)
@@ -330,3 +377,137 @@ def _model_to_json(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", by_alias=True, exclude_none=False)
     return value
+
+
+class AsyncApiCaller(QObject):
+    """The one and only way to invoke ``AspenApiClient`` from the GUI layer.
+
+    Every blocking HTTP call in the client must be submitted through an
+    instance of this class. The operation runs on a ``QThreadPool`` worker
+    thread, and the result (or exception) is delivered to a callback on the
+    GUI thread via a queued Qt signal. This means:
+
+    * The GUI event loop never blocks on network I/O, so keystrokes,
+      scrolling, repaints, and window management stay responsive regardless
+      of how slow or unresponsive the server is.
+    * Callbacks always fire on the thread that owns this ``QObject`` (the
+      thread it was constructed on, normally the GUI thread), so callers
+      can safely mutate widgets and ``ClientState`` from inside them.
+
+    ``AspenApiClient`` uses ``httpx.Client`` under the hood, which is
+    documented as safe to share across threads, so a single ``AspenApiClient``
+    instance backs all concurrent ``submit`` calls.
+    """
+
+    # Carries a zero-arg callable to invoke on the GUI thread. Using a
+    # single ``object`` signal lets us submit arbitrary operations without
+    # having to declare a new typed signal per call site, which kept the
+    # old ``MessagePageFetcher`` pattern from scaling to the rest of the
+    # API surface.
+    _deliver = Signal(object)
+
+    # Upper bound on how long ``shutdown()`` will wait for already-running
+    # HTTP tasks to finish. Kept small so the GUI exit path stays snappy;
+    # the underlying httpx client will be closed immediately afterwards,
+    # which causes any request still in flight to unwind with an error
+    # rather than running out its full 15s request timeout.
+    _SHUTDOWN_WAIT_MS = 200
+
+    def __init__(self, api: AspenApiClient, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._api = api
+        # Dedicated pool (rather than ``QThreadPool.globalInstance()``) so
+        # shutdown can clear the queue and bound the wait without
+        # disturbing unrelated Qt subsystems that might also be using the
+        # global pool.
+        self._pool = QThreadPool(self)
+        self._stopped = False
+        # Queued delivery: emit is invoked from worker threads, but the
+        # connected slot runs on the thread that owns ``self``.
+        self._deliver.connect(self._invoke)
+
+    def submit(
+        self,
+        operation: Callable[[AspenApiClient], T],
+        on_success: Callable[[T], None],
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Run ``operation(api)`` on a worker thread.
+
+        On completion, ``on_success(result)`` is called on the GUI thread.
+        On any exception from ``operation``, ``on_error(exc)`` is called on
+        the GUI thread (or the exception is re-raised into the GUI event
+        loop if ``on_error`` is ``None`` — tests will catch that, users
+        should not).
+
+        After ``shutdown()`` has been called this is a no-op, so late
+        callers during teardown don't resurrect work on a closed HTTP
+        client.
+        """
+        if self._stopped:
+            return
+        self._pool.start(_AsyncApiTask(self, operation, on_success, on_error))
+
+    def shutdown(self) -> None:
+        """Stop accepting new work and bound the wait on in-flight tasks.
+
+        Queued-but-not-yet-running runnables are dropped outright; tasks
+        that were already executing are given a brief window to finish so
+        their callbacks aren't orphaned mid-flight. Whether or not they
+        finish inside that window we return; the GUI thread must not be
+        held hostage to network latency on the way out.
+        """
+        if self._stopped:
+            return
+        self._stopped = True
+        self._pool.clear()
+        self._pool.waitForDone(self._SHUTDOWN_WAIT_MS)
+
+    def _enqueue(self, callback: Callable[[], None]) -> None:
+        # Suppress late GUI-thread callbacks once we've begun tearing down,
+        # so slots can't touch widgets that are already being destroyed.
+        if self._stopped:
+            return
+        self._deliver.emit(callback)
+
+    @staticmethod
+    def _invoke(callback: object) -> None:
+        if callable(callback):
+            callback()
+
+
+class _AsyncApiTask(QRunnable):
+    """QRunnable body for one submitted ``AsyncApiCaller`` operation."""
+
+    def __init__(
+        self,
+        caller: AsyncApiCaller,
+        operation: Callable[[AspenApiClient], Any],
+        on_success: Callable[[Any], None],
+        on_error: Callable[[Exception], None] | None,
+    ) -> None:
+        super().__init__()
+        self._caller = caller
+        self._operation = operation
+        self._on_success = on_success
+        self._on_error = on_error
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            result = self._operation(self._caller._api)
+        except Exception as exc:  # noqa: BLE001 - surfaced to GUI callback
+            on_error = self._on_error
+            if on_error is None:
+                # Nothing to route to; re-raise on the GUI thread so the
+                # error is at least visible in logs rather than silently
+                # swallowed in a worker.
+                self._caller._enqueue(lambda exc=exc: _reraise(exc))
+                return
+            self._caller._enqueue(lambda exc=exc: on_error(exc))
+            return
+        on_success = self._on_success
+        self._caller._enqueue(lambda result=result: on_success(result))
+
+
+def _reraise(exc: BaseException) -> None:
+    raise exc

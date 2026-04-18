@@ -6,13 +6,34 @@ from typing import Any
 
 from aspen_client.types import Channel, Community, Message
 
+# Hard ceiling on the number of messages retained per channel window. Shared
+# with the UI layer so eviction is consistent regardless of whether a message
+# arrives via a paged read or a live WebSocket event.
+MESSAGE_WINDOW_CAP = 100
+
+
+@dataclass(slots=True)
+class ChannelMessageWindow:
+    """A bounded slice of a channel's message history held on the client.
+
+    ``ordered_ids`` is kept sorted ascending by UUID v7 id, which is also
+    ascending by creation time. ``has_older`` / ``has_newer`` track whether
+    the server may still hold records outside the slice in either direction,
+    so the UI layer can decide when to trigger further paged fetches and when
+    to hide the "jump to latest" affordance.
+    """
+
+    ordered_ids: list[str] = field(default_factory=list)
+    has_older: bool = True
+    has_newer: bool = False
+
 
 @dataclass(slots=True)
 class ClientState:
     communities: dict[str, Community] = field(default_factory=dict)
     channels: dict[str, Channel] = field(default_factory=dict)
     messages: dict[str, Message] = field(default_factory=dict)
-    channel_message_ids: dict[str, list[str]] = field(default_factory=dict)
+    channel_windows: dict[str, ChannelMessageWindow] = field(default_factory=dict)
     deleted_communities: set[str] = field(default_factory=set)
     deleted_channels: set[str] = field(default_factory=set)
     deleted_messages: set[str] = field(default_factory=set)
@@ -25,14 +46,99 @@ class ClientState:
         for channel in channels:
             self.upsert_channel(channel)
 
-    def set_channel_messages(self, channel_id: str, messages: list[Message]) -> None:
+    def set_channel_window(
+        self,
+        channel_id: str,
+        messages: list[Message],
+        *,
+        has_older: bool,
+        has_newer: bool,
+    ) -> ChannelMessageWindow:
+        """Replace the window for a channel with the given page.
+
+        Used for the initial tip-load and for "jump to latest" resets.
+        """
         for message in messages:
-            self.upsert_message(message)
+            if message.id in self.deleted_messages:
+                continue
+            self.messages[message.id] = message
         ordered_ids = sorted(
-            {message.id for message in messages},
-            key=lambda msg_id: self.messages[msg_id].timestamp,
+            {m.id for m in messages if m.id not in self.deleted_messages},
+            key=lambda mid: mid,
         )
-        self.channel_message_ids[channel_id] = ordered_ids
+        window = ChannelMessageWindow(
+            ordered_ids=ordered_ids,
+            has_older=has_older,
+            has_newer=has_newer,
+        )
+        self.channel_windows[channel_id] = window
+        return window
+
+    def merge_channel_page(
+        self,
+        channel_id: str,
+        messages: list[Message],
+    ) -> list[str]:
+        """Merge a page of messages into the window.
+
+        Direction-agnostic: the ordered-id invariant is maintained via a sort,
+        so callers can supply either an older or newer slice and the result
+        is the same. Returns the list of ids that were newly inserted (in
+        ascending order), so the UI layer knows which rows to materialize.
+        """
+        window = self.channel_windows.setdefault(channel_id, ChannelMessageWindow())
+        existing = set(window.ordered_ids)
+        added: list[str] = []
+        for message in messages:
+            if message.id in self.deleted_messages:
+                continue
+            self.messages[message.id] = message
+            if message.id in existing:
+                continue
+            existing.add(message.id)
+            added.append(message.id)
+        if added:
+            window.ordered_ids = sorted(existing)
+        return sorted(added)
+
+    def evict_older_to_cap(self, channel_id: str, cap: int) -> list[str]:
+        """Drop the oldest ids past the cap; flips ``has_older`` true."""
+        window = self.channel_windows.get(channel_id)
+        if window is None:
+            return []
+        overflow = len(window.ordered_ids) - cap
+        if overflow <= 0:
+            return []
+        evicted = window.ordered_ids[:overflow]
+        window.ordered_ids = window.ordered_ids[overflow:]
+        window.has_older = True
+        self._drop_message_records(evicted)
+        return evicted
+
+    def evict_newer_to_cap(self, channel_id: str, cap: int) -> list[str]:
+        """Drop the newest ids past the cap; flips ``has_newer`` true."""
+        window = self.channel_windows.get(channel_id)
+        if window is None:
+            return []
+        overflow = len(window.ordered_ids) - cap
+        if overflow <= 0:
+            return []
+        evicted = window.ordered_ids[-overflow:]
+        window.ordered_ids = window.ordered_ids[:-overflow]
+        window.has_newer = True
+        self._drop_message_records(evicted)
+        return evicted
+
+    def _drop_message_records(self, message_ids: list[str]) -> None:
+        for message_id in message_ids:
+            self.messages.pop(message_id, None)
+
+    def clear_channel_window(self, channel_id: str) -> list[str]:
+        window = self.channel_windows.pop(channel_id, None)
+        if window is None:
+            return []
+        self._drop_message_records(window.ordered_ids)
+        return window.ordered_ids
 
     def upsert_community(self, community: Community) -> None:
         if community.id in self.deleted_communities:
@@ -44,14 +150,40 @@ class ClientState:
             return
         self.channels[channel.id] = channel
 
-    def upsert_message(self, message: Message) -> None:
+    def upsert_message(self, message: Message) -> bool:
+        """Insert or update a message in its channel's window.
+
+        Returns ``True`` if the visible window was modified (so the UI layer
+        knows whether to reflect it). Live events for channels whose window
+        has diverged from the server tip (``has_newer``) are dropped: the
+        user is reading older history, and they'll pick up the new tip when
+        they scroll down or hit "jump to latest".
+        """
         if message.id in self.deleted_messages:
-            return
+            return False
+        window = self.channel_windows.get(message.channel_id)
+        if window is None:
+            # Channel has no materialized window yet; keep the record alive so
+            # the eventual first load can consume it without a refetch penalty.
+            self.messages[message.id] = message
+            return False
+        already_present = message.id in window.ordered_ids
+        if already_present:
+            self.messages[message.id] = message
+            return True
+        if window.has_newer:
+            # We're not looking at the tip; silently drop so the window stays
+            # a contiguous slice of server state.
+            return False
         self.messages[message.id] = message
-        message_ids = self.channel_message_ids.setdefault(message.channel_id, [])
-        if message.id not in message_ids:
-            message_ids.append(message.id)
-            message_ids.sort(key=lambda msg_id: self.messages[msg_id].timestamp)
+        window.ordered_ids.append(message.id)
+        window.ordered_ids.sort()
+        # Cap enforcement: live appends to an already-full window trim the
+        # oldest end. This applies equally to the channel currently on
+        # screen and to channels the user has visited but is not viewing
+        # right now, keeping total client memory bounded.
+        self.evict_older_to_cap(message.channel_id, MESSAGE_WINDOW_CAP)
+        return True
 
     def remove_community(self, community_id: str) -> None:
         self.deleted_communities.add(community_id)
@@ -60,18 +192,20 @@ class ClientState:
     def remove_channel(self, channel_id: str) -> None:
         self.deleted_channels.add(channel_id)
         self.channels.pop(channel_id, None)
-        self.channel_message_ids.pop(channel_id, None)
+        self.clear_channel_window(channel_id)
 
     def remove_message(self, message_id: str) -> None:
         self.deleted_messages.add(message_id)
         message = self.messages.pop(message_id, None)
         if message is None:
             return
-        ids = self.channel_message_ids.get(message.channel_id)
-        if ids is None:
+        window = self.channel_windows.get(message.channel_id)
+        if window is None:
             return
-        if message_id in ids:
-            ids.remove(message_id)
+        try:
+            window.ordered_ids.remove(message_id)
+        except ValueError:
+            pass
 
     def get_communities_sorted(self) -> list[Community]:
         return sorted(self.communities.values(), key=lambda community: community.name.lower())
@@ -85,8 +219,12 @@ class ClientState:
         return sorted(channels, key=lambda channel: channel.sort_index)
 
     def get_messages_for_channel(self, channel_id: str) -> list[Message]:
-        ids = self.channel_message_ids.get(channel_id, [])
-        return [self.messages[msg_id] for msg_id in ids if msg_id in self.messages]
+        window = self.channel_windows.get(channel_id)
+        if window is None:
+            return []
+        return [
+            self.messages[msg_id] for msg_id in window.ordered_ids if msg_id in self.messages
+        ]
 
     def apply_server_event(self, payload: dict[str, Any]) -> bool:
         server_event = str(payload.get("serverEvent", ""))
@@ -184,21 +322,23 @@ class ClientState:
                 return False
             content = payload.get("content")
             attachments = payload.get("attachments")
-            self.upsert_message(
-                Message(
-                    id=current.id,
-                    author=current.author,
-                    channel_id=current.channel_id,
-                    timestamp=current.timestamp,
-                    content=str(content) if content is not None else current.content,
-                    attachments=(
-                        [str(value) for value in attachments]
-                        if attachments is not None
-                        else current.attachments
-                    ),
-                )
+            updated = Message(
+                id=current.id,
+                author=current.author,
+                channel_id=current.channel_id,
+                timestamp=current.timestamp,
+                content=str(content) if content is not None else current.content,
+                attachments=(
+                    [str(value) for value in attachments]
+                    if attachments is not None
+                    else current.attachments
+                ),
             )
-            return True
+            # upsert_message applies window rules; for an update of a record
+            # we already know about we always want the new content persisted.
+            self.messages[current.id] = updated
+            window = self.channel_windows.get(current.channel_id)
+            return window is not None and current.id in window.ordered_ids
         if event_type == "create":
             channel_id = payload.get("channelId")
             author = payload.get("author")
@@ -207,17 +347,15 @@ class ClientState:
             attachments = payload.get("attachments", [])
             if channel_id is None or author is None or timestamp is None or content is None:
                 return False
-            self.upsert_message(
-                Message(
-                    id=message_id,
-                    author=str(author),
-                    channel_id=str(channel_id),
-                    timestamp=_to_datetime(str(timestamp)),
-                    content=str(content),
-                    attachments=[str(value) for value in attachments],
-                )
+            message = Message(
+                id=message_id,
+                author=str(author),
+                channel_id=str(channel_id),
+                timestamp=_to_datetime(str(timestamp)),
+                content=str(content),
+                attachments=[str(value) for value in attachments],
             )
-            return True
+            return self.upsert_message(message)
         return False
 
 
