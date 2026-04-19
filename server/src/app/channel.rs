@@ -17,7 +17,7 @@ use diesel::{
     Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use vecmap::VecMap;
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
@@ -36,10 +36,7 @@ pub struct Channel {
 impl Loadable for Channel {
     type Id = ChannelId;
 
-    async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: Self::Id,
-    ) -> Result<Self, diesel::result::Error> {
+    async fn load_from_db(state: &GlobalServerContext, id: Self::Id) -> crate::app::Result<Self> {
         let channel = channel::table
             .select(Channel::as_select())
             .filter(
@@ -47,7 +44,7 @@ impl Loadable for Channel {
                     .eq(id)
                     .and(channel::dsl::deleted_at.is_null()),
             )
-            .first(pg_connection)
+            .first(&mut state.connection_pool.get().await?)
             .await?;
         Ok(channel)
     }

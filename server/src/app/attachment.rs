@@ -4,7 +4,7 @@ use crate::app::{AttachmentId, Loadable};
 use crate::database::schema::attachment;
 use chrono::Utc;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::RunQueryDsl;
 use tracing::warn;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -21,15 +21,13 @@ pub struct Attachment {
 impl Loadable for Attachment {
     type Id = AttachmentId;
 
-    async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: AttachmentId,
-    ) -> Result<Self, diesel::result::Error> {
+    async fn load_from_db(state: &GlobalServerContext, id: AttachmentId) -> app::Result<Self> {
         attachment::table
             .select(Attachment::as_select())
             .filter(attachment::id.eq(id))
-            .first(pg_connection)
+            .first(&mut state.connection_pool.get().await?)
             .await
+            .map_err(Into::into)
     }
 
     fn id(&self) -> &Self::Id {
@@ -85,8 +83,7 @@ pub async fn read_attachment(
     state: &GlobalServerContext,
     id: AttachmentId,
 ) -> app::Result<(Attachment, Vec<u8>)> {
-    let mut conn = state.connection_pool.get().await?;
-    let attachment = Attachment::load_from_db(conn.as_mut(), id).await?;
+    let attachment = Attachment::load_from_db(state, id).await?;
     let data = state.media_store.get_bytes(&attachment.storage_key).await?;
     Ok((attachment, data))
 }

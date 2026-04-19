@@ -62,6 +62,7 @@ pub async fn create_user(
             id: new_user_id,
             name: command.name,
             icon: command.icon,
+            online_status: UserOnlineStatus::Offline,
         })
         .into(),
     )
@@ -73,13 +74,14 @@ pub async fn read_user(
     _: SessionUser,
     Json(command): Json<UserReadCommand>,
 ) -> (StatusCode, Json<UserReadCommandResponse>) {
-    match app::user::read_user(state, command.id).await {
+    match app::user::read_user(&state, command.id).await {
         Ok(user) => (
             StatusCode::OK,
             UserReadCommandResponse::User(api::message_enum::User {
-                id: user.id,
-                name: user.name,
-                icon: user.icon.map(|i| *i.id()),
+                id: user.user_pg.id,
+                name: user.user_pg.name,
+                icon: user.user_pg.icon.map(|i| *i.id()),
+                online_status: user.online_status,
             })
             .into(),
         ),

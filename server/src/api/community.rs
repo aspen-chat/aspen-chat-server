@@ -108,9 +108,10 @@ pub async fn read_community_users(
                 data: users
                     .into_iter()
                     .map(|u| User {
-                        id: u.id,
-                        name: u.name,
-                        icon: u.icon.map(|i| *i.id()),
+                        id: u.user_pg.id,
+                        name: u.user_pg.name,
+                        icon: u.user_pg.icon.map(|i| *i.id()),
+                        online_status: u.online_status,
                     })
                     .collect(),
             }

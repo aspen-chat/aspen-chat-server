@@ -4,7 +4,7 @@ use crate::app::{IconId, Loadable};
 use crate::database::schema::icon;
 use chrono::Utc;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::RunQueryDsl;
 use tracing::warn;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -21,15 +21,13 @@ pub struct Icon {
 impl Loadable for Icon {
     type Id = IconId;
 
-    async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: IconId,
-    ) -> Result<Self, diesel::result::Error> {
+    async fn load_from_db(state: &GlobalServerContext, id: IconId) -> crate::app::Result<Self> {
         icon::table
             .select(Icon::as_select())
             .filter(icon::id.eq(id))
-            .first(pg_connection)
+            .first(&mut state.connection_pool.get().await?)
             .await
+            .map_err(Into::into)
     }
 
     fn id(&self) -> &Self::Id {
@@ -78,8 +76,7 @@ pub async fn create_icon(
 }
 
 pub async fn read_icon(state: &GlobalServerContext, id: IconId) -> app::Result<(Icon, Vec<u8>)> {
-    let mut conn = state.connection_pool.get().await?;
-    let icon = Icon::load_from_db(conn.as_mut(), id).await?;
+    let icon = Icon::load_from_db(state, id).await?;
     let data = match state.media_store.get_bytes(&icon.storage_key).await {
         Ok(data) => data,
         Err(e) => return Err(e),

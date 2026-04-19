@@ -4,6 +4,7 @@ use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::create_channel;
 use crate::app::icon::Icon;
+use crate::app::user::users_online_status;
 use crate::app::{CommunityId, IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::channel;
 use crate::database::schema::community;
@@ -13,7 +14,7 @@ use diesel::{
     Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use rust_i18n::t;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -37,10 +38,7 @@ pub struct CommunityUser {
 impl Loadable for Community {
     type Id = CommunityId;
 
-    async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: CommunityId,
-    ) -> Result<Self, diesel::result::Error> {
+    async fn load_from_db(state: &GlobalServerContext, id: CommunityId) -> app::Result<Self> {
         community::table
             .select(Community::as_select())
             .filter(
@@ -48,8 +46,9 @@ impl Loadable for Community {
                     .eq(id)
                     .and(community::deleted_at.is_null()),
             )
-            .first(pg_connection)
+            .first(&mut state.connection_pool.get().await?)
             .await
+            .map_err(Into::into)
     }
 
     fn id(&self) -> &Self::Id {
@@ -149,8 +148,7 @@ pub(crate) async fn read_community(
     state: &GlobalServerContext,
     id: CommunityId,
 ) -> app::error::Result<Community> {
-    let mut conn = state.connection_pool.get().await?;
-    Ok(Community::load_from_db(conn.as_mut(), id).await?)
+    Community::load_from_db(state, id).await
 }
 
 pub(crate) async fn delete_community(
@@ -246,7 +244,7 @@ pub(crate) async fn read_community_users(
     let mut conn = state.connection_pool.get().await?;
     let users = community_user::table
         .inner_join(user::table)
-        .select(app::user::User::as_select())
+        .select(app::user::UserPg::as_select())
         .filter(
             community_user::community
                 .eq(community)
@@ -256,7 +254,15 @@ pub(crate) async fn read_community_users(
         .limit(100)
         .load(conn.as_mut())
         .await?;
-    Ok(users)
+    let online_status = users_online_status(state, users.iter().map(|u| u.id).collect()).await?;
+    Ok(users
+        .into_iter()
+        .zip(online_status)
+        .map(|(u, (_id, o))| app::user::User {
+            user_pg: u,
+            online_status: o,
+        })
+        .collect())
 }
 
 pub(crate) async fn read_community_channels(

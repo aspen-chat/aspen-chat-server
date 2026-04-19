@@ -5,7 +5,6 @@ use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
 use diesel::sql_types::{SqlType, Uuid as DieselUuid};
 use diesel::{QueryId, Queryable};
-use diesel_async::AsyncPgConnection;
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
@@ -118,16 +117,13 @@ impl<T: Loadable> MaybeLoaded<T> {
         MaybeLoaded::NotLoaded(id)
     }
 
-    pub async fn get(
-        &mut self,
-        pg_connection: &mut AsyncPgConnection,
-    ) -> StdResult<&mut T, diesel::result::Error> {
+    pub async fn get(&mut self, state: &GlobalServerContext) -> crate::Result<&mut T> {
         match self {
             MaybeLoaded::Loaded(v) => Ok(v),
             MaybeLoaded::NotLoaded(id) => {
-                let v = T::load_from_db(pg_connection, id.clone()).await?;
+                let v = T::load_from_db(state, id.clone()).await?;
                 *self = MaybeLoaded::Loaded(v);
-                self.get(pg_connection).await
+                self.get(state).await
             }
         }
     }
@@ -136,9 +132,9 @@ impl<T: Loadable> MaybeLoaded<T> {
 pub trait Loadable: Sized {
     type Id: Clone;
     fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
+        state: &GlobalServerContext,
         id: Self::Id,
-    ) -> impl Future<Output = StdResult<Self, diesel::result::Error>> + Send;
+    ) -> impl Future<Output = crate::app::Result<Self>> + Send;
 
     fn id(&self) -> &Self::Id;
 }

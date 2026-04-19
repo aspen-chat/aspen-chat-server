@@ -11,7 +11,7 @@ use diesel::{
     Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, RunQueryDsl};
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
 #[diesel(table_name=category)]
@@ -27,15 +27,13 @@ pub struct Category {
 impl Loadable for Category {
     type Id = CategoryId;
 
-    async fn load_from_db(
-        pg_connection: &mut AsyncPgConnection,
-        id: Self::Id,
-    ) -> Result<Self, diesel::result::Error> {
+    async fn load_from_db(state: &GlobalServerContext, id: Self::Id) -> crate::app::Result<Self> {
         category::table
             .select(Category::as_select())
             .filter(category::id.eq(id).and(category::deleted_at.is_null()))
-            .first(pg_connection)
+            .first(&mut state.connection_pool.get().await?)
             .await
+            .map_err(Into::into)
     }
 
     fn id(&self) -> &Self::Id {

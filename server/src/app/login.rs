@@ -11,10 +11,9 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::api::GlobalServerContext;
 use crate::api::login::authenticated_user;
-use crate::app::user::User;
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
+use crate::{api::GlobalServerContext, app::user::UserPg};
 
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
@@ -90,8 +89,8 @@ pub async fn try_login(
     let mut conn = state.connection_pool.get().await?;
     let conn = conn.as_mut();
     let Login { username, password } = &login;
-    let user_entry: Result<User, _> = user
-        .select(User::as_select())
+    let user_entry: Result<UserPg, _> = user
+        .select(UserPg::as_select())
         .filter(name.eq(username))
         .filter(deleted_at.is_null())
         .first(conn)
@@ -300,12 +299,12 @@ pub enum OtherServerAuthResponse {
 }
 
 pub async fn try_other_server_auth(
-    mut conn: impl AsMut<AsyncPgConnection>,
+    state: &GlobalServerContext,
     o: &OtherServerAuth,
 ) -> Result<OtherServerAuthResponse, app::Error> {
     use schema::other_server_auth_token;
 
-    let Some(user) = authenticated_user(&mut conn, o.session_token.clone()).await? else {
+    let Some(user) = authenticated_user(state, o.session_token.clone()).await? else {
         return Ok(OtherServerAuthResponse::InvalidToken);
     };
     let other_server_auth_token = make_token();
@@ -317,7 +316,7 @@ pub async fn try_other_server_auth(
             other_server_auth_token::dsl::expires.eq(expires),
             other_server_auth_token::dsl::domain.eq(&o.other_server_domain),
         ))
-        .execute(conn.as_mut())
+        .execute(&mut state.connection_pool.get().await?)
         .await?;
     Ok(OtherServerAuthResponse::Ok {
         other_server_auth_token,
