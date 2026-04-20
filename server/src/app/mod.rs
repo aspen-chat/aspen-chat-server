@@ -18,6 +18,7 @@ pub mod community;
 mod error;
 pub mod icon;
 pub mod invite;
+pub mod link_preview;
 pub mod login;
 pub mod media_store;
 pub mod message;
@@ -98,6 +99,8 @@ id_type!(CategoryId);
 id_type!(AttachmentId);
 
 id_type!(IconId);
+
+id_type!(LinkPreviewImageId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

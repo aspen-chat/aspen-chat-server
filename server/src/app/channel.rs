@@ -5,7 +5,8 @@ use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::category::Category;
 use crate::app::community::Community;
-use crate::app::message::{Message, MessageWithAttachments};
+use crate::app::link_preview::load_previews;
+use crate::app::message::{Message, MessageWithRelations};
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, Loadable, MaybeLoaded, MessageId,
     publish_event,
@@ -108,7 +109,7 @@ pub(crate) async fn read_channel_messages(
     state: &GlobalServerContext,
     id: ChannelId,
     channel_view_description: ChannelViewDescription,
-) -> app::error::Result<Vec<MessageWithAttachments>> {
+) -> app::error::Result<Vec<MessageWithRelations>> {
     let mut conn = state.connection_pool.get().await?;
     channel::table
         .select(Channel::as_select())
@@ -153,30 +154,36 @@ pub(crate) async fn read_channel_messages(
             todo!()
         }
     };
+    let message_ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
     let message_attachments: Vec<(MessageId, AttachmentId)> = message_attachment::table
         .select((
             message_attachment::message_id,
             message_attachment::attachment_id,
         ))
-        .filter(message_attachment::message_id.eq_any(messages.iter().map(|m| m.id)))
+        .filter(message_attachment::message_id.eq_any(&message_ids))
         .order_by(message_attachment::message_id.asc())
         .load(conn.as_mut())
         .await?;
+    // Link previews live in a separate child table; batch-load them by
+    // message id so we don't N+1 the query for larger backfills.
+    let mut previews_by_id = load_previews(conn.as_mut(), &message_ids).await?;
     let mut ret = messages
         .into_iter()
         .map(|message| {
+            let link_previews = previews_by_id.remove(&message.id).unwrap_or_default();
             (
                 message.id,
-                MessageWithAttachments {
+                MessageWithRelations {
                     message,
                     attachments: Vec::new(),
+                    link_previews,
                 },
             )
         })
         .collect::<VecMap<_, _>>();
     for attachment in message_attachments {
-        if let Some(message_with_attachments) = ret.get_mut(&attachment.0) {
-            message_with_attachments.attachments.push(attachment.1);
+        if let Some(entry) = ret.get_mut(&attachment.0) {
+            entry.attachments.push(attachment.1);
         }
     }
     Ok(ret.into_values().collect())

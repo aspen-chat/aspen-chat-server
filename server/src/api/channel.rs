@@ -130,7 +130,7 @@ pub async fn read_channel_messages(
             ChannelMessagesReadCommandResponse::Messages {
                 data: messages
                     .into_iter()
-                    .map(|m| message_to_api(m.message, m.attachments))
+                    .map(|m| message_to_api(m.message, m.attachments, m.link_previews))
                     .collect(),
             }
             .into(),

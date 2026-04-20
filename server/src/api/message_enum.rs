@@ -1,3 +1,4 @@
+use crate::api::link_preview::LinkPreview;
 use crate::api::{ChannelType, user::UserOnlineStatus};
 use crate::app::{AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
 use chrono::Utc;
@@ -33,6 +34,26 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
         attachments: Vec<AttachmentId>,
+        // Populated asynchronously by the server after the initial
+        // create/update. Clients receive the final set via the
+        // `MessageLinkPreviewsReady` custom event; REST reads serve the
+        // most recent value directly.
+        #[message_gen(server_authoritative)]
+        link_previews: Vec<LinkPreview>,
+    },
+    // Delivered by the server once the async link-preview fetcher finishes
+    // materialising previews for a message. The macro rewrites this variant
+    // untouched thanks to `custom_event`, so it doesn't bring in the CRUD
+    // machinery the rest of the enum generates. The variant-level
+    // ``#[serde(rename_all = "camelCase")]`` is required because the enum-level
+    // ``rename_all`` on ``ServerEvent`` renames variants but does not recurse
+    // into struct-variant fields.
+    #[message_gen(custom_event)]
+    #[serde(rename_all = "camelCase")]
+    MessageLinkPreviewsReady {
+        message_id: MessageId,
+        channel_id: ChannelId,
+        previews: Vec<LinkPreview>,
     },
     #[message_gen(no_events)]
     Attachment {

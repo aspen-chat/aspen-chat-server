@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from aspen_client.types import Channel, Community, Message
+from aspen_client.types import Channel, Community, LinkPreview, Message
 
 # Hard ceiling on the number of messages retained per channel window. Shared
 # with the UI layer so eviction is consistent regardless of whether a message
@@ -182,6 +182,28 @@ class ClientState:
         # screen and to channels the user has visited but is not viewing
         # right now, keeping total client memory bounded.
         self.evict_older_to_cap(message.channel_id, MESSAGE_WINDOW_CAP)
+        return True
+
+    def apply_link_previews_ready(
+        self, message_id: str, previews: list[LinkPreview]
+    ) -> bool:
+        """Replace the cached message's preview list.
+
+        The server emits ``messageLinkPreviewsReady`` with the full
+        authoritative list once its asynchronous preview fetch lands —
+        subsequent edits that remove every preview also arrive here
+        with an empty list. If the message isn't in our cache (e.g. the
+        window evicted it, or the event races a resync that just wiped
+        state) the update is silently dropped: the next paged read will
+        fetch the previews alongside the message itself. Returns
+        ``True`` iff the cached record was updated.
+        """
+        message = self.messages.get(message_id)
+        if message is None:
+            return False
+        self.messages[message_id] = message.model_copy(
+            update={"link_previews": previews}
+        )
         return True
 
     def remove_community(self, community_id: str) -> None:

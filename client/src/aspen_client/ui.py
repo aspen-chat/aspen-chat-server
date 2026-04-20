@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
-from typing import Callable
+from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QObject, QTimer, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
@@ -32,9 +32,9 @@ from aspen_client.event_client import EventStreamClient
 from aspen_client.generated.event_models import ServerEvent as GeneratedServerEvent
 from aspen_client.icons import IconCache, apply_button_icon, material_icon
 from aspen_client.keyed_list import KeyedListWidget
-from aspen_client.link_preview import LinkPreviewCache
+from aspen_client.link_preview import LinkPreviewImageCache
 from aspen_client.state import ClientState
-from aspen_client.types import Channel, Community, Message, UserProfile
+from aspen_client.types import Channel, Community, LinkPreview, Message, UserProfile
 from aspen_client.ui_login import LoginPage
 from aspen_client.ui_messages import MessagePane
 from aspen_client.user_directory import UserDirectory
@@ -288,19 +288,21 @@ class ChatWindow(QMainWindow):
             on_profile_loaded=self._on_user_profile_loaded,
         )
 
-        # Link-preview metadata cache. Same shape as the two caches
-        # above: the ``MessagePane`` asks it for previews on the render
-        # hot-path, a miss spawns a background HTTP fetch via
-        # ``TaskSpawner``, and the ready callback fires on the GUI
-        # thread so live preview cards can be populated in place. We
-        # own it here (rather than inside ``MessagePane``) because the
-        # reconnect-grace flow in ``_reset_client_state`` wipes every
-        # render-adjacent cache together, and because the async client
-        # has to be closed from ``_async_shutdown`` alongside the
-        # other HTTP transports.
-        self._link_previews = LinkPreviewCache(
+        # Link-preview thumbnails are stored by the server and streamed
+        # back through the authenticated API; this cache keeps the
+        # decoded ``QPixmap`` per ``imageId`` so a row's preview card
+        # can paint its thumbnail synchronously on first render. The
+        # text half of the preview (title/description/site name /
+        # theme colour) lives on the ``Message`` record itself, so
+        # there is no second cache to own for that side. Same shape as
+        # ``IconCache`` / ``UserDirectory`` — synchronous getter,
+        # dedupe-guarded background fetch, ready callback on the GUI
+        # thread — and it's wiped alongside the rest of the
+        # render-adjacent state in ``_reset_client_state``.
+        self._link_preview_images = LinkPreviewImageCache(
+            self._api,
             self._tasks,
-            on_preview_ready=self._on_link_preview_ready,
+            on_image_ready=self._on_link_preview_image_ready,
         )
 
         self.setWindowTitle("Aspen Chat Client")
@@ -478,7 +480,7 @@ class ChatWindow(QMainWindow):
             self._api,
             self._tasks,
             self._icons,
-            self._link_previews,
+            self._link_preview_images,
             profile_resolver=self._resolve_author_profiles,
             header_formatter=self._format_message_header_html,
             avatar_pixmap=self._user_avatar_pixmap,
@@ -796,6 +798,17 @@ class ChatWindow(QMainWindow):
             parsed = GeneratedServerEvent.model_validate(payload).root
         except Exception:
             return
+
+        # ``messageLinkPreviewsReady`` is a standalone event (no
+        # ``type`` discriminator) emitted by the server after a
+        # message's asynchronous preview fetch lands. It carries the
+        # complete preview list for the message, so we replace the
+        # cached ``link_previews`` wholesale and hand off to the pane
+        # to rebuild the row's preview cards.
+        if server_event == "messageLinkPreviewsReady":
+            self._handle_message_link_previews_ready(parsed)
+            return
+
         changed = self._state.apply_server_event(parsed)
         if not changed:
             return
@@ -853,6 +866,34 @@ class ChatWindow(QMainWindow):
             item = self._channel_kw.item_for(channel_id)
             if item is not None:
                 self._channel_list.setCurrentItem(item)
+
+    def _handle_message_link_previews_ready(self, parsed: Any) -> None:
+        """Apply a landed ``messageLinkPreviewsReady`` event to state + UI.
+
+        The event is the server's way of telling us "the async preview
+        fetch I kicked off for this message has finished; here's the
+        authoritative list". We overwrite the cached message's
+        ``link_previews`` (the server sends the full list even if the
+        final count is zero, so re-edits that clear the previews land
+        correctly) and, if the affected row is currently materialised,
+        tell the pane to rebuild its preview cards.
+        """
+        message_id = str(getattr(parsed, "messageId", ""))
+        channel_id = str(getattr(parsed, "channelId", ""))
+        if not message_id or not channel_id:
+            return
+        raw_previews = getattr(parsed, "previews", None)
+        if raw_previews is None:
+            return
+        previews = [
+            LinkPreview.model_validate(p.model_dump(mode="json"))
+            for p in raw_previews
+        ]
+        if not self._state.apply_link_previews_ready(message_id, previews):
+            return
+        if channel_id != self._current_channel_id:
+            return
+        self._message_pane.handle_link_previews_ready(message_id)
 
     def _handle_message_event(self, message_id: str, event_type: str) -> None:
         if event_type == "delete":
@@ -974,7 +1015,7 @@ class ChatWindow(QMainWindow):
         self._state = ClientState()
         self._users.clear()
         self._icons.clear()
-        self._link_previews.clear()
+        self._link_preview_images.clear()
         if self._community_kw is not None:
             self._community_kw.clear()
         if self._community_avatar_kw is not None:
@@ -1140,16 +1181,16 @@ class ChatWindow(QMainWindow):
         self._icons.invalidate_user(user_id)
         self._message_pane.refresh_author_row(user_id)
 
-    def _on_link_preview_ready(self, url: str) -> None:
-        """Fan a landed link-preview fetch out to the message pane.
+    def _on_link_preview_image_ready(self, image_id: str) -> None:
+        """Fan a landed preview-thumbnail fetch out to the message pane.
 
-        ``LinkPreviewCache`` calls this on the GUI thread (its fetch
-        completion is scheduled via ``TaskSpawner.run`` so callbacks
-        run where widgets live). We just forward to ``MessagePane``,
-        which is the only component that has the subscriber map and
-        knows how to repaint the affected rows.
+        :class:`LinkPreviewImageCache` calls this on the GUI thread —
+        its fetch completion is scheduled via ``TaskSpawner.run`` so
+        callbacks run where widgets live. We just forward to
+        ``MessagePane``, which holds the subscriber map keyed by
+        ``imageId`` and knows how to repaint the affected rows.
         """
-        self._message_pane.handle_preview_ready(url)
+        self._message_pane.handle_preview_image_ready(image_id)
 
     @staticmethod
     def _selected_item_user_role(list_widget: QListWidget) -> str | None:
@@ -1455,7 +1496,6 @@ class ChatWindow(QMainWindow):
         try:
             await self._tasks.shutdown()
             await self._api.aclose()
-            await self._link_previews.aclose()
         finally:
             self._shutdown_complete = True
             self._app_close_event.set()

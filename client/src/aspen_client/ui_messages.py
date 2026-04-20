@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from aspen_client.api_client import AspenApiClient, TaskSpawner
 from aspen_client.icons import IconCache, material_icon
-from aspen_client.link_preview import LinkPreview, LinkPreviewCache
+from aspen_client.link_preview import PREVIEW_IMAGE_SIZE, LinkPreviewImageCache
 from aspen_client.state import MESSAGE_WINDOW_CAP, ClientState
 from aspen_client.theme import (
     COLOR_ACCENT,
@@ -34,7 +34,7 @@ from aspen_client.theme import (
     COLOR_TEXT_MAIN,
     COLOR_TEXT_MUTED,
 )
-from aspen_client.types import Message
+from aspen_client.types import LinkPreview, Message
 
 # Tunable limits for the bidirectional message window. INITIAL_MESSAGE_LOAD
 # fills the viewport with one round-trip on channel switch; MESSAGE_PAGE_SIZE
@@ -76,80 +76,27 @@ MARKDOWN_FEATURES = (
 # clicking — keep it narrow.
 _SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
 
-# Cap on how many preview cards a single message can spawn. The spec is
-# "first three links", and capping here (rather than at the fetch layer)
-# means three concurrent previews are the most a single message can put
-# in flight even if a bored user pastes fifty URLs.
-MAX_LINK_PREVIEWS_PER_MESSAGE = 3
 
+def _render_markdown_to_html(content: str) -> str:
+    """Convert an Aspen message body (markdown) to rich-text HTML.
 
-def _render_markdown_to_html(content: str) -> tuple[str, list[str]]:
-    """Convert an Aspen message body (markdown) to rich-text HTML + preview URLs.
+    The body is parsed into a ``QTextDocument``, passed through
+    ``_disarm_misleading_links`` so no anchor can hide a deceptive
+    destination behind friendly text, and then serialised back to HTML
+    ready for ``QLabel.setText`` at ``Qt.TextFormat.RichText``.
 
-    Returns a ``(html, preview_urls)`` tuple. ``html`` is the rendered
-    body ready for ``QLabel.setText`` at ``Qt.TextFormat.RichText``;
-    ``preview_urls`` is the first few http(s) URLs the body contained
-    (in document order, de-duplicated, capped at
-    ``MAX_LINK_PREVIEWS_PER_MESSAGE``) that the UI should ask the
-    ``LinkPreviewCache`` to fetch metadata for.
-
-    Doing both jobs off the same parsed ``QTextDocument`` is deliberate.
-    We already pay one markdown-parse per row on the render hot-path;
-    walking the document tree twice (once for link-disarm, once again
-    for preview extraction) would repeat that cost. Returning both
-    outputs from a single function keeps every caller honest: if you
-    rendered the body, you also know which URLs deserve previews, and
-    vice versa.
+    Link-preview extraction is *not* done here. The server parses the
+    message body itself, fetches the metadata asynchronously, and
+    publishes the authoritative preview list on the
+    ``messageLinkPreviewsReady`` event; the client renders preview
+    cards from ``Message.link_previews`` rather than re-scanning the
+    body, which avoids a second tree walk on the render hot-path and
+    keeps the client's preview set identical to the server's.
     """
     doc = QTextDocument()
     doc.setMarkdown(content, MARKDOWN_FEATURES)
-    preview_urls = _collect_preview_urls(doc)
     _disarm_misleading_links(doc)
-    return doc.toHtml(), preview_urls
-
-
-def _collect_preview_urls(doc: QTextDocument) -> list[str]:
-    """Pick the URLs worth requesting previews for out of a rendered body.
-
-    Must be called *before* ``_disarm_misleading_links`` rewrites any
-    anchors — once an anchor has been collapsed into literal
-    ``[text](href)`` text, its fragment no longer carries anchor format
-    and we'd miss it. The two passes read the document in the same
-    order, so preview URLs come out in exactly the order the user sees
-    them.
-
-    Filtering rules (match the fetch layer's expectations):
-
-    - Only ``http`` / ``https`` schemes are considered; ``mailto:`` and
-      friends are omitted because there's nothing at the other end to
-      preview.
-    - Duplicates within one message are collapsed — if the same link
-      appears three times we only want one preview card, shown at the
-      earliest position.
-    - The list is capped at ``MAX_LINK_PREVIEWS_PER_MESSAGE`` so even a
-      message pasting dozens of links only ever spawns three previews.
-    """
-    urls: list[str] = []
-    seen: set[str] = set()
-    block = doc.firstBlock()
-    while block.isValid():
-        it = block.begin()
-        while not it.atEnd():
-            frag = it.fragment()
-            if frag.isValid():
-                fmt = frag.charFormat()
-                if fmt.isAnchor():
-                    href = fmt.anchorHref()
-                    if href and href not in seen:
-                        scheme = QUrl(href).scheme().lower()
-                        if scheme in ("http", "https"):
-                            seen.add(href)
-                            urls.append(href)
-                            if len(urls) >= MAX_LINK_PREVIEWS_PER_MESSAGE:
-                                return urls
-            it += 1
-        block = block.next()
-    return urls
+    return doc.toHtml()
 
 
 def _is_faithful_anchor(text: str, href: str) -> bool:
@@ -236,32 +183,20 @@ def _disarm_misleading_links(doc: QTextDocument) -> None:
         cursor.insertText(f"[{text}]({href})", plain_format)
 
 
-def _find_preview_card(container: QWidget, url: str) -> "_LinkPreviewCard | None":
-    """Return the row's ``_LinkPreviewCard`` for ``url``, or ``None``.
-
-    The preview container attaches every card as a child of the row's
-    top-level container widget, so a plain ``findChildren`` traversal
-    by object-name picks them all up without caring how many levels
-    deep Qt's layout ends up nesting them.
-    """
-    for card in container.findChildren(_LinkPreviewCard, _LinkPreviewCard.OBJECT_NAME):
-        if card.url == url:
-            return card
-    return None
-
-
 class _LinkPreviewCard(QFrame):
     """Single preview card rendered beneath a message body.
 
-    The card is instantiated when the row is built and starts hidden;
-    ``populate`` fills in the labels and reveals it once the fetch lands.
-    Hiding the card (rather than destroying it) on failure means a
-    subsequent message edit that re-requests the same URL can toggle it
-    back without the UI churn of tearing down and rebuilding the row.
+    Constructed from a server-provided :class:`LinkPreview` record, so
+    the text half (title / description / site name / theme colour)
+    lands on the first render pass without a network round-trip. If the
+    record carries an ``image_id``, the card also asks the
+    :class:`LinkPreviewImageCache` for the thumbnail; a hit paints
+    synchronously, a miss schedules a fetch and the ``handle_preview_image_ready``
+    callback patches the live thumbnail once the bytes land.
 
-    Clicks go through a ``clicked(url)`` signal so ``MessagePane`` can
-    reuse the same ``_open_message_link`` scheme-allowlist it uses for
-    in-body link activations. That also keeps card-click semantics
+    Clicks route through a ``clicked(url)`` signal so ``MessagePane``
+    can reuse the same ``_open_message_link`` scheme-allowlist it uses
+    for in-body link activations. That keeps card-click semantics
     identical to clicking the link inside the message itself.
     """
 
@@ -273,64 +208,121 @@ class _LinkPreviewCard(QFrame):
     # ``findChildren(QWidget, name)``.
     OBJECT_NAME = "messageLinkPreviewCard"
 
-    def __init__(self, url: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        preview: LinkPreview,
+        image_cache: LinkPreviewImageCache,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._url = url
+        self._preview = preview
+        self._image_cache = image_cache
         self.setObjectName(self.OBJECT_NAME)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # A muted, slightly-lighter-than-bubble background plus a
         # full-height accent bar on the left visually separates the card
         # from the message body above it while echoing the Aspen palette.
-        # The accent defaults to Aspen's own ``COLOR_ACCENT`` and can be
-        # overridden in ``populate`` once the fetched metadata supplies a
-        # site-specific ``theme-color``.
-        self._apply_accent(COLOR_ACCENT)
+        # The bar colour is driven by the server-supplied ``theme_color``
+        # when present, falling back to Aspen's own ``COLOR_ACCENT``.
+        if preview.theme_color and QColor(preview.theme_color).isValid():
+            accent = preview.theme_color
+        else:
+            accent = COLOR_ACCENT
+        self._apply_accent(accent)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(2)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(8)
 
-        # Labels are created up front so ``populate`` only has to set
-        # text — no allocation on the hot path, no races between a
-        # preview arriving and the card finishing its layout.
-        self._site_label = QLabel(self)
-        self._site_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 10px;")
-        self._site_label.setWordWrap(False)
-        self._site_label.hide()
+        text_column = QWidget(self)
+        text_column.setStyleSheet("background: transparent;")
+        text_layout = QVBoxLayout(text_column)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(2)
 
-        self._title_label = QLabel(self)
-        self._title_label.setStyleSheet(f"color: {COLOR_TEXT_MAIN}; font-weight: 600;")
-        self._title_label.setWordWrap(True)
-        self._title_label.hide()
+        if preview.site_name:
+            site_label = QLabel(preview.site_name, text_column)
+            site_label.setStyleSheet(
+                f"color: {COLOR_TEXT_MUTED}; font-size: 10px;"
+            )
+            site_label.setWordWrap(False)
+            text_layout.addWidget(site_label)
 
-        self._description_label = QLabel(self)
-        self._description_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
-        self._description_label.setWordWrap(True)
-        self._description_label.hide()
+        if preview.title:
+            title_label = QLabel(preview.title, text_column)
+            title_label.setStyleSheet(
+                f"color: {COLOR_TEXT_MAIN}; font-weight: 600;"
+            )
+            title_label.setWordWrap(True)
+            text_layout.addWidget(title_label)
 
-        layout.addWidget(self._site_label)
-        layout.addWidget(self._title_label)
-        layout.addWidget(self._description_label)
+        if preview.description:
+            description_label = QLabel(preview.description, text_column)
+            description_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            description_label.setWordWrap(True)
+            text_layout.addWidget(description_label)
 
-        # Remain invisible until ``populate`` fires; a preview that
-        # never arrives stays out of the layout entirely rather than
-        # occupying blank space.
-        self.hide()
+        row.addWidget(text_column, 1)
+
+        # Thumbnail slot. Only materialised when the server says there
+        # is an image to show; otherwise the layout stays tight against
+        # the text column and doesn't reserve space for a picture that
+        # will never arrive.
+        self._thumbnail_label: QLabel | None = None
+        if preview.image_id is not None:
+            self._thumbnail_label = QLabel(self)
+            self._thumbnail_label.setObjectName("messageLinkPreviewThumbnail")
+            self._thumbnail_label.setFixedSize(PREVIEW_IMAGE_SIZE, PREVIEW_IMAGE_SIZE)
+            self._thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._thumbnail_label.setStyleSheet("background: transparent;")
+            row.addWidget(
+                self._thumbnail_label,
+                0,
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
+            self._apply_thumbnail()
+            if not image_cache.has_settled(preview.image_id):
+                image_cache.request_image(preview.image_id)
 
     @property
     def url(self) -> str:
-        return self._url
+        return self._preview.url
+
+    @property
+    def image_id(self) -> str | None:
+        return self._preview.image_id
+
+    def refresh_thumbnail(self) -> None:
+        """Repaint the thumbnail from the cache.
+
+        Called by ``MessagePane.handle_preview_image_ready`` once the
+        background fetch for ``self.image_id`` lands. No-op if the card
+        was built without a thumbnail slot (the server published no
+        image for this URL); a settled-but-failed fetch leaves the
+        QLabel's pixmap null so the slot stays empty rather than
+        occupying space with a broken placeholder.
+        """
+        if self._thumbnail_label is None:
+            return
+        self._apply_thumbnail()
+
+    def _apply_thumbnail(self) -> None:
+        assert self._thumbnail_label is not None
+        assert self._preview.image_id is not None
+        pixmap = self._image_cache.get_pixmap(self._preview.image_id)
+        if pixmap is not None:
+            self._thumbnail_label.setPixmap(pixmap)
+        else:
+            self._thumbnail_label.clear()
 
     def _apply_accent(self, color: str) -> None:
         """Install the card's stylesheet with ``color`` as the left bar.
 
-        Separated out so ``populate`` can re-run it against a
-        site-supplied ``theme-color`` without re-stating the rest of
-        the card chrome. Only the border-left colour is parameterised;
-        the background, rounded-corner geometry, and text colours stay
-        anchored to the Aspen palette so a pathological site-colour
-        can't destroy the card's visual identity.
+        Only the border-left colour is parameterised; the background,
+        rounded-corner geometry, and text colours stay anchored to the
+        Aspen palette so a pathological ``theme-color`` cannot destroy
+        the card's visual identity.
         """
         self.setStyleSheet(
             f"QFrame#{self.OBJECT_NAME} {{"
@@ -343,47 +335,9 @@ class _LinkPreviewCard(QFrame):
             "}"
         )
 
-    def populate(self, preview: LinkPreview) -> None:
-        """Fill the card with fetched metadata and reveal it.
-
-        Labels with no backing data are left hidden so an all-title,
-        no-description card doesn't show a blank description line, and
-        an all-description card isn't weighed down by an empty title
-        line. The card's overall visibility still depends on whether
-        *any* field is populated — ``LinkPreviewCache`` already
-        filters those out via ``LinkPreview.has_content``, so in
-        practice we always reveal.
-
-        If the site published a ``<meta name="theme-color">`` we pass
-        it through ``QColor`` as both a validator (it accepts the full
-        hex / ``rgb(...)`` / named-colour surface the spec permits)
-        and a guard against garbage content that would otherwise
-        produce a Qt stylesheet parse warning.
-        """
-        if preview.theme_color and QColor(preview.theme_color).isValid():
-            self._apply_accent(preview.theme_color)
-        else:
-            self._apply_accent(COLOR_ACCENT)
-        if preview.site_name:
-            self._site_label.setText(preview.site_name)
-            self._site_label.show()
-        else:
-            self._site_label.hide()
-        if preview.title:
-            self._title_label.setText(preview.title)
-            self._title_label.show()
-        else:
-            self._title_label.hide()
-        if preview.description:
-            self._description_label.setText(preview.description)
-            self._description_label.show()
-        else:
-            self._description_label.hide()
-        self.show()
-
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self._url)
+            self.clicked.emit(self._preview.url)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -427,7 +381,7 @@ class MessagePane(QWidget):
         api: AspenApiClient,
         tasks: TaskSpawner,
         icons: IconCache,
-        link_previews: LinkPreviewCache,
+        link_preview_images: LinkPreviewImageCache,
         *,
         profile_resolver: Callable[[list[Message]], None],
         header_formatter: Callable[[Message], str],
@@ -440,7 +394,7 @@ class MessagePane(QWidget):
         self._api = api
         self._tasks = tasks
         self._icons = icons
-        self._link_previews = link_previews
+        self._link_preview_images = link_preview_images
         self._profile_resolver = profile_resolver
         self._format_header = header_formatter
         self._avatar_pixmap = avatar_pixmap
@@ -451,15 +405,15 @@ class MessagePane(QWidget):
         self._loading_header_item: QListWidgetItem | None = None
         self._loading_footer_item: QListWidgetItem | None = None
         self._pending_fetches: dict[str, set[str]] = {}
-        # URL → set of message ids whose rows currently have a preview
-        # slot for this URL. Populated by ``_insert_message_item_at`` /
-        # ``_update_message_row`` and consumed by
-        # ``handle_preview_ready`` so a landing preview only has to
-        # look at the rows that actually asked for it rather than
-        # walking the entire window. Entries are pruned when rows are
-        # evicted (``_evict_ui_rows_not_in_window``,
+        # imageId → set of message ids whose rows currently have a
+        # thumbnail slot expecting this image. Populated when a row is
+        # built with a preview that carries an ``image_id`` and
+        # consumed by ``handle_preview_image_ready`` so a landed
+        # thumbnail only touches the rows that actually asked for it
+        # rather than walking the entire window. Entries are pruned
+        # when rows are evicted (``_evict_ui_rows_not_in_window``,
         # ``remove_message_row``) so the bookkeeping stays bounded.
-        self._preview_subscribers: dict[str, set[str]] = {}
+        self._image_subscribers: dict[str, set[str]] = {}
 
         self.setStyleSheet(f"background-color: {COLOR_BG_PANE};")
         layout = QVBoxLayout(self)
@@ -593,28 +547,55 @@ class MessagePane(QWidget):
         self._loading_header_item = None
         self._loading_footer_item = None
         self._pending_fetches.clear()
-        self._preview_subscribers.clear()
+        self._image_subscribers.clear()
 
-    def handle_preview_ready(self, url: str) -> None:
-        """Route a landed link-preview fetch to the rows that wanted it.
+    def handle_link_previews_ready(self, message_id: str) -> None:
+        """Rebuild a row's preview cards after a ``messageLinkPreviewsReady`` event.
 
-        The callback wire runs ``LinkPreviewCache`` →
-        ``ChatWindow._on_link_preview_ready`` → here. We consult
-        ``_preview_subscribers`` to find only the rows that spawned a
-        preview slot for this URL, and either populate the card (if the
-        fetch produced usable metadata) or hide it (if it came back
-        empty / failed, per ``LinkPreviewCache.is_failed``). In both
-        cases we invalidate the row's cached width marker and re-size
-        it so the row's height reflects the presence/absence of the
-        card — without this, the QListWidget would keep drawing the row
-        at its original preview-less height and the card would be
-        clipped.
+        The state layer has just replaced the cached message's
+        ``link_previews`` with the authoritative list the server
+        published for it; here we translate that into new
+        :class:`_LinkPreviewCard` children on the row, tearing down any
+        cards that belonged to the previous preview set. Any row that
+        isn't currently materialised (evicted past the window cap, or
+        for a channel the user isn't viewing) is silently skipped —
+        the cache update is what matters; the next time the row is
+        built, it reads the updated ``link_previews`` directly.
         """
-        subscribers = self._preview_subscribers.get(url)
+        item = self._message_items_by_id.get(message_id)
+        if item is None:
+            return
+        widget = self._messages_list.itemWidget(item)
+        if not isinstance(widget, QWidget):
+            return
+        previews_container = widget.findChild(QWidget, "messagePreviewsContainer")
+        if not isinstance(previews_container, QWidget):
+            return
+        message = self._state.messages.get(message_id)
+        if message is None:
+            return
+        self._reset_preview_cards(previews_container, message_id, message.link_previews)
+        # Preview rows shift the card stack height, so force a re-sizing
+        # pass: without this the row keeps whatever height it had
+        # before the cards landed and the last card gets clipped.
+        item.setData(self._SIZED_AT_WIDTH_ROLE, None)
+        self._size_message_item(item)
+
+    def handle_preview_image_ready(self, image_id: str) -> None:
+        """Patch every row whose preview card subscribed to ``image_id``.
+
+        The callback wire runs :class:`LinkPreviewImageCache` →
+        ``ChatWindow._on_link_preview_image_ready`` → here. We consult
+        ``_image_subscribers`` to find only the rows that built a
+        thumbnail slot for this id and ask each card to repaint itself
+        from the cache; the card already knows whether the fetch
+        succeeded (paint the pixmap) or failed (leave the slot empty).
+        We still invalidate the row's width marker so a newly-taller
+        thumbnail slot doesn't clip against a stale cached height.
+        """
+        subscribers = self._image_subscribers.get(image_id)
         if not subscribers:
             return
-        preview = self._link_previews.get_preview(url)
-        failed = self._link_previews.is_failed(url)
         for message_id in list(subscribers):
             item = self._message_items_by_id.get(message_id)
             if item is None:
@@ -623,16 +604,11 @@ class MessagePane(QWidget):
             container = self._messages_list.itemWidget(item)
             if not isinstance(container, QWidget):
                 continue
-            card = _find_preview_card(container, url)
-            if card is None:
-                continue
-            if preview is not None:
-                card.populate(preview)
-            elif failed:
-                card.hide()
-            # Content changed — invalidate the width cache so the next
-            # ``_size_message_item`` pass recomputes ``heightForWidth``
-            # against the new (possibly taller) layout.
+            for card in container.findChildren(
+                _LinkPreviewCard, _LinkPreviewCard.OBJECT_NAME
+            ):
+                if card.image_id == image_id:
+                    card.refresh_thumbnail()
             item.setData(self._SIZED_AT_WIDTH_ROLE, None)
             self._size_message_item(item)
 
@@ -672,11 +648,11 @@ class MessagePane(QWidget):
         self._message_items_by_id.clear()
         self._loading_header_item = None
         self._loading_footer_item = None
-        # Every row that could have been subscribed to a preview is now
-        # gone, so the subscriber map is as stale as it gets. Wiping it
-        # wholesale is cheaper and safer than iterating what used to be
-        # there.
-        self._preview_subscribers.clear()
+        # Every row that could have been subscribed to a preview image
+        # is now gone, so the subscriber map is as stale as it gets.
+        # Wiping it wholesale is cheaper and safer than iterating what
+        # used to be there.
+        self._image_subscribers.clear()
 
     def _render_cached_window(self) -> None:
         """Rebuild the message view from the currently-cached window."""
@@ -921,9 +897,10 @@ class MessagePane(QWidget):
         # link-preview cards. Aspen message content is markdown; we
         # render it through ``_render_markdown_to_html`` (which sets
         # ``MarkdownNoHTML``) so the parser strips raw HTML from the
-        # source before producing the rich-text output. The helper also
-        # returns the first few http(s) URLs worth fetching previews
-        # for, which we wire up below.
+        # source before producing the rich-text output. Link previews
+        # are populated from ``message.link_previews`` below rather
+        # than scanned out of the body here — the server is the
+        # authoritative source for which URLs get a card.
         text_column = QWidget(container)
         text_column.setStyleSheet(f"background-color: {COLOR_BG_PANE};")
         text_column_layout = QVBoxLayout(text_column)
@@ -938,7 +915,7 @@ class MessagePane(QWidget):
         header_label.setContentsMargins(0, 0, 0, 0)
         text_column_layout.addWidget(header_label)
 
-        body_html, preview_urls = _render_markdown_to_html(message.content)
+        body_html = _render_markdown_to_html(message.content)
         body_label = QLabel(text_column)
         body_label.setObjectName("messageBodyLabel")
         body_label.setTextFormat(Qt.TextFormat.RichText)
@@ -962,11 +939,14 @@ class MessagePane(QWidget):
         body_label.linkActivated.connect(self._open_message_link)
         text_column_layout.addWidget(body_label)
 
-        # Preview container: always created (so message updates can
-        # swap its children without restructuring the layout), empty
-        # when the body has no preview-worthy URLs. ``_build_preview_cards``
-        # populates it and registers the message id as a subscriber for
-        # each URL, and also kicks off the async fetches.
+        # Preview container: always created (so ``messageLinkPreviewsReady``
+        # events arriving after the row is materialised can swap its
+        # children without restructuring the layout), empty when the
+        # server published no preview-worthy links for this message.
+        # ``_build_preview_cards`` populates it from
+        # ``message.link_previews`` and registers the message id as a
+        # subscriber for each card's ``image_id`` so a landed thumbnail
+        # fetch only repaints the rows that asked for it.
         previews_container = QWidget(text_column)
         previews_container.setObjectName("messagePreviewsContainer")
         previews_container.setStyleSheet(f"background-color: {COLOR_BG_PANE};")
@@ -974,7 +954,9 @@ class MessagePane(QWidget):
         previews_layout.setContentsMargins(0, 4, 0, 0)
         previews_layout.setSpacing(4)
         text_column_layout.addWidget(previews_container)
-        self._build_preview_cards(previews_container, message.id, preview_urls)
+        self._build_preview_cards(
+            previews_container, message.id, message.link_previews
+        )
 
         container_layout.addWidget(text_column, 1)
 
@@ -986,35 +968,34 @@ class MessagePane(QWidget):
         self,
         previews_container: QWidget,
         message_id: str,
-        preview_urls: list[str],
+        previews: list[LinkPreview],
     ) -> None:
-        """Materialize preview cards for a row and fire off the fetches.
+        """Materialize preview cards for a row from server-provided records.
 
-        Creates at most ``MAX_LINK_PREVIEWS_PER_MESSAGE`` cards (already
-        enforced by ``_render_markdown_to_html``) and attaches them to
-        ``previews_container``. Each card starts hidden; if the URL was
-        already cached at build time (common when scrolling back over a
-        message the user's session has seen before), the card is
-        populated synchronously so the first paint shows the final
-        layout without a flash of empty space. Otherwise the card waits
-        for ``handle_preview_ready`` to fire.
+        Attaches one :class:`_LinkPreviewCard` per entry in
+        ``previews`` (the server already enforces the per-message
+        preview cap, so no client-side limit is applied here). Each
+        card is populated synchronously from the ``LinkPreview`` record
+        itself, so the first paint shows the final text layout without
+        any loading placeholder; only the thumbnail image may still be
+        outstanding, in which case the card kicks off a fetch via
+        :class:`LinkPreviewImageCache` and ``handle_preview_image_ready``
+        patches the thumbnail slot once the bytes land.
 
         The method also registers ``message_id`` as a subscriber for
-        each URL, so a fetch that completes later (or, once cached, for
-        a *different* row mentioning the same URL) lands on exactly the
-        rows that need updating.
+        each card's ``image_id``, so a later-arriving thumbnail (or a
+        thumbnail shared by a *different* row referencing the same id)
+        only repaints the rows that actually need updating.
         """
         layout = previews_container.layout()
-        for url in preview_urls:
-            card = _LinkPreviewCard(url, previews_container)
+        for preview in previews:
+            card = _LinkPreviewCard(preview, self._link_preview_images, previews_container)
             card.clicked.connect(self._open_message_link)
             layout.addWidget(card)
-            self._preview_subscribers.setdefault(url, set()).add(message_id)
-            cached = self._link_previews.get_preview(url)
-            if cached is not None:
-                card.populate(cached)
-            else:
-                self._link_previews.request_preview(url)
+            if preview.image_id is not None:
+                self._image_subscribers.setdefault(preview.image_id, set()).add(
+                    message_id
+                )
 
     def _evict_ui_rows_not_in_window(self) -> None:
         if self._current_channel_id is None:
@@ -1034,25 +1015,29 @@ class MessagePane(QWidget):
                 self._messages_list.takeItem(row)
 
     def _drop_preview_subscriptions(self, item: QListWidgetItem, message_id: str) -> None:
-        """Remove ``message_id`` from the subscriber list of each of its preview URLs.
+        """Remove ``message_id`` from the subscriber list of each card's image.
 
         Called just before a row is evicted so a later-arriving
-        ``handle_preview_ready`` doesn't try to populate a card on a
-        widget Qt has already freed. Walks the row's cards via
-        object-name rather than tracking URLs separately on the row,
-        which keeps the preview URL list in exactly one place
-        (the widget tree).
+        ``handle_preview_image_ready`` doesn't try to repaint a card on
+        a widget Qt has already freed. Walks the row's cards via
+        object-name rather than tracking image ids separately on the
+        row, which keeps the subscription set in exactly one place
+        (the widget tree). Cards without a thumbnail never entered the
+        subscriber map, so we just skip them.
         """
         container = self._messages_list.itemWidget(item)
         if not isinstance(container, QWidget):
             return
         for card in container.findChildren(_LinkPreviewCard, _LinkPreviewCard.OBJECT_NAME):
-            subscribers = self._preview_subscribers.get(card.url)
+            image_id = card.image_id
+            if image_id is None:
+                continue
+            subscribers = self._image_subscribers.get(image_id)
             if subscribers is None:
                 continue
             subscribers.discard(message_id)
             if not subscribers:
-                self._preview_subscribers.pop(card.url, None)
+                self._image_subscribers.pop(image_id, None)
 
     def _capture_top_anchor(self) -> tuple[str, int] | None:
         """Record the id + pixel offset of the topmost visible message row.
@@ -1181,15 +1166,20 @@ class MessagePane(QWidget):
             header_label.setText(self._format_header(message))
         body_label = widget.findChild(QLabel, "messageBodyLabel")
         # Re-render through the ``MarkdownNoHTML`` pipeline so the same
-        # HTML-stripping guarantee holds for edited messages, and
-        # re-collect the preview URLs — a message edit can add, remove,
-        # or reorder links and the preview row has to follow.
-        body_html, preview_urls = _render_markdown_to_html(message.content)
+        # HTML-stripping guarantee holds for edited messages. Preview
+        # cards are driven separately by ``message.link_previews`` —
+        # the server clears them synchronously on an edit and republishes
+        # a fresh set via ``messageLinkPreviewsReady`` once its
+        # async fetch lands, so we just rebuild from whatever the cached
+        # record currently carries.
+        body_html = _render_markdown_to_html(message.content)
         if isinstance(body_label, QLabel):
             body_label.setText(body_html)
         previews_container = widget.findChild(QWidget, "messagePreviewsContainer")
         if isinstance(previews_container, QWidget):
-            self._reset_preview_cards(previews_container, message.id, preview_urls)
+            self._reset_preview_cards(
+                previews_container, message.id, message.link_previews
+            )
         # Content changed — invalidate the cached-at-width marker so the
         # next sizing pass actually recomputes heightForWidth.
         item.setData(self._SIZED_AT_WIDTH_ROLE, None)
@@ -1199,28 +1189,32 @@ class MessagePane(QWidget):
         self,
         previews_container: QWidget,
         message_id: str,
-        preview_urls: list[str],
+        previews: list[LinkPreview],
     ) -> None:
-        """Tear down the row's existing cards and rebuild from ``preview_urls``.
+        """Tear down the row's existing cards and rebuild from ``previews``.
 
-        An edit can introduce a completely different set of URLs (a user
-        might replace a link, strip them all, or paste a new one), so
+        An edit or a ``messageLinkPreviewsReady`` event can introduce a
+        completely different set of links (a user might replace a URL,
+        strip them all, or the server might resolve new metadata), so
         the cheapest correct answer is to wipe the row's preview slots
-        and rebuild. Subscribers for the old URLs are pruned here so a
-        late-arriving fetch for a URL the row no longer references
-        doesn't touch its widgets.
+        and rebuild from the authoritative list. Image subscribers for
+        the old cards are pruned here so a late-arriving thumbnail
+        fetch for an image the row no longer references doesn't touch
+        its widgets.
         """
         for card in list(
             previews_container.findChildren(_LinkPreviewCard, _LinkPreviewCard.OBJECT_NAME)
         ):
-            subscribers = self._preview_subscribers.get(card.url)
-            if subscribers is not None:
-                subscribers.discard(message_id)
-                if not subscribers:
-                    self._preview_subscribers.pop(card.url, None)
+            image_id = card.image_id
+            if image_id is not None:
+                subscribers = self._image_subscribers.get(image_id)
+                if subscribers is not None:
+                    subscribers.discard(message_id)
+                    if not subscribers:
+                        self._image_subscribers.pop(image_id, None)
             card.setParent(None)
             card.deleteLater()
-        self._build_preview_cards(previews_container, message_id, preview_urls)
+        self._build_preview_cards(previews_container, message_id, previews)
 
     def _size_message_item(self, item: QListWidgetItem) -> None:
         """Apply width + size-hint to one message row.

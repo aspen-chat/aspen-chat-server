@@ -96,6 +96,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    message_link_preview (message_id, position) {
+        message_id -> Uuid,
+        position -> Int4,
+        url -> Text,
+        title -> Nullable<Text>,
+        description -> Nullable<Text>,
+        site_name -> Nullable<Text>,
+        image_id -> Nullable<Uuid>,
+        image_mime_type -> Nullable<Text>,
+        theme_color -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     other_server_auth_token (token) {
         token -> Text,
         expires -> Timestamp,
@@ -161,6 +175,7 @@ diesel::joinable!(message -> channel (channel));
 diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
+diesel::joinable!(message_link_preview -> message (message_id));
 diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
@@ -179,6 +194,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     invite,
     message,
     message_attachment,
+    message_link_preview,
     other_server_auth_token,
     pin,
     react,

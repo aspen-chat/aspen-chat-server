@@ -56,6 +56,26 @@ class Channel(BaseModel):
     sort_index: int = Field(default=0, alias="sortIndex")
 
 
+class LinkPreview(BaseModel):
+    """Metadata for a single server-generated link-preview card.
+
+    Mirrors the server's ``api::link_preview::LinkPreview`` DTO. The
+    server parses link URLs out of message bodies, fetches the HTML, and
+    uploads any referenced ``og:image`` to its media store; we receive
+    the resulting strings plus an ``imageId`` that the ``LinkPreviewImageCache``
+    can trade for image bytes via ``/link-preview-image``.
+    """
+
+    model_config = _RECORD_CONFIG
+
+    url: str
+    title: str | None = None
+    description: str | None = None
+    site_name: str | None = Field(default=None, alias="siteName")
+    image_id: str | None = Field(default=None, alias="imageId")
+    theme_color: str | None = Field(default=None, alias="themeColor")
+
+
 class Message(BaseModel):
     model_config = _RECORD_CONFIG
 
@@ -69,6 +89,13 @@ class Message(BaseModel):
     timestamp: datetime
     content: str
     attachments: list[str] = Field(default_factory=list)
+    # Server-authoritative; populated asynchronously after ``Create`` by
+    # the ``MessageLinkPreviewsReady`` WebSocket event. Fresh ``Create``
+    # payloads always arrive with this empty and the UI renders the
+    # card(s) only once the follow-up event lands.
+    link_previews: list[LinkPreview] = Field(
+        default_factory=list, alias="linkPreviews"
+    )
 
 
 class UserProfile(BaseModel):

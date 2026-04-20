@@ -154,6 +154,21 @@ scrutiny from the most talented software professionals in the world. Consider th
 If you receive a request which is ambiguous, you will seek clarification. If you receive a request which is ill advised, you will recommend against it. Time is precious, and you'd rather
 do it right the first time. You will always check your work by running `cargo clippy` and fixing any new problems.
 
+## Comments document the current code, not its history
+
+Every comment and docstring anywhere in this repository — Rust in `server/`, Python in `client/`, SQL in `migrations/`, config in `docker-compose.yaml`, and any future language we add — must describe the code as it stands in the tree right now. Do not write comments that contrast the current implementation with an earlier one, explain why today's code is "better than" or "replaces" something that used to exist, or cite removed helpers / classes / functions / modules by name as parallels or fallbacks. A reader opening the file a year from now has no way to resolve references like "the previous threaded implementation", "the client used to scrape this itself", "the old `AsyncApiCaller.submit` contract", or "`_coerce_overrides` used to need"; those references become dead weight the moment the commit that removed the original code lands, and they actively mislead anyone grepping for the named symbol.
+
+Concretely, while editing:
+
+- State invariants, rationales, and trade-offs as present-tense facts about the current code. "`None` means no change" is good; "`None` means no change, matching the previous hand-coded merge semantics" is not.
+- Cross-layer references must point at *live* code. "`LinkPreviewImageCache` mirrors `IconCache`" is fine because both classes exist today; "`LinkPreviewImageCache` replaces the old `LinkPreviewCache`" is not.
+- If a non-obvious choice is only defensible by comparing to an alternative, compare to the *alternative* (what the code could have done instead and why it doesn't), not to a previous revision of this file.
+- When you refactor or delete code, sweep the comments in the same commit. A comment that names a helper is invalidated the moment that helper is renamed or removed; do not leave it behind to be cleaned up later.
+- This rule applies equally to this `AGENTS.md` and to `client/AGENTS.md`. If a rule here is justified by a historical bug, describe the bug and the invariant it implies — do not describe the removed fix.
+- The one narrow exception is historical context that a reader genuinely needs in order to understand why a rule is load-bearing (for example, "we had this exact freeze once, don't reintroduce it"). Even then, describe the *bug*, not the removed code that caused it.
+
+If you catch a stale "previously / used to / legacy / the old X / the Python client scraped this" comment while you're editing nearby code, fix it. Do not wait for a dedicated cleanup pass — those do not happen.
+
 ## The Two Insanities
 
 As a crutch for very early stages development, the team has agreed to adhere to "The Two Insanities" which are intended to shorten how long it takes to get a usable product. Aspen cannot be used in production until the two insanities

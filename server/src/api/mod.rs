@@ -16,6 +16,7 @@ pub(crate) mod community;
 mod event_stream;
 pub(crate) mod icon;
 pub(crate) mod invite;
+pub(crate) mod link_preview;
 pub(crate) mod login;
 pub(crate) mod message;
 pub(crate) mod message_enum;
@@ -156,6 +157,10 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             invite::read_community_invites,
             invite::update_invite,
             invite::revoke_invite,
+        ))
+        .routes(routes!(
+            // Link Preview Image
+            link_preview::read_link_preview_image,
         ))
         // Events
         .route("/event_stream", any(event_stream::event_stream));

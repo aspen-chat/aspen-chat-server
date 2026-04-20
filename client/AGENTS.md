@@ -92,6 +92,23 @@ The architecture has four cooperating pieces. Each piece is load-bearing; breaki
 - The floating button is visible **if and only if** `window.has_newer is True`. It's how users escape from a scrolled-back state back to the tip. Clicking it clears the window and dispatches a fresh `initial` fetch.
 - `_send_clicked` detects the "user is scrolled back and just sent a message" case and triggers the same jump-to-latest reset. Do not try to append the sent message to a mid-history window; that violates the contiguous-slice invariant (see §1).
 
+## Non-negotiable: link previews are server-authoritative
+
+Link previews for message bodies are generated **entirely on the server**. The server parses the message markdown, extracts URLs, fetches each target asynchronously, stores preview metadata in the `message_link_preview` table, uploads preview images into the shared `MediaStore` under `link-preview-images/`, and publishes the authoritative preview list on a dedicated `messageLinkPreviewsReady` event. The client does **not** scrape URLs out of message bodies, does **not** make its own HTTP requests to third-party hosts, and does **not** invent its own caps on previews-per-message — the server owns all three concerns and does not want the client second-guessing any of them.
+
+Concretely, on the client:
+
+- `Message.link_previews: list[LinkPreview]` (in `src/aspen_client/types.py`) is the ground truth for which preview cards a row renders. REST responses carry it inline on the message; later revisions arrive via `messageLinkPreviewsReady`, which `ChatWindow._handle_message_link_previews_ready` routes into `ClientState.apply_link_previews_ready` and then through `MessagePane.handle_link_previews_ready`. A row displayed against a `Message` whose `link_previews` is `[]` shows no preview row, even if the body contains URLs — that means the server deliberately skipped them (crawl refused by robots, fetch failed, content-type not HTML, etc.), and the client must not override that decision.
+- `_render_markdown_to_html` in `src/aspen_client/ui_messages.py` is **only** responsible for turning the body into sanitised rich text (see `MarkdownNoHTML` + `_disarm_misleading_links`). It does not extract URLs, does not return a URL list, and must not grow one; the preview card stack is built entirely from `message.link_previews` in `_build_preview_cards` / `_reset_preview_cards`.
+- Preview **thumbnail images** are the one remaining network hop the client makes, and that hop goes to the Aspen server via `GET /link-preview-image` (the `AspenApiClient.read_link_preview_image` method). `LinkPreviewImageCache` in `src/aspen_client/link_preview.py` mirrors the `IconCache` pattern (synchronous `get_pixmap` / `has_settled` for the render hot-path, async background fetch through `TaskSpawner`, `on_image_ready` callback, dedupe of in-flight ids). `MessagePane._image_subscribers` maps `image_id → set(message_id)` so a landed thumbnail only repaints the rows that actually asked for it. When a row is evicted (`_evict_ui_rows_not_in_window`, `_drop_preview_subscriptions`) or its preview stack is replaced (`_reset_preview_cards`, `handle_link_previews_ready`), the subscription entries are pruned in the same pass — otherwise a thumbnail arriving after eviction would try to repaint a widget Qt has already freed.
+- The `messageLinkPreviewsReady` event replaces the cached message's `link_previews` **wholesale**; the server always publishes the full authoritative list (even an empty one on an edit that stripped every URL). Do not try to diff against the previous list to preserve "existing" cards — the server has already reasoned about which URLs survived the edit.
+
+Out-of-scope "improvements" in this area, for the same reason as the other non-negotiables:
+
+- Re-scanning `message.content` for URLs on the client. This puts the client and server out of sync on what counts as a preview-worthy URL and re-introduces the network fan-out the server migration was built to eliminate.
+- Fetching third-party hosts directly from the client (Open Graph metadata, favicons, preview images). All outbound link traffic must originate from the server so the user's IP is never exposed to URL targets by merely viewing a message.
+- A client-side cap on previews per message, or hiding preview cards whose metadata "looks empty". The server already applies the cap and already filters out previews it considers unusable; anything that reaches `Message.link_previews` is meant to render.
+
 ## What's explicitly out of scope
 
 The following are tempting "improvements" that you should not make without a fresh, human-approved plan:
@@ -100,20 +117,6 @@ The following are tempting "improvements" that you should not make without a fre
 - Unbounded caching of message history "because we already fetched it". The whole point of eviction is that memory is bounded across many visited channels.
 - Eagerly prefetching multiple pages on channel switch. One `initial` fetch per switch is enough; the scroll handler handles everything else.
 - Awaiting `AspenApiClient` methods anywhere outside a coroutine scheduled via `self._tasks.run(...)` or `self._tasks.spawn(...)`, or "just calling" a coroutine from a sync slot without scheduling it. See the "every `AspenApiClient` call is awaited from a `TaskSpawner`-spawned coroutine" rule above — that rule is the canonical statement of this constraint and applies during channel switch, login, event handling, row rendering, icon lookup, and profile resolution.
-
-## Comments document the current code, not its history
-
-Every comment and docstring in `src/aspen_client/` must describe the code as it stands in the tree right now. Do not write comments that contrast the current implementation with an earlier one, explain why today's code is "better than" or "replaces" something that used to exist, or cite removed helpers / classes / functions by name as parallels or fallbacks. A reader opening the file a year from now has no way to resolve "the previous threaded implementation", "the old `AsyncApiCaller.submit` contract", "the prior hand-rolled `_parse_*` helpers", or "`_coerce_overrides` used to need" — those references become dead weight the moment the commit that removed the original code lands, and they actively mislead anyone grepping for the named symbol.
-
-Concretely, while editing:
-
-- State invariants, rationales, and trade-offs as present-tense facts about the current code. "`None` means no change" is good; "`None` means no change, matching the previous hand-coded merge semantics" is not.
-- If a non-obvious choice is only defensible by comparing to an alternative, compare to the *alternative* (what the code could have done instead and why it doesn't), not to a previous revision of this file.
-- When you refactor or delete code, sweep the comments in the same commit. A comment that names a helper is invalidated the moment that helper is renamed or removed; do not leave it behind to be cleaned up later.
-- This rule applies equally to this `AGENTS.md` file. If a rule here is justified by a historical bug, describe the bug and the invariant it implies — don't describe the removed fix.
-- The one narrow exception is historical context that a reader genuinely needs to understand why a rule is load-bearing (e.g. "we had this exact freeze once, don't reintroduce it"). Even then, describe the *bug*, not the removed code that caused it.
-
-If you catch a stale "previously / used to / legacy / the old X" comment while you're editing nearby code, fix it. Do not wait for a dedicated cleanup pass — those don't happen.
 
 ## Code-generation boundary
 

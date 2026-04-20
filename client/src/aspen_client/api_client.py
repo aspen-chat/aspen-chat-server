@@ -319,6 +319,32 @@ class AspenApiClient:
             raise AspenApiError("Failed to load icon")
         return bytes(int(value.root) for value in parsed.icon.data)
 
+    async def read_link_preview_image(self, image_id: str) -> tuple[bytes, str]:
+        """Fetch the bytes + mime-type of a server-stored preview thumbnail.
+
+        The server resolved the ``og:image`` URL that originally appeared
+        in the linked page, downloaded the bytes into our media store, and
+        handed the client back only a stable ``imageId``. We trade the id
+        in for bytes here exactly as we do for ``/icon``: this keeps
+        third-party URLs off the wire on the client side and lets the
+        server enforce size / content-type limits.
+
+        Returns ``(bytes, mime_type)``. Raises ``AspenApiError`` on any
+        transport or server-side failure so callers can fall through to
+        a text-only preview card without special-casing shapes.
+        """
+        response = await self._authorized_request(
+            "GET",
+            "/link-preview-image",
+            gen.LinkPreviewImageReadCommand(id=image_id),
+        )
+        data = self._expect_json(response)
+        parsed = gen.LinkPreviewImageReadCommandResponse.model_validate(data).root
+        if not hasattr(parsed, "image"):
+            raise AspenApiError("Failed to load link preview image")
+        image_bytes = bytes(int(value.root) for value in parsed.image.data)
+        return image_bytes, parsed.image.mime_type
+
     async def send_message(self, channel_id: str, content: str) -> Message:
         response = await self._authorized_request(
             "POST",

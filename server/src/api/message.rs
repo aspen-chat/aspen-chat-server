@@ -1,4 +1,5 @@
 use crate::api::GlobalServerContext;
+use crate::api::link_preview::LinkPreview;
 use crate::api::login::SessionUser;
 use crate::api::message_enum::Message;
 use crate::api::message_enum::command::{
@@ -31,7 +32,15 @@ pub async fn create_message(
     match r {
         Ok(msg) => (
             StatusCode::OK,
-            MessageCreateCommandResponse::CreateOk(message_to_api(msg, command.attachments)).into(),
+            // Freshly-created messages always ship with an empty preview
+            // list; the async fetcher's `MessageLinkPreviewsReady` event
+            // will populate the final set shortly.
+            MessageCreateCommandResponse::CreateOk(message_to_api(
+                msg,
+                command.attachments,
+                Vec::new(),
+            ))
+            .into(),
         ),
         Err(e) => {
             error!(error = e.to_string(), "message create command error");
@@ -43,7 +52,11 @@ pub async fn create_message(
     }
 }
 
-pub fn message_to_api(msg: app::message::Message, attachments: Vec<AttachmentId>) -> Message {
+pub fn message_to_api(
+    msg: app::message::Message,
+    attachments: Vec<AttachmentId>,
+    link_previews: Vec<LinkPreview>,
+) -> Message {
     Message {
         id: msg.id,
         author: *msg.author.id(),
@@ -51,6 +64,7 @@ pub fn message_to_api(msg: app::message::Message, attachments: Vec<AttachmentId>
         content: msg.content,
         attachments,
         channel_id: *msg.channel.id(),
+        link_previews,
     }
 }
 
@@ -63,7 +77,12 @@ pub async fn read_message(
     match app::message::read_message(&state, command.id).await {
         Ok(m) => (
             StatusCode::OK,
-            MessageReadCommandResponse::Message(message_to_api(m.message, m.attachments)).into(),
+            MessageReadCommandResponse::Message(message_to_api(
+                m.message,
+                m.attachments,
+                m.link_previews,
+            ))
+            .into(),
         ),
         Err(e) => match e {
             Error::Diesel(diesel::result::Error::NotFound) => (
