@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import signal
-import socket
 import sys
 
-from PySide6.QtCore import QSocketNotifier
+import qasync
 from PySide6.QtWidgets import QApplication
 
 from aspen_client.api_client import AspenApiClient
@@ -16,76 +16,61 @@ from aspen_client.ui import ChatWindow
 def main() -> int:
     config = ClientConfig.from_env()
     app = QApplication(sys.argv)
+
+    # ``qasync.QEventLoop`` is a full ``asyncio.AbstractEventLoop`` that
+    # schedules callbacks on top of Qt's event loop. Unlike
+    # ``PySide6.QtAsyncio``, it implements the network primitives
+    # (``create_connection`` / ``getaddrinfo`` / readers / writers / ...)
+    # that ``httpx.AsyncClient`` (via ``anyio``) and ``websockets`` both
+    # require, so async HTTP requests and the event-stream WebSocket
+    # issued from Qt slots actually work.
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+
     api_client = AspenApiClient(config)
     event_client = EventStreamClient(config)
-    window = ChatWindow(api_client, event_client)
+    # ``app_close_event`` is the handshake between the window's async
+    # shutdown path and ``main()``'s ``run_until_complete`` below.
+    # ``ChatWindow._async_shutdown`` sets it at the end of cleanup,
+    # which unblocks ``event.wait()`` while the event loop is still
+    # running normally. Using ``aboutToQuit`` instead causes the
+    # wake-up to be scheduled on an already-stopping loop and crashes
+    # on exit; see the comment in ``_async_shutdown`` for the full
+    # failure mode.
+    app_close_event = asyncio.Event()
+    window = ChatWindow(api_client, event_client, app_close_event)
     window.show()
 
-    # Qt's C-level event loop doesn't yield back to the Python interpreter
-    # on its own, so Python signal handlers installed via ``signal.signal``
-    # never get to fire during ``app.exec()`` unless something pokes the
-    # interpreter.
-    #
-    # The canonical fix is ``signal.set_wakeup_fd``: the interpreter
-    # writes one byte to a given file descriptor every time a signal is
-    # delivered, and a ``QSocketNotifier`` watching the read end of a
-    # socket pair wakes the Qt event loop synchronously to drain that
-    # byte and dispatch the shutdown. This is strictly better than the
-    # previous no-op QTimer because (a) there is zero steady-state wake
-    # cost, and (b) signal-to-shutdown latency is bounded by the event
-    # loop's next iteration rather than by a polling interval.
-    read_sock, write_sock = socket.socketpair()
-    read_sock.setblocking(False)
-    write_sock.setblocking(False)
-    # ``set_wakeup_fd`` requires a non-blocking fd and returns the
-    # previously registered one; we don't use the old value but we must
-    # keep the sockets alive for the lifetime of the process, hence the
-    # closure captures below.
-    signal.set_wakeup_fd(write_sock.fileno())
-
-    notifier = QSocketNotifier(read_sock.fileno(), QSocketNotifier.Type.Read)
-
-    def _drain_and_close(_fd: int) -> None:
-        try:
-            # Drain whatever the interpreter wrote; the actual signal has
-            # already been dispatched to the Python-level handler below.
-            while True:
-                data = read_sock.recv(4096)
-                if not data:
-                    break
-        except (BlockingIOError, InterruptedError):
-            pass
+    # Signal handling is routed through asyncio: ``add_signal_handler``
+    # registers a Python-level callback that fires on the next loop
+    # tick after the OS delivers the signal, which lands in the same
+    # qasync-driven loop every HTTP/WebSocket coroutine runs on.
+    # ``add_signal_handler`` is Unix-only; on Windows asyncio raises
+    # ``NotImplementedError`` for it, so we fall back to a no-op
+    # (Windows users close the window via the title-bar X, which
+    # routes through ``ChatWindow.closeEvent`` either way).
+    def _request_shutdown() -> None:
+        # ``window.close`` triggers the async-aware shutdown path in
+        # ``ChatWindow.closeEvent`` which awaits the http client and
+        # spawned tasks before letting the window actually close.
         window.close()
 
-    notifier.activated.connect(_drain_and_close)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+        except NotImplementedError:
+            break
 
-    def _signal_handler(_signum: int, _frame: object) -> None:
-        # The wakeup fd machinery above is what actually drives the
-        # shutdown; this handler exists so the interpreter has something
-        # to call (the default action for SIGINT is KeyboardInterrupt,
-        # which we don't want to raise across the Qt boundary).
-        pass
+    # Block on the close event until ``ChatWindow._async_shutdown``
+    # sets it. Setting from inside the async shutdown (rather than
+    # wiring it to ``app.aboutToQuit``) guarantees the wake-up is
+    # scheduled while the event loop is still fully running; by the
+    # time Qt actually begins tearing itself down we've already
+    # returned from ``run_until_complete``.
+    with loop:
+        loop.run_until_complete(app_close_event.wait())
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-
-    # Ensure the window's cleanup runs exactly once regardless of which
-    # exit path trips: X button (closeEvent), signal (wakeup fd above),
-    # or a programmatic ``QApplication.quit()``. ``ChatWindow.shutdown``
-    # is idempotent.
-    app.aboutToQuit.connect(window.shutdown)
-
-    exit_code = app.exec()
-
-    # Explicitly unregister the wakeup fd before the sockets drop out of
-    # scope; otherwise the interpreter may attempt to write to a closed
-    # fd if a signal arrives during interpreter teardown.
-    signal.set_wakeup_fd(-1)
-    notifier.setEnabled(False)
-    read_sock.close()
-    write_sock.close()
-
-    return exit_code
+    return 0
 
 
 if __name__ == "__main__":

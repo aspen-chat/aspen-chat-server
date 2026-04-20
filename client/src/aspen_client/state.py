@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from aspen_client.types import Channel, Community, Message
@@ -9,7 +8,7 @@ from aspen_client.types import Channel, Community, Message
 # Hard ceiling on the number of messages retained per channel window. Shared
 # with the UI layer so eviction is consistent regardless of whether a message
 # arrives via a paged read or a live WebSocket event.
-MESSAGE_WINDOW_CAP = 100
+MESSAGE_WINDOW_CAP = 500
 
 
 @dataclass(slots=True)
@@ -226,140 +225,149 @@ class ClientState:
             self.messages[msg_id] for msg_id in window.ordered_ids if msg_id in self.messages
         ]
 
-    def apply_server_event(self, payload: dict[str, Any]) -> bool:
-        server_event = str(payload.get("serverEvent", ""))
-        event_type = str(payload.get("type", ""))
-        changed = False
+    def apply_server_event(self, event: Any) -> bool:
+        """Fold a validated ``GeneratedServerEvent.root`` variant into state.
 
+        The caller (the UI layer's ``_handle_event``) hands us the typed
+        pydantic object directly — no dict round-trip — so this method
+        relies on attribute access for known fields and uses
+        ``model_dump(exclude_none=True)`` to derive a sparse delta when
+        merging optional update fields. ``None`` is treated as "no
+        change", so a JSON ``null`` from the server is not a way to
+        clear an optional field.
+        """
+        server_event = getattr(event, "serverEvent", None)
+        event_type = getattr(event, "type", None)
         if server_event == "community":
-            changed = self._apply_community_event(payload, event_type)
-        elif server_event == "channel":
-            changed = self._apply_channel_event(payload, event_type)
-        elif server_event == "message":
-            changed = self._apply_message_event(payload, event_type)
+            return self._apply_community_event(event, event_type)
+        if server_event == "channel":
+            return self._apply_channel_event(event, event_type)
+        if server_event == "message":
+            return self._apply_message_event(event, event_type)
+        return False
 
-        return changed
-
-    def _apply_community_event(self, payload: dict[str, Any], event_type: str) -> bool:
-        community_id = payload.get("id")
-        if community_id is None:
-            return False
-        community_id = str(community_id)
+    def _apply_community_event(self, event: Any, event_type: str | None) -> bool:
+        community_id = str(event.id)
         if event_type == "delete":
             existed = community_id in self.communities
             self.remove_community(community_id)
             return existed
-        if event_type in {"create", "update"}:
-            current = self.communities.get(community_id)
-            name = payload.get("name")
-            icon = payload.get("icon")
-            merged = Community(
-                id=community_id,
-                name=str(name if name is not None else (current.name if current else community_id)),
-                icon=str(icon) if icon is not None else (current.icon if current else None),
-            )
-            self.upsert_community(merged)
-            return True
-        return False
-
-    def _apply_channel_event(self, payload: dict[str, Any], event_type: str) -> bool:
-        channel_id = payload.get("id")
-        if channel_id is None:
+        merged = self._merge_event_into_record(
+            event=event,
+            record_id=community_id,
+            current=self.communities.get(community_id),
+            model=Community,
+            event_type=event_type,
+            create_defaults={"name": community_id},
+        )
+        if merged is None:
             return False
-        channel_id = str(channel_id)
+        self.upsert_community(merged)
+        return True
+
+    def _apply_channel_event(self, event: Any, event_type: str | None) -> bool:
+        channel_id = str(event.id)
         if event_type == "delete":
             existed = channel_id in self.channels
             self.remove_channel(channel_id)
             return existed
-        if event_type in {"create", "update"}:
-            current = self.channels.get(channel_id)
-            community = payload.get("community")
-            parent_category = payload.get("parentCategory")
-            sort_index = payload.get("sortIndex")
-            channel = Channel(
-                id=channel_id,
-                name=str(
-                    payload.get("name")
-                    if payload.get("name") is not None
-                    else (current.name if current else channel_id)
-                ),
-                ty=str(
-                    payload.get("ty")
-                    if payload.get("ty") is not None
-                    else (current.ty if current else "Text")
-                ),
-                community=(
-                    str(community)
-                    if community is not None
-                    else (current.community if current else None)
-                ),
-                parent_category=(
-                    str(parent_category)
-                    if parent_category is not None
-                    else (current.parent_category if current else None)
-                ),
-                sort_index=int(
-                    sort_index if sort_index is not None else (current.sort_index if current else 0)
-                ),
-            )
-            self.upsert_channel(channel)
-            return True
-        return False
-
-    def _apply_message_event(self, payload: dict[str, Any], event_type: str) -> bool:
-        message_id = payload.get("id")
-        if message_id is None:
+        merged = self._merge_event_into_record(
+            event=event,
+            record_id=channel_id,
+            current=self.channels.get(channel_id),
+            model=Channel,
+            event_type=event_type,
+            # Fallbacks for a malformed ``create`` event missing
+            # required fields. ``sortIndex`` already has a default of
+            # ``0`` on the model itself.
+            create_defaults={"name": channel_id, "ty": "Text"},
+        )
+        if merged is None:
             return False
-        message_id = str(message_id)
+        self.upsert_channel(merged)
+        return True
+
+    def _apply_message_event(self, event: Any, event_type: str | None) -> bool:
+        message_id = str(event.id)
         if event_type == "delete":
             existed = message_id in self.messages
             self.remove_message(message_id)
             return existed
+        merged = self._merge_event_into_record(
+            event=event,
+            record_id=message_id,
+            current=self.messages.get(message_id),
+            model=Message,
+            event_type=event_type,
+        )
+        if merged is None:
+            return False
         if event_type == "update":
-            current = self.messages.get(message_id)
-            if current is None:
-                # Unknown record updates are ignored until a create/read arrives.
-                return False
-            content = payload.get("content")
-            attachments = payload.get("attachments")
-            updated = Message(
-                id=current.id,
-                author=current.author,
-                channel_id=current.channel_id,
-                timestamp=current.timestamp,
-                content=str(content) if content is not None else current.content,
-                attachments=(
-                    [str(value) for value in attachments]
-                    if attachments is not None
-                    else current.attachments
-                ),
-            )
-            # upsert_message applies window rules; for an update of a record
-            # we already know about we always want the new content persisted.
-            self.messages[current.id] = updated
-            window = self.channel_windows.get(current.channel_id)
-            return window is not None and current.id in window.ordered_ids
-        if event_type == "create":
-            channel_id = payload.get("channelId")
-            author = payload.get("author")
-            timestamp = payload.get("timestamp")
-            content = payload.get("content")
-            attachments = payload.get("attachments", [])
-            if channel_id is None or author is None or timestamp is None or content is None:
-                return False
-            message = Message(
-                id=message_id,
-                author=str(author),
-                channel_id=str(channel_id),
-                timestamp=_to_datetime(str(timestamp)),
-                content=str(content),
-                attachments=[str(value) for value in attachments],
-            )
-            return self.upsert_message(message)
-        return False
+            # ``upsert_message`` applies window rules (drop if the user
+            # is reading older history); for an update of a record we
+            # already know about we always want the new content
+            # persisted, regardless of which slice of history is on
+            # screen.
+            self.messages[merged.id] = merged
+            window = self.channel_windows.get(merged.channel_id)
+            return window is not None and merged.id in window.ordered_ids
+        return self.upsert_message(merged)
 
+    @staticmethod
+    def _merge_event_into_record(
+        *,
+        event: Any,
+        record_id: str,
+        current: Any,
+        model: type[Any],
+        event_type: str | None,
+        create_defaults: dict[str, Any] | None = None,
+    ) -> Any:
+        """Build the post-event record by merging the sparse event delta in.
 
-def _to_datetime(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = f"{value[:-1]}+00:00"
-    return datetime.fromisoformat(value)
+        The pipeline is:
+
+        * ``model_dump(by_alias=True, exclude_none=True, mode="json")``
+          produces a sparse, JSON-friendly delta from the validated
+          generated event payload. ``mode="json"`` stringifies
+          UUID-typed fields so the client-side ``str`` model accepts
+          them. ``exclude_none=True`` gives ``None`` the meaning "no
+          change", so a JSON ``null`` from the server is not a way to
+          clear an optional field.
+        * For an ``update`` event with no matching record, drop the
+          event. Synthesising a record from a partial update payload
+          that may be missing required fields would poison state, and
+          the matching ``create`` event will populate it correctly
+          when it arrives.
+        * For a ``create`` event, layer ``create_defaults`` under the
+          delta so a malformed event missing required fields still
+          validates.
+        * For an ``update`` event with an existing record, dump the
+          existing record (also alias-keyed JSON-mode) and overlay the
+          delta on top before re-validating.
+
+        ``populate_by_name=True`` on the record models means the
+        merged dict can carry either alias (camelCase) or python
+        (snake_case) keys -- both pipelines work.
+        """
+        if event_type not in {"create", "update"}:
+            return None
+        delta = event.model_dump(
+            exclude_none=True,
+            by_alias=True,
+            exclude={"serverEvent", "type", "id"},
+            mode="json",
+        )
+        if current is None:
+            # An update without a matching record is silently dropped
+            # to avoid synthesising a record from a partial payload
+            # that may be missing required fields.
+            if event_type == "update":
+                return None
+            merged_data = {**(create_defaults or {}), **delta, "id": record_id}
+        else:
+            # Both create-with-existing and update-with-existing fold
+            # the sparse delta on top of the existing record.
+            base = current.model_dump(by_alias=True, mode="json")
+            merged_data = {**base, **delta, "id": record_id}
+        return model.model_validate(merged_data)
