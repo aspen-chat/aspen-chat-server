@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["server", "message_gen"]
+members = ["server", "message_gen", "migrate"]
 default-members = ["server"]

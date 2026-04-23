@@ -1,0 +1,22 @@
+[package]
+name = "aspen-migrate"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+diesel = { version = "2.2.10", features = ["postgres", "chrono"] }
+diesel-async = { version = "0.7.4", features = ["postgres", "deadpool"] }
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1.89"
+clap = { version = "4.5.37", features = ["derive"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+anyhow = "1.0.102"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+serde = { version = "1.0.219", features = ["derive"] }
+toml = "0.8"
+syn = { version = "2.0.101", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0.40"
+prettyplease = "0.2"
+colored = "3.1.1"
