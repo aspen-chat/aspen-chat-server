@@ -51,6 +51,10 @@ pub enum Error {
     ),
     #[error("error reading media bytes {0}")]
     S3ByteStream(#[from] aws_sdk_s3::primitives::ByteStreamError),
+    #[error("user not authorized")]
+    Unauthorized,
+    #[error("tokio join error {0}")]
+    TokioJoinError(#[from] tokio::task::JoinError),
 }
 
 pub type Result<T> = std::result::Result<T, app::Error>;

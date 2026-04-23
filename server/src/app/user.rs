@@ -71,13 +71,7 @@ pub async fn create_user(
             return Err(e.into());
         }
     };
-    let password_hash_result = hash_password(&command.password);
-    let password_hash = match password_hash_result {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
+    let password_hash = hash_password(command.password.to_string()).await?;
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
     diesel::insert_into(user::table)
@@ -123,8 +117,12 @@ pub async fn read_user_communities(
 
 pub(crate) async fn update_user(
     state: GlobalServerContext,
+    requesting_user: UserId,
     command: UserUpdateCommand,
 ) -> Result<User, app::Error> {
+    if requesting_user != command.id {
+        return Err(app::Error::Unauthorized);
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -162,7 +160,14 @@ pub(crate) async fn update_user(
     .await
 }
 
-pub(crate) async fn delete_user(state: GlobalServerContext, id: UserId) -> Result<(), app::Error> {
+pub(crate) async fn delete_user(
+    state: GlobalServerContext,
+    requesting_user: UserId,
+    id: UserId,
+) -> Result<(), app::Error> {
+    if requesting_user != id {
+        return Err(app::Error::Unauthorized);
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

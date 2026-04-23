@@ -43,7 +43,7 @@ pub enum InviteCreateCommandResponse {
 #[utoipa::path(post, path = "/invite", responses((status = OK, body = InviteCreateCommandResponse)))]
 pub async fn create_invite(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<InviteCreateCommand>,
 ) -> (StatusCode, Json<InviteCreateCommandResponse>) {
     match app::invite::create_invite(
@@ -142,7 +142,7 @@ pub enum InviteUpdateCommandResponse {
 #[utoipa::path(patch, path = "/invite", responses((status = OK, body = InviteUpdateCommandResponse)))]
 pub async fn update_invite(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<InviteUpdateCommand>,
 ) -> (StatusCode, Json<InviteUpdateCommandResponse>) {
     match app::invite::update_invite(&state, user.id, command.code, command.expires_at).await {
@@ -190,7 +190,7 @@ pub enum InviteRevokeCommandResponse {
 #[utoipa::path(delete, path = "/invite", responses((status = OK, body = InviteRevokeCommandResponse)))]
 pub async fn revoke_invite(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<InviteRevokeCommand>,
 ) -> (StatusCode, Json<InviteRevokeCommandResponse>) {
     match app::invite::revoke_invite(&state, user.id, command.code).await {

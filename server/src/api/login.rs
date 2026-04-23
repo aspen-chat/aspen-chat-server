@@ -96,11 +96,15 @@ pub async fn token_refresh(
 #[utoipa::path(post, path = "/change_password", responses((status = OK, body=ChangePasswordResponse)))]
 pub async fn change_password(
     State(state): State<GlobalServerContext>,
+    SessionUser {
+        user: _,
+        session_token,
+    }: SessionUser,
     Json(change_password): Json<ChangePassword>,
 ) -> (StatusCode, Json<ChangePasswordResponse>) {
     let conn = state.connection_pool.get().map_err(Into::into);
     let resp = match conn
-        .and_then(|conn| app::login::try_change_password(conn, &change_password))
+        .and_then(|conn| app::login::try_change_password(conn, &change_password, session_token))
         .await
     {
         Ok(resp) => resp,
@@ -152,7 +156,10 @@ pub async fn authenticated_user(
 }
 
 #[derive(Clone)]
-pub struct SessionUser(pub UserPg);
+pub struct SessionUser {
+    pub user: UserPg,
+    pub session_token: String,
+}
 impl FromRequestParts<GlobalServerContext> for SessionUser {
     type Rejection = (StatusCode, Cow<'static, str>);
 
@@ -184,6 +191,9 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
             }
         };
         app::user::mark_user_online(state, &user);
-        Ok(SessionUser(user))
+        Ok(SessionUser {
+            user,
+            session_token: token.to_string(),
+        })
     }
 }

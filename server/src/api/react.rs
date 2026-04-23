@@ -15,7 +15,7 @@ use tracing::error;
 
 pub async fn create_react(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<ReactCreateCommand>,
 ) -> (StatusCode, Json<ReactCreateCommandResponse>) {
     match app::react::create_react(&state, user.id, command.message_id, command.emoji.clone()).await
@@ -49,7 +49,7 @@ pub async fn create_react(
 #[utoipa::path(delete, path = "/react", responses((status = OK, body=ReactDeleteCommandResponse)))]
 pub async fn delete_react(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<ReactDeleteCommand>,
 ) -> (StatusCode, Json<ReactDeleteCommandResponse>) {
     match app::react::delete_react(&state, user.id, command.message_id, command.emoji).await {

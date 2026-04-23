@@ -1,2 +1,0 @@
-ALTER TABLE community
-ADD COLUMN deleted_at TIMESTAMPTZ;

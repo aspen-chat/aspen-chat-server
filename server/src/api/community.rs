@@ -25,7 +25,8 @@ pub async fn create_community(
     user: SessionUser,
     Json(command): Json<CommunityCreateCommand>,
 ) -> (StatusCode, Json<CommunityCreateCommandResponse>) {
-    let new_community = match app::community::create_community(state, user.0.id, &command).await {
+    let new_community = match app::community::create_community(state, user.user.id, &command).await
+    {
         Ok(value) => value,
         Err(e) => {
             return {
@@ -256,7 +257,7 @@ pub async fn delete_community(
 #[utoipa::path(post, path = "/community/join", responses((status = OK, body=CommunityUpdateCommandResponse)))]
 pub async fn join_community(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<UserCommunityCreateCommand>,
 ) -> (StatusCode, Json<UserCommunityCreateCommandResponse>) {
     match app::community::join_community(
@@ -295,7 +296,7 @@ pub async fn join_community(
 #[utoipa::path(delete, path = "/community/leave", responses((status = OK, body=CommunityDeleteCommandResponse)))]
 pub async fn leave_community(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<UserCommunityDeleteCommand>,
 ) -> (StatusCode, Json<UserCommunityDeleteCommandResponse>) {
     match app::community::leave_community(&state, user.id, command.community).await {

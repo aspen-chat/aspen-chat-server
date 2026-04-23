@@ -113,7 +113,7 @@ pub enum UserCommunitiesReadCommandResponse {
 )]
 pub async fn read_user_communities(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
 ) -> (StatusCode, Json<UserCommunitiesReadCommandResponse>) {
     match app::user::read_user_communities(state, user.id).await {
         Ok(communities) => (
@@ -144,9 +144,10 @@ pub async fn read_user_communities(
 
 pub async fn update_user(
     State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<UserUpdateCommand>,
 ) -> (StatusCode, Json<UserUpdateCommandResponse>) {
-    match app::user::update_user(state, command).await {
+    match app::user::update_user(state, user.id, command).await {
         Ok(_) => (StatusCode::OK, UserUpdateCommandResponse::UpdateOk.into()),
         Err(e) => match e {
             Error::Diesel(diesel::result::Error::NotFound) => (
@@ -167,9 +168,10 @@ pub async fn update_user(
 #[utoipa::path(delete, path = "/user", responses((status = OK, body=UserDeleteCommandResponse)))]
 pub async fn delete_user(
     State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<UserDeleteCommand>,
 ) -> (StatusCode, Json<UserDeleteCommandResponse>) {
-    match app::user::delete_user(state, command.id).await {
+    match app::user::delete_user(state, user.id, command.id).await {
         Ok(()) => (StatusCode::OK, UserDeleteCommandResponse::DeleteOk.into()),
         Err(e) => match e {
             Error::Diesel(diesel::result::Error::NotFound) => (

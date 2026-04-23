@@ -224,9 +224,7 @@ fn push_url(urls: &mut Vec<Url>, seen: &mut HashSet<String>, raw: &str) -> bool 
 
 /// Trailing characters we trim off a naked URL match. Lifted from the set of
 /// punctuation GFM autolink usually ignores at the end of the match.
-const BARE_URL_TRAILING: &[char] = &[
-    '.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>', '`',
-];
+const BARE_URL_TRAILING: &[char] = &['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>', '`'];
 
 /// Find runs that look like `http://…` or `https://…` in a plain-text span.
 ///
@@ -585,7 +583,11 @@ async fn fetch_metadata_uncached(url: &Url) -> Option<ParsedMetadata> {
     let response = match http_client().get(url.as_str()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(url = url.as_str(), error = e.to_string(), "link preview fetch failed");
+            warn!(
+                url = url.as_str(),
+                error = e.to_string(),
+                "link preview fetch failed"
+            );
             return None;
         }
     };
@@ -650,7 +652,11 @@ async fn fetch_and_store_image(
     let response = match http_client().get(image_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(url = image_url, error = e.to_string(), "preview image fetch failed");
+            warn!(
+                url = image_url,
+                error = e.to_string(),
+                "preview image fetch failed"
+            );
             return None;
         }
     };
@@ -884,7 +890,9 @@ pub async fn load_previews(
         return Ok(HashMap::new());
     }
     let rows: Vec<LinkPreviewRow> = message_link_preview::table
-        .select(<LinkPreviewRow as diesel::SelectableHelper<diesel::pg::Pg>>::as_select())
+        .select(<LinkPreviewRow as diesel::SelectableHelper<
+            diesel::pg::Pg,
+        >>::as_select())
         .filter(message_link_preview::message_id.eq_any(message_ids))
         .order_by((
             message_link_preview::message_id.asc(),
@@ -894,9 +902,7 @@ pub async fn load_previews(
         .await?;
     let mut out: HashMap<MessageId, Vec<LinkPreview>> = HashMap::new();
     for row in rows {
-        out.entry(row.message_id)
-            .or_default()
-            .push(row.into_wire());
+        out.entry(row.message_id).or_default().push(row.into_wire());
     }
     Ok(out)
 }
@@ -1010,10 +1016,7 @@ mod tests {
     #[test]
     fn extracts_reference_links() {
         let md = "See [the ref][foo] page.\n\n[foo]: https://ref.example.com/";
-        assert_eq!(
-            urls_from(md),
-            vec!["https://ref.example.com/".to_string()],
-        );
+        assert_eq!(urls_from(md), vec!["https://ref.example.com/".to_string()],);
     }
 
     #[test]
@@ -1099,7 +1102,10 @@ https://d.example.com";
         // not the originally-requested URL.
         let final_url = Url::parse("https://cdn.example.com/posts/42/").unwrap();
         let resolved = final_url.join("/assets/thumb.png").unwrap();
-        assert_eq!(resolved.as_str(), "https://cdn.example.com/assets/thumb.png");
+        assert_eq!(
+            resolved.as_str(),
+            "https://cdn.example.com/assets/thumb.png"
+        );
         let resolved = final_url.join("../thumb.png").unwrap();
         assert_eq!(resolved.as_str(), "https://cdn.example.com/posts/thumb.png");
         let resolved = final_url.join("https://img.example.com/a.png").unwrap();

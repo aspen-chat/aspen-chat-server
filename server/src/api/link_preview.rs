@@ -59,13 +59,8 @@ pub struct LinkPreviewImageReadCommand {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum LinkPreviewImageReadCommandResponse {
-    Image {
-        data: Vec<u8>,
-        mime_type: String,
-    },
-    Error {
-        cause: Option<Cow<'static, str>>,
-    },
+    Image { data: Vec<u8>, mime_type: String },
+    Error { cause: Option<Cow<'static, str>> },
 }
 
 #[utoipa::path(get, path = "/link-preview-image", responses((status = OK, body = LinkPreviewImageReadCommandResponse)))]

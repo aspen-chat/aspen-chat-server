@@ -13,7 +13,7 @@ use tracing::error;
 #[utoipa::path(post, path = "/attachment", responses((status = OK, body=AttachmentCreateCommandResponse)))]
 pub async fn create_attachment(
     State(state): State<GlobalServerContext>,
-    SessionUser(_user): SessionUser,
+    SessionUser { .. }: SessionUser,
     Json(command): Json<AttachmentCreateCommand>,
 ) -> (StatusCode, Json<AttachmentCreateCommandResponse>) {
     match app::attachment::create_attachment(
@@ -79,7 +79,7 @@ pub async fn read_attachment(
 #[utoipa::path(delete, path = "/attachment", responses((status = OK, body=AttachmentDeleteCommandResponse)))]
 pub async fn delete_attachment(
     State(state): State<GlobalServerContext>,
-    SessionUser(_user): SessionUser,
+    SessionUser { .. }: SessionUser,
     Json(command): Json<AttachmentDeleteCommand>,
 ) -> (StatusCode, Json<AttachmentDeleteCommandResponse>) {
     match app::attachment::delete_attachment(&state, command.id).await {

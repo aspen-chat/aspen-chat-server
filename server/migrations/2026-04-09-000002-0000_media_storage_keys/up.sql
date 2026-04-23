@@ -1,6 +1,0 @@
-ALTER TABLE icon
-ADD COLUMN storage_key TEXT NOT NULL,
-DROP COLUMN data;
-
-ALTER TABLE attachment
-ADD COLUMN storage_key TEXT NOT NULL;

@@ -5,7 +5,9 @@ use argon2::{
 use base64::{Engine, prelude::BASE64_STANDARD};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl, SelectableHelper};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use futures_util::StreamExt;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
@@ -39,27 +41,38 @@ pub struct Login {
     pub password: String,
 }
 
-pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
-    let argon2 = argon2::Argon2::default();
-    CHACHA_RNG.with(|rng| {
-        let bytes = rng.borrow_mut().random::<[u8; Salt::RECOMMENDED_LENGTH]>();
-        SaltString::encode_b64(&bytes)
-            .and_then(|salt| PasswordHash::generate(argon2, password, &salt).map(|h| h.to_string()))
+pub async fn hash_password(password: String) -> app::Result<String> {
+    // Prevent CPU blocking work from hoarding tokio workers
+    tokio::task::spawn_blocking(|| {
+        let argon2 = argon2::Argon2::default();
+        CHACHA_RNG.with(|rng| {
+            let bytes = rng.borrow_mut().random::<[u8; Salt::RECOMMENDED_LENGTH]>();
+            SaltString::encode_b64(&bytes).and_then(|salt| {
+                PasswordHash::generate(argon2, password, &salt).map(|h| h.to_string())
+            })
+        })
     })
+    .await?
+    .map_err(Into::into)
 }
 
-pub fn check_password(password: &str, entry_password_hash: &str) -> bool {
-    let argon2 = argon2::Argon2::default();
-    let entry_hash = match PasswordHash::try_from(entry_password_hash) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("user entry password hash malformed in database {e}");
-            return false;
-        }
-    };
-    argon2
-        .verify_password(password.as_bytes(), &entry_hash)
-        .is_ok()
+pub async fn check_password(password: String, entry_password_hash: String) -> app::Result<bool> {
+    // Prevent CPU blocking work from hoarding tokio workers
+    tokio::task::spawn_blocking(move || {
+        let argon2 = argon2::Argon2::default();
+        let entry_hash = match PasswordHash::try_from(entry_password_hash.as_str()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("user entry password hash malformed in database {e}");
+                return false;
+            }
+        };
+        argon2
+            .verify_password(password.as_bytes(), &entry_hash)
+            .is_ok()
+    })
+    .await
+    .map_err(Into::into)
 }
 
 fn make_token() -> String {
@@ -97,7 +110,7 @@ pub async fn try_login(
         .await;
     match user_entry {
         Ok(u) => {
-            if check_password(password, &u.password_hash) {
+            if check_password(password.to_string(), u.password_hash).await? {
                 use crate::database::schema::{refresh_token, session};
                 let session_token = make_token();
                 let refresh_token = make_token();
@@ -249,6 +262,7 @@ const PASSWORD_MIN_LENGTH: usize = 8;
 pub async fn try_change_password(
     mut conn: impl AsMut<AsyncPgConnection>,
     c: &ChangePassword,
+    current_session_token: String,
 ) -> Result<ChangePasswordResponse, app::Error> {
     let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
@@ -260,23 +274,61 @@ pub async fn try_change_password(
         )
         .first(conn)
         .await?;
-    if check_password(&c.old_password, &entry_password_hash) {
+    if check_password(c.old_password.to_string(), entry_password_hash).await? {
         if c.new_password.len() < PASSWORD_MIN_LENGTH {
             return Ok(ChangePasswordResponse::NewPasswordDoesntMeetRequirements {
                 cause: PasswordRequirement::Length,
             });
         }
-        let new_password_hash = hash_password(&c.new_password)?;
-        diesel::update(
-            schema::user::table.filter(
-                schema::user::id
-                    .eq(&c.user_id.0)
-                    .and(schema::user::deleted_at.is_null()),
-            ),
-        )
-        .set(schema::user::password_hash.eq(new_password_hash))
-        .execute(conn)
+        let new_password_hash = hash_password(c.new_password.to_string()).await?;
+        conn.transaction(|conn| {
+            async move {
+                diesel::update(
+                    schema::user::table.filter(
+                        schema::user::id
+                            .eq(&c.user_id)
+                            .and(schema::user::deleted_at.is_null()),
+                    ),
+                )
+                .set(schema::user::password_hash.eq(new_password_hash))
+                .execute(conn)
+                .await?;
+                diesel::sql_query(
+                    "
+                    UPDATE session
+                    SET expires = now()
+                    FROM refresh_token
+                    WHERE refresh_token.token = session.refresh_token
+                        AND session.token != $1
+                        AND refresh_token.user = $2
+                        AND session.expires > now();
+                ",
+                )
+                .bind::<diesel::sql_types::Text, _>(&current_session_token)
+                .bind::<diesel::sql_types::Uuid, _>(&c.user_id)
+                .execute(conn)
+                .await?;
+                diesel::sql_query(
+                    "
+                    UPDATE refresh_token
+                    SET expires = now()
+                    FROM session 
+                    WHERE refresh_token.token = session.refresh_token
+                        AND session.token != $1
+                        AND refresh_token.user = $2
+                        AND refresh_token.expires > now();
+                ",
+                )
+                .bind::<diesel::sql_types::Text, _>(&current_session_token)
+                .bind::<diesel::sql_types::Uuid, _>(&c.user_id)
+                .execute(conn)
+                .await?;
+                Result::<(), app::Error>::Ok(())
+            }
+            .scope_boxed()
+        })
         .await?;
+
         Ok(ChangePasswordResponse::Ok)
     } else {
         Ok(ChangePasswordResponse::OldPasswordIncorrect)

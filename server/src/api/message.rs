@@ -18,7 +18,7 @@ use tracing::error;
 
 pub async fn create_message(
     State(state): State<GlobalServerContext>,
-    SessionUser(user): SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(command): Json<MessageCreateCommand>,
 ) -> (StatusCode, Json<MessageCreateCommandResponse>) {
     let r = app::message::create_message(
