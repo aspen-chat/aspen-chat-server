@@ -32,3 +32,11 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the QML scene tree alongside the package so installed wheels
+# can locate ``Main.qml`` via ``importlib.resources`` the same way a
+# source checkout does. Without this the QML files are silently
+# stripped from the wheel and ``ASPEN_UI=quick`` fails to start with
+# "engine.rootObjects() is empty".
+"aspen_client.qml_ui" = ["qml/*.qml"]

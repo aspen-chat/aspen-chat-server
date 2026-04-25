@@ -28,6 +28,15 @@ if TYPE_CHECKING:
 # "wake" the reader.
 _PING_INTERVAL_SECONDS = 20.0
 _PING_TIMEOUT_SECONDS = 10.0
+# Upper bound on how long ``ClientConnection.close()`` will wait for the
+# server's close-frame acknowledgement before forcibly dropping the TCP
+# socket. The default is 10 seconds, which makes a post-login shutdown
+# feel like the client has hung. We don't actually rely on the server
+# acking the close (the shutdown path skips ``close()`` entirely; see
+# ``_consume``'s ``finally`` below) but the bound applies to any other
+# close path too \u2014 e.g. a server-initiated drop that's already handed us
+# a stale connection \u2014 and one second is a humane ceiling.
+_CLOSE_TIMEOUT_SECONDS = 1.0
 
 # Reconnect policy. The server's NATS JetStream consumer is created with
 # ``DeliverPolicy::ByStartTime { start_time: now - 60s }`` (see
@@ -223,6 +232,7 @@ class EventStreamClient(QObject):
                 ssl=ssl_context,
                 ping_interval=_PING_INTERVAL_SECONDS,
                 ping_timeout=_PING_TIMEOUT_SECONDS,
+                close_timeout=_CLOSE_TIMEOUT_SECONDS,
             )
         except (
             OSError,
@@ -256,9 +266,23 @@ class EventStreamClient(QObject):
             # drop and starts a fresh outage episode.
             return
         finally:
-            try:
-                await connection.close()
-            except (OSError, WebSocketException):
-                # Already torn down; the outer loop will reconnect.
-                pass
+            # On the shutdown path we deliberately skip the graceful
+            # close handshake. ``close()`` sends a close frame and then
+            # waits for the server's close frame back (bounded by
+            # ``close_timeout``), which used to make every post-login
+            # shutdown stall for the full default 10 seconds before
+            # the process could exit. The server detects the dropped
+            # TCP socket within its own ping-timeout and reaps the
+            # subscription either way, so politely closing on our way
+            # out the door buys us nothing but a stalled UI.
+            #
+            # In every non-shutdown path (server-initiated drop,
+            # transient I/O error) ``close()`` runs as before so we
+            # release sockets cleanly between reconnect attempts.
+            if not self._stopping:
+                try:
+                    await connection.close()
+                except (OSError, WebSocketException):
+                    # Already torn down; the outer loop will reconnect.
+                    pass
             self._connection = None

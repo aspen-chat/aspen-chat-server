@@ -45,6 +45,23 @@ Optional environment variables:
 - `ASPEN_API_BASE_URL` (default `https://127.0.0.1:443`)
 - `ASPEN_WS_URL` (default derived from API base URL + `/event_stream`)
 - `ASPEN_VERIFY_TLS` (`true`/`false`, default `false`)
+- `ASPEN_UI` (`widgets` / `quick`, default `widgets`) — selects the UI layer
+
+## Experimental: Qt Quick UI
+
+A parallel Qt Quick (QML) implementation lives in `src/aspen_client/qml_ui/`. It reuses every non-UI layer (`AspenApiClient`, `TaskSpawner`, `ClientState`, `EventStreamClient`, `IconCache`, `LinkPreviewImageCache`, `UserDirectory`) and adds `QObject` controllers, `QAbstractListModel`-backed list models, a `QQuickImageProvider` for cached avatars and link-preview thumbnails, and the QML scene tree.
+
+Opt in by exporting `ASPEN_UI=quick` before launching:
+
+```bash
+source .venv/bin/activate
+ASPEN_API_BASE_URL=https://127.0.0.1:443 \
+ASPEN_VERIFY_TLS=false \
+ASPEN_UI=quick \
+aspen-client
+```
+
+Parity status: login, communities/channels/users panels, message pane (sliding window + paging + previews + composer), reconnect-resync, and shutdown all work end-to-end. The Widgets path remains the default until the Quick path has had at least one full human-validation pass.
 
 ## Current MVP features
 
@@ -70,4 +87,6 @@ Client checks (from `client`):
 source .venv/bin/activate
 generate-client
 python -m compileall src/aspen_client
+ASPEN_UI=widgets aspen-client   # smoke: Widgets path still works
+ASPEN_UI=quick   aspen-client   # smoke: Quick path boots, login, chat
 ```
