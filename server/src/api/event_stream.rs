@@ -119,6 +119,45 @@ async fn handle_socket_conn(
                     }
                 }
             },
+            // Drive the read side of the socket too. The event stream
+            // is server -> client only at the application layer, but
+            // the WebSocket protocol's control frames (Close, Ping)
+            // arrive on this same channel. Tungstenite only reacts to
+            // them while the stream is being polled, so without this
+            // arm a client-initiated close-frame would sit unread in
+            // the read buffer indefinitely; the close acknowledgement
+            // would never be flushed back, and the client's
+            // ``close()`` call would block until its ``close_timeout``
+            // fired before giving up. Polling here lets tungstenite
+            // auto-respond to Close (and auto-pong Pings) as the
+            // protocol expects.
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Close(_))) | None => {
+                        // Explicitly send our half of the close
+                        // handshake. Tungstenite will have queued an
+                        // auto-response when it parsed the inbound
+                        // Close, but ``send`` is what actually
+                        // schedules the flush. The send is best-effort
+                        // (the peer may have already aborted TCP);
+                        // either way we exit the loop and drop the
+                        // socket.
+                        let _ = socket.send(Message::Close(None)).await;
+                        return;
+                    }
+                    Some(Ok(_)) => {
+                        // Pings are auto-pong'd by tungstenite at the
+                        // protocol layer; Text / Binary aren't part of
+                        // this stream's contract so we drop them
+                        // silently rather than tearing the connection
+                        // down on an unexpected payload.
+                    }
+                    Some(Err(e)) => {
+                        error!("websocket recv error on event stream {e}");
+                        return;
+                    }
+                }
+            },
             _ = force_shutdown_rx.recv() => {
                 error!("forcefully disconnecting user due to slow events download");
                 break;
