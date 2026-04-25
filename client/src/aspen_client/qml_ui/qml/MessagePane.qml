@@ -36,13 +36,14 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            DesktopListView {
+            ListView {
                 id: messages
                 anchors.fill: parent
                 clip: true
                 model: chat.messageModel
                 spacing: 4
                 cacheBuffer: 600
+                acceptedButtons: Qt.NoButton
                 // Re-anchor the view to the bottom on first show so the
                 // most recent message is visible without the user having
                 // to scroll. ``positionViewAtEnd`` is cheaper than

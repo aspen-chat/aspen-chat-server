@@ -11,7 +11,7 @@ Rectangle {
     // is visible based on ``collapsed`` so the avatar strip can have a
     // very different delegate from the full text+icon row without
     // forcing a model swap on the controller side.
-    DesktopListView {
+    ListView {
         id: fullList
         anchors.fill: parent
         anchors.margins: 4
@@ -20,6 +20,7 @@ Rectangle {
         model: chat.communities
         spacing: 2
         currentIndex: -1
+        acceptedButtons: Qt.NoButton
 
         delegate: ItemDelegate {
             width: ListView.view.width
@@ -43,7 +44,7 @@ Rectangle {
         }
     }
 
-    DesktopListView {
+    ListView {
         id: avatarStrip
         anchors.fill: parent
         anchors.margins: 4
@@ -51,6 +52,7 @@ Rectangle {
         visible: root.collapsed
         model: chat.communities
         spacing: 4
+        acceptedButtons: Qt.NoButton
 
         delegate: Item {
             width: avatarStrip.width

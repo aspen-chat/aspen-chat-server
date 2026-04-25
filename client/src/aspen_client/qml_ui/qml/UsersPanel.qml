@@ -6,13 +6,14 @@ Rectangle {
     id: root
     color: theme.bgPane
 
-    DesktopListView {
+    ListView {
         id: list
         anchors.fill: parent
         anchors.margins: 4
         clip: true
         model: chat.users
         spacing: 2
+        acceptedButtons: Qt.NoButton
 
         delegate: Item {
             width: ListView.view.width

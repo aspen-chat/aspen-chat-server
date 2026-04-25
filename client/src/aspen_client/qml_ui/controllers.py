@@ -4,7 +4,7 @@ The controllers are the only objects on the Quick path that hold a
 reference to :class:`AspenApiClient` or :class:`TaskSpawner`. Every
 ``@Slot`` is the entry point QML uses to ask for some work; each one
 dispatches through ``self._tasks.run(...)`` exactly the way
-:class:`ChatWindow` does on the Widgets path \u2014 GUI slots stay
+:class:`ChatWindow` does on the Widgets path. GUI slots stay
 synchronous, and resumption after ``await`` lands on the GUI thread
 (qasync drives the asyncio loop on top of Qt's loop) so result
 callbacks may freely touch the models.
