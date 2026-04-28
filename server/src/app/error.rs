@@ -54,7 +54,7 @@ pub enum Error {
     #[error("user not authorized")]
     Unauthorized,
     #[error("tokio join error {0}")]
-    TokioJoinError(#[from] tokio::task::JoinError),
+    TokioJoin(#[from] tokio::task::JoinError),
 }
 
 pub type Result<T> = std::result::Result<T, app::Error>;
