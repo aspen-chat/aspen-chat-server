@@ -166,7 +166,8 @@ pub(crate) async fn read_channel_messages(
         .await?;
     // Link previews live in a separate child table; batch-load them by
     // message id so we don't N+1 the query for larger backfills.
-    let mut previews_by_id = load_previews(conn.as_mut(), &message_ids).await?;
+    let mut previews_by_id =
+        load_previews(conn.as_mut(), state.media_store.as_ref(), &message_ids).await?;
     let mut ret = messages
         .into_iter()
         .map(|message| {

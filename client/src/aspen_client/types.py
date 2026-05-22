@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -62,8 +62,11 @@ class LinkPreview(BaseModel):
     Mirrors the server's ``api::link_preview::LinkPreview`` DTO. The
     server parses link URLs out of message bodies, fetches the HTML, and
     uploads any referenced ``og:image`` to its media store; we receive
-    the resulting strings plus an ``imageId`` that the ``LinkPreviewImageCache``
-    can trade for image bytes via ``/link-preview-image``.
+    the resulting strings plus an ``imageUrl`` that points directly at
+    the Aspen media store's anonymous-read endpoint. The
+    ``LinkPreviewImageCache`` trades the URL for bytes via
+    ``AspenApiClient.download_media_bytes`` and never has to consult an
+    intermediate server endpoint.
     """
 
     model_config = _RECORD_CONFIG
@@ -72,8 +75,27 @@ class LinkPreview(BaseModel):
     title: str | None = None
     description: str | None = None
     site_name: str | None = Field(default=None, alias="siteName")
-    image_id: str | None = Field(default=None, alias="imageId")
+    image_url: str | None = Field(default=None, alias="imageUrl")
     theme_color: str | None = Field(default=None, alias="themeColor")
+
+
+class Icon(BaseModel):
+    """Metadata for a server-stored icon blob.
+
+    Mirrors the server's ``api::icon::Icon`` DTO. The server uploads
+    the bytes into its media store and templates a public,
+    anonymous-read URL into ``download_url``; the client trades that
+    URL for the actual image bytes via
+    ``AspenApiClient.download_media_bytes`` (typically from inside
+    ``IconCache._do_load_user_icon`` /
+    ``IconCache._do_load_community_icon``).
+    """
+
+    model_config = _RECORD_CONFIG
+
+    id: str
+    mime_type: str = Field(alias="mimeType")
+    download_url: str = Field(alias="downloadUrl")
 
 
 class Message(BaseModel):

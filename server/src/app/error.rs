@@ -40,17 +40,18 @@ pub enum Error {
     S3PutObject(
         #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::put_object::PutObjectError>>,
     ),
-    #[error("error reading object from media store {0}")]
-    S3GetObject(
-        #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>,
-    ),
     #[error("error deleting object from media store {0}")]
     S3DeleteObject(
         #[from]
         Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_object::DeleteObjectError>>,
     ),
-    #[error("error reading media bytes {0}")]
-    S3ByteStream(#[from] aws_sdk_s3::primitives::ByteStreamError),
+    #[error("error inspecting object in media store {0}")]
+    S3HeadObject(
+        #[from]
+        Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::head_object::HeadObjectError>>,
+    ),
+    #[error("error presigning media store request {0}")]
+    S3Presign(#[from] aws_sdk_s3::presigning::PresigningConfigError),
     #[error("user not authorized")]
     Unauthorized,
     #[error("tokio join error {0}")]

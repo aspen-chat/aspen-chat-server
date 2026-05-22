@@ -23,3 +23,4 @@ pub mod m20260409_000003_community_soft_deletes;
 pub mod m20260409_000004_invite_table;
 pub mod m20260417_200000_message_channel_id_index;
 pub mod m20260420_000000_message_link_preview;
+pub mod m20260502_002140_media_pending_uploads;

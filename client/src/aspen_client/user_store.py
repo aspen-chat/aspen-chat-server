@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from aspen_client.api_client import AspenApiClient, TaskSpawner
 
 
-class UserDirectory:
+class UserStore:
     """Caches per-user profile + presence status; dedupes background fetches.
 
     Mirrors ``IconCache`` for the user-profile / presence side of the

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Slot
 
-from aspen_client.ui_messages import _render_markdown_to_html
+from aspen_client.ui_messages import render_markdown_to_html
 
 
 class MarkdownBridge(QObject):
@@ -35,4 +35,4 @@ class MarkdownBridge(QObject):
         renderer strips raw HTML at parse time and disarms anchors
         whose visible text disagrees with their ``href``.
         """
-        return _render_markdown_to_html(content)
+        return render_markdown_to_html(content)

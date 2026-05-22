@@ -1,37 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-import qtawesome as qta
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QPushButton
 
-from aspen_client.theme import COLOR_ACCENT, COLOR_AWAY, COLOR_BG_MAIN, COLOR_TEXT_MAIN
+from aspen_client.qml_ui.theme import COLOR_BG_MAIN, COLOR_TEXT_MAIN
 from aspen_client.types import Community, UserProfile
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from aspen_client.api_client import AspenApiClient, TaskSpawner
-
-
-def material_icon(name: str, color: str = "#9A9080") -> QIcon:
-    """Build a Material Design icon from a short mdi6 name."""
-    return qta.icon(f"mdi6.{name}", color=color)
-
-
-def apply_button_icon(
-    button: QPushButton,
-    icon_name: str,
-    *,
-    color: str = "#8EBA54",
-    size: int = 18,
-) -> None:
-    """Apply a Material icon to a push button with consistent sizing."""
-    button.setIcon(material_icon(icon_name, color))
-    button.setIconSize(QSize(size, size))
-
 
 class IconCache:
     """Caches per-user / per-community avatar pixmaps and icons.
@@ -135,10 +118,19 @@ class IconCache:
     async def _do_load_user_icon(
         self, user_id: str, icon_id: str, pending_key: str
     ) -> None:
+        # Two-step: resolve the id to a metadata DTO carrying the
+        # public ``download_url``, then fetch the bytes from the media
+        # store. The dedupe slot covers both hops, so a second renderer
+        # asking for the same id while either hop is in flight is a
+        # no-op.
         try:
-            icon_bytes = await self._api.read_icon_bytes(icon_id)
-        except Exception:  # noqa: BLE001 - dedupe set must always release
+            icon = await self._api.read_icon(icon_id)
+            icon_bytes, _content_type = await self._api.download_media_bytes(
+                icon.download_url
+            )
+        except Exception as err:
             self._pending_user_icon_fetches.discard(pending_key)
+            logger.warning(f"Failed to download user icon {err}")
             return
         self._pending_user_icon_fetches.discard(pending_key)
         # We render user avatars at two sizes (28 in message rows, 20 in
@@ -157,10 +149,17 @@ class IconCache:
         self._tasks.spawn(self._do_load_community_icon(community_id, icon_id))
 
     async def _do_load_community_icon(self, community_id: str, icon_id: str) -> None:
+        # Same two-step as ``_do_load_user_icon``: metadata round-trip
+        # to get the public ``download_url``, then bytes from the media
+        # store. The dedupe slot covers both hops.
         try:
-            icon_bytes = await self._api.read_icon_bytes(icon_id)
-        except Exception:  # noqa: BLE001 - dedupe set must always release
+            icon = await self._api.read_icon(icon_id)
+            icon_bytes, _content_type = await self._api.download_media_bytes(
+                icon.download_url
+            )
+        except Exception as err:
             self._pending_community_icon_fetches.discard(icon_id)
+            logger.warning(f"Failed to download community icon {err}")
             return
         self._pending_community_icon_fetches.discard(icon_id)
         pixmap = QPixmap()
@@ -175,24 +174,6 @@ class IconCache:
         )
         self._community_icon_cache[icon_id] = icon
         self._on_community_icon_ready(community_id, icon_id)
-
-    @staticmethod
-    def presence_dot_pixmap(status: str, size: int) -> QPixmap:
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        status_color = COLOR_ACCENT if status == "online" else COLOR_AWAY
-        ring_pen = QPen(QColor(status_color))
-        ring_pen.setWidth(1)
-        painter.setPen(ring_pen)
-        if status in {"online", "away"}:
-            painter.setBrush(QColor(status_color))
-        else:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(0, 0, size - 1, size - 1)
-        painter.end()
-        return pixmap
 
     @staticmethod
     def _circular_pixmap_from_bytes(icon_bytes: bytes, size: int) -> QPixmap:

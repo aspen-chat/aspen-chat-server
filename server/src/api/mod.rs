@@ -135,17 +135,19 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             community::read_community_users,
         ))
         .routes(routes!(
-            // Attachment
-            attachment::create_attachment,
+            // Attachment metadata
             attachment::read_attachment,
             attachment::delete_attachment,
         ))
+        .routes(routes!(attachment::init_attachment_upload))
+        .routes(routes!(attachment::confirm_attachment_upload))
         .routes(routes!(
-            // Icon
-            icon::create_icon,
+            // Icon metadata
             icon::read_icon,
             icon::delete_icon,
         ))
+        .routes(routes!(icon::init_icon_upload))
+        .routes(routes!(icon::confirm_icon_upload))
         .routes(routes!(
             // React
             react::create_react,
@@ -157,10 +159,6 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             invite::read_community_invites,
             invite::update_invite,
             invite::revoke_invite,
-        ))
-        .routes(routes!(
-            // Link Preview Image
-            link_preview::read_link_preview_image,
         ))
         // Events
         .route("/event_stream", any(event_stream::event_stream));

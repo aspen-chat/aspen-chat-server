@@ -12,15 +12,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, Slot
 
-from aspen_client.theme import (
-    COLOR_ACCENT,
-    COLOR_AWAY,
-    COLOR_BG_MAIN,
-    COLOR_BG_PANE,
-    COLOR_HIGHLIGHT,
-    COLOR_TEXT_MAIN,
-    COLOR_TEXT_MUTED,
-)
+COLOR_BG_MAIN = "#1E2A18"
+COLOR_BG_PANE = "#141C10"
+COLOR_ACCENT = "#8EBA54"
+COLOR_AWAY = "#D7B25C"
+COLOR_HIGHLIGHT = "#FDF4E3"
+COLOR_TEXT_MAIN = "#EDE4D0"
+COLOR_TEXT_MUTED = "#9A9080"
 
 
 class ThemeBridge(QObject):

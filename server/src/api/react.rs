@@ -11,7 +11,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use tracing::error;
 
-#[utoipa::path(post, path = "/react", responses((status = OK, body=ReactCreateCommandResponse)))]
+#[utoipa::path(post, path = "/react", security(("loginKey" = [])), responses((status = OK, body=ReactCreateCommandResponse)))]
 
 pub async fn create_react(
     State(state): State<GlobalServerContext>,
@@ -46,7 +46,7 @@ pub async fn create_react(
     }
 }
 
-#[utoipa::path(delete, path = "/react", responses((status = OK, body=ReactDeleteCommandResponse)))]
+#[utoipa::path(delete, path = "/react", security(("loginKey" = [])), responses((status = OK, body=ReactDeleteCommandResponse)))]
 pub async fn delete_react(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,

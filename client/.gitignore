@@ -1,4 +1,6 @@
 .venv/
+.ruff_cache/
+client.log
 __pycache__/
 *.pyc
 src/aspen_client/generated/

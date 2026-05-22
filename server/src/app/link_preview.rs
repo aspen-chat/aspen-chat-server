@@ -21,10 +21,16 @@
 //!    [`ServerEvent::MessageLinkPreviewsReady`] so connected clients can
 //!    swap the empty-preview card stack on the message for the populated
 //!    one without reloading the channel.
-//! 3. [`load_previews`] batches preview rows back out for REST reads.
+//! 3. [`load_previews`] batches preview rows back out for REST reads,
+//!    templating each row's `image_id` into a public download URL via
+//!    [`MediaStore::public_url`].
 //! 4. [`delete_images_for_message`] tears down the S3 objects for a message
 //!    before `delete_message` / the content-edit refetch path lets the row
 //!    itself go away, so we don't leak image blobs.
+//!
+//! Preview thumbnails are downloaded by clients directly from the
+//! anonymous-read endpoint behind [`crate::app::media_store::MediaStore::public_url`];
+//! the API never serves the bytes itself.
 //!
 //! The metadata side of (b) goes through a process-local LRU cache keyed by
 //! URL so repeated mentions of the same link don't hammer the third-party
@@ -35,6 +41,7 @@
 use crate::api::GlobalServerContext;
 use crate::api::link_preview::{LinkPreview, image_storage_key};
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::media_store::MediaStore;
 use crate::app::{self, ChannelId, LinkPreviewImageId, MessageId};
 use crate::database::schema::message_link_preview;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable};
@@ -110,19 +117,26 @@ pub struct LinkPreviewRow {
     pub description: Option<String>,
     pub site_name: Option<String>,
     pub image_id: Option<LinkPreviewImageId>,
-    #[allow(dead_code)] // served by the read-image endpoint, not surfaced on the DTO
+    // Stored on the row so an operator inspecting the database can match a
+    // thumbnail back to its origin content type without round-tripping S3
+    // metadata. Not surfaced on the wire DTO: clients learn the type from
+    // the `Content-Type` header on the public download.
+    #[allow(dead_code)]
     pub image_mime_type: Option<String>,
     pub theme_color: Option<String>,
 }
 
 impl LinkPreviewRow {
-    fn into_wire(self) -> LinkPreview {
+    fn into_wire(self, media_store: &MediaStore) -> LinkPreview {
+        let image_url = self
+            .image_id
+            .map(|id| media_store.public_url(&image_storage_key(id)));
         LinkPreview {
             url: self.url,
             title: self.title,
             description: self.description,
             site_name: self.site_name,
-            image_id: self.image_id,
+            image_url,
             theme_color: self.theme_color,
         }
     }
@@ -822,6 +836,7 @@ async fn run_preview_fetch(
         .filter_map(|m| m.image.as_ref().map(|(id, _)| *id))
         .collect();
 
+    let media_store = state.media_store.as_ref();
     let wire_previews: Vec<LinkPreview> = materialised
         .iter()
         .map(|m| LinkPreview {
@@ -829,7 +844,10 @@ async fn run_preview_fetch(
             title: m.metadata.title.clone(),
             description: m.metadata.description.clone(),
             site_name: m.metadata.site_name.clone(),
-            image_id: m.image.as_ref().map(|(id, _)| *id),
+            image_url: m
+                .image
+                .as_ref()
+                .map(|(id, _)| media_store.public_url(&image_storage_key(*id))),
             theme_color: m.metadata.theme_color.clone(),
         })
         .collect();
@@ -923,8 +941,13 @@ async fn run_preview_fetch(
 
 /// Load all previews for `message_ids` in a single query and bucket them by
 /// message id preserving the on-disk `position` order.
+///
+/// The `media_store` argument is the same one threaded through the rest of
+/// the app; it's used here to template each row's `image_id` into a public
+/// download URL so the wire DTO is what clients actually paint.
 pub async fn load_previews(
     conn: &mut AsyncPgConnection,
+    media_store: &MediaStore,
     message_ids: &[MessageId],
 ) -> app::Result<HashMap<MessageId, Vec<LinkPreview>>> {
     if message_ids.is_empty() {
@@ -943,48 +966,11 @@ pub async fn load_previews(
         .await?;
     let mut out: HashMap<MessageId, Vec<LinkPreview>> = HashMap::new();
     for row in rows {
-        out.entry(row.message_id).or_default().push(row.into_wire());
+        out.entry(row.message_id)
+            .or_default()
+            .push(row.into_wire(media_store));
     }
     Ok(out)
-}
-
-/// Load the stored bytes + declared mime type for a preview thumbnail.
-///
-/// This is the app-layer counterpart to
-/// [`api::link_preview::read_link_preview_image`][read_endpoint]; it keeps
-/// the database read and the media-store fetch together in one place so
-/// every caller sees the same ordering (mime type first, bytes second) and
-/// the same "row exists but S3 lost the bytes" failure mode is diagnosed
-/// identically from any entry point. The mime type lives on the
-/// `message_link_preview` row rather than in S3 object metadata so we don't
-/// pay an extra round-trip just to learn how to set the `Content-Type`
-/// header on the response.
-///
-/// Returns [`app::Error::Diesel`] with [`diesel::result::Error::NotFound`]
-/// when the id has no `message_link_preview` row (expected: the id was
-/// fabricated, or the owning message has been deleted and its previews
-/// cascaded away) *and* when the row exists but its `image_mime_type`
-/// column is unexpectedly `NULL` — the table's `CHECK` constraint makes
-/// the latter impossible in practice, but there are no bytes we could
-/// meaningfully serve either way so collapsing both into a single
-/// "not found" outcome keeps the caller's branching simple.
-///
-/// [read_endpoint]: crate::api::link_preview::read_link_preview_image
-pub async fn read_image(
-    state: &GlobalServerContext,
-    id: LinkPreviewImageId,
-) -> app::Result<(Vec<u8>, String)> {
-    let mut conn = state.connection_pool.get().await?;
-    let mime_type: Option<String> = message_link_preview::table
-        .filter(message_link_preview::image_id.eq(id))
-        .select(message_link_preview::image_mime_type)
-        .first::<Option<String>>(conn.as_mut())
-        .await?;
-    let Some(mime_type) = mime_type else {
-        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-    };
-    let data = state.media_store.get_bytes(&image_storage_key(id)).await?;
-    Ok((data, mime_type))
 }
 
 /// Delete S3 objects for all previews attached to a message, then remove the

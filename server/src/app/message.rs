@@ -8,6 +8,7 @@ use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_p
 use crate::app::user::User;
 use crate::app::{AttachmentId, ChannelId, UserId, publish_event};
 use crate::app::{MaybeLoaded, MessageId};
+use crate::database::schema::attachment;
 use crate::database::schema::channel;
 use crate::database::schema::message;
 use crate::database::schema::message_attachment;
@@ -16,8 +17,10 @@ use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     Selectable, SelectableHelper,
 };
+use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
+use rust_i18n::t;
 
 #[derive(Selectable, Queryable, Insertable)]
 #[diesel(table_name=message)]
@@ -47,6 +50,34 @@ pub struct MessageAttachment {
     attachment_id: AttachmentId,
 }
 
+/// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
+/// NOT NULL`) row before linking it to a message. The `attachment` table
+/// admits half-uploaded reservations, and exposing them through a message
+/// would let a client publish a card pointing at bytes that may never
+/// arrive. Returns [`app::Error::Validation`] if any id is missing or
+/// pending.
+async fn ensure_attachments_ready(
+    conn: &mut AsyncPgConnection,
+    attachments: &[AttachmentId],
+) -> Result<(), app::Error> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    let ready: Vec<AttachmentId> = attachment::table
+        .select(attachment::id)
+        .filter(
+            attachment::id
+                .eq_any(attachments)
+                .and(attachment::ready_at.is_not_null()),
+        )
+        .load(conn)
+        .await?;
+    if ready.len() != attachments.len() {
+        return Err(app::Error::Validation(t!("attachmentNotReady")));
+    }
+    Ok(())
+}
+
 pub async fn create_message(
     state: &GlobalServerContext,
     author: UserId,
@@ -65,6 +96,7 @@ pub async fn create_message(
         timestamp,
         deleted_at: None,
     };
+    ensure_attachments_ready(conn.as_mut(), &attachments).await?;
     diesel::insert_into(message::table)
         .values(&message)
         .execute(conn.as_mut())
@@ -117,7 +149,7 @@ pub async fn read_message(
         .filter(message_attachment::message_id.eq(id))
         .load(conn.as_mut())
         .await?;
-    let link_previews = load_previews(conn.as_mut(), &[id])
+    let link_previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &[id])
         .await?
         .remove(&id)
         .unwrap_or_default();
@@ -164,6 +196,7 @@ pub async fn update_message(
                 };
 
                 if let Some(ref new_attachments) = command.attachments {
+                    ensure_attachments_ready(conn.as_mut(), new_attachments).await?;
                     diesel::delete(message_attachment::table)
                         .filter(message_attachment::message_id.eq(command.id))
                         .execute(conn.as_mut())
@@ -235,7 +268,7 @@ pub async fn update_message(
     // edit this will be empty (we just wiped it); for attachment-only edits
     // the previous set is still current.
     let mut conn = state.connection_pool.get().await?;
-    let link_previews = load_previews(conn.as_mut(), &[command.id])
+    let link_previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &[command.id])
         .await?
         .remove(&command.id)
         .unwrap_or_default();
@@ -256,7 +289,6 @@ pub async fn delete_message(state: &GlobalServerContext, id: MessageId) -> Resul
             // two destructions close together mirrors the attachment path
             // and keeps the "soft-delete removes visible artefacts" model
             // consistent.
-            delete_images_for_message(state, conn.as_mut(), id).await?;
             diesel::delete(message_attachment::table)
                 .filter(message_attachment::message_id.eq(id))
                 .execute(conn.as_mut())
@@ -274,5 +306,8 @@ pub async fn delete_message(state: &GlobalServerContext, id: MessageId) -> Resul
         }
         .scope_boxed()
     })
-    .await
+    .await?;
+    delete_images_for_message(state, conn.as_mut(), id).await?;
+    Ok(())
+
 }

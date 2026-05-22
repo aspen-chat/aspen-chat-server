@@ -6,7 +6,7 @@ Rectangle {
     id: root
     // ``preview`` is a plain dict from MessageListModel.LinkPreviewsRole.
     // Keys: ``url``, ``title``, ``description``, ``siteName``,
-    // ``imageId``, ``themeColor``. Strings are always present (empty
+    // ``imageUrl``, ``themeColor``. Strings are always present (empty
     // string for absent fields) so we can use them in bindings without
     // null guards.
     property var preview: ({})
@@ -71,13 +71,16 @@ Rectangle {
         }
 
         Image {
-            visible: preview && preview.imageId && preview.imageId.length > 0
+            visible: preview && preview.imageUrl && preview.imageUrl.length > 0
             Layout.preferredWidth: 72
             Layout.preferredHeight: 72
             sourceSize.width: 72; sourceSize.height: 72
             fillMode: Image.PreserveAspectCrop
-            source: preview && preview.imageId && preview.imageId.length > 0
-                    ? "image://aspen/preview/" + preview.imageId
+            // The provider expects a percent-encoded URL in the path
+            // segment so the colons and slashes from the server-supplied
+            // ``imageUrl`` don't collide with image://aspen/<kind>/<key>.
+            source: preview && preview.imageUrl && preview.imageUrl.length > 0
+                    ? "image://aspen/preview/" + encodeURIComponent(preview.imageUrl)
                     : ""
         }
     }

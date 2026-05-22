@@ -13,6 +13,7 @@ diesel::table! {
         file_name -> Text,
         timestamp -> Timestamptz,
         storage_key -> Text,
+        ready_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -63,6 +64,7 @@ diesel::table! {
         icon_mime_type -> Text,
         timestamp -> Timestamptz,
         storage_key -> Text,
+        ready_at -> Nullable<Timestamptz>,
     }
 }
 

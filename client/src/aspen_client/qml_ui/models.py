@@ -781,7 +781,7 @@ class MessageListModel(QAbstractListModel):
             "title": preview.title or "",
             "description": preview.description or "",
             "siteName": preview.site_name or "",
-            "imageId": preview.image_id or "",
+            "imageUrl": preview.image_url or "",
             "themeColor": preview.theme_color or "",
         }
 

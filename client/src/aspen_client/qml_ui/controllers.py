@@ -51,9 +51,8 @@ from aspen_client.types import Channel, Community, LinkPreview, Message, UserPro
 from aspen_client.ui_messages import (
     INITIAL_MESSAGE_LOAD,
     MESSAGE_PAGE_SIZE,
-    _SAFE_LINK_SCHEMES,
 )
-from aspen_client.user_directory import UserDirectory
+from aspen_client.user_store import UserStore
 
 from aspen_client.qml_ui.models import (
     ChannelListModel,
@@ -65,6 +64,15 @@ from aspen_client.qml_ui.models import (
 if TYPE_CHECKING:
     from aspen_client.qml_ui.image_provider import AspenImageProvider
 
+# URL schemes the message-body click handler is willing to hand to
+# ``QDesktopServices.openUrl``. Everything else (``javascript:``, ``data:``,
+# ``file:``, ``vbscript:``, custom application schemes registered on the
+# user's machine, etc.) is refused outright with a status-bar message.
+# Anchors that survive ``_disarm_misleading_links`` already have visible
+# text matching their href modulo a small set of GFM autolink prefixes, so
+# this list is what the user can actually have read off the screen before
+# clicking — keep it narrow.
+_SAFE_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
 
 # ---------- Login ----------
 
@@ -211,7 +219,7 @@ class ChatController(QObject):
         self._channels = ChannelListModel(self)
         self._users = UserListModel(self)
 
-        self._user_directory = UserDirectory(
+        self._user_directory = UserStore(
             api,
             tasks,
             on_profile_loaded=self._on_user_profile_loaded,
@@ -771,11 +779,11 @@ class ChatController(QObject):
         self._users.bump_icon_epoch(user_id)
         self._message_model.bump_avatar_epoch_for_user(user_id)
 
-    def _on_link_preview_image_ready(self, image_id: str) -> None:
+    def _on_link_preview_image_ready(self, image_url: str) -> None:
         # Forward to the message pane controller, which knows the
-        # subscriber set for this image id and bumps just the affected
+        # subscriber set for this image URL and bumps just the affected
         # rows.
-        self._message_pane.handle_preview_image_ready(image_id)
+        self._message_pane.handle_preview_image_ready(image_url)
 
     # ---------- helpers ----------
 
@@ -819,7 +827,7 @@ class MessagePaneController(QObject):
         tasks: TaskSpawner,
         state: ClientState,
         message_model: MessageListModel,
-        user_directory: UserDirectory,
+        user_directory: UserStore,
         link_preview_images: LinkPreviewImageCache,
         chat: ChatController,
         parent: QObject | None = None,
@@ -833,13 +841,13 @@ class MessagePaneController(QObject):
         self._link_preview_images = link_preview_images
         self._chat = chat
         self._current_channel_id: str | None = None
-        # Direction \u2192 ``True`` while a fetch is in flight. Mirrors
+        # Set to ``True`` while a fetch is in flight. Mirrors
         # ``MessagePane._pending_fetches`` per-channel structure but
         # collapsed to the active channel since rebinds wipe it.
         self._pending: dict[str, set[str]] = {}
-        # ``imageId`` \u2192 set of ``messageId`` whose currently-rendered
+        # ``imageUrl`` set of ``messageId`` whose currently-rendered
         # row is showing (or expecting) a preview thumbnail with that
-        # id. Same shape as ``MessagePane._image_subscribers`` so a
+        # URL. Same shape as ``MessagePane._image_subscribers`` so a
         # landed thumbnail only repaints the rows that asked for it.
         self._image_subscribers: dict[str, set[str]] = {}
         # Forward the model's per-prepend signal so QML doesn't have to
@@ -939,8 +947,8 @@ class MessagePaneController(QObject):
         self._unregister_preview_subscribers(message_id)
         self._model.remove_message(message_id)
 
-    def handle_preview_image_ready(self, image_id: str) -> None:
-        subscribers = self._image_subscribers.get(image_id)
+    def handle_preview_image_ready(self, image_url: str) -> None:
+        subscribers = self._image_subscribers.get(image_url)
         if not subscribers:
             return
         # Bump each subscribed row's preview epoch by issuing a
@@ -1175,21 +1183,21 @@ class MessagePaneController(QObject):
 
     def _register_preview_subscribers(self, message: Message) -> None:
         for preview in message.link_previews:
-            if preview.image_id is None:
+            if preview.image_url is None:
                 continue
-            self._image_subscribers.setdefault(preview.image_id, set()).add(message.id)
+            self._image_subscribers.setdefault(preview.image_url, set()).add(message.id)
             # Pull the bytes through the cache if we haven't yet.
             # ``request_image`` is a no-op once the entry is settled
             # (or already in flight), so calling it on every subscribe
             # is safe and keeps the dedupe inside the cache.
-            if not self._link_preview_images.has_settled(preview.image_id):
-                self._link_preview_images.request_image(preview.image_id)
+            if not self._link_preview_images.has_settled(preview.image_url):
+                self._link_preview_images.request_image(preview.image_url)
 
     def _unregister_preview_subscribers(self, message_id: str) -> None:
-        for image_id, subscribers in list(self._image_subscribers.items()):
+        for image_url, subscribers in list(self._image_subscribers.items()):
             subscribers.discard(message_id)
             if not subscribers:
-                self._image_subscribers.pop(image_id, None)
+                self._image_subscribers.pop(image_url, None)
 
     def _row_for_message(self, message_id: str) -> int | None:
         # Linear scan; the model has at most ``MESSAGE_WINDOW_CAP``

@@ -23,4 +23,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260409_000004_invite_table::M,
     &migrations::m20260417_200000_message_channel_id_index::M,
     &migrations::m20260420_000000_message_link_preview::M,
+    &migrations::m20260502_002140_media_pending_uploads::M,
 ];

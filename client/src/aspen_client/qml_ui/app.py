@@ -43,7 +43,7 @@ from aspen_client.event_client import EventStreamClient
 from aspen_client.qml_ui.controllers import ChatController, LoginController
 from aspen_client.qml_ui.image_provider import AspenImageProvider
 from aspen_client.qml_ui.markdown import MarkdownBridge
-from aspen_client.qml_ui.theme_bridge import ThemeBridge
+from aspen_client.qml_ui.theme import ThemeBridge
 
 
 def quick_main(

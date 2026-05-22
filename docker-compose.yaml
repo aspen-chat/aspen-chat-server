@@ -21,19 +21,20 @@ services:
     image: valkey/valkey:alpine
     ports:
       - "6379:6379"
-  garage:
-    image: dxflrs/garage:v2.2.0
-    command: /garage -c /etc/garage.toml server
-    # Bootstrap commands are documented in garage/README.md.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.22
+    command: server -s3
     volumes:
-      - ./garage/garage.toml:/etc/garage.toml:ro
-      - garage_meta:/var/lib/garage/meta
-      - garage_data:/var/lib/garage/data
+      - seaweeddata:/data 
     ports:
-      - "3900:3900"
-      - "3901:3901"
-      - "3903:3903"
+      - 9333:9333
+      - 8080:8080
+      - 8888:8888
+      - 8333:8333
+    environment:
+      - AWS_ACCESS_KEY_ID=GK484e56c38fb7e14b182bf47a
+      - AWS_SECRET_ACCESS_KEY=6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027
+      - S3_BUCKET=aspen-media
 volumes:
   db:
-  garage_meta:
-  garage_data:
+  seaweeddata:

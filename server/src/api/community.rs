@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use tracing::error;
 use utoipa::ToSchema;
 
-#[utoipa::path(post, path = "/community", responses((status = OK, body=CommunityCreateCommandResponse)))]
+#[utoipa::path(post, path = "/community", security(("loginKey" = [])), responses((status = OK, body=CommunityCreateCommandResponse)))]
 pub async fn create_community(
     State(state): State<GlobalServerContext>,
     user: SessionUser,
@@ -254,7 +254,7 @@ pub async fn delete_community(
     }
 }
 
-#[utoipa::path(post, path = "/community/join", responses((status = OK, body=CommunityUpdateCommandResponse)))]
+#[utoipa::path(post, path = "/community/join", security(("loginKey" = [])), responses((status = OK, body=UserCommunityCreateCommandResponse)))]
 pub async fn join_community(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
@@ -293,7 +293,7 @@ pub async fn join_community(
     }
 }
 
-#[utoipa::path(delete, path = "/community/leave", responses((status = OK, body=CommunityDeleteCommandResponse)))]
+#[utoipa::path(delete, path = "/community/leave", security(("loginKey" = [])), responses((status = OK, body=UserCommunityDeleteCommandResponse)))]
 pub async fn leave_community(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,

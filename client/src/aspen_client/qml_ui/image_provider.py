@@ -10,7 +10,7 @@ existing "ready" callback (``IconCache.on_user_icon_ready`` /
 ``LinkPreviewImageCache.on_image_ready``) fires on the GUI thread once
 bytes land; the controller layer then bumps an integer ``epoch``
 property that QML ``Image.source`` bindings read in their query string,
-which forces QML to re-issue the request \u2014 this time hitting the cache.
+which forces QML to re-issue the request this time hitting the cache.
 
 The provider never makes network calls itself. Every actual fetch is
 dispatched through the existing :class:`TaskSpawner` discipline owned by
@@ -23,6 +23,7 @@ even though QML pulls the bytes through a synchronous-looking
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import quote, unquote
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QImage, QPixmap
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from aspen_client.icons import IconCache
     from aspen_client.link_preview import LinkPreviewImageCache
     from aspen_client.state import ClientState
-    from aspen_client.user_directory import UserDirectory
+    from aspen_client.user_store import UserStore
 
 
 # Default sizes for the three image kinds. The QML side is free to pass
@@ -50,11 +51,14 @@ class AspenImageProvider(QQuickImageProvider):
 
     URL schemes accepted:
 
-    * ``image://aspen/user/<userId>`` \u2014 user avatar at the default size.
-    * ``image://aspen/user/<userId>/<size>`` \u2014 user avatar at ``size``
+    * ``image://aspen/user/<userId>`` user avatar at the default size.
+    * ``image://aspen/user/<userId>/<size>`` user avatar at ``size``
       pixels square.
-    * ``image://aspen/community/<communityId>`` \u2014 community icon.
-    * ``image://aspen/preview/<imageId>`` \u2014 link-preview thumbnail.
+    * ``image://aspen/community/<communityId>`` community icon.
+    * ``image://aspen/preview/<percent-encoded image_url>`` link-preview
+      thumbnail. The full server-supplied ``imageUrl`` is URL-encoded
+      into the path segment so the colons / slashes in the URL don't
+      collide with the provider's own path syntax.
 
     The optional ``?v=<epoch>`` query string the QML side appends to its
     ``source`` is part of the URL Qt passes here only as far as
@@ -67,7 +71,7 @@ class AspenImageProvider(QQuickImageProvider):
     def __init__(
         self,
         icons: "IconCache",
-        users: "UserDirectory",
+        users: "UserStore",
         link_previews: "LinkPreviewImageCache",
         state: "ClientState",
     ) -> None:
@@ -137,9 +141,13 @@ class AspenImageProvider(QQuickImageProvider):
             icon = self._icons.community_avatar_icon(community)
             return icon.pixmap(QSize(_DEFAULT_COMMUNITY_SIZE, _DEFAULT_COMMUNITY_SIZE))
         if kind == "preview":
-            pixmap = self._link_previews.get_pixmap(key)
-            if pixmap is None and not self._link_previews.has_settled(key):
-                self._link_previews.request_image(key)
+            # The path segment is the percent-encoded ``image_url`` the
+            # server published; the cache is keyed on the decoded URL
+            # so we restore it here before consulting it.
+            image_url = unquote(key)
+            pixmap = self._link_previews.get_pixmap(image_url)
+            if pixmap is None and not self._link_previews.has_settled(image_url):
+                self._link_previews.request_image(image_url)
             return pixmap
         return None
 
@@ -166,8 +174,15 @@ def _community_icon_url(community_id: str, epoch: int) -> str:
     return f"image://aspen/community/{community_id}?v={epoch}"
 
 
-def _preview_image_url(image_id: str, epoch: int) -> str:
-    return f"image://aspen/preview/{image_id}?v={epoch}"
+def _preview_image_url(image_url: str, epoch: int) -> str:
+    """Format a stable ``image://`` URL for a link-preview thumbnail.
+
+    The server-supplied ``image_url`` is percent-encoded so the colons
+    / slashes from its scheme and host don't tangle with the provider's
+    own path syntax. The provider URL-decodes it again before
+    consulting the cache.
+    """
+    return f"image://aspen/preview/{quote(image_url, safe='')}?v={epoch}"
 
 
 __all__ = [

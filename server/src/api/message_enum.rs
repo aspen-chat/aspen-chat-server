@@ -55,17 +55,6 @@ enum MessageEnumSource {
         channel_id: ChannelId,
         previews: Vec<LinkPreview>,
     },
-    #[message_gen(no_events)]
-    Attachment {
-        #[message_gen(id)]
-        id: AttachmentId,
-        #[message_gen(permanent)]
-        file_name: String,
-        #[message_gen(permanent)]
-        data: Vec<u8>,
-        #[message_gen(permanent)]
-        mime_type: String,
-    },
     Pin {
         #[message_gen(id = "client_authoritative")]
         message_id: MessageId,
@@ -124,15 +113,6 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         created_at: chrono::DateTime<Utc>,
         expires_at: Option<chrono::DateTime<Utc>>,
-    },
-    #[message_gen(no_events)]
-    Icon {
-        #[message_gen(id)]
-        id: IconId,
-        #[message_gen(permanent)]
-        data: Vec<u8>,
-        #[message_gen(permanent)]
-        mime_type: String,
     },
 }
 

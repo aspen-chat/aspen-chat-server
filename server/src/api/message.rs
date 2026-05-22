@@ -14,7 +14,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use tracing::error;
 
-#[utoipa::path(post, path = "/message", responses((status = OK, body=MessageCreateCommandResponse)))]
+#[utoipa::path(post, path = "/message", security(("loginKey" = [])), responses((status = OK, body=MessageCreateCommandResponse)))]
 
 pub async fn create_message(
     State(state): State<GlobalServerContext>,

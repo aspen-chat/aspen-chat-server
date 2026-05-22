@@ -68,7 +68,7 @@ pub async fn create_user(
     )
 }
 
-#[utoipa::path(get, path = "/user", responses((status = OK, body=UserReadCommandResponse)))]
+#[utoipa::path(get, path = "/user", security(("loginKey" = [])), responses((status = OK, body=UserReadCommandResponse)))]
 pub async fn read_user(
     State(state): State<GlobalServerContext>,
     _: SessionUser,
@@ -140,7 +140,7 @@ pub async fn read_user_communities(
     }
 }
 
-#[utoipa::path(patch, path = "/user", responses((status = OK, body=UserUpdateCommandResponse)))]
+#[utoipa::path(patch, path = "/user", security(("loginKey" = [])), responses((status = OK, body=UserUpdateCommandResponse)))]
 
 pub async fn update_user(
     State(state): State<GlobalServerContext>,
@@ -165,7 +165,7 @@ pub async fn update_user(
     }
 }
 
-#[utoipa::path(delete, path = "/user", responses((status = OK, body=UserDeleteCommandResponse)))]
+#[utoipa::path(delete, path = "/user", security(("loginKey" = [])), responses((status = OK, body=UserDeleteCommandResponse)))]
 pub async fn delete_user(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,

@@ -93,7 +93,7 @@ pub async fn token_refresh(
     (status_code, resp.into())
 }
 
-#[utoipa::path(post, path = "/change_password", responses((status = OK, body=ChangePasswordResponse)))]
+#[utoipa::path(post, path = "/change_password", security(("loginKey" = [])), responses((status = OK, body=ChangePasswordResponse)))]
 pub async fn change_password(
     State(state): State<GlobalServerContext>,
     SessionUser {

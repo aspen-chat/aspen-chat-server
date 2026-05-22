@@ -10,6 +10,7 @@ from aspen_client.generated import openapi_models as gen
 from aspen_client.types import (
     Channel,
     Community,
+    Icon,
     LoginSession,
     Message,
     UserProfile,
@@ -307,7 +308,14 @@ class AspenApiClient:
         ]
         return sorted(messages, key=lambda m: m.timestamp)
 
-    async def read_icon_bytes(self, icon_id: str) -> bytes:
+    async def read_icon(self, icon_id: str) -> Icon:
+        """Resolve an icon id to its metadata + public download URL.
+
+        The server stores the actual bytes in its media store and
+        templates a public, anonymous-read URL into ``downloadUrl``;
+        callers (today, ``IconCache``) pair this call with
+        :meth:`download_media_bytes` to fetch the image itself.
+        """
         response = await self._authorized_request(
             "GET",
             "/icon",
@@ -317,33 +325,33 @@ class AspenApiClient:
         parsed = gen.IconReadCommandResponse.model_validate(data).root
         if not hasattr(parsed, "icon"):
             raise AspenApiError("Failed to load icon")
-        return bytes(int(value.root) for value in parsed.icon.data)
+        return Icon.model_validate(parsed.icon.model_dump(mode="json"))
 
-    async def read_link_preview_image(self, image_id: str) -> tuple[bytes, str]:
-        """Fetch the bytes + mime-type of a server-stored preview thumbnail.
+    async def download_media_bytes(self, url: str) -> tuple[bytes, str]:
+        """GET an absolute media-store URL and return ``(bytes, content_type)``.
 
-        The server resolved the ``og:image`` URL that originally appeared
-        in the linked page, downloaded the bytes into our media store, and
-        handed the client back only a stable ``imageId``. We trade the id
-        in for bytes here exactly as we do for ``/icon``: this keeps
-        third-party URLs off the wire on the client side and lets the
-        server enforce size / content-type limits.
+        Used by :class:`IconCache` and :class:`LinkPreviewImageCache` to
+        pull the actual image bytes after the server has handed back a
+        public ``downloadUrl`` / ``imageUrl``. The request is
+        unauthenticated because the server's media-store endpoints are
+        anonymous-read by design; ``httpx`` accepts an absolute URL even
+        when ``base_url`` is set, so the per-host TLS / connection-pool
+        configuration on ``self._client`` carries over for free.
 
-        Returns ``(bytes, mime_type)``. Raises ``AspenApiError`` on any
-        transport or server-side failure so callers can fall through to
-        a text-only preview card without special-casing shapes.
+        Raises :class:`AspenApiError` on any transport or HTTP-level
+        failure so callers can drop back to a fallback render without
+        special-casing shapes.
         """
-        response = await self._authorized_request(
-            "GET",
-            "/link-preview-image",
-            gen.LinkPreviewImageReadCommand(id=image_id),
-        )
-        data = self._expect_json(response)
-        parsed = gen.LinkPreviewImageReadCommandResponse.model_validate(data).root
-        if not hasattr(parsed, "image"):
-            raise AspenApiError("Failed to load link preview image")
-        image_bytes = bytes(int(value.root) for value in parsed.image.data)
-        return image_bytes, parsed.image.mime_type
+        try:
+            response = await self._client.get(url)
+        except httpx.HTTPError as exc:
+            raise AspenApiError(f"Failed to download media: {exc}") from exc
+        if response.status_code >= 400:
+            raise AspenApiError(
+                f"Failed to download media: HTTP {response.status_code}"
+            )
+        content_type = response.headers.get("content-type", "")
+        return response.content, content_type
 
     async def send_message(self, channel_id: str, content: str) -> Message:
         response = await self._authorized_request(

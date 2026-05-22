@@ -40,7 +40,7 @@ pub enum InviteCreateCommandResponse {
     Error { cause: Option<Cow<'static, str>> },
 }
 
-#[utoipa::path(post, path = "/invite", responses((status = OK, body = InviteCreateCommandResponse)))]
+#[utoipa::path(post, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteCreateCommandResponse)))]
 pub async fn create_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
@@ -98,7 +98,7 @@ pub enum CommunityInvitesReadCommandResponse {
     Error { cause: Option<Cow<'static, str>> },
 }
 
-#[utoipa::path(get, path = "/invite", responses((status = OK, body = CommunityInvitesReadCommandResponse)))]
+#[utoipa::path(get, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = CommunityInvitesReadCommandResponse)))]
 pub async fn read_community_invites(
     State(state): State<GlobalServerContext>,
     _: SessionUser,
@@ -139,7 +139,7 @@ pub enum InviteUpdateCommandResponse {
     Error { cause: Option<Cow<'static, str>> },
 }
 
-#[utoipa::path(patch, path = "/invite", responses((status = OK, body = InviteUpdateCommandResponse)))]
+#[utoipa::path(patch, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteUpdateCommandResponse)))]
 pub async fn update_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
@@ -187,7 +187,7 @@ pub enum InviteRevokeCommandResponse {
     Error { cause: Option<Cow<'static, str>> },
 }
 
-#[utoipa::path(delete, path = "/invite", responses((status = OK, body = InviteRevokeCommandResponse)))]
+#[utoipa::path(delete, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteRevokeCommandResponse)))]
 pub async fn revoke_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,

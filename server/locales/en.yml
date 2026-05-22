@@ -23,5 +23,10 @@ reactMustBeSingleEmoji: "React must be a single emoji."
 # Event stream
 eventStreamError: "An error occurred while setting up the event stream."
 
+# Media uploads
+attachmentUploadNotFound: "Upload was not found in storage. Please try uploading the file again."
+iconUploadNotFound: "Upload was not found in storage. Please try uploading the icon again."
+attachmentNotReady: "One or more attachments have not finished uploading."
+
 firstTextChannelName: "general"
 firstVoiceChannelName: "lobby"
