@@ -1,11 +1,17 @@
 use crate::api::link_preview::LinkPreview;
-use crate::api::{ChannelType, user::UserOnlineStatus};
-use crate::app::{AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, UserId};
+use crate::api::poll::{PollOption, PollOptionResult};
+use crate::api::user::{CustomStatus, UserOnlineStatus};
+use crate::api::voice::VoiceSessionEndReason;
+use crate::api::{ChannelType, MessageKind};
+use crate::app::{
+    AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, PollId, UserId,
+    VoiceServerId, VoiceSessionId,
+};
 use chrono::Utc;
 use message_gen::message_enum_source;
 
 // WARNING: message_enum_source is a special macro. The below enum will not appear in the final program, but this is responsible
-// for generating all Command types, and Server events. This comment is not a doc comment. This is intentional.
+// for generating all record types, REST request bodies, and server events. This comment is not a doc comment. This is intentional.
 #[message_enum_source]
 enum MessageEnumSource {
     User {
@@ -17,6 +23,12 @@ enum MessageEnumSource {
         icon: Option<IconId>,
         #[message_gen(server_authoritative)]
         online_status: UserOnlineStatus,
+        // The profile. Each is absent until the user sets it and cleared with `null`; the
+        // bounds are `app::user`'s `DISPLAY_NAME_MAX_CHARS` and friends.
+        display_name: Option<String>,
+        pronouns: Option<String>,
+        bio: Option<String>,
+        status: Option<CustomStatus>,
     },
     #[message_gen(custom_event)]
     UserStatus {
@@ -26,34 +38,61 @@ enum MessageEnumSource {
     Message {
         #[message_gen(id)]
         id: MessageId,
-        #[message_gen(permanent)]
+        #[message_gen(parent)]
         channel_id: ChannelId,
         content: String,
         #[message_gen(server_authoritative)]
         author: UserId,
         #[message_gen(server_authoritative)]
         timestamp: chrono::DateTime<Utc>,
+        // Set whenever the content changes; `None` until the first edit.
+        #[message_gen(server_authoritative = "mutable")]
+        edited_at: Option<chrono::DateTime<Utc>>,
         attachments: Vec<AttachmentId>,
-        // Populated asynchronously by the server after the initial
-        // create/update. Clients receive the final set via the
-        // `MessageLinkPreviewsReady` custom event; REST reads serve the
-        // most recent value directly.
-        #[message_gen(server_authoritative)]
+        // Empty at creation; a background fetch fills it in afterwards and a content edit
+        // clears it, each announced by an `Update` event carrying the new set.
+        #[message_gen(server_authoritative = "mutable")]
         link_previews: Vec<LinkPreview>,
+        // `Standard` for anything a client posts; the poll kinds are created by `POST
+        // /channels/{channel}/polls` and by the poll closer, with `poll` naming their poll.
+        #[message_gen(server_authoritative)]
+        kind: MessageKind,
+        #[message_gen(server_authoritative)]
+        poll: Option<PollId>,
     },
-    // Delivered by the server once the async link-preview fetcher finishes
-    // materialising previews for a message. The macro rewrites this variant
-    // untouched thanks to `custom_event`, so it doesn't bring in the CRUD
-    // machinery the rest of the enum generates. The variant-level
-    // ``#[serde(rename_all = "camelCase")]`` is required because the enum-level
-    // ``rename_all`` on ``ServerEvent`` renames variants but does not recurse
-    // into struct-variant fields.
-    #[message_gen(custom_event)]
-    #[serde(rename_all = "camelCase")]
-    MessageLinkPreviewsReady {
-        message_id: MessageId,
+    Poll {
+        #[message_gen(id)]
+        id: PollId,
+        #[message_gen(parent)]
         channel_id: ChannelId,
-        previews: Vec<LinkPreview>,
+        // The message of kind `poll` this poll is shown in, created together with it.
+        #[message_gen(server_authoritative)]
+        message_id: MessageId,
+        #[message_gen(server_authoritative)]
+        created_by: UserId,
+        #[message_gen(server_authoritative)]
+        created_at: chrono::DateTime<Utc>,
+        #[message_gen(server_authoritative)]
+        closes_at: chrono::DateTime<Utc>,
+        // Set by the closer once `closes_at` has passed; votes are refused from then on.
+        #[message_gen(server_authoritative = "mutable")]
+        closed_at: Option<chrono::DateTime<Utc>>,
+        // One entry per option, in option order, updated with every vote.
+        #[message_gen(server_authoritative = "mutable")]
+        results: Vec<PollOptionResult>,
+        #[message_gen(permanent)]
+        question: String,
+        #[message_gen(permanent)]
+        options: Vec<PollOption>,
+        #[message_gen(permanent)]
+        multiple_choice: bool,
+        // An anonymous poll reports counts only; who voted is never sent to any client.
+        #[message_gen(permanent)]
+        anonymous: bool,
+        // How long the poll stays open, given by the creator. Only the resulting `closes_at`
+        // is stored and sent, so this is accepted on create and appears nowhere else.
+        #[message_gen(secret)]
+        duration_seconds: u32,
     },
     Pin {
         #[message_gen(id = "client_authoritative")]
@@ -83,7 +122,7 @@ enum MessageEnumSource {
     Category {
         #[message_gen(id)]
         id: CategoryId,
-        #[message_gen(permanent)]
+        #[message_gen(parent)]
         community: CommunityId,
         name: String,
         sort_index: i32,
@@ -101,6 +140,59 @@ enum MessageEnumSource {
         user: UserId,
         #[message_gen(secret)]
         invite_code: String,
+        // Where the community sits in this member's own list. Set by `PATCH
+        // /communities/{community}/members/@me`; a new membership goes at the end.
+        #[message_gen(server_authoritative = "mutable")]
+        sort_index: i32,
+    },
+    // A channel's call while anyone is in it. Created and ended by the voice server's reports,
+    // never by a client request; clients join through `POST /channels/{channel}/voice/join`.
+    #[message_gen(no_commands)]
+    VoiceSession {
+        #[message_gen(id)]
+        id: VoiceSessionId,
+        #[message_gen(server_authoritative)]
+        channel: ChannelId,
+        #[message_gen(server_authoritative)]
+        voice_server: VoiceServerId,
+        #[message_gen(server_authoritative)]
+        created_at: chrono::DateTime<Utc>,
+    },
+    // Someone in a call. `muted` and `deafened` follow the voice server's reports.
+    #[message_gen(no_commands)]
+    VoiceParticipant {
+        #[message_gen(id = "client_authoritative")]
+        session: VoiceSessionId,
+        #[message_gen(id)]
+        user: UserId,
+        #[message_gen(server_authoritative)]
+        channel: ChannelId,
+        #[message_gen(server_authoritative)]
+        joined_at: chrono::DateTime<Utc>,
+        #[message_gen(server_authoritative = "mutable")]
+        muted: bool,
+        #[message_gen(server_authoritative = "mutable")]
+        deafened: bool,
+        // Whether they are sharing a screen, window, or game into the call.
+        #[message_gen(server_authoritative = "mutable")]
+        sharing_screen: bool,
+    },
+    // Why a call ended, sent just before the session's `delete` event. A client that was in
+    // the call uses `reason` to tell its user, in particular that an idle call was ended to
+    // free the voice server.
+    #[message_gen(custom_event)]
+    VoiceSessionEnded {
+        id: VoiceSessionId,
+        channel: ChannelId,
+        reason: VoiceSessionEndReason,
+    },
+    // Someone in a call started or stopped speaking. Not stored; the client keeps the last
+    // time each participant spoke from these.
+    #[message_gen(custom_event)]
+    VoiceSpeaking {
+        channel: ChannelId,
+        user: UserId,
+        speaking: bool,
     },
     #[message_gen(no_commands)]
     Invite {
@@ -119,38 +211,111 @@ enum MessageEnumSource {
 #[cfg(test)]
 mod tests {
     use crate::api;
-    use crate::app::{MessageId, UserId};
+    use crate::app::{IconId, MessageId, UserId};
     use serde_json::json;
 
-    use super::server_event::ServerEvent;
+    use super::request::CommunityUpdateRequest;
+    use super::server_event::{CommunityEvent, MessageEvent, ReactEvent, ServerEvent};
+
+    /// Events are internally tagged twice: `serverEvent` names the entity, `type` names the
+    /// operation, and the record's own fields sit beside them at the top level.
+    #[test]
+    fn create_event_is_flattened() {
+        let message_id = MessageId::new();
+        let user_id = UserId::new();
+        let e = ServerEvent::React(ReactEvent::Create(api::message_enum::React {
+            message_id,
+            emoji: "😁".to_string(),
+            user_id,
+        }));
+        assert_eq!(
+            serde_json::to_value(e).unwrap(),
+            json!({
+                "serverEvent": "react",
+                "type": "create",
+                "messageId": message_id.0,
+                "emoji": "😁",
+                "userId": user_id.0,
+            })
+        );
+    }
+
+    /// An update event only carries the fields that changed; `null` means a nullable field was
+    /// cleared, absence means it was left alone.
+    #[test]
+    fn update_event_omits_unchanged_fields() {
+        let id = crate::app::CommunityId::new();
+        let e = ServerEvent::Community(CommunityEvent::Update {
+            id,
+            name: None,
+            icon: Some(None),
+        });
+        assert_eq!(
+            serde_json::to_value(e).unwrap(),
+            json!({
+                "serverEvent": "community",
+                "type": "update",
+                "id": id.0,
+                "icon": null,
+            })
+        );
+    }
+
+    /// A server-set field marked mutable rides along in update events, and only when it changed.
+    #[test]
+    fn mutable_server_field_appears_in_update_events_only_when_set() {
+        let id = MessageId::new();
+        let edited_at = chrono::DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let edited = ServerEvent::Message(MessageEvent::Update {
+            id,
+            content: Some("new".to_string()),
+            attachments: None,
+            edited_at: Some(Some(edited_at)),
+            link_previews: None,
+        });
+        assert_eq!(
+            serde_json::to_value(edited).unwrap(),
+            json!({
+                "serverEvent": "message",
+                "type": "update",
+                "id": id.0,
+                "content": "new",
+                "editedAt": "2026-09-25T12:00:00Z",
+            })
+        );
+        let attachments_only = ServerEvent::Message(MessageEvent::Update {
+            id,
+            content: None,
+            attachments: Some(Vec::new()),
+            edited_at: None,
+            link_previews: None,
+        });
+        assert_eq!(
+            serde_json::to_value(attachments_only).unwrap(),
+            json!({
+                "serverEvent": "message",
+                "type": "update",
+                "id": id.0,
+                "attachments": [],
+            })
+        );
+    }
 
     #[test]
-    fn server_event_transparent() {
-        let e = ServerEvent::React(super::server_event::ReactEvent::Create(
-            api::message_enum::React {
-                message_id: MessageId::new(),
-                emoji: "😁".to_string(),
-                user_id: UserId::new(),
-            },
-        ));
-        let mut json_value = serde_json::to_value(e).unwrap();
-        let object_mut = json_value.as_object_mut().unwrap();
-        let create_obj = object_mut
-            .get_mut("create")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
-        // Needs to be a value of some sort, not particular on which one
-        assert!(create_obj.remove("messageId").is_some());
-        assert!(create_obj.remove("userId").is_some());
-        assert_eq!(
-            json_value,
-            json! ({
-                "serverEvent": "react",
-                "create": {
-                    "emoji": "😁"
-                }
-            })
-        )
+    fn update_request_distinguishes_absent_from_null() {
+        let untouched: CommunityUpdateRequest = serde_json::from_str("{}").unwrap();
+        assert!(untouched.name.is_none());
+        assert!(untouched.icon.is_none());
+
+        let cleared: CommunityUpdateRequest = serde_json::from_str(r#"{"icon": null}"#).unwrap();
+        assert_eq!(cleared.icon, Some(None));
+
+        let icon = IconId::new();
+        let set: CommunityUpdateRequest =
+            serde_json::from_value(json!({ "name": "x", "icon": icon.0 })).unwrap();
+        assert_eq!(set.name.as_deref(), Some("x"));
+        assert_eq!(set.icon, Some(Some(icon)));
     }
 }

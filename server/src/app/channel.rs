@@ -1,5 +1,4 @@
-use crate::api::channel::ChannelViewDescription;
-use crate::api::message_enum::command::ChannelUpdateCommand;
+use crate::api::message_enum::request::ChannelUpdateRequest;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
@@ -103,12 +102,27 @@ pub(crate) async fn read_channel(
     Ok(channel)
 }
 
-const MAX_MESSAGES_QUERIED: u32 = 200;
+/// Upper bound on the number of messages a single read returns.
+pub const MAX_MESSAGES_QUERIED: u32 = 200;
+
+/// Which slice of a channel's history to read. Message ids are UUIDv7 and therefore sort
+/// chronologically, so every window is a keyset range over the id column.
+#[derive(Debug, Clone, Copy)]
+pub enum MessageWindow {
+    /// The newest `limit` messages.
+    Latest { limit: u32 },
+    /// Up to `limit` messages older than `anchor`, excluding `anchor` itself.
+    Before { anchor: MessageId, limit: u32 },
+    /// Up to `limit` messages newer than `anchor`, excluding `anchor` itself.
+    After { anchor: MessageId, limit: u32 },
+    /// `anchor` itself plus up to `radius` messages on either side of it.
+    Around { anchor: MessageId, radius: u32 },
+}
 
 pub(crate) async fn read_channel_messages(
     state: &GlobalServerContext,
     id: ChannelId,
-    channel_view_description: ChannelViewDescription,
+    window: MessageWindow,
 ) -> app::error::Result<Vec<MessageWithRelations>> {
     let mut conn = state.connection_pool.get().await?;
     channel::table
@@ -119,39 +133,43 @@ pub(crate) async fn read_channel_messages(
     let query = message::table
         .select(Message::as_select())
         .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
-    let messages: Vec<Message> = match channel_view_description {
-        ChannelViewDescription::Before { message, count } => {
+    let messages: Vec<Message> = match window {
+        MessageWindow::Latest { limit } => {
             query
-                .limit(count.min(MAX_MESSAGES_QUERIED) as i64)
-                .filter(message::id.le(message))
+                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
                 .order_by(message::id.desc())
                 .load(conn.as_mut())
                 .await?
         }
-        ChannelViewDescription::After { message, count } => {
+        MessageWindow::Before { anchor, limit } => {
             query
-                .limit(count.min(MAX_MESSAGES_QUERIED) as i64)
-                .filter(message::id.ge(message))
+                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
+                .filter(message::id.lt(anchor))
+                .order_by(message::id.desc())
+                .load(conn.as_mut())
+                .await?
+        }
+        MessageWindow::After { anchor, limit } => {
+            query
+                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
+                .filter(message::id.gt(anchor))
                 .order_by(message::id.asc())
                 .load(conn.as_mut())
                 .await?
         }
-        ChannelViewDescription::Around { message, radius } => {
+        MessageWindow::Around { anchor, radius } => {
             query
-                .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64)
-                .filter(message::id.le(message))
+                .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64 + 1)
+                .filter(message::id.le(anchor))
                 .order_by(message::id.desc())
                 .union(
                     query
                         .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64)
-                        .filter(message::id.gt(message))
+                        .filter(message::id.gt(anchor))
                         .order_by(message::id.asc()),
                 )
                 .load(conn.as_mut())
                 .await?
-        }
-        ChannelViewDescription::Search { .. } => {
-            todo!()
         }
     };
     let message_ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
@@ -241,7 +259,8 @@ pub struct ChannelChangeset {
 
 pub(crate) async fn update_channel(
     state: &GlobalServerContext,
-    command: ChannelUpdateCommand,
+    id: ChannelId,
+    command: ChannelUpdateRequest,
 ) -> app::error::Result<Channel> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -253,11 +272,7 @@ pub(crate) async fn update_channel(
                     name: command.name.clone(),
                     sort_index: command.sort_index,
                 })
-                .filter(
-                    channel::id
-                        .eq(command.id)
-                        .and(channel::deleted_at.is_null()),
-                )
+                .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
                 .returning(Channel::as_select())
                 .load(conn.as_mut())
                 .await?;
@@ -267,7 +282,7 @@ pub(crate) async fn update_channel(
             publish_event(
                 state,
                 &ServerEvent::Channel(ChannelEvent::Update {
-                    id: command.id,
+                    id,
                     parent_category: command.parent_category,
                     community: command.community,
                     name: command.name,

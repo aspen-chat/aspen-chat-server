@@ -22,9 +22,11 @@ pub mod link_preview;
 pub mod login;
 pub mod media_store;
 pub mod message;
+pub mod poll;
 pub mod react;
 pub mod user;
 pub mod user_status;
+pub mod voice;
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
 pub use error::Error;
@@ -93,6 +95,12 @@ id_type!(UserId);
 id_type!(ChannelId);
 
 id_type!(MessageId);
+
+id_type!(PollId);
+
+id_type!(VoiceServerId);
+
+id_type!(VoiceSessionId);
 
 id_type!(CategoryId);
 

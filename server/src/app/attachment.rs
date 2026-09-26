@@ -59,6 +59,27 @@ impl Loadable for Attachment {
     }
 }
 
+/// Loads the confirmed attachments among `ids`, in no particular order. Reservations that were
+/// never confirmed are invisible here, as they are everywhere else readers look.
+pub async fn read_attachments(
+    state: &GlobalServerContext,
+    ids: &[AttachmentId],
+) -> app::Result<Vec<Attachment>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    attachment::table
+        .select(Attachment::as_select())
+        .filter(
+            attachment::id
+                .eq_any(ids)
+                .and(attachment::ready_at.is_not_null()),
+        )
+        .load(&mut state.connection_pool.get().await?)
+        .await
+        .map_err(Into::into)
+}
+
 /// Result of an [`init_upload`] call.
 #[derive(Debug)]
 pub struct AttachmentUpload {

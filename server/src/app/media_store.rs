@@ -119,8 +119,8 @@ impl MediaStore {
             .presigned(presigning)
             .await
             .map_err(Box::new)?;
-        let expires_at = Utc::now()
-            + Duration::from_std(self.upload_url_ttl).unwrap_or(Duration::seconds(900));
+        let expires_at =
+            Utc::now() + Duration::from_std(self.upload_url_ttl).unwrap_or(Duration::seconds(900));
         Ok(PresignedUpload {
             url: presigned.uri().to_string(),
             expires_at,
@@ -144,7 +144,9 @@ impl MediaStore {
             .await
         {
             Ok(_) => Ok(true),
-            Err(SdkError::ServiceError(svc)) if matches!(svc.err(), HeadObjectError::NotFound(_)) => {
+            Err(SdkError::ServiceError(svc))
+                if matches!(svc.err(), HeadObjectError::NotFound(_)) =>
+            {
                 Ok(false)
             }
             Err(e) => Err(app::Error::S3HeadObject(Box::new(e))),

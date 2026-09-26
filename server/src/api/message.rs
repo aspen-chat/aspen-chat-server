@@ -1,56 +1,20 @@
-use crate::api::GlobalServerContext;
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::{Created, Json, NoContent, Path, Query};
+use crate::api::include::{IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::api::link_preview::LinkPreview;
-use crate::api::login::SessionUser;
 use crate::api::message_enum::Message;
-use crate::api::message_enum::command::{
-    MessageCreateCommand, MessageCreateCommandResponse, MessageDeleteCommand,
-    MessageDeleteCommandResponse, MessageReadCommand, MessageReadCommandResponse,
-    MessageUpdateCommand, MessageUpdateCommandResponse,
-};
-use crate::app;
-use crate::app::{AttachmentId, Error};
-use axum::Json;
+use crate::api::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
+use crate::api::poll::PollVote;
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_MESSAGES};
+use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
+use crate::app::{AttachmentId, ChannelId, MessageId, PollId, UserId};
+use crate::{api, app};
 use axum::extract::State;
-use axum::http::StatusCode;
-use tracing::error;
-
-#[utoipa::path(post, path = "/message", security(("loginKey" = [])), responses((status = OK, body=MessageCreateCommandResponse)))]
-
-pub async fn create_message(
-    State(state): State<GlobalServerContext>,
-    SessionUser { user, .. }: SessionUser,
-    Json(command): Json<MessageCreateCommand>,
-) -> (StatusCode, Json<MessageCreateCommandResponse>) {
-    let r = app::message::create_message(
-        &state,
-        user.id,
-        command.channel_id,
-        command.content,
-        command.attachments.clone(),
-    )
-    .await;
-    match r {
-        Ok(msg) => (
-            StatusCode::OK,
-            // Freshly-created messages always ship with an empty preview
-            // list; the async fetcher's `MessageLinkPreviewsReady` event
-            // will populate the final set shortly.
-            MessageCreateCommandResponse::CreateOk(message_to_api(
-                msg,
-                command.attachments,
-                Vec::new(),
-            ))
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "message create command error");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                MessageCreateCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
+use rust_i18n::t;
+use serde::Deserialize;
+use std::collections::HashSet;
+use utoipa::{IntoParams, ToSchema};
 
 pub fn message_to_api(
     msg: app::message::Message,
@@ -61,93 +25,306 @@ pub fn message_to_api(
         id: msg.id,
         author: *msg.author.id(),
         timestamp: msg.timestamp,
+        edited_at: msg.edited_at,
         content: msg.content,
         attachments,
         channel_id: *msg.channel.id(),
         link_previews,
+        kind: msg.kind,
+        poll: msg.poll,
     }
 }
 
-#[utoipa::path(get, path = "/message", responses((status = OK, body=MessageReadCommandResponse)))]
+fn with_relations_to_api(m: app::message::MessageWithRelations) -> Message {
+    message_to_api(m.message, m.attachments, m.link_previews)
+}
 
-pub async fn read_message(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<MessageReadCommand>,
-) -> (StatusCode, Json<MessageReadCommandResponse>) {
-    match app::message::read_message(&state, command.id).await {
-        Ok(m) => (
-            StatusCode::OK,
-            MessageReadCommandResponse::Message(message_to_api(
-                m.message,
-                m.attachments,
-                m.link_previews,
-            ))
-            .into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                MessageReadCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error reading message");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    MessageReadCommandResponse::Error { cause: None }.into(),
-                )
+/// Relationships a message read can sideload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MessageInclude {
+    /// The users who wrote the messages, as `included.users`. Authors whose accounts have since
+    /// been deleted are omitted.
+    Authors,
+    /// The messages' attachments, as `included.attachments`.
+    Attachments,
+    /// The polls the messages show or announce, as `included.polls`, with the caller's own
+    /// votes on them as `included.pollVotes`.
+    Polls,
+}
+
+/// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
+pub type MessageRead = Sideloaded<Message>;
+/// Body of a message list read; see [`MessageRead`].
+pub type MessageList = SideloadedList<Message>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct MessageReadQuery {
+    /// Related records to return alongside the message, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<MessageInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<MessageInclude>,
+}
+
+/// Loads the relationships named in `include` for every message in `messages`, one batched
+/// read per relationship, run concurrently.
+async fn sideload_messages(
+    state: &GlobalServerContext,
+    caller: UserId,
+    messages: &[Message],
+    include: &IncludeSet<MessageInclude>,
+) -> ApiResult<Included> {
+    let poll_ids: Vec<PollId> = messages
+        .iter()
+        .filter_map(|m| m.poll)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let (users, attachments, polls) = tokio::try_join!(
+        async {
+            if include.contains(MessageInclude::Authors) {
+                let authors: Vec<UserId> = messages
+                    .iter()
+                    .map(|m| m.author)
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                app::user::read_users(state, &authors).await.map(Some)
+            } else {
+                Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::Attachments) {
+                let ids: Vec<AttachmentId> = messages
+                    .iter()
+                    .flat_map(|m| &m.attachments)
+                    .copied()
+                    .collect();
+                app::attachment::read_attachments(state, &ids)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(MessageInclude::Polls) {
+                let (polls, votes) = tokio::try_join!(
+                    app::poll::read_polls(state, &poll_ids),
+                    app::poll::read_votes(state, caller, &poll_ids),
+                )?;
+                Ok::<Option<(Vec<crate::api::message_enum::Poll>, Vec<PollVote>)>, app::Error>(
+                    Some((polls, votes)),
+                )
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
+    let (polls, poll_votes) = match polls {
+        Some((polls, votes)) => (Some(polls), Some(votes)),
+        None => (None, None),
+    };
+    Ok(Included {
+        users: users.map(|users| users.into_iter().map(api::user::user_to_api).collect()),
+        attachments: attachments.map(|rows| {
+            rows.into_iter()
+                .map(|row| api::attachment::attachment_to_api(state, row))
+                .collect()
+        }),
+        polls,
+        poll_votes,
+        ..Included::default()
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/channels/{channel}/messages",
+    tag = TAG_MESSAGES,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn create_message(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+    Json(request): Json<MessageCreateRequest>,
+) -> ApiResult<Created<Message>> {
+    let msg = app::message::create_message(
+        &state,
+        user.id,
+        channel,
+        request.content,
+        request.attachments.clone(),
+    )
+    .await?;
+    let location = format!("{API_PREFIX}/messages/{}", msg.id.0);
+    // Freshly-created messages always ship with an empty preview list; the async fetcher's
+    // `Update` event will populate the final set shortly.
+    Ok(Created::new(
+        location,
+        message_to_api(msg, request.attachments, Vec::new()),
+    ))
+}
+
+const DEFAULT_MESSAGE_LIMIT: u32 = 50;
+
+/// Selects a window of a channel's history. At most one of `before`, `after`, and `around` may be
+/// given; with none of them the newest messages are returned.
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct MessageListQuery {
+    /// Return messages older than this message id (exclusive).
+    pub before: Option<MessageId>,
+    /// Return messages newer than this message id (exclusive).
+    pub after: Option<MessageId>,
+    /// Return this message and up to `limit` messages on each side of it.
+    pub around: Option<MessageId>,
+    /// Maximum number of messages to return (per side, for `around`). Defaults to 50.
+    #[param(minimum = 1, maximum = 200)]
+    pub limit: Option<u32>,
+    /// Related records to return alongside the messages, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<MessageInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<MessageInclude>,
+}
+
+impl MessageListQuery {
+    fn into_window(self) -> ApiResult<MessageWindow> {
+        let limit = self.limit.unwrap_or(DEFAULT_MESSAGE_LIMIT);
+        if limit == 0 || limit > MAX_MESSAGES_QUERIED {
+            return Err(ApiError::new(ProblemCode::Validation)
+                .with_detail(t!("messageLimitOutOfRange", max = MAX_MESSAGES_QUERIED)));
+        }
+        match (self.before, self.after, self.around) {
+            (None, None, None) => Ok(MessageWindow::Latest { limit }),
+            (Some(anchor), None, None) => Ok(MessageWindow::Before { anchor, limit }),
+            (None, Some(anchor), None) => Ok(MessageWindow::After { anchor, limit }),
+            (None, None, Some(anchor)) => Ok(MessageWindow::Around {
+                anchor,
+                radius: limit,
+            }),
+            _ => Err(ApiError::new(ProblemCode::Validation)
+                .with_detail(t!("messageWindowMultipleAnchors"))),
+        }
     }
 }
 
-#[utoipa::path(patch, path = "/message", responses((status = OK, body=MessageUpdateCommandResponse)))]
+/// Messages are returned newest first for `before` and the default window, oldest first for
+/// `after`, and in ascending id order for `around`. `include` sideloads the messages' authors,
+/// attachments, and polls.
+#[utoipa::path(
+    get,
+    path = "/channels/{channel}/messages",
+    tag = TAG_MESSAGES,
+    params(("channel" = ChannelId, Path), MessageListQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = MessageList),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_channel_messages(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+    Query(query): Query<MessageListQuery>,
+) -> ApiResult<Json<MessageList>> {
+    let include = query.include.clone();
+    let window = query.into_window()?;
+    let messages: Vec<Message> = app::channel::read_channel_messages(&state, channel, window)
+        .await?
+        .into_iter()
+        .map(with_relations_to_api)
+        .collect();
+    let included = sideload_messages(&state, user.id, &messages, &include).await?;
+    Ok(Json(MessageList::new(messages, included)))
+}
+
+/// Reads a message. `include` sideloads its author, attachments, and poll.
+#[utoipa::path(
+    get,
+    path = "/messages/{message}",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path), MessageReadQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = MessageRead),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_message(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(message): Path<MessageId>,
+    Query(query): Query<MessageReadQuery>,
+) -> ApiResult<Json<MessageRead>> {
+    let m = with_relations_to_api(app::message::read_message(&state, message).await?);
+    let included =
+        sideload_messages(&state, user.id, std::slice::from_ref(&m), &query.include).await?;
+    Ok(Json(MessageRead::new(m, included)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/messages/{message}",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Message),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn update_message(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<MessageUpdateCommand>,
-) -> (StatusCode, Json<MessageUpdateCommandResponse>) {
-    match app::message::update_message(&state, command).await {
-        Ok(_) => (
-            StatusCode::OK,
-            MessageUpdateCommandResponse::UpdateOk.into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                MessageUpdateCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error updating message");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    MessageUpdateCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(message): Path<MessageId>,
+    Json(request): Json<MessageUpdateRequest>,
+) -> ApiResult<Json<Message>> {
+    let m = app::message::update_message(&state, message, request).await?;
+    Ok(Json(with_relations_to_api(m)))
 }
 
-#[utoipa::path(delete, path = "/message", responses((status = OK, body=MessageDeleteCommandResponse)))]
+#[utoipa::path(
+    delete,
+    path = "/messages/{message}",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn delete_message(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<MessageDeleteCommand>,
-) -> (StatusCode, Json<MessageDeleteCommandResponse>) {
-    match app::message::delete_message(&state, command.id).await {
-        Ok(()) => (
-            StatusCode::OK,
-            MessageDeleteCommandResponse::DeleteOk.into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                MessageDeleteCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error deleting message");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    MessageDeleteCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(message): Path<MessageId>,
+) -> ApiResult<NoContent> {
+    app::message::delete_message(&state, message).await?;
+    Ok(NoContent)
 }

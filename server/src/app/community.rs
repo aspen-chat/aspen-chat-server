@@ -1,17 +1,16 @@
-use crate::api::message_enum::command::{CommunityCreateCommand, CommunityUpdateCommand};
+use crate::api::message_enum::request::{CommunityCreateRequest, CommunityUpdateRequest};
 use crate::api::message_enum::server_event::{CommunityEvent, ServerEvent, UserCommunityEvent};
 use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::create_channel;
 use crate::app::icon::Icon;
-use crate::app::user::users_online_status;
 use crate::app::{CommunityId, IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::channel;
 use crate::database::schema::community;
 use crate::database::schema::community_user;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
-    Selectable, SelectableHelper,
+    QueryableByName, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -33,6 +32,7 @@ pub struct Community {
 pub struct CommunityUser {
     pub user: UserId,
     pub community: CommunityId,
+    pub sort_index: i32,
 }
 
 impl Loadable for Community {
@@ -59,7 +59,7 @@ impl Loadable for Community {
 pub(crate) async fn create_community(
     state: GlobalServerContext,
     user: UserId,
-    command: &CommunityCreateCommand,
+    command: &CommunityCreateRequest,
 ) -> Result<Community, app::Error> {
     let mut conn = state.connection_pool.get().await?;
     let community = Community {
@@ -105,7 +105,8 @@ pub struct CommunityChangeset {
 
 pub(crate) async fn update_community(
     state: &GlobalServerContext,
-    command: CommunityUpdateCommand,
+    id: CommunityId,
+    command: CommunityUpdateRequest,
 ) -> app::error::Result<Community> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -115,11 +116,7 @@ pub(crate) async fn update_community(
                     name: command.name.clone(),
                     icon: command.icon,
                 })
-                .filter(
-                    community::id
-                        .eq(command.id)
-                        .and(community::deleted_at.is_null()),
-                )
+                .filter(community::id.eq(id).and(community::deleted_at.is_null()))
                 .returning(Community::as_select())
                 .load(conn.as_mut())
                 .await?
@@ -131,7 +128,7 @@ pub(crate) async fn update_community(
             publish_event(
                 state,
                 &ServerEvent::Community(CommunityEvent::Update {
-                    id: command.id,
+                    id,
                     name: command.name,
                     icon: command.icon,
                 }),
@@ -184,12 +181,13 @@ pub enum Invitation {
     AccessGranted,
 }
 
+/// Adds `user` to the community and returns the membership as the event carried it.
 pub(crate) async fn join_community(
     state: &GlobalServerContext,
     user: UserId,
     community: CommunityId,
     invitation: Invitation,
-) -> app::error::Result<()> {
+) -> app::error::Result<message_enum::UserCommunity> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -199,15 +197,94 @@ pub(crate) async fn join_community(
                     return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
                 }
             }
+            // A new membership goes after everything the user already has in their list.
+            let last: Option<i32> = community_user::table
+                .filter(community_user::user.eq(user))
+                .select(diesel::dsl::max(community_user::sort_index))
+                .first(conn)
+                .await?;
+            let sort_index = last.map_or(0, |last| last + 1);
             diesel::insert_into(community_user::table)
-                .values(&CommunityUser { user, community })
+                .values(&CommunityUser {
+                    user,
+                    community,
+                    sort_index,
+                })
                 .execute(conn)
                 .await?;
-            let event = ServerEvent::UserCommunity(UserCommunityEvent::Create(
-                message_enum::UserCommunity { community, user },
-            ));
+            let membership = message_enum::UserCommunity {
+                community,
+                user,
+                sort_index,
+            };
+            let event = ServerEvent::UserCommunity(UserCommunityEvent::Create(membership.clone()));
             app::publish_event(state, &event).await?;
-            Ok(())
+            Ok(membership)
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// The caller's membership of a community, or `NotFound` when they are not a member.
+pub(crate) async fn read_membership(
+    state: &GlobalServerContext,
+    user: UserId,
+    community: CommunityId,
+) -> app::error::Result<message_enum::UserCommunity> {
+    let mut conn = state.connection_pool.get().await?;
+    let row: CommunityUser = community_user::table
+        .select(CommunityUser::as_select())
+        .filter(
+            community_user::community
+                .eq(community)
+                .and(community_user::user.eq(user)),
+        )
+        .first(conn.as_mut())
+        .await?;
+    Ok(message_enum::UserCommunity {
+        community: row.community,
+        user: row.user,
+        sort_index: row.sort_index,
+    })
+}
+
+/// Moves a community within `user`'s own list. Returns the membership as the event carried it.
+pub(crate) async fn reorder_membership(
+    state: &GlobalServerContext,
+    user: UserId,
+    community: CommunityId,
+    sort_index: i32,
+) -> app::error::Result<message_enum::UserCommunity> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let updated = diesel::update(community_user::table)
+                .filter(
+                    community_user::community
+                        .eq(community)
+                        .and(community_user::user.eq(user)),
+                )
+                .set(community_user::sort_index.eq(sort_index))
+                .execute(conn)
+                .await?;
+            if updated == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            publish_event(
+                state,
+                &ServerEvent::UserCommunity(UserCommunityEvent::Update {
+                    community,
+                    user,
+                    sort_index: Some(sort_index),
+                }),
+            )
+            .await?;
+            Ok(message_enum::UserCommunity {
+                community,
+                user,
+                sort_index,
+            })
         }
         .scope_boxed()
     })
@@ -235,34 +312,122 @@ pub(crate) async fn leave_community(
     Ok(())
 }
 
-pub(crate) async fn read_community_users(
-    state: &GlobalServerContext,
-    community: CommunityId,
-) -> app::error::Result<Vec<app::user::User>> {
-    use crate::database::schema::user;
+/// Members a single community read returns: the most recently seen users, capped so a large
+/// community cannot make its member list unbounded.
+pub const MEMBERS_PER_COMMUNITY: i64 = 100;
 
+/// One row of [`read_community_members`]: a member together with the community the row was
+/// selected for. A user in several of the requested communities appears once per community.
+#[derive(Debug, QueryableByName)]
+pub struct CommunityMember {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub community: CommunityId,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub sort_index: i32,
+    #[diesel(embed)]
+    pub user: app::user::UserPg,
+}
+
+/// A membership as [`read_community_members`] returns it.
+pub struct Membership {
+    pub community: CommunityId,
+    pub user: app::user::User,
+    /// Where the community sits in this user's own list.
+    pub sort_index: i32,
+}
+
+/// The most recently seen members of each of `communities`, at most [`MEMBERS_PER_COMMUNITY`]
+/// per community, grouped by community and ordered most recently seen first within each group.
+/// The caller's own membership of each community is always among them, however long ago they
+/// were seen, because their memberships carry the order of their own community list. One query
+/// serves any number of communities: the per-community cap is a window function rather than a
+/// `LIMIT`, so sideloading members for a user's whole community list costs one round trip.
+pub(crate) async fn read_community_members(
+    state: &GlobalServerContext,
+    caller: UserId,
+    communities: &[CommunityId],
+) -> app::error::Result<Vec<Membership>> {
+    use diesel::sql_types::{Array, BigInt, Uuid};
+
+    if communities.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut conn = state.connection_pool.get().await?;
-    let users = community_user::table
-        .inner_join(user::table)
-        .select(app::user::UserPg::as_select())
-        .filter(
-            community_user::community
-                .eq(community)
-                .and(user::deleted_at.is_null()),
-        )
-        .order_by(user::last_seen_at.desc())
-        .limit(100)
-        .load(conn.as_mut())
-        .await?;
-    let online_status = users_online_status(state, users.iter().map(|u| u.id).collect()).await?;
-    Ok(users
+    let rows: Vec<CommunityMember> = diesel::sql_query(
+        r#"
+        SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
+               deleted_at, display_name, pronouns, bio, status_text, status_emoji
+        FROM (
+            SELECT cu.community, cu.sort_index, u.*,
+                   ROW_NUMBER() OVER (PARTITION BY cu.community ORDER BY u.last_seen_at DESC) AS recency_rank
+            FROM community_user cu
+            JOIN "user" u ON u.id = cu."user"
+            WHERE cu.community = ANY($1) AND u.deleted_at IS NULL
+        ) ranked
+        WHERE recency_rank <= $2 OR id = $3
+        ORDER BY community, last_seen_at DESC
+        "#,
+    )
+    .bind::<Array<Uuid>, _>(communities.iter().map(|c| c.0).collect::<Vec<_>>())
+    .bind::<BigInt, _>(MEMBERS_PER_COMMUNITY)
+    .bind::<Uuid, _>(caller.0)
+    .load(conn.as_mut())
+    .await?;
+    let mut communities = Vec::with_capacity(rows.len());
+    let mut sort_indexes = Vec::with_capacity(rows.len());
+    let mut users = Vec::with_capacity(rows.len());
+    for row in rows {
+        communities.push(row.community);
+        sort_indexes.push(row.sort_index);
+        users.push(row.user);
+    }
+    let users = app::user::with_online_status(state, users).await?;
+    Ok(communities
         .into_iter()
-        .zip(online_status)
-        .map(|(u, (_id, o))| app::user::User {
-            user_pg: u,
-            online_status: o,
+        .zip(sort_indexes)
+        .zip(users)
+        .map(|((community, sort_index), user)| Membership {
+            community,
+            user,
+            sort_index,
         })
         .collect())
+}
+
+pub(crate) async fn read_community_users(
+    state: &GlobalServerContext,
+    caller: UserId,
+    community: CommunityId,
+) -> app::error::Result<Vec<app::user::User>> {
+    Ok(read_community_members(state, caller, &[community])
+        .await?
+        .into_iter()
+        .map(|membership| membership.user)
+        .collect())
+}
+
+/// Every live channel of each of `communities`, including those filed under a category, ordered
+/// by community and then sort index. This is the batch a client needs to render the channel
+/// tree of every community it belongs to in one request.
+pub(crate) async fn read_communities_channels(
+    state: &GlobalServerContext,
+    communities: &[CommunityId],
+) -> app::error::Result<Vec<app::channel::Channel>> {
+    if communities.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let channels = channel::table
+        .select(app::channel::Channel::as_select())
+        .filter(
+            channel::community
+                .eq_any(communities)
+                .and(channel::deleted_at.is_null()),
+        )
+        .order_by((channel::community.asc(), channel::sort_index.asc()))
+        .load(conn.as_mut())
+        .await?;
+    Ok(channels)
 }
 
 pub(crate) async fn read_community_channels(

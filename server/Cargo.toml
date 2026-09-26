@@ -26,6 +26,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 
 message_gen = { path = "../message_gen" }
+voice_protocol = { path = "../voice_protocol" }
 rand = "0.10.0"
 rand_chacha = "0.10.0"
 base64 = "0.22.1"
@@ -33,6 +34,7 @@ diesel-async = { version = "0.7.4", features = ["deadpool", "postgres", "r2d2"] 
 hyper = { version = "1.6.0", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "server-auto", "server-graceful"] }
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }
+tower-http = { version = "0.6.8", features = ["cors"] }
 tokio-rustls = "0.26.2"
 async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }
 bytes = "1.10.1"
@@ -60,3 +62,6 @@ pulldown-cmark = { version = "0.13.3", default-features = false }
 html5ever = "0.39.0"
 url = "2.5.8"
 lru = "0.17.0"
+
+[dev-dependencies]
+serde_urlencoded = "0.7.1"

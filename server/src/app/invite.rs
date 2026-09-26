@@ -236,6 +236,18 @@ pub(crate) async fn revoke_invite(
     .await
 }
 
+/// The invite with this code, whether or not it has expired, so a caller can tell the user an
+/// expired link is expired rather than unknown. Revoked invites read as not found.
+pub(crate) async fn read_invite(state: &GlobalServerContext, code: &str) -> app::Result<Invite> {
+    let mut conn = state.connection_pool.get().await?;
+    invite::table
+        .select(Invite::as_select())
+        .filter(invite::code.eq(code).and(invite::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await
+        .map_err(Into::into)
+}
+
 pub(crate) async fn read_community_invites(
     state: &GlobalServerContext,
     community: CommunityId,

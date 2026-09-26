@@ -61,7 +61,10 @@ pub fn storage_key(id: IconId) -> String {
     format!("icons/{}", id.0)
 }
 
-pub async fn init_upload(state: &GlobalServerContext, mime_type: String) -> app::Result<IconUpload> {
+pub async fn init_upload(
+    state: &GlobalServerContext,
+    mime_type: String,
+) -> app::Result<IconUpload> {
     let id = IconId::new();
     let key = storage_key(id);
     let row = Icon {

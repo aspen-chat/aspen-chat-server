@@ -4,6 +4,10 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "channel_type"))]
     pub struct ChannelType;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "message_kind"))]
+    pub struct MessageKind;
 }
 
 diesel::table! {
@@ -55,6 +59,7 @@ diesel::table! {
     community_user (user, community) {
         user -> Uuid,
         community -> Uuid,
+        sort_index -> Int4,
     }
 }
 
@@ -80,6 +85,9 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::MessageKind;
+
     message (id) {
         id -> Uuid,
         author -> Uuid,
@@ -87,6 +95,9 @@ diesel::table! {
         content -> Text,
         timestamp -> Timestamptz,
         deleted_at -> Nullable<Timestamptz>,
+        edited_at -> Nullable<Timestamptz>,
+        kind -> MessageKind,
+        poll -> Nullable<Uuid>,
     }
 }
 
@@ -108,6 +119,9 @@ diesel::table! {
         image_id -> Nullable<Uuid>,
         image_mime_type -> Nullable<Text>,
         theme_color -> Nullable<Text>,
+        video_src -> Nullable<Text>,
+        video_width -> Nullable<Int4>,
+        video_height -> Nullable<Int4>,
     }
 }
 
@@ -126,6 +140,38 @@ diesel::table! {
         channel -> Uuid,
         timestamp -> Timestamptz,
         sort_index -> Int4,
+    }
+}
+
+diesel::table! {
+    poll (id) {
+        id -> Uuid,
+        channel -> Uuid,
+        created_by -> Uuid,
+        question -> Text,
+        multiple_choice -> Bool,
+        anonymous -> Bool,
+        created_at -> Timestamptz,
+        closes_at -> Timestamptz,
+        closed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    poll_option (poll, index) {
+        poll -> Uuid,
+        index -> Int4,
+        label -> Text,
+        emoji -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    poll_vote (poll, option_index, user) {
+        poll -> Uuid,
+        option_index -> Int4,
+        user -> Uuid,
+        timestamp -> Timestamptz,
     }
 }
 
@@ -163,6 +209,53 @@ diesel::table! {
         created_at -> Timestamptz,
         last_seen_at -> Timestamptz,
         deleted_at -> Nullable<Timestamptz>,
+        display_name -> Nullable<Text>,
+        pronouns -> Nullable<Text>,
+        bio -> Nullable<Text>,
+        status_text -> Nullable<Text>,
+        status_emoji -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    voice_participant (session, user) {
+        session -> Uuid,
+        user -> Uuid,
+        joined_at -> Timestamptz,
+        muted -> Bool,
+        deafened -> Bool,
+        sharing_screen -> Bool,
+    }
+}
+
+diesel::table! {
+    voice_server (id) {
+        id -> Uuid,
+        name -> Text,
+        url -> Text,
+        capacity -> Int4,
+        enabled -> Bool,
+        created_at -> Timestamptz,
+        last_report_at -> Nullable<Timestamptz>,
+        reported_participants -> Int4,
+    }
+}
+
+diesel::table! {
+    voice_server_failure (voice_server, user) {
+        voice_server -> Uuid,
+        user -> Uuid,
+        reported_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    voice_session (id) {
+        id -> Uuid,
+        channel -> Uuid,
+        voice_server -> Uuid,
+        created_at -> Timestamptz,
+        alone_since -> Nullable<Timestamptz>,
     }
 }
 
@@ -174,6 +267,7 @@ diesel::joinable!(community_user -> user (user));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(message -> channel (channel));
+diesel::joinable!(message -> poll (poll));
 diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
@@ -181,10 +275,20 @@ diesel::joinable!(message_link_preview -> message (message_id));
 diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
+diesel::joinable!(poll -> channel (channel));
+diesel::joinable!(poll -> user (created_by));
+diesel::joinable!(poll_option -> poll (poll));
+diesel::joinable!(poll_vote -> user (user));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(refresh_token -> user (user));
 diesel::joinable!(session -> refresh_token (refresh_token));
+diesel::joinable!(voice_participant -> user (user));
+diesel::joinable!(voice_participant -> voice_session (session));
+diesel::joinable!(voice_server_failure -> user (user));
+diesel::joinable!(voice_server_failure -> voice_server (voice_server));
+diesel::joinable!(voice_session -> channel (channel));
+diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
@@ -199,8 +303,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     message_link_preview,
     other_server_auth_token,
     pin,
+    poll,
+    poll_option,
+    poll_vote,
     react,
     refresh_token,
     session,
     user,
+    voice_participant,
+    voice_server,
+    voice_server_failure,
+    voice_session,
 );

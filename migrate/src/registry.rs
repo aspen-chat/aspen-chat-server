@@ -24,4 +24,13 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260417_200000_message_channel_id_index::M,
     &migrations::m20260420_000000_message_link_preview::M,
     &migrations::m20260502_002140_media_pending_uploads::M,
+    &migrations::m20260925_214711_message_edited_at::M,
+    &migrations::m20260925_232722_link_preview_video::M,
+    &migrations::m20260925_235811_polls::M,
+    &migrations::m20260926_002117_poll_option_emoji::M,
+    &migrations::m20260926_014131_user_profile::M,
+    &migrations::m20260926_032241_membership_sort_index::M,
+    &migrations::m20260926_041014_voice::M,
+    &migrations::m20260926_043002_voice_session_alone_since::M,
+    &migrations::m20260926_063058_voice_participant_sharing_screen::M,
 ];

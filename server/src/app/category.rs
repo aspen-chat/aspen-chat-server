@@ -1,4 +1,4 @@
-use crate::api::message_enum::command::CategoryUpdateCommand;
+use crate::api::message_enum::request::CategoryUpdateRequest;
 use crate::api::message_enum::server_event::{CategoryEvent, ServerEvent};
 use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
@@ -101,6 +101,28 @@ pub(crate) async fn read_community_categories(
     Ok(categories)
 }
 
+/// Every live category of each of `communities`, ordered by community and then sort index.
+pub(crate) async fn read_communities_categories(
+    state: &GlobalServerContext,
+    communities: &[CommunityId],
+) -> app::error::Result<Vec<Category>> {
+    if communities.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let categories = category::table
+        .select(Category::as_select())
+        .filter(
+            category::community
+                .eq_any(communities)
+                .and(category::deleted_at.is_null()),
+        )
+        .order_by((category::community.asc(), category::sort_index.asc()))
+        .load(conn.as_mut())
+        .await?;
+    Ok(categories)
+}
+
 pub(crate) async fn read_category_channels(
     state: &GlobalServerContext,
     category: CategoryId,
@@ -138,7 +160,8 @@ pub struct CategoryChangeset {
 
 pub(crate) async fn update_category(
     state: &GlobalServerContext,
-    command: CategoryUpdateCommand,
+    id: CategoryId,
+    command: CategoryUpdateRequest,
 ) -> app::error::Result<Category> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -148,11 +171,7 @@ pub(crate) async fn update_category(
                     name: command.name.clone(),
                     sort_index: command.sort_index,
                 })
-                .filter(
-                    category::id
-                        .eq(command.id)
-                        .and(category::deleted_at.is_null()),
-                )
+                .filter(category::id.eq(id).and(category::deleted_at.is_null()))
                 .returning(Category::as_select())
                 .load(conn.as_mut())
                 .await?
@@ -164,7 +183,7 @@ pub(crate) async fn update_category(
             publish_event(
                 state,
                 &ServerEvent::Category(CategoryEvent::Update {
-                    id: command.id,
+                    id,
                     name: command.name,
                     sort_index: command.sort_index,
                 }),

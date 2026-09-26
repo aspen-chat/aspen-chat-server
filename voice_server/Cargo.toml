@@ -1,0 +1,27 @@
+[package]
+name = "voice_server"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "An Aspen voice server: a mediasoup SFU that carries the media of calls, signals with clients over WebSockets, and reports to the API server over NATS."
+
+[dependencies]
+anyhow = "1.0.102"
+async-nats = { version = "0.46.0", features = ["aws-lc-rs", "server_2_10", "server_2_11"], default-features = false }
+axum = { version = "0.8.4", features = ["macros", "ws"] }
+clap = { version = "4.5.37", features = ["derive"] }
+config = { version = "0.15.14", features = ["toml"] }
+futures-util = "0.3.31"
+local-ip-address = "0.6"
+mediasoup = "0.20.0"
+num_cpus = "1.17.0"
+schemars = { version = "1.2.1", features = ["uuid1"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.18"
+tokio = { version = "1.51.1", features = ["full"] }
+tower-http = { version = "0.6.8", features = ["cors"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.16.0", features = ["serde", "v7"] }
+voice_protocol = { path = "../voice_protocol" }

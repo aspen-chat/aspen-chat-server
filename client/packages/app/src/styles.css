@@ -1,0 +1,285 @@
+@import "tailwindcss";
+/* Exposes React Aria's render-prop states as Tailwind variants (`pressed:`, `focus-visible:`,
+   `selected:`, `invalid:` ...) via the components' `data-*` attributes. */
+@plugin "tailwindcss-react-aria-components";
+
+/*
+ * Colour is expressed through semantic tokens, never through Tailwind's named palette, so that a
+ * palette is a block of CSS variables and nothing else. `@theme inline` makes each token a utility
+ * (`bg-surface`, `text-ink-muted`, `border-line`, `bg-accent`) that reads the variable at use, so
+ * changing `data-theme` on <html> restyles the page without a rebuild. Every value is a
+ * `light-dark()` pair: the palette chooses the hues, the OS chooses light or dark.
+ */
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --color-surface: var(--palette-surface);
+  --color-surface-raised: var(--palette-surface-raised);
+  --color-surface-sunken: var(--palette-surface-sunken);
+  --color-surface-hover: var(--palette-surface-hover);
+  --color-ink: var(--palette-ink);
+  --color-ink-muted: var(--palette-ink-muted);
+  --color-ink-faint: var(--palette-ink-faint);
+  --color-line: var(--palette-line);
+  --color-accent: var(--palette-accent);
+  --color-accent-strong: var(--palette-accent-strong);
+  --color-accent-soft: var(--palette-accent-soft);
+  --color-accent-contrast: var(--palette-accent-contrast);
+  --color-danger: var(--palette-danger);
+  --color-danger-soft: var(--palette-danger-soft);
+  --color-online: var(--palette-online);
+  --color-away: var(--palette-away);
+  --color-code-keyword: var(--palette-code-keyword);
+  --color-code-string: var(--palette-code-string);
+  --color-code-comment: var(--palette-code-comment);
+  --color-code-number: var(--palette-code-number);
+  --color-code-type: var(--palette-code-type);
+  --color-code-attr: var(--palette-code-attr);
+}
+
+/* Aspen: the default palette. Neutral greys with a forest-green accent. */
+:root,
+:root[data-theme="aspen"] {
+  --palette-surface: light-dark(#fafafa, #0a0a0a);
+  --palette-surface-raised: light-dark(#ffffff, #171717);
+  --palette-surface-sunken: light-dark(#f0f0f0, #050505);
+  --palette-surface-hover: light-dark(#ececec, #262626);
+  --palette-ink: light-dark(#171717, #f5f5f5);
+  --palette-ink-muted: light-dark(#525252, #a3a3a3);
+  --palette-ink-faint: light-dark(#8a8a8a, #737373);
+  --palette-line: light-dark(#d4d4d4, #2e2e2e);
+  --palette-accent: light-dark(#047857, #34d399);
+  --palette-accent-strong: light-dark(#065f46, #6ee7b7);
+  --palette-accent-soft: light-dark(#d1fae5, #064e3b);
+  --palette-accent-contrast: light-dark(#ffffff, #052e16);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#16a34a, #4ade80);
+  --palette-away: light-dark(#d97706, #fbbf24);
+  --palette-code-keyword: light-dark(#7c3aed, #c4b5fd);
+  --palette-code-string: light-dark(#047857, #6ee7b7);
+  --palette-code-comment: light-dark(#8a8a8a, #737373);
+  --palette-code-number: light-dark(#b45309, #fbbf24);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#0f766e, #5eead4);
+}
+
+/* Dusk: cool slate surfaces with a violet accent. */
+:root[data-theme="dusk"] {
+  --palette-surface: light-dark(#f6f5fb, #0f0e17);
+  --palette-surface-raised: light-dark(#ffffff, #1a1826);
+  --palette-surface-sunken: light-dark(#ebe9f5, #09080f);
+  --palette-surface-hover: light-dark(#e3e0f0, #262336);
+  --palette-ink: light-dark(#1b1930, #f2f0fa);
+  --palette-ink-muted: light-dark(#5b5876, #a6a2c2);
+  --palette-ink-faint: light-dark(#8f8ba8, #6f6b8a);
+  --palette-line: light-dark(#d5d2e6, #2f2c42);
+  --palette-accent: light-dark(#6d28d9, #a78bfa);
+  --palette-accent-strong: light-dark(#5b21b6, #c4b5fd);
+  --palette-accent-soft: light-dark(#ede9fe, #2e1065);
+  --palette-accent-contrast: light-dark(#ffffff, #1e1b4b);
+  --palette-danger: light-dark(#be123c, #fda4af);
+  --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
+  --palette-online: light-dark(#0d9488, #2dd4bf);
+  --palette-away: light-dark(#c2410c, #fb923c);
+  --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-string: light-dark(#0f766e, #5eead4);
+  --palette-code-comment: light-dark(#8f8ba8, #6f6b8a);
+  --palette-code-number: light-dark(#b45309, #fcd34d);
+  --palette-code-type: light-dark(#1e40af, #a5b4fc);
+  --palette-code-attr: light-dark(#9d174d, #f9a8d4);
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  @apply bg-surface text-ink antialiased;
+  font-family: var(--font-sans);
+}
+
+/* Message bodies are GitHub-flavoured Markdown rendered by `features/messages/Markdown.tsx`. */
+.message-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.message-body > * + * {
+  margin-top: 0.5rem;
+}
+.message-body p {
+  white-space: pre-wrap;
+}
+.message-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875em;
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-line);
+}
+.message-body pre {
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-line);
+}
+.message-body pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.message-body blockquote {
+  border-left: 3px solid var(--color-line);
+  padding-left: 0.75rem;
+  color: var(--color-ink-muted);
+}
+.message-body ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+.message-body ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+.message-body li > ul,
+.message-body li > ol {
+  margin-top: 0;
+}
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4,
+.message-body h5,
+.message-body h6 {
+  font-weight: 600;
+}
+.message-body h1 {
+  font-size: 1.25rem;
+}
+.message-body h2 {
+  font-size: 1.125rem;
+}
+.message-body table {
+  border-collapse: collapse;
+}
+.message-body th,
+.message-body td {
+  border: 1px solid var(--color-line);
+  padding: 0.25rem 0.5rem;
+}
+.message-body th {
+  background: var(--color-surface-sunken);
+}
+.message-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-line);
+}
+.message-body input[type="checkbox"] {
+  margin-right: 0.4rem;
+}
+/* Spoilers: a solid block until revealed, then a faint tint so the reader can see what was hidden. */
+.message-body .spoiler {
+  border-radius: 0.25rem;
+  padding: 0 0.15em;
+}
+.message-body .spoiler-hidden {
+  background: var(--color-ink);
+  color: transparent;
+  cursor: pointer;
+  user-select: none;
+}
+.message-body .spoiler-hidden * {
+  color: transparent;
+}
+.message-body .spoiler-hidden:hover {
+  background: var(--color-ink-muted);
+}
+.message-body .spoiler-hidden:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.message-body .spoiler-revealed {
+  background: var(--color-surface-sunken);
+}
+
+/* highlight.js token classes mapped onto the palette, so code follows the theme. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-strong {
+  color: var(--color-code-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-char.escape_ {
+  color: var(--color-code-string);
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+  color: var(--color-code-comment);
+  font-style: italic;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--color-code-number);
+}
+.hljs-title,
+.hljs-type,
+.hljs-class,
+.hljs-section,
+.hljs-built_in {
+  color: var(--color-code-type);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-meta,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-property,
+.hljs-params {
+  color: var(--color-code-attr);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* The emoji picker (`emoji-picker-react`) styles itself through these variables. */
+.emoji-picker.epr-main {
+  --epr-bg-color: var(--color-surface-raised);
+  --epr-category-label-bg-color: var(--color-surface-raised);
+  --epr-text-color: var(--color-ink);
+  --epr-hover-bg-color: var(--color-surface-hover);
+  --epr-focus-bg-color: var(--color-surface-hover);
+  --epr-highlight-color: var(--color-accent);
+  --epr-search-input-bg-color: var(--color-surface);
+  --epr-search-input-text-color: var(--color-ink);
+  --epr-search-input-placeholder-color: var(--color-ink-faint);
+  --epr-search-border-color: var(--color-accent);
+  --epr-picker-border-color: transparent;
+  --epr-category-icon-active-color: var(--color-accent);
+  --epr-skin-tone-picker-menu-color: var(--color-surface-raised);
+  border: 0;
+}

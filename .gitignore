@@ -5,3 +5,5 @@
 /event_schema.json
 .idea/
 .vscode/
+/voice_server.toml
+/voice_signal_schema.json

@@ -1,92 +1,59 @@
-# Aspen Qt Client
+# Aspen client
 
-Qt for Python desktop client for Aspen server.
+One TypeScript web application, shipped three ways:
+
+| Package             | What it is                                                                                                                                                        |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/protocol` | Generated types from the server's `openapi.yaml` and `event_schema.json`, plus the HTTP session client and the reconnecting WebSocket event stream built on them. |
+| `packages/app`      | The user interface: React 19 and React Aria Components, styled with Tailwind CSS. Built with Vite. Runs in Chrome, Firefox, and Safari.                           |
+| `packages/desktop`  | Electron shell (Windows, macOS, Linux). Loads the `app` build; has no UI of its own.                                                                              |
+| `packages/mobile`   | Capacitor shell (Android, iOS). Wraps the `app` build in a native project.                                                                                        |
 
 ## Prerequisites
 
-- Python 3.12+
-- Aspen server running locally (or configured URL)
+- Node 22.12 or newer and pnpm 11 (`corepack enable` picks up the pinned version).
+- A Rust toolchain, only if you need to regenerate the server's schema files.
+- For the mobile shells: Android Studio and/or Xcode, per Capacitor's requirements.
 
-## Install
+## Getting started
 
-```bash
+```sh
 cd client
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+pnpm install          # also runs codegen against ../openapi.yaml and ../event_schema.json
+pnpm dev              # Vite dev server on http://localhost:5173
+pnpm build            # web build (site root); the desktop and mobile packages use `build:shell`
 ```
 
-## Generate API/Event models
+The dev server proxies `/api` to an Aspen server at `http://127.0.0.1:8000` by default (start one
+with `cargo run -- --no-https --port 8000`), so the browser needs neither CORS nor a trusted
+certificate. Point somewhere else with `VITE_DEV_PROXY_TARGET`, or bypass the proxy by setting
+`VITE_ASPEN_SERVER_URL` to the server's origin (which then needs `[cors] allowed_origins` in the
+server's `aspen.toml`).
 
-First regenerate the server schema files (from repo root):
+## Code generation
 
-```bash
-cargo run -- --gen-openapi-schema
+```sh
+pnpm codegen          # regenerate TypeScript from the existing schema files
+pnpm codegen:regen    # ask the server (via cargo) for fresh schema files first
 ```
 
-Then regenerate Python models (from this `client` directory):
+Output lands in `packages/protocol/src/generated/` and is gitignored. `pnpm install` and
+`pnpm build` both run `codegen`; if the schema files are missing it runs the server's generator
+automatically.
 
-```bash
-source .venv/bin/activate
-generate-client
+## Everyday commands
+
+```sh
+pnpm typecheck        # tsc across every package
+pnpm lint             # eslint
+pnpm test             # vitest across every package
+pnpm e2e              # Playwright against Chromium, Firefox, and WebKit (run `pnpm --filter @aspen/app e2e:install` once)
+pnpm build            # production build of every package
+pnpm dev:desktop      # Electron pointed at the running Vite dev server
+pnpm --filter @aspen/desktop package   # installers under packages/desktop/release
+pnpm --filter @aspen/mobile add:android && pnpm --filter @aspen/mobile run:android
 ```
 
-## Run the app
+## License
 
-```bash
-source .venv/bin/activate
-ASPEN_API_BASE_URL=https://127.0.0.1:443 \
-ASPEN_VERIFY_TLS=false \
-aspen-client
-```
-
-Optional environment variables:
-
-- `ASPEN_API_BASE_URL` (default `https://127.0.0.1:443`)
-- `ASPEN_WS_URL` (default derived from API base URL + `/event_stream`)
-- `ASPEN_VERIFY_TLS` (`true`/`false`, default `false`)
-- `ASPEN_UI` (`widgets` / `quick`, default `widgets`) — selects the UI layer
-
-## Experimental: Qt Quick UI
-
-A parallel Qt Quick (QML) implementation lives in `src/aspen_client/qml_ui/`. It reuses every non-UI layer (`AspenApiClient`, `TaskSpawner`, `ClientState`, `EventStreamClient`, `IconCache`, `LinkPreviewImageCache`, `UserDirectory`) and adds `QObject` controllers, `QAbstractListModel`-backed list models, a `QQuickImageProvider` for cached avatars and link-preview thumbnails, and the QML scene tree.
-
-Opt in by exporting `ASPEN_UI=quick` before launching:
-
-```bash
-source .venv/bin/activate
-ASPEN_API_BASE_URL=https://127.0.0.1:443 \
-ASPEN_VERIFY_TLS=false \
-ASPEN_UI=quick \
-aspen-client
-```
-
-Parity status: login, communities/channels/users panels, message pane (sliding window + paging + previews + composer), reconnect-resync, and shutdown all work end-to-end. The Widgets path remains the default until the Quick path has had at least one full human-validation pass.
-
-## Current MVP features
-
-- Login via `/login`
-- Community list via `/user/communities`
-- Channel list via `/community/channels`
-- Message history via `/channel/messages`
-- Send messages via `/message`
-- Receive incoming message create events via `/event_stream`
-
-## Validation checks
-
-Server checks (from repo root):
-
-```bash
-cargo run -- --gen-openapi-schema
-cargo clippy --all-targets --all-features
-```
-
-Client checks (from `client`):
-
-```bash
-source .venv/bin/activate
-generate-client
-python -m compileall src/aspen_client
-ASPEN_UI=widgets aspen-client   # smoke: Widgets path still works
-ASPEN_UI=quick   aspen-client   # smoke: Quick path boots, login, chat
-```
+GPL-3.0-or-later, like the rest of the repository.

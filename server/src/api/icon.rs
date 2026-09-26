@@ -1,20 +1,15 @@
-//! REST surface for the two-phase icon upload flow.
-//!
-//! Mirrors the attachment flow in [`crate::api::attachment`] except that
-//! the wire DTO has no `fileName`. Icons today are unauthenticated for
-//! create/read/delete (the previous CRUD shape was the same); the review's
-//! P1-2 follow-up is the right place to tighten that.
+//! REST surface for the two-phase icon upload flow. Mirrors [`crate::api::attachment`] except
+//! that icons carry no file name.
 
-use crate::api::GlobalServerContext;
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::{Created, Json, NoContent, Path};
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_ICONS};
 use crate::app::{self, IconId};
-use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use tracing::error;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -36,10 +31,12 @@ fn icon_to_api(state: &GlobalServerContext, row: app::icon::Icon) -> Icon {
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct IconUploadInitCommand {
+pub struct IconUploadInitRequest {
     pub mime_type: String,
 }
 
+/// A reserved icon slot. `PUT` the image bytes to `uploadUrl` before `expiresAt`, then confirm
+/// the upload.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IconUploadHandle {
@@ -48,166 +45,106 @@ pub struct IconUploadHandle {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum IconUploadInitCommandResponse {
-    Upload(IconUploadHandle),
-    Error { cause: Option<Cow<'static, str>> },
-}
-
 #[utoipa::path(
     post,
-    path = "/icon/upload-init",
-    responses((status = OK, body = IconUploadInitCommandResponse))
+    path = "/icons",
+    tag = TAG_ICONS,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = IconUploadHandle, headers(("Location" = String, description = "URL of the icon once confirmed"))),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn init_icon_upload(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<IconUploadInitCommand>,
-) -> (StatusCode, Json<IconUploadInitCommandResponse>) {
-    match app::icon::init_upload(&state, command.mime_type).await {
-        Ok(upload) => (
-            StatusCode::OK,
-            IconUploadInitCommandResponse::Upload(IconUploadHandle {
-                id: upload.id,
-                upload_url: upload.upload_url,
-                expires_at: upload.expires_at,
-            })
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error initiating icon upload");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                IconUploadInitCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct IconUploadConfirmCommand {
-    pub id: IconId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum IconUploadConfirmCommandResponse {
-    Icon(Icon),
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
+    _: SessionUser,
+    Json(request): Json<IconUploadInitRequest>,
+) -> ApiResult<Created<IconUploadHandle>> {
+    let upload = app::icon::init_upload(&state, request.mime_type).await?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/icons/{}", upload.id.0),
+        IconUploadHandle {
+            id: upload.id,
+            upload_url: upload.upload_url,
+            expires_at: upload.expires_at,
+        },
+    ))
 }
 
 #[utoipa::path(
     post,
-    path = "/icon/upload-confirm",
-    responses((status = OK, body = IconUploadConfirmCommandResponse))
+    path = "/icons/{icon}/confirm",
+    tag = TAG_ICONS,
+    params(("icon" = IconId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Icon),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (object not found in storage)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn confirm_icon_upload(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<IconUploadConfirmCommand>,
-) -> (StatusCode, Json<IconUploadConfirmCommandResponse>) {
-    match app::icon::confirm_upload(&state, command.id).await {
-        Ok(row) => (
-            StatusCode::OK,
-            IconUploadConfirmCommandResponse::Icon(icon_to_api(&state, row)).into(),
-        ),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::BAD_REQUEST,
-            IconUploadConfirmCommandResponse::NotAllowed {
-                reason: Some(reason),
+    _: SessionUser,
+    Path(icon): Path<IconId>,
+) -> ApiResult<Json<Icon>> {
+    let row = app::icon::confirm_upload(&state, icon)
+        .await
+        .map_err(|e| match e {
+            app::Error::Validation(reason) => {
+                ApiError::new(ProblemCode::Validation).with_detail(reason)
             }
-            .into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            IconUploadConfirmCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error confirming icon upload");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                IconUploadConfirmCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct IconReadCommand {
-    pub id: IconId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum IconReadCommandResponse {
-    Icon(Icon),
-    Error { cause: Option<Cow<'static, str>> },
+            other => other.into(),
+        })?;
+    Ok(Json(icon_to_api(&state, row)))
 }
 
 #[utoipa::path(
     get,
-    path = "/icon",
-    responses((status = OK, body = IconReadCommandResponse))
+    path = "/icons/{icon}",
+    tag = TAG_ICONS,
+    params(("icon" = IconId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Icon),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
-pub async fn read_icon(
+pub async fn get_icon(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<IconReadCommand>,
-) -> (StatusCode, Json<IconReadCommandResponse>) {
-    match app::icon::read_icon(&state, command.id).await {
-        Ok(row) => (
-            StatusCode::OK,
-            IconReadCommandResponse::Icon(icon_to_api(&state, row)).into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            IconReadCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading icon");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                IconReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct IconDeleteCommand {
-    pub id: IconId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum IconDeleteCommandResponse {
-    DeleteOk,
-    Error { cause: Option<Cow<'static, str>> },
+    _: SessionUser,
+    Path(icon): Path<IconId>,
+) -> ApiResult<Json<Icon>> {
+    let row = app::icon::read_icon(&state, icon).await?;
+    Ok(Json(icon_to_api(&state, row)))
 }
 
 #[utoipa::path(
     delete,
-    path = "/icon",
-    responses((status = OK, body = IconDeleteCommandResponse))
+    path = "/icons/{icon}",
+    tag = TAG_ICONS,
+    params(("icon" = IconId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn delete_icon(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<IconDeleteCommand>,
-) -> (StatusCode, Json<IconDeleteCommandResponse>) {
-    match app::icon::delete_icon(&state, command.id).await {
-        Ok(()) => (StatusCode::OK, IconDeleteCommandResponse::DeleteOk.into()),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            IconDeleteCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error deleting icon");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                IconDeleteCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    _: SessionUser,
+    Path(icon): Path<IconId>,
+) -> ApiResult<NoContent> {
+    app::icon::delete_icon(&state, icon).await?;
+    Ok(NoContent)
 }

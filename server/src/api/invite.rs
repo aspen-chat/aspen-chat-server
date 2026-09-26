@@ -1,15 +1,16 @@
-use crate::api::GlobalServerContext;
-use crate::api::login::SessionUser;
+use crate::api;
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::{Created, Json, NoContent, Path, Query};
+use crate::api::include::{IncludeSet, Included, Sideloaded};
 use crate::api::message_enum;
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_INVITES, double_option};
 use crate::app::{self, CommunityId};
-use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use tracing::error;
-use utoipa::ToSchema;
+use diesel::result::DatabaseErrorKind;
+use serde::Deserialize;
+use utoipa::{IntoParams, ToSchema};
 
 fn invite_to_api(invite: &app::invite::Invite) -> message_enum::Invite {
     message_enum::Invite {
@@ -21,197 +22,197 @@ fn invite_to_api(invite: &app::invite::Invite) -> message_enum::Invite {
     }
 }
 
-// --- Create Invite ---
-
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct InviteCreateCommand {
-    pub community: CommunityId,
+pub struct InviteCreateRequest {
+    /// Alphanumeric, 1 to 16 characters. Omit to have the server generate a code.
     pub custom_code: Option<String>,
+    /// Omit for an invite that never expires.
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum InviteCreateCommandResponse {
-    Invite(message_enum::Invite),
-    CodeAlreadyTaken,
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(post, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteCreateCommandResponse)))]
+#[utoipa::path(
+    post,
+    path = "/communities/{community}/invites",
+    tag = TAG_INVITES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = message_enum::Invite, headers(("Location" = String, description = "URL of the new invite"))),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (bad custom code, not a member)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = CONFLICT, description = "`inviteCodeTaken`", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn create_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-    Json(command): Json<InviteCreateCommand>,
-) -> (StatusCode, Json<InviteCreateCommandResponse>) {
-    match app::invite::create_invite(
+    Path(community): Path<CommunityId>,
+    Json(request): Json<InviteCreateRequest>,
+) -> ApiResult<Created<message_enum::Invite>> {
+    let invite = app::invite::create_invite(
         &state,
         user.id,
-        command.community,
-        command.custom_code,
-        command.expires_at,
+        community,
+        request.custom_code,
+        request.expires_at,
     )
     .await
-    {
-        Ok(invite) => (
-            StatusCode::OK,
-            InviteCreateCommandResponse::Invite(invite_to_api(&invite)).into(),
-        ),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::BAD_REQUEST,
-            InviteCreateCommandResponse::NotAllowed {
-                reason: Some(reason),
-            }
-            .into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
-            diesel::result::DatabaseErrorKind::UniqueViolation,
+    .map_err(|e| match e {
+        app::Error::Diesel(diesel::result::Error::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
             _,
-        ))) => (
-            StatusCode::CONFLICT,
-            InviteCreateCommandResponse::CodeAlreadyTaken.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error creating invite");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                InviteCreateCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+        )) => ApiError::new(ProblemCode::InviteCodeTaken),
+        other => other.into(),
+    })?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/invites/{}", invite.code),
+        invite_to_api(&invite),
+    ))
 }
 
-// --- Read Community Invites ---
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CommunityInvitesReadCommand {
-    pub community: CommunityId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum CommunityInvitesReadCommandResponse {
-    Invites { data: Vec<message_enum::Invite> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = CommunityInvitesReadCommandResponse)))]
-pub async fn read_community_invites(
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/invites",
+    tag = TAG_INVITES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<message_enum::Invite>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_community_invites(
     State(state): State<GlobalServerContext>,
     _: SessionUser,
-    Json(command): Json<CommunityInvitesReadCommand>,
-) -> (StatusCode, Json<CommunityInvitesReadCommandResponse>) {
-    match app::invite::read_community_invites(&state, command.community).await {
-        Ok(invites) => (
-            StatusCode::OK,
-            CommunityInvitesReadCommandResponse::Invites {
-                data: invites.iter().map(invite_to_api).collect(),
-            }
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading community invites");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CommunityInvitesReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    Path(community): Path<CommunityId>,
+) -> ApiResult<Json<Vec<message_enum::Invite>>> {
+    let invites = app::invite::read_community_invites(&state, community).await?;
+    Ok(Json(invites.iter().map(invite_to_api).collect()))
 }
 
-// --- Update Invite ---
+/// Relationships an invite read can sideload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum InviteInclude {
+    /// The community the invite opens, as `included.communities`.
+    Community,
+}
+
+/// Body of an invite read; a named alias for the same reason as `api::community::CommunityRead`.
+pub type InviteRead = Sideloaded<message_enum::Invite>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct InviteReadQuery {
+    /// Related records to return alongside the invite, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<InviteInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<InviteInclude>,
+}
+
+/// Reads an invite by its code, so a client holding only a link can show which community it
+/// opens before joining. An expired invite is still returned, with its `expiresAt` in the past;
+/// a revoked or unknown code is `404`.
+#[utoipa::path(
+    get,
+    path = "/invites/{code}",
+    tag = TAG_INVITES,
+    params(("code" = String, Path), InviteReadQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = InviteRead),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_invite(
+    State(state): State<GlobalServerContext>,
+    _: SessionUser,
+    Path(code): Path<String>,
+    Query(query): Query<InviteReadQuery>,
+) -> ApiResult<Json<InviteRead>> {
+    let invite = app::invite::read_invite(&state, &code).await?;
+    let mut included = Included::default();
+    if query.include.contains(InviteInclude::Community) {
+        let community = app::community::read_community(&state, invite.community).await?;
+        included.communities = Some(vec![api::community::community_to_api(community)]);
+    }
+    Ok(Json(InviteRead::new(invite_to_api(&invite), included)))
+}
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct InviteUpdateCommand {
-    pub code: String,
+pub struct InviteUpdateRequest {
+    /// Omit to leave the expiry unchanged; send `null` to make the invite permanent.
+    #[serde(default, deserialize_with = "double_option")]
     pub expires_at: Option<Option<DateTime<Utc>>>,
 }
 
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum InviteUpdateCommandResponse {
-    Invite(message_enum::Invite),
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(patch, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteUpdateCommandResponse)))]
+#[utoipa::path(
+    patch,
+    path = "/invites/{code}",
+    tag = TAG_INVITES,
+    params(("code" = String, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = message_enum::Invite),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn update_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-    Json(command): Json<InviteUpdateCommand>,
-) -> (StatusCode, Json<InviteUpdateCommandResponse>) {
-    match app::invite::update_invite(&state, user.id, command.code, command.expires_at).await {
-        Ok(invite) => (
-            StatusCode::OK,
-            InviteUpdateCommandResponse::Invite(invite_to_api(&invite)).into(),
-        ),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::FORBIDDEN,
-            InviteUpdateCommandResponse::NotAllowed {
-                reason: Some(reason),
-            }
-            .into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            InviteUpdateCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error updating invite");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                InviteUpdateCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    Path(code): Path<String>,
+    Json(request): Json<InviteUpdateRequest>,
+) -> ApiResult<Json<message_enum::Invite>> {
+    let invite = app::invite::update_invite(&state, user.id, code, request.expires_at)
+        .await
+        .map_err(membership_required)?;
+    Ok(Json(invite_to_api(&invite)))
 }
 
-// --- Revoke Invite ---
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct InviteRevokeCommand {
-    pub code: String,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum InviteRevokeCommandResponse {
-    RevokeOk,
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(delete, path = "/invite", security(("loginKey" = [])), responses((status = OK, body = InviteRevokeCommandResponse)))]
+#[utoipa::path(
+    delete,
+    path = "/invites/{code}",
+    tag = TAG_INVITES,
+    params(("code" = String, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn revoke_invite(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-    Json(command): Json<InviteRevokeCommand>,
-) -> (StatusCode, Json<InviteRevokeCommandResponse>) {
-    match app::invite::revoke_invite(&state, user.id, command.code).await {
-        Ok(()) => (StatusCode::OK, InviteRevokeCommandResponse::RevokeOk.into()),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::FORBIDDEN,
-            InviteRevokeCommandResponse::NotAllowed {
-                reason: Some(reason),
-            }
-            .into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            InviteRevokeCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error revoking invite");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                InviteRevokeCommandResponse::Error { cause: None }.into(),
-            )
-        }
+    Path(code): Path<String>,
+) -> ApiResult<NoContent> {
+    app::invite::revoke_invite(&state, user.id, code)
+        .await
+        .map_err(membership_required)?;
+    Ok(NoContent)
+}
+
+/// The app layer reports "not a member of this community" as a validation failure; on the wire
+/// that is an authorization problem, so it is served as `403`.
+fn membership_required(e: app::Error) -> ApiError {
+    match e {
+        app::Error::Validation(reason) => ApiError::new(ProblemCode::Forbidden).with_detail(reason),
+        other => other.into(),
     }
 }

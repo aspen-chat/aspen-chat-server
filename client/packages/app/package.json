@@ -1,0 +1,46 @@
+{
+  "name": "@aspen/app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Aspen user interface: a React + React Aria web app that every shell (browser, Electron, Capacitor) renders.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:shell": "tsc --noEmit && vite build --base ./",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install --with-deps chromium firefox webkit"
+  },
+  "dependencies": {
+    "@aspen/protocol": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-router": "^1.170.39",
+    "emoji-picker-react": "^4.22.2",
+    "highlight.js": "^11.12.0",
+    "react": "^19.2.8",
+    "react-aria-components": "^1.21.1",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tlds": "^1.261.0",
+    "unist-util-visit": "^5.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/mdast": "^4.0.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^30.0.1",
+    "tailwindcss": "^4.3.3",
+    "tailwindcss-react-aria-components": "^2.2.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.6",
+    "vitest": "^5.0.0"
+  }
+}

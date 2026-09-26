@@ -4,8 +4,29 @@ _version: 1
 invalidAuthToken: "Invalid auth token."
 tryAgainLater: "Please try again later."
 
+# Problem Details titles (see server/src/api/error.rs)
+problemBadRequest: "The request could not be understood."
+problemValidation: "The request is not valid."
+problemUnauthorized: "You must be logged in to do that."
+problemForbidden: "You are not allowed to do that."
+problemNotFound: "The requested item does not exist."
+problemConflict: "The request conflicts with the current state."
+problemInvalidCredentials: "Incorrect username or password."
+problemInvalidToken: "The token is invalid or has expired."
+problemInviteCodeTaken: "That invite code is already in use."
+problemOldPasswordIncorrect: "The current password is incorrect."
+problemPasswordRequirementsNotMet: "The new password does not meet the requirements."
+passwordTooShort: "Passwords must be at least %{min} characters long."
+notYourAccount: "You can only modify your own account."
+
 # User
 usernameAlreadyTaken: "Username already in use, pick a different username."
+usernameBlankOrPadded: "Username must not be empty or start or end with whitespace."
+usernameTooLong: "Username must be at most %{max} characters long."
+displayNameLength: "A display name must be between 1 and %{max} characters."
+pronounsLength: "Pronouns must be between 1 and %{max} characters."
+bioLength: "A bio must be between 1 and %{max} characters."
+statusLength: "A status must be between 1 and %{max} characters."
 
 # Invite
 inviteCodeLength: "Invite code must be between 1 and 16 characters."
@@ -17,11 +38,29 @@ notCommunityMemberUpdateInvite: "You must be a member of this community to updat
 notCommunityMemberRevokeInvite: "You must be a member of this community to revoke invites."
 inviteCodeCommunityMismatch: "Invite code does not belong to the requested community."
 
+# Polls
+pollQuestionLength: "The question must be between 1 and %{max} characters."
+pollOptionCount: "A poll needs between %{min} and %{max} options."
+pollOptionLength: "Each option must be between 1 and %{max} characters."
+pollDurationRange: "The duration must be between %{min} and %{max} seconds."
+pollOptionOutOfRange: "The poll has no such option."
+problemPollClosed: "The poll has closed."
+
+# Voice
+voiceChannelOnly: "Only voice channels have calls."
+voiceNoServers: "No voice server is available right now."
+
 # React
 reactMustBeSingleEmoji: "React must be a single emoji."
 
+# Messages
+messageLimitOutOfRange: "limit must be between 1 and %{max}."
+messageWindowMultipleAnchors: "Use at most one of before, after, and around."
+
 # Event stream
 eventStreamError: "An error occurred while setting up the event stream."
+eventStreamIdentifyMalformed: "The first message must be a well-formed identify frame."
+eventStreamIdentifyTimeout: "No identify frame was received in time."
 
 # Media uploads
 attachmentUploadNotFound: "Upload was not found in storage. Please try uploading the file again."

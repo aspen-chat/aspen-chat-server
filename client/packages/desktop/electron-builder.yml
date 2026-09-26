@@ -1,0 +1,29 @@
+# Packaging for the desktop shell. Run `pnpm package` (all platforms the host can build) or
+# `pnpm package:dir` for an unpacked directory to inspect.
+appId: org.aspenchat.client
+productName: Aspen
+copyright: "GPL-3.0-or-later"
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+extraResources:
+  # The renderer: the @aspen/app production build, loaded from `resources/app/index.html`.
+  - from: ../app/dist
+    to: app
+asar: true
+npmRebuild: false
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Network
+mac:
+  target:
+    - dmg
+  category: public.app-category.social-networking
+win:
+  target:
+    - nsis

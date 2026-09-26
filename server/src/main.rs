@@ -87,18 +87,17 @@ fn main() {
         eprintln!("failed to load config from aspen.toml or environment. {e}");
         std::process::exit(2);
     }
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::FmtSubscriber::builder()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::builder()
-                    .with_default_directive(LevelFilter::INFO.into())
-                    .with_env_var("ASPEN_LOG")
-                    .from_env()
-                    .expect("invalid logging filter set in env var ASPEN_LOG"),
-            )
-            .finish(),
-    )
-    .unwrap();
+    // `init` also routes `log` records into tracing, which is how dependencies that log through
+    // the `log` crate (the Valkey client among them) show up under `ASPEN_LOG=...,fred=debug`.
+    tracing_subscriber::FmtSubscriber::builder()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .with_env_var("ASPEN_LOG")
+                .from_env()
+                .expect("invalid logging filter set in env var ASPEN_LOG"),
+        )
+        .init();
     panic::set_hook(Box::new(tracing_panic::panic_hook));
     let opt = Opt::parse();
     let runtime = runtime::Builder::new_multi_thread()

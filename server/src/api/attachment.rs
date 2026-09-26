@@ -1,36 +1,28 @@
 //! REST surface for the two-phase attachment upload flow.
 //!
-//! - `POST /attachment/upload-init` — caller sends `{fileName, mimeType}`,
-//!   server reserves an id and returns `{id, uploadUrl, expiresAt}`.
-//! - `POST /attachment/upload-confirm` — caller sends `{id}` after the
-//!   direct-to-S3 PUT, server HEADs the object and flips the row to
-//!   ready. Returns the final [`Attachment`] DTO with a public
-//!   `downloadUrl`.
-//! - `GET /attachment` — looks up an already-ready attachment by id and
-//!   returns its metadata + `downloadUrl`.
-//! - `DELETE /attachment` — drops the row and the object.
+//! - `POST /attachments` — caller sends `{fileName, mimeType}`, server reserves an id and
+//!   returns `{id, uploadUrl, expiresAt}`.
+//! - `POST /attachments/{id}/confirm` — caller calls this after the direct-to-S3 PUT; the
+//!   server HEADs the object and flips the row to ready. Returns the final [`Attachment`] with
+//!   a public `downloadUrl`.
+//! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment.
+//! - `DELETE /attachments/{id}` — drops the row and the object.
 //!
-//! Bytes do not flow through these handlers in either direction. Auth
-//! mirrors the previous CRUD shape: writes require `SessionUser`, the
-//! read does not.
+//! Bytes do not flow through these handlers in either direction.
 
-use crate::api::GlobalServerContext;
-use crate::api::login::SessionUser;
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::{Created, Json, NoContent, Path};
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_ATTACHMENTS};
 use crate::app::{self, AttachmentId};
-use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use tracing::error;
 use utoipa::ToSchema;
 
-/// Wire-level representation of an attachment.
-///
-/// `data` no longer rides on this DTO; clients fetch the bytes themselves
-/// from the anonymous-read endpoint behind `downloadUrl`.
+/// Wire-level representation of an attachment. Clients fetch the bytes themselves from the
+/// anonymous-read endpoint behind `downloadUrl`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
@@ -40,7 +32,10 @@ pub struct Attachment {
     pub download_url: String,
 }
 
-fn attachment_to_api(state: &GlobalServerContext, row: app::attachment::Attachment) -> Attachment {
+pub(crate) fn attachment_to_api(
+    state: &GlobalServerContext,
+    row: app::attachment::Attachment,
+) -> Attachment {
     let download_url = state.media_store.public_url(&row.storage_key);
     Attachment {
         id: row.id,
@@ -50,20 +45,15 @@ fn attachment_to_api(state: &GlobalServerContext, row: app::attachment::Attachme
     }
 }
 
-// --- Upload init ---
-
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AttachmentUploadInitCommand {
+pub struct AttachmentUploadInitRequest {
     pub file_name: String,
     pub mime_type: String,
 }
 
-/// Body of the `Upload` variant on [`AttachmentUploadInitCommandResponse`].
-///
-/// Pulled out into its own struct so its fields are camelCased on the wire;
-/// `#[serde(rename_all = ...)]` on an enum variant only renames the variant
-/// itself, not the fields of an inline struct payload.
+/// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, then
+/// confirm the upload.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUploadHandle {
@@ -72,182 +62,106 @@ pub struct AttachmentUploadHandle {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum AttachmentUploadInitCommandResponse {
-    Upload(AttachmentUploadHandle),
-    Error { cause: Option<Cow<'static, str>> },
-}
-
 #[utoipa::path(
     post,
-    path = "/attachment/upload-init",
-    security(("loginKey" = [])),
-    responses((status = OK, body = AttachmentUploadInitCommandResponse))
+    path = "/attachments",
+    tag = TAG_ATTACHMENTS,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = AttachmentUploadHandle, headers(("Location" = String, description = "URL of the attachment once confirmed"))),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn init_attachment_upload(
     State(state): State<GlobalServerContext>,
-    SessionUser { .. }: SessionUser,
-    Json(command): Json<AttachmentUploadInitCommand>,
-) -> (StatusCode, Json<AttachmentUploadInitCommandResponse>) {
-    match app::attachment::init_upload(&state, command.file_name, command.mime_type).await {
-        Ok(upload) => (
-            StatusCode::OK,
-            AttachmentUploadInitCommandResponse::Upload(AttachmentUploadHandle {
-                id: upload.id,
-                upload_url: upload.upload_url,
-                expires_at: upload.expires_at,
-            })
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error initiating attachment upload");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AttachmentUploadInitCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-// --- Upload confirm ---
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentUploadConfirmCommand {
-    pub id: AttachmentId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum AttachmentUploadConfirmCommandResponse {
-    Attachment(Attachment),
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
+    _: SessionUser,
+    Json(request): Json<AttachmentUploadInitRequest>,
+) -> ApiResult<Created<AttachmentUploadHandle>> {
+    let upload = app::attachment::init_upload(&state, request.file_name, request.mime_type).await?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/attachments/{}", upload.id.0),
+        AttachmentUploadHandle {
+            id: upload.id,
+            upload_url: upload.upload_url,
+            expires_at: upload.expires_at,
+        },
+    ))
 }
 
 #[utoipa::path(
     post,
-    path = "/attachment/upload-confirm",
-    security(("loginKey" = [])),
-    responses((status = OK, body = AttachmentUploadConfirmCommandResponse))
+    path = "/attachments/{attachment}/confirm",
+    tag = TAG_ATTACHMENTS,
+    params(("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Attachment),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (object not found in storage)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn confirm_attachment_upload(
     State(state): State<GlobalServerContext>,
-    SessionUser { .. }: SessionUser,
-    Json(command): Json<AttachmentUploadConfirmCommand>,
-) -> (StatusCode, Json<AttachmentUploadConfirmCommandResponse>) {
-    match app::attachment::confirm_upload(&state, command.id).await {
-        Ok(row) => (
-            StatusCode::OK,
-            AttachmentUploadConfirmCommandResponse::Attachment(attachment_to_api(&state, row))
-                .into(),
-        ),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::BAD_REQUEST,
-            AttachmentUploadConfirmCommandResponse::NotAllowed {
-                reason: Some(reason),
+    _: SessionUser,
+    Path(attachment): Path<AttachmentId>,
+) -> ApiResult<Json<Attachment>> {
+    let row = app::attachment::confirm_upload(&state, attachment)
+        .await
+        .map_err(|e| match e {
+            app::Error::Validation(reason) => {
+                ApiError::new(ProblemCode::Validation).with_detail(reason)
             }
-            .into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            AttachmentUploadConfirmCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error confirming attachment upload");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AttachmentUploadConfirmCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-// --- Read ---
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentReadCommand {
-    pub id: AttachmentId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum AttachmentReadCommandResponse {
-    Attachment(Attachment),
-    Error { cause: Option<Cow<'static, str>> },
+            other => other.into(),
+        })?;
+    Ok(Json(attachment_to_api(&state, row)))
 }
 
 #[utoipa::path(
     get,
-    path = "/attachment",
-    responses((status = OK, body = AttachmentReadCommandResponse))
+    path = "/attachments/{attachment}",
+    tag = TAG_ATTACHMENTS,
+    params(("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Attachment),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
-pub async fn read_attachment(
+pub async fn get_attachment(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<AttachmentReadCommand>,
-) -> (StatusCode, Json<AttachmentReadCommandResponse>) {
-    match app::attachment::read_attachment(&state, command.id).await {
-        Ok(row) => (
-            StatusCode::OK,
-            AttachmentReadCommandResponse::Attachment(attachment_to_api(&state, row)).into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            AttachmentReadCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading attachment");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AttachmentReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-// --- Delete ---
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentDeleteCommand {
-    pub id: AttachmentId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum AttachmentDeleteCommandResponse {
-    DeleteOk,
-    Error { cause: Option<Cow<'static, str>> },
+    _: SessionUser,
+    Path(attachment): Path<AttachmentId>,
+) -> ApiResult<Json<Attachment>> {
+    let row = app::attachment::read_attachment(&state, attachment).await?;
+    Ok(Json(attachment_to_api(&state, row)))
 }
 
 #[utoipa::path(
     delete,
-    path = "/attachment",
-    security(("loginKey" = [])),
-    responses((status = OK, body = AttachmentDeleteCommandResponse))
+    path = "/attachments/{attachment}",
+    tag = TAG_ATTACHMENTS,
+    params(("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
 pub async fn delete_attachment(
     State(state): State<GlobalServerContext>,
-    SessionUser { .. }: SessionUser,
-    Json(command): Json<AttachmentDeleteCommand>,
-) -> (StatusCode, Json<AttachmentDeleteCommandResponse>) {
-    match app::attachment::delete_attachment(&state, command.id).await {
-        Ok(()) => (
-            StatusCode::OK,
-            AttachmentDeleteCommandResponse::DeleteOk.into(),
-        ),
-        Err(app::Error::Diesel(diesel::result::Error::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            AttachmentDeleteCommandResponse::Error { cause: None }.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error deleting attachment");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                AttachmentDeleteCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    _: SessionUser,
+    Path(attachment): Path<AttachmentId>,
+) -> ApiResult<NoContent> {
+    app::attachment::delete_attachment(&state, attachment).await?;
+    Ok(NoContent)
 }

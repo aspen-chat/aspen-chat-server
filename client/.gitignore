@@ -1,8 +1,16 @@
-.venv/
-.ruff_cache/
-client.log
-__pycache__/
-*.pyc
-src/aspen_client/generated/
-aspen_chat_client.egg-info/
-src/aspen_chat_client.egg-info/
+node_modules/
+dist/
+dist-electron/
+out/
+release/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.env
+.env.*.local
+# Output of `pnpm codegen`; regenerated from ../openapi.yaml and ../event_schema.json.
+packages/protocol/src/generated/
+# Native projects are created on demand with `npx cap add <platform>`.
+packages/mobile/ios/
+packages/mobile/android/

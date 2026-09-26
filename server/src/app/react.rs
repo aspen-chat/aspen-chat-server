@@ -14,6 +14,7 @@ pub struct React {
     pub emoji: String,
     pub author: UserId,
     pub message: MessageId,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 pub fn validate_emoji(s: &str) -> Result<(), app::Error> {
@@ -35,6 +36,7 @@ pub async fn create_react(
         emoji: emoji.clone(),
         author,
         message: message_id,
+        timestamp: chrono::Utc::now(),
     };
     diesel::insert_into(react::table)
         .values(&react)

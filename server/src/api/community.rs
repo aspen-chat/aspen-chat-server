@@ -1,315 +1,401 @@
-use crate::api::login::SessionUser;
-use crate::api::message_enum::command::{
-    CommunityCreateCommand, CommunityCreateCommandResponse, CommunityDeleteCommand,
-    CommunityDeleteCommandResponse, CommunityReadCommand, CommunityReadCommandResponse,
-    CommunityUpdateCommand, CommunityUpdateCommandResponse, UserCommunityCreateCommand,
-    UserCommunityCreateCommandResponse, UserCommunityDeleteCommand,
-    UserCommunityDeleteCommandResponse,
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiResult, Problem};
+use crate::api::extract::{Created, Json, NoContent, Path, Query};
+use crate::api::include::{IncludeSet, Included, Sideloaded, SideloadedList};
+use crate::api::message_enum::request::{
+    CommunityCreateRequest, CommunityUpdateRequest, UserCommunityCreateRequest,
 };
-use crate::api::message_enum::{Category, Channel, User};
-use crate::api::{GlobalServerContext, message_enum};
-use crate::app::CommunityId;
+use crate::api::message_enum::{Channel, User, UserCommunity};
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_COMMUNITIES, message_enum};
+use crate::app::{CommunityId, UserId};
 use crate::{api, app};
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use rust_i18n::t;
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use tracing::error;
-use utoipa::ToSchema;
+use diesel::result::DatabaseErrorKind;
+use serde::Deserialize;
+use std::collections::HashSet;
+use utoipa::{IntoParams, ToSchema};
 
-#[utoipa::path(post, path = "/community", security(("loginKey" = [])), responses((status = OK, body=CommunityCreateCommandResponse)))]
+pub fn community_to_api(c: app::community::Community) -> message_enum::Community {
+    message_enum::Community {
+        id: c.id,
+        name: c.name,
+        icon: c.icon.map(|i| *i.id()),
+    }
+}
+
+/// Relationships a community read can sideload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CommunityInclude {
+    /// Every channel of the community, including those filed under a category, as
+    /// `included.channels`.
+    Channels,
+    /// The community's categories, as `included.categories`.
+    Categories,
+    /// The most recently seen members, as `included.users` plus the `included.userCommunities`
+    /// membership records that link them to each community. Capped at 100 per community, like
+    /// `GET /communities/{community}/members`.
+    Members,
+    /// The calls in progress on the communities' voice channels, as `included.voiceSessions`
+    /// and `included.voiceParticipants`.
+    Voice,
+}
+
+/// Body of a community read. Named aliases rather than `Sideloaded<Community>` at the handler
+/// because `#[utoipa::path]` treats a generic type in `body = ...` as one it must compose
+/// itself, bypassing the hand-written schema of the envelope.
+pub type CommunityRead = Sideloaded<message_enum::Community>;
+/// Body of a community list read; see [`CommunityRead`].
+pub type CommunityList = SideloadedList<message_enum::Community>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct CommunityReadQuery {
+    /// Related records to return alongside the community, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<CommunityInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<CommunityInclude>,
+}
+
+/// Loads the relationships named in `include` for every community in `communities`. Each
+/// requested relationship is one batched read regardless of how many communities there are,
+/// and the reads run concurrently.
+pub async fn sideload_communities(
+    state: &GlobalServerContext,
+    caller: UserId,
+    communities: &[CommunityId],
+    include: &IncludeSet<CommunityInclude>,
+) -> ApiResult<Included> {
+    let (channels, categories, members, voice) = tokio::try_join!(
+        async {
+            if include.contains(CommunityInclude::Channels) {
+                app::community::read_communities_channels(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Categories) {
+                app::category::read_communities_categories(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Members) {
+                app::community::read_community_members(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Voice) {
+                app::voice::read_communities_voice(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
+    let mut included = Included {
+        channels: channels.map(|channels| {
+            channels
+                .into_iter()
+                .map(api::channel::channel_to_api)
+                .collect()
+        }),
+        categories: categories.map(|categories| {
+            categories
+                .into_iter()
+                .map(api::category::category_to_api)
+                .collect()
+        }),
+        ..Included::default()
+    };
+    if let Some((sessions, participants)) = voice {
+        included.voice_sessions = Some(sessions);
+        included.voice_participants = Some(participants);
+    }
+    if let Some(members) = members {
+        // A user who belongs to several of the communities is one record in `users` and one
+        // membership per community in `userCommunities`.
+        let mut seen = HashSet::<UserId>::with_capacity(members.len());
+        let mut users = Vec::with_capacity(members.len());
+        let mut memberships = Vec::with_capacity(members.len());
+        for membership in members {
+            let user_id = membership.user.user_pg.id;
+            memberships.push(UserCommunity {
+                community: membership.community,
+                user: user_id,
+                sort_index: membership.sort_index,
+            });
+            if seen.insert(user_id) {
+                users.push(api::user::user_to_api(membership.user));
+            }
+        }
+        included.users = Some(users);
+        included.user_communities = Some(memberships);
+    }
+    Ok(included)
+}
+
+/// Creates a community. The caller becomes its first member and a default text and voice channel
+/// are created.
+#[utoipa::path(
+    post,
+    path = "/communities",
+    tag = TAG_COMMUNITIES,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = message_enum::Community, headers(("Location" = String, description = "URL of the new community"))),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn create_community(
     State(state): State<GlobalServerContext>,
-    user: SessionUser,
-    Json(command): Json<CommunityCreateCommand>,
-) -> (StatusCode, Json<CommunityCreateCommandResponse>) {
-    let new_community = match app::community::create_community(state, user.user.id, &command).await
-    {
-        Ok(value) => value,
-        Err(e) => {
-            return {
-                error!("Error creating community {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    CommunityCreateCommandResponse::Error {
-                        cause: Some(t!("tryAgainLater")),
-                    }
-                    .into(),
-                )
-            };
-        }
-    };
-    (
-        StatusCode::OK,
-        CommunityCreateCommandResponse::CreateOk(api::message_enum::Community {
-            id: new_community.id,
-            name: new_community.name,
-            icon: new_community.icon.map(|i| *i.id()),
-        })
-        .into(),
+    SessionUser { user, .. }: SessionUser,
+    Json(request): Json<CommunityCreateRequest>,
+) -> ApiResult<Created<message_enum::Community>> {
+    let c = app::community::create_community(state, user.id, &request).await?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/communities/{}", c.id.0),
+        community_to_api(c),
+    ))
+}
+
+/// Reads a community. `include` sideloads its channels, categories, and members so a client can
+/// render the whole community from one response.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path), CommunityReadQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = CommunityRead),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
-}
-
-#[utoipa::path(get, path = "/community", responses((status = OK, body=CommunityReadCommandResponse)))]
-pub async fn read_community(
+)]
+pub async fn get_community(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityReadCommand>,
-) -> (StatusCode, Json<CommunityReadCommandResponse>) {
-    match app::community::read_community(&state, command.id).await {
-        Ok(community) => (
-            StatusCode::OK,
-            CommunityReadCommandResponse::Community(message_enum::Community {
-                id: community.id,
-                name: community.name,
-                icon: community.icon.map(|i| *i.id()),
-            })
-            .into(),
-        ),
-        Err(e) => match e {
-            app::Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                CommunityReadCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error reading community");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    CommunityReadCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    SessionUser { user, .. }: SessionUser,
+    Path(community): Path<CommunityId>,
+    Query(query): Query<CommunityReadQuery>,
+) -> ApiResult<Json<CommunityRead>> {
+    let c = app::community::read_community(&state, community).await?;
+    let included = sideload_communities(&state, user.id, &[c.id], &query.include).await?;
+    Ok(Json(Sideloaded::new(community_to_api(c), included)))
 }
 
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CommunityUsersReadCommand {
-    community: CommunityId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum CommunityUsersReadCommandResponse {
-    Users { data: Vec<User> },
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/community/users", responses((status = OK, body=CommunityUsersReadCommandResponse)))]
-pub async fn read_community_users(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityUsersReadCommand>,
-) -> (StatusCode, Json<CommunityUsersReadCommandResponse>) {
-    match app::community::read_community_users(&state, command.community).await {
-        Ok(users) => (
-            StatusCode::OK,
-            CommunityUsersReadCommandResponse::Users {
-                data: users
-                    .into_iter()
-                    .map(|u| User {
-                        id: u.user_pg.id,
-                        name: u.user_pg.name,
-                        icon: u.user_pg.icon.map(|i| *i.id()),
-                        online_status: u.online_status,
-                    })
-                    .collect(),
-            }
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading community users");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CommunityUsersReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CommunityCategoriesReadCommand {
-    community: CommunityId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum CommunityCategoriesReadCommandResponse {
-    Categories { data: Vec<Category> },
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/community/categories", responses((status = OK, body=CommunityCategoriesReadCommandResponse)))]
-pub async fn read_community_categories(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityCategoriesReadCommand>,
-) -> (StatusCode, Json<CommunityCategoriesReadCommandResponse>) {
-    match app::category::read_community_categories(&state, command.community).await {
-        Ok(categories) => (
-            StatusCode::OK,
-            CommunityCategoriesReadCommandResponse::Categories {
-                data: categories
-                    .into_iter()
-                    .map(api::category::category_to_api)
-                    .collect(),
-            }
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading community channels");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CommunityCategoriesReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CommunityChannelsReadCommand {
-    community: CommunityId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum CommunityChannelsReadCommandResponse {
-    Channels { data: Vec<Channel> },
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/community/channels", responses((status = OK, body=CommunityChannelsReadCommandResponse)))]
-pub async fn read_community_channels(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityChannelsReadCommand>,
-) -> (StatusCode, Json<CommunityChannelsReadCommandResponse>) {
-    match app::community::read_community_channels(&state, command.community).await {
-        Ok(channels) => (
-            StatusCode::OK,
-            CommunityChannelsReadCommandResponse::Channels {
-                data: channels
-                    .into_iter()
-                    .map(api::channel::channel_to_api)
-                    .collect(),
-            }
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error reading community channels");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CommunityChannelsReadCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
-
-#[utoipa::path(patch, path = "/community", responses((status = OK, body=CommunityUpdateCommandResponse)))]
+#[utoipa::path(
+    patch,
+    path = "/communities/{community}",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = message_enum::Community),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn update_community(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityUpdateCommand>,
-) -> (StatusCode, Json<CommunityUpdateCommandResponse>) {
-    match app::community::update_community(&state, command).await {
-        Ok(_) => (
-            StatusCode::OK,
-            CommunityUpdateCommandResponse::UpdateOk.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error updating community");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                CommunityUpdateCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    _: SessionUser,
+    Path(community): Path<CommunityId>,
+    Json(request): Json<CommunityUpdateRequest>,
+) -> ApiResult<Json<message_enum::Community>> {
+    let c = app::community::update_community(&state, community, request).await?;
+    Ok(Json(community_to_api(c)))
 }
 
-#[utoipa::path(delete, path = "/community", responses((status = OK, body=CommunityDeleteCommandResponse)))]
+#[utoipa::path(
+    delete,
+    path = "/communities/{community}",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn delete_community(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<CommunityDeleteCommand>,
-) -> (StatusCode, Json<CommunityDeleteCommandResponse>) {
-    match app::community::delete_community(&state, command.id).await {
-        Ok(()) => (
-            StatusCode::OK,
-            CommunityDeleteCommandResponse::DeleteOk.into(),
-        ),
-        Err(e) => match e {
-            app::Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                CommunityDeleteCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error deleting community");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    CommunityDeleteCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(community): Path<CommunityId>,
+) -> ApiResult<NoContent> {
+    app::community::delete_community(&state, community).await?;
+    Ok(NoContent)
 }
 
-#[utoipa::path(post, path = "/community/join", security(("loginKey" = [])), responses((status = OK, body=UserCommunityCreateCommandResponse)))]
+/// Members of the community, most recently seen first. Capped at 100 entries.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/members",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<User>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_community_members(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(community): Path<CommunityId>,
+) -> ApiResult<Json<Vec<User>>> {
+    let users = app::community::read_community_users(&state, user.id, community).await?;
+    Ok(Json(
+        users.into_iter().map(api::user::user_to_api).collect(),
+    ))
+}
+
+/// Top-level channels of the community (those not filed under a category), in sort order.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/channels",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<Channel>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_community_channels(
+    State(state): State<GlobalServerContext>,
+    _: SessionUser,
+    Path(community): Path<CommunityId>,
+) -> ApiResult<Json<Vec<Channel>>> {
+    let channels = app::community::read_community_channels(&state, community).await?;
+    Ok(Json(
+        channels
+            .into_iter()
+            .map(api::channel::channel_to_api)
+            .collect(),
+    ))
+}
+
+/// Joins the calling user to the community using an invite code. Joining a community the user
+/// already belongs to succeeds with `200`.
+#[utoipa::path(
+    put,
+    path = "/communities/{community}/members/@me",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "Joined", body = UserCommunity),
+        (status = OK, description = "Already a member", body = UserCommunity),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (invite invalid, expired, or for another community)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn join_community(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-    Json(command): Json<UserCommunityCreateCommand>,
-) -> (StatusCode, Json<UserCommunityCreateCommandResponse>) {
+    Path(community): Path<CommunityId>,
+    Json(request): Json<UserCommunityCreateRequest>,
+) -> ApiResult<(StatusCode, Json<UserCommunity>)> {
     match app::community::join_community(
         &state,
         user.id,
-        command.community,
-        app::community::Invitation::Code(command.invite_code),
+        community,
+        app::community::Invitation::Code(request.invite_code),
     )
     .await
     {
-        Ok(_) => (
-            StatusCode::OK,
-            UserCommunityCreateCommandResponse::CreateOk(message_enum::UserCommunity {
-                user: user.id,
-                community: command.community,
-            })
-            .into(),
-        ),
-        Err(app::Error::Validation(reason)) => (
-            StatusCode::BAD_REQUEST,
-            UserCommunityCreateCommandResponse::Error {
-                cause: Some(reason),
-            }
-            .into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error joining community");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                UserCommunityCreateCommandResponse::Error { cause: None }.into(),
-            )
+        Ok(membership) => Ok((StatusCode::CREATED, Json(membership))),
+        Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
+            _,
+        ))) => {
+            let membership = app::community::read_membership(&state, user.id, community).await?;
+            Ok((StatusCode::OK, Json(membership)))
         }
+        Err(e) => Err(e.into()),
     }
 }
 
-#[utoipa::path(delete, path = "/community/leave", security(("loginKey" = [])), responses((status = OK, body=UserCommunityDeleteCommandResponse)))]
+/// Moves the community within the calling user's own list. Other members' lists are unaffected.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MembershipUpdateRequest {
+    /// The community's new position in the caller's list; lower comes first.
+    pub sort_index: i32,
+}
+
+#[utoipa::path(
+    patch,
+    path = "/communities/{community}/members/@me",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = UserCommunity),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "Not a member", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn update_membership(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(community): Path<CommunityId>,
+    Json(request): Json<MembershipUpdateRequest>,
+) -> ApiResult<Json<UserCommunity>> {
+    let membership =
+        app::community::reorder_membership(&state, user.id, community, request.sort_index).await?;
+    Ok(Json(membership))
+}
+
+/// Removes the calling user from the community. Leaving a community the user is not a member of
+/// still yields `204`.
+#[utoipa::path(
+    delete,
+    path = "/communities/{community}/members/@me",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn leave_community(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-    Json(command): Json<UserCommunityDeleteCommand>,
-) -> (StatusCode, Json<UserCommunityDeleteCommandResponse>) {
-    match app::community::leave_community(&state, user.id, command.community).await {
-        Ok(_) => (
-            StatusCode::OK,
-            UserCommunityDeleteCommandResponse::DeleteOk.into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "error leaving community");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                UserCommunityDeleteCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
+    Path(community): Path<CommunityId>,
+) -> ApiResult<NoContent> {
+    app::community::leave_community(&state, user.id, community).await?;
+    Ok(NoContent)
 }

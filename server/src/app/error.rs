@@ -18,12 +18,18 @@ pub enum Error {
     NatsCreateStream(#[from] async_nats::jetstream::context::CreateStreamError),
     #[error("error while getting NATS stream {0}")]
     NatsGetStream(#[from] async_nats::jetstream::context::GetStreamError),
+    #[error("error while querying NATS stream state {0}")]
+    NatsRequest(#[from] async_nats::jetstream::context::RequestError),
     #[error("error while creating NATS stream consumer {0}")]
     NatsConsumer(#[from] async_nats::jetstream::stream::ConsumerError),
     #[error("error while reading from NATS stream consumer {0}")]
     NatsStream(#[from] async_nats::jetstream::consumer::StreamError),
     #[error("error while publishing to NATS event stream {0}")]
     NatsPublish(#[from] async_nats::jetstream::context::PublishError),
+    #[error("error while subscribing to a NATS subject {0}")]
+    NatsSubscribe(String),
+    #[error("could not send a voice command: {0}")]
+    VoiceCommand(String),
     #[error("error serializing as YAML {0}")]
     SerdeNorway(#[from] serde_norway::Error),
     #[error("error serializing as JSON {0}")]
@@ -36,6 +42,10 @@ pub enum Error {
     DeadpoolBuild(#[from] deadpool::BuildError),
     #[error("validation error: {0}")]
     Validation(Cow<'static, str>),
+    #[error("the poll is closed")]
+    PollClosed,
+    #[error("password does not meet requirement {0:?}")]
+    PasswordRequirement(crate::api::error::PasswordRequirement),
     #[error("error putting object to media store {0}")]
     S3PutObject(
         #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::put_object::PutObjectError>>,

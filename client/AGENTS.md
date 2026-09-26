@@ -1,147 +1,214 @@
 # Aspen client — agent instructions
 
-This directory contains the PySide6 desktop client. The rules below are load-bearing; if you're tempted to change any of them, stop and get explicit human approval first.
+This directory is a pnpm workspace containing the cross-platform Aspen client. The root
+`AGENTS.md` applies here in full (comments describe the current code, seek clarification, do not
+commit to `main`). The rules below are specific to the client.
 
-## Non-negotiable: every `AspenApiClient` call is awaited from a `TaskSpawner`-spawned coroutine
+## Layout and dependency direction
 
-Qt's event loop is single-threaded. Anything that blocks it — an HTTP round-trip, a DNS lookup, a slow TLS handshake — freezes every widget in the window: keystrokes pile up behind the freeze, scroll events are dropped, repaints stall, and users perceive the client as skipping characters or "eating" clicks. We had exactly this bug in `_send_clicked` because it was calling `self._api.send_message(...)` synchronously on the GUI thread. Do not reintroduce it anywhere else.
-
-`AspenApiClient` is built on `httpx.AsyncClient`; every method (`login`, `read_community_channels`, `send_message`, `read_icon`, `download_media_bytes`, …) is `async def`. The asyncio loop runs on top of the Qt event loop via `qasync` (started in `main.py`; `qasync.QEventLoop` is what httpx/anyio actually run network I/O against — `PySide6.QtAsyncio` is a stub that doesn't implement `create_connection`/`getaddrinfo` and must not be reintroduced). Coroutines and Qt slots both execute on the GUI thread, and an `await` point on the API client yields control back to the event loop while the network round-trip is in flight — the same way the previous worker-thread hand-off did, just without the thread.
-
-GUI slots stay synchronous (Qt requires it). Anything that needs to `await` is dispatched through `self._tasks.run(coro, on_success=..., on_failure=...)`. The helper schedules the coroutine and routes the awaited result to the success/failure callback on the GUI thread; the per-call `try`/`except`/dispatch boilerplate that used to live in a hand-written `async def _do_xxx` helper now lives once, inside `TaskSpawner.run`. The canonical shape is:
-
-```python
-def _community_changed(self) -> None:
-    ...
-    preferred_channel_id = self._current_channel_id
-    self._tasks.run(
-        self._api.read_community_channels(community_id),
-        on_success=lambda channels: self._on_community_channels_loaded(
-            community_id, channels, preferred_channel_id
-        ),
-        on_failure=lambda exc: self._status_label.setText(f"Failed to load channels: {exc}"),
-    )
+```
+packages/protocol   generated types + HTTP/session client + event stream   (no UI, no React)
+packages/app        React + React Aria UI                                  (depends on protocol)
+packages/desktop    Electron main/preload                                  (loads app's build; imports nothing from app)
+packages/mobile     Capacitor config                                       (wraps app's build)
 ```
 
-When a coroutine needs more setup than a single API call (paged-read selection of `before` / `after` / `around`, e.g. `MessagePane._dispatch_message_fetch`), build the coroutine first and then hand it to `self._tasks.run` — the helper just needs *a* coroutine, not specifically a method on `AspenApiClient`. The lower-level `self._tasks.spawn(coro)` is still available for fire-and-forget background loops with their own internal exception handling (the WebSocket reader in `EventStreamClient._run` is the only current example).
+`protocol` must stay free of React and of any platform API so it can be unit-tested in Node and
+reused by any shell. `app` must stay free of Node and Electron APIs: it is a web page, and in
+Electron it runs sandboxed with `contextIsolation`. Anything the page needs from the host goes
+through the preload bridge (`window.aspenDesktop`), whose shape is declared in
+`packages/app/src/vite-env.d.ts`.
 
-Rules that follow from this:
+## The server contract is generated, never hand-written
 
-- **Never** call `self._api.<anything>` from a synchronous GUI slot, a paint path, a row insert, a scroll callback, `eventFilter`, a slot connected to `clicked`, or any other non-async code. Every API method is a coroutine; calling one from sync code without `await` returns an un-awaited coroutine and emits a runtime warning rather than performing the request. The only sanctioned exception is `await self._api.aclose()` inside `_async_shutdown`, which is part of the local teardown sequence.
-- Every new feature that needs to talk to the server must dispatch through `self._tasks.run(...)` (or, for fire-and-forget loops, `self._tasks.spawn(...)`). If you catch yourself "just this once" calling a coroutine via `asyncio.run` or `loop.run_until_complete` from inside a slot because the call "is usually fast", stop — both of those nest event loops, and `usually` is not a guarantee.
-- Render hot-paths (row inserts, avatar lookups, profile name rendering) must never `await` synchronously either. The established pattern is: render a fallback synchronously inside the slot, kick off the fetch via the relevant cache (`self._icons.user_avatar_pixmap` or `self._users.request_profiles`), and patch the affected widgets in the cache's "ready" callback once the bytes land. `IconCache` (`src/aspen_client/icons.py`) and `UserDirectory` (`src/aspen_client/user_directory.py`) own this state for the icon and profile/presence sides respectively; both expose the same shape (synchronous getter for the render hot-path + async background fetch + ready-callback) and `ChatWindow` is the consumer of both.
-- Code after an `await` runs on the GUI thread (that is the whole point of running asyncio on top of Qt's event loop), so widget and `ClientState` mutations inside the `on_success` / `on_failure` callback (or any other coroutine scheduled through `TaskSpawner`) are safe. There is no longer a "worker thread" you have to keep widget code out of — including the WebSocket reader, which is now an asyncio coroutine running on the same loop.
-- When a fetch's result depends on UI state that can change in the meantime (e.g. "load channels for the currently selected community"), capture the relevant id in the closure of the `on_success` lambda and have the handler bail if it no longer matches the current selection. Otherwise a slow response will clobber the newer selection. (See `_on_community_channels_loaded` and `_on_message_page_loaded` for the existing equality-check guards.)
-- Prefer dedupe sets over letting the same fetch queue up repeatedly. A scrollbar dwelling at an edge or a row being re-rendered should not generate hundreds of duplicate requests. The dedupe sets live with the cache that owns the fetch: `UserDirectory._pending_profile_fetches` for user profiles, `IconCache._pending_user_icon_fetches` / `IconCache._pending_community_icon_fetches` for avatars, `MessagePane._pending_fetches` for paged reads. Releasing the dedupe slot on the error path is the `on_failure` lambda's job (see `UserDirectory.request_profiles` for the reference shape).
+`packages/protocol/src/generated/` is produced by `pnpm codegen` from `../openapi.yaml` and
+`../event_schema.json`, which the server produces with `cargo run -- --gen-openapi-schema`. Do not
+edit generated files, do not declare server types by hand, and do not build a request URL as a
+string. Use the typed openapi-fetch client (`client.api.GET("/api/v1/channels/{channel}", …)`)
+so a server-side change surfaces as a compile error here.
 
-If you need a new concurrency primitive for the client, extend `TaskSpawner` rather than introducing a second scheduler. DRY matters here precisely because a single, well-understood spawner is the only thing standing between the user and a frozen UI — and between a clean shutdown and orphaned coroutines outliving the window. (`AsyncApiCaller` from earlier revisions of this file no longer exists; `TaskSpawner` is its asyncio-native successor.)
+When the server API changes, run `pnpm codegen:regen` and fix whatever stops compiling.
 
-## Non-negotiable: the event-stream reconnect contract
+## Talking to the server
 
-`EventStreamClient` (`src/aspen_client/event_client.py`) is the WebSocket reader for live server events. It runs as an `asyncio` coroutine on the qasync loop (started via `EventStreamClient.start(self._tasks)` from `_on_login_succeeded`); reconnects are managed by a `tenacity.AsyncRetrying` schedule. The UI integrates via four Qt signals — `event_received(dict)`, `connection_lost(str)`, `connected()`, and `state_resync_required()` — and a single state-wipe helper, `ChatWindow._reset_client_state()`. The whole design is anchored to one server-side fact: the NATS JetStream consumer in `server/src/api/event_stream.rs` is created with `DeliverPolicy::ByStartTime { start_time: now - MAX_EVENT_AGE }` where `MAX_EVENT_AGE = 60s`. So the server replays the last 60 seconds of events to any reconnecting client, no client-supplied cursor, no resume token.
+- Every request goes through `AspenClient` (`packages/protocol/src/http.ts`). It attaches the
+  bearer token, refreshes the session token before it expires and on a `401`, and replays the
+  request once. Do not call `fetch` directly for API traffic.
+- Errors are RFC 9457 Problems. Branch on `problem.code`, never on `title` or `detail`, which are
+  localized prose for display. `unwrap()` converts a failed openapi-fetch result into an
+  `ApiProblemError` for callers that prefer exceptions.
+- The event stream (`packages/protocol/src/events.ts`) authenticates with an `identify` first
+  frame, tracks the sequence of the last event it delivered, and asks the server to resume from
+  it on reconnect. When it reports `onResyncRequired`, the server could not replay the gap:
+  throw away cached state and re-bootstrap from REST before applying further events. Supply
+  `authenticate` from `AspenClient.freshSessionToken` so a rejected token is refreshed rather
+  than retried.
+- Reads that accept `include` (community reads, the user's community list, message reads) return
+  `{ data, included }` whether or not you asked for anything, and `included` holds the same
+  record types the event stream carries, keyed by type (`channels`, `users`, ...). Pass
+  `query: { include: ["channels", "members"] }`; the client serializes arrays comma separated
+  because that is how the OpenAPI document declares them. Prefer one read with `include` over a
+  fan-out of per-community or per-message requests.
+- Server state lives in `RecordStore` (`packages/protocol/src/store.ts`), a normalized cache
+  keyed by record type and id, kept current by `AspenSync` (`sync.ts`): REST bootstrap first,
+  then the event stream, whose replay window covers the gap. Components read the store through
+  the hooks in `src/api/hooks.ts`, each subscribed to one store topic; never copy server records
+  into component state or fetch them with `client.api` directly from a component. New reads and
+  writes go in `AspenSync`, and new record types go in the store with their event handling.
+- A write's REST response never overwrites a record the stream already holds. The server
+  publishes events before it answers, so an event that arrives while the request is in flight
+  is newer than the response; the response only fills in a record the stream has not delivered
+  yet. Updates to existing records are left to their events entirely.
+- Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages/Markdown.tsx`
+  with `react-markdown` (no raw HTML, unsafe schemes dropped); element styles are the
+  `message-body` rules in `styles.css`. Fenced code is highlighted by highlight.js
+  (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
+  block: its "common" grammars come with that chunk and every other grammar it ships is fetched
+  on first use. Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at
+  the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain. Spoilers are
+  `||text||` (Discord) or `>!text!<` (Reddit), wrapped by `remarkSpoilers.ts` and rendered by
+  `Spoiler.tsx` as a block the reader activates to reveal; markup inside them is kept. On top of
+  GFM's own autolinks, bare domains are linked by
+  the tokenizer in `src/features/messages/linkify.ts`: explicit
+  `http(s)` URLs, and bare domains whose TLD is on IANA's list (the `tlds` package). A handful
+  of TLDs that double as source-file extensions only link with a port, a path, or `www.`; the
+  set is a constant in that file. The server's preview extractor
+  (`server/src/app/link_preview.rs`, list in `tlds.txt`) applies the same rule, so what renders
+  as a link is what gets a preview; change both together.
+- Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (reserve,
+  `PUT` the bytes straight to storage with `uploadFetch`, confirm) and are named by id in
+  `sendMessage`. A message event carries only ids, so `useAttachment` fetches records on
+  demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
+  links whose path has an image extension, and links the server found to be images, which
+  arrive as previews with a picture and no text. `MessageMedia` there gathers all three into
+  one strip and shows at most `INLINE_IMAGE_LIMIT` (three) inline; beyond that a `+N` tile,
+  like any inline picture, opens `ImageGallery.tsx`, a modal that pages through the whole set.
+- Video links get a card with a play control (`src/features/messages/VideoCard.tsx`). The
+  server only sends a player for providers in its `VIDEO_PROVIDERS` table
+  (`server/src/app/link_preview.rs`), and `src/features/messages/video.ts` keeps the matching
+  list of player hosts the client will frame; extend both together. Twitch's player needs the
+  embedding hostname as `parent`, which `playerSrc` adds. The player iframe is sandboxed and
+  only created after the reader presses play.
+- Polls (`src/features/messages/PollCard.tsx`, `CreatePollDialog.tsx`, `PollClosedNotice.tsx`)
+  are records of their own: a message of kind `poll` names one in its `poll` field and carries
+  no text, and a message of kind `pollClosed` is the announcement the server posts when the
+  deadline passes. The tally lives in the poll record's `results` and is republished as an
+  update event on every vote, so a vote only records the caller's own choice locally
+  (`store.setMyVote`) and leaves the numbers to the stream. Message reads sideload `polls` with
+  the caller's `pollVotes`, which is the only way to learn one's own vote on an anonymous poll;
+  `usePoll` fetches a poll the window did not bring. Each option is `{ label, emoji? }`; the
+  emoji is chosen in the dialog from the same lazily loaded picker reactions use, and the server
+  validates it as a single emoji. The outcome text of the announcement is
+  composed on the client from the final tally (`src/features/messages/poll.ts`), so it is
+  localized like everything else.
+- Reordering is drag and drop from React Aria (`useDragAndDrop` on a `GridList` for the
+  community rail and one per channel group, each row carrying a `Button slot="drag"` handle
+  that keyboard and screen reader users drag with), with `src/features/layout/reorder.ts`
+  turning a drop into the new id order. `AspenSync.reorderCommunities` and `reorderChannels`
+  renumber positions, patch only the records whose index changed, and arrange the cache at
+  once so the events that follow are no-ops. Community order is per user: it lives on the
+  caller's membership (`UserCommunity.sortIndex`), which every community read sideloads.
+  A channel dragged into another group, or onto an empty category's drop zone, moves there:
+  `arrangeChannels` sets its `parentCategory` along with its position. Rows carry a private
+  drag type so channel groups accept only channels and the rail accepts only communities.
+  Categories keep their own order for now.
+- Icons (user avatars and community icons) are uploaded through `AspenSync.uploadIcon`, the
+  server's two-phase flow, and then named by id on the user or community. `IconPicker.tsx` in
+  `src/features/media` runs the whole thing: file chooser, the `CropDialog` where the reader
+  places a circle that never leaves the picture (geometry in `crop.ts`), a square PNG crop of
+  that circle at most `ICON_MAX_SIZE` wide, upload, and the id. `Avatar` takes an `iconId` and
+  shows the picture once `useIcon` has the record, initials until then.
+- Profiles are fields on the user record (`displayName`, `pronouns`, `bio`, `status` as
+  `{ text, emoji? }`), edited by `AspenSync.updateProfile` as a merge patch built by
+  `src/features/users/profile.ts`, which also decides what to call a user (`displayNameOf`).
+  Show that name wherever a user is named, never `name` directly; `ProfileCard.tsx` is the card
+  any user control opens, and `EditProfileDialog.tsx` the signed-in user's editor.
+- Voice lives in `packages/protocol/src/voice.ts`. `AspenSync.voice` is a `VoiceCall`: `join(channelId)`
+  asks the API server for a join offer (`POST /channels/{channel}/voice/join`), opens the
+  microphone (a refusal fails the join with `errorKind: "microphone"` before any server is
+  tried or blamed; browsers refuse media on an insecure origin, which is anything but `https`
+  or `localhost`), pings each candidate's `/health` at once, and tries them nearest first; a candidate that refuses the token
+  or does not answer within `READY_TIMEOUT_MS` is reported to `POST /voice-servers/{server}/failures`
+  and the next one is tried. Once a server answers `ready`, the call loads a mediasoup `Device`,
+  opens a send and a receive transport, produces the microphone, and then waits for the send
+  transport's ICE and DTLS to connect (`CONNECT_TIMEOUT_MS`): the server accepting the producer
+  says nothing about media, and a transport that fails or times out counts as that server's
+  failure, so it is reported and the next candidate tried. A transport that fails mid-call
+  rejoins. Every `newConsumer` the server announces is consumed: audio is played through a hidden element, video is a `RemoteScreen` in `state.screens` for the app to render. `startScreenShare()` asks `VoiceMedia.getScreen()` (`getDisplayMedia` with audio) and produces the picture as `screen` and any sound as `screenAudio`; `stopScreenShare()` closes both, and the share also ends when the browser's own stop control ends the track. `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share. In Electron, `getDisplayMedia` only works because the main process answers it in `setDisplayMediaRequestHandler` (`packages/desktop/src/main/index.ts`): the system picker where there is one, else the primary screen. The signalling frames are the generated
+  `src/generated/voiceSignal.ts` (from `voice_signal_schema.json`, which `pnpm codegen` builds by
+  running the voice server with `--gen-signal-schema`). `VoiceCallState` is read with
+  `useVoiceCall()`; it keeps `channelId` while `failed` so the call bar can show why. A call
+  whose session ends with reason `serverLost` or `serverRemoved` (from the `voiceSessionEnded`
+  event, which `AspenSync` hands to the call), or whose socket drops unannounced, rejoins after a
+  random pause of at most `REJOIN_DELAY_MAX_MS` (a second); an `idle` ending sets `endedReason`,
+  which `VoiceEndedDialog` shows until `acknowledgeEnd()`; an `empty` ending is the user's own
+  leave. Browser media (`getUserMedia`, hidden `<audio>` elements per consumer) is in
+  `browserMedia.ts` behind the `VoiceMedia` interface, loaded lazily so the protocol package
+  stays importable in Node, and tests pass a fake. Who is in each channel's call is store state
+  (`RecordStore.channelVoice`, topic `voice:<channelId>`, hook `useChannelVoice`), built from the
+  `voice` sideload and the `voiceSession`, `voiceParticipant`, and `voiceSpeaking` events; each
+  participant carries `speaking` and `lastSpokeAt`, and `src/features/voice/voiceList.ts` picks
+  the fifteen to show under a channel (most recent speakers first once a call is larger than
+  that). `VoiceParticipants` draws them with a green ring while speaking and a monitor mark while
+  sharing; `CallBar` above the user footer holds mute, deafen, share, and leave. Clicking a
+  voice channel row joins it and opens `VoiceScreen`, the channel's screen in place of a
+  history: the shared screens (one large, the others as thumbnails to pick), everyone in the
+  call as tiles, and a Join button when the user is not in it. `ChannelHeader` is the bar both
+  channel screens share. Moderation is `ParticipantMenu` on every other participant's tile and
+  sidebar row: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
+  (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's
+  own events. A `participantState` frame about the user themself overwrites `muted` and
+  `deafened` in the call state, which is how a server mute shows on their own controls; a
+  `kicked` frame with reason `kicked` sets `endedReason: "kicked"` for `VoiceEndedDialog`,
+  `replaced` (another of their own clients took over) ends the call silently, and
+  `serverStopping` rejoins.
+- Update events and update requests are JSON Merge Patches: an absent field is unchanged, `null`
+  clears a nullable field. Apply them field by field; never replace a cached record wholesale
+  with an update payload.
 
-The client reconnect policy is calibrated to that server window:
+## UI
 
-- The first reconnect attempt of every outage episode is **immediate** (no delay; tenacity does not wait before attempt #1). Subsequent failures back off `0.5s → 1s → 2s → 4s → 5s` (capped via `wait_exponential(multiplier=0.5, max=5.0)`). This continues indefinitely (`stop=stop_never`) until `stop()` — there is no failure-count ceiling, because the user expects the client to come back if connectivity returns hours later.
-- The grace deadline is **45 seconds** (`_RECONNECT_GRACE_SECONDS`), measured from the start of the outage. It is a *deadline*, not an *interval*: we keep retrying past it. If a connect succeeds within the deadline, the server's 60s replay buffer is guaranteed to cover the gap and in-memory state stays valid. If the connect succeeds after the deadline, the replay can no longer be assumed to cover the whole gap, and the client must treat its caches as stale.
-- These two numbers (45s grace, 60s server replay) are coupled. If `MAX_EVENT_AGE` ever changes server-side, `_RECONNECT_GRACE_SECONDS` must move with it, keeping a safety margin (currently 15s) to absorb wall-clock skew between the disconnect timestamp and the JetStream window boundary. Don't tune one without the other.
+- Components come from `react-aria-components`. Do not reach for `react-aria` hooks or another
+  component library unless React Aria genuinely lacks the primitive; if so, say why in a comment.
+- Colour comes only from the semantic tokens in `src/styles.css` (`bg-surface`, `text-ink-muted`,
+  `border-line`, `bg-accent`, `text-danger`, ...). Do not use Tailwind's named colours or
+  `dark:` variants: each token is a `light-dark()` pair inside a palette, and a palette is a
+  `[data-theme]` block of variables that `src/theme/palettes.ts` switches at runtime.
+- Icon-only controls get a `Tooltip` (`src/features/layout/Tooltip.tsx`) whose text is also their
+  `aria-label`, so the tooltip and the accessible name never disagree.
+- Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken).
+  Prefer an icon to an emoji glyph in controls. Emoji reactions use `emoji-picker-react` with
+  native glyphs, loaded lazily by `src/features/messages/Reactions.tsx`; it fetches nothing.
+- Styling is Tailwind CSS 4 with `tailwindcss-react-aria-components`, so interaction states are
+  the `pressed:`, `selected:`, `focus-visible:`, `invalid:` variants driven by React Aria's data
+  attributes. Do not add `:hover`/`:active` CSS by hand for those states.
+- User-facing strings live in `packages/app/src/i18n/messages.ts` with camelCase keys, matching
+  the server's locale files. Server Problem text is already localized and is shown as-is.
+- Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
+  `pnpm build:shell` (`--base ./`, used by the desktop and mobile packages, which load the bundle
+  from `file://` or an app-local origin and route after a `#`). Never write an absolute
+  `/assets/…` URL by hand; let Vite resolve assets so both builds work.
+- Routing is TanStack Router (`src/router.tsx`), code-based, one route tree for every shell.
+  Anything a user might want to share is a route: `/communities/{id}/channels/{id}` and
+  `.../messages/{id}`. Read params with `useParams`; navigate with `Link` and `Navigate` rather
+  than by building URLs. A message link's id segment leaves the URL once the reader scrolls on
+  their own (wheel, touch, scrollbar, or a navigation key, tracked in `MessageList.tsx`); scroll
+  events the browser fires for layout changes, image loads, or scripted scrolling do not count,
+  and dropping the segment never reloads the window. History pages in on its own as the reader
+  nears either end of the loaded window (`loadOlder` / `loadNewer`), and the store keeps the
+  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records; the viewport is
+  re-anchored on the topmost visible message after every change. A window that is not at the
+  latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
+  which reloads the newest page.
+- The UI thread is the only thread. Anything that awaits (network, storage) must not block
+  rendering; keep async work in effects or event handlers and surface pending state in the UI.
 
-Signal contract — keep these exact semantics:
+## Verification before handing work back
 
-- `connection_lost(str)` is emitted **exactly once per outage episode**, at its start (initial-connect failure, or post-connect drop). Not on each retry. The UI surfaces it as a single status update; if it fired per-retry the status bar would flicker. The string is informational and currently surfaced as a tooltip, not as the visible text.
-- `connected()` is emitted on every successful connect, including reconnects. The UI uses it to clear the "Disconnected" status; it deliberately only overwrites status text that begins with "Disconnected" so it doesn't clobber unrelated user-action statuses (e.g. "Message sent") that may have been written during steady-state operation.
-- `state_resync_required()` is emitted **immediately before** `connected()` on a reconnect that crossed the 45s deadline. Qt delivers queued cross-thread signals in emission order, so the UI's resync slot runs first and stages the cache wipe + re-bootstrap before the connected slot writes "Connected". If you ever change the order, you must also change the UI's interaction between these two slots, otherwise the transient "Reconnected — refreshing state…" status will be lost.
+```sh
+pnpm typecheck && pnpm lint && pnpm test
+```
 
-UI side: `ChatWindow._on_state_resync_required` calls `_reset_client_state()` and then re-runs the initial communities load via `_dispatch_initial_communities_load(preferred_community_id=...)`. Two invariants here matter:
-
-- `_reset_client_state()` wipes every cache derived from server state (`_state`, the `IconCache`/`UserDirectory` caches, the `KeyedListWidget`-managed lists, the user-row entry map, the message pane's window, and any `_pending_*` dedupe sets owned by the caches). It must keep being a 1:1 mirror of the server-derived field initialisation in `__init__`; any new server-derived cache you add elsewhere needs a `clear()` call here too, or the resync will leave stale references. It deliberately does **not** touch `_current_community_id` / `_current_channel_id` (the rebootstrap reselects them) and does **not** clear the visible widgets directly — the `KeyedListWidget.replace_all` calls that run as the bootstrap completes do the on-screen replacement, so the user sees the previous UI continuously until it's overwritten pane by pane (the "minimal" UX choice).
-- The rebootstrap deliberately does not cancel in-flight `TaskSpawner` tasks left over from before the disconnect. Those tasks complete against the freshly-emptied state, miss most of their lookups, and effectively no-op; the rebootstrap then overwrites everything. Cancelling them up-front would race with `asyncio` task teardown and isn't worth the complexity.
-
-`_handle_event` and the per-type event handlers must remain robust to events arriving against an empty `_state` / empty row-index dicts (they currently bail on `not in` lookups and missing dict entries). The reconnect path relies on this because events arriving on the new WebSocket can race the rebootstrap.
-
-## Non-negotiable: the sliding-window message architecture
-
-Aspen channels are expected to live forever and accumulate effectively unbounded histories. To keep the client responsive regardless of how much history a channel has, message history is rendered through a **bidirectional sliding window** per channel. **Do not remove, weaken, or work around this architecture.**
-
-The architecture has four cooperating pieces. Each piece is load-bearing; breaking any one of them silently re-introduces the "slow after a few dozen messages" / "OOM after a few days" regressions this design was built to prevent.
-
-### 1. `ChannelMessageWindow` in `src/aspen_client/state.py`
-
-- `ClientState.channel_windows: dict[str, ChannelMessageWindow]` is the single source of truth for which messages exist on the client for a given channel.
-- `ChannelMessageWindow` holds `ordered_ids` (ascending UUID v7, which is also ascending time), `has_older`, and `has_newer`.
-- `has_newer` **must** stay True whenever the window is not sitting on the server tip (either because the user scrolled back and we evicted the newest, or because we loaded a middle slice). Live WebSocket events for a channel in that state **must** be dropped by `upsert_message`; do not try to "helpfully" append them — that would produce a non-contiguous slice and break pagination invariants downstream.
-- `MESSAGE_WINDOW_CAP` (currently 500) is the hard ceiling on ids retained per channel. `upsert_message` enforces it on live appends; `_on_message_page_loaded` in the UI enforces it on paged reads. Both paths must remain; removing either re-introduces unbounded growth.
-- When ids are evicted from a window, the corresponding records **must** also be dropped from `ClientState.messages`. Keeping them around defeats the memory bound.
-- `merge_channel_page` is direction-agnostic and is the only correct way to fold a paged read result into a window. Do not add special-case prepend/append helpers unless you have a concrete reason the direction-agnostic version can't serve.
-
-### 2. Paginated reads via `TaskSpawner`
-
-- All paginated reads (`initial`, `older`, `newer`) are dispatched by `MessagePane._dispatch_message_fetch` in `ui_messages.py`, which builds a `read_channel_messages` coroutine and hands it to `self._tasks.run(...)`; the success callback routes the result back to `_on_message_page_loaded` on the GUI thread (which is where the asyncio loop runs anyway). This is a specific instance of the general "every API call is awaited from a `TaskSpawner`-spawned coroutine" rule above.
-- `read_channel_messages` accepts at most one of `before` / `after` / `around`. Keep that invariant; it maps directly to the server's `ChannelViewDescription` discriminated union.
-- Count is clamped to `[1, 200]` to match the server's `MAX_MESSAGES_QUERIED`. Don't raise it without a matching server-side change.
-
-### 3. Scroll-driven paging in `src/aspen_client/ui.py`
-
-- `_on_messages_scrolled` watches the vertical scrollbar and triggers `older` / `newer` fetches when near the edges of the viewport. This is what makes the scroll feel infinite; deleting it reverts the client to a single static page.
-- `_pending_fetches` prevents piling up concurrent identical requests while the bar dwells at an edge. Don't remove this dedupe; without it a slow connection can queue hundreds of redundant fetches.
-- `_capture_top_anchor` / `_restore_top_anchor` pin the user's visual scroll position across an older-direction prepend. If this is broken, scrolling up causes the content to jump, which is what every other chat client in 2026 has gotten right and users expect us to as well.
-- The loading sentinel rows (`_loading_header_item`, `_loading_footer_item`) are the user-visible signal that a fetch is in flight. Keep them.
-
-### 4. The "Jump to latest" affordance
-
-- The floating button is visible **if and only if** `window.has_newer is True`. It's how users escape from a scrolled-back state back to the tip. Clicking it clears the window and dispatches a fresh `initial` fetch.
-- `_send_clicked` detects the "user is scrolled back and just sent a message" case and triggers the same jump-to-latest reset. Do not try to append the sent message to a mid-history window; that violates the contiguous-slice invariant (see §1).
-
-## Non-negotiable: link previews are server-authoritative
-
-Link previews for message bodies are generated **entirely on the server**. The server parses the message markdown, extracts URLs, fetches each target asynchronously, stores preview metadata in the `message_link_preview` table, uploads preview images into the shared `MediaStore` under `link-preview-images/`, templates a public anonymous-read URL into the wire DTO's `imageUrl`, and publishes the authoritative preview list on a dedicated `messageLinkPreviewsReady` event. The client does **not** scrape URLs out of message bodies, does **not** make its own HTTP requests to third-party hosts, and does **not** invent its own caps on previews-per-message — the server owns all three concerns and does not want the client second-guessing any of them.
-
-Concretely, on the client:
-
-- `Message.link_previews: list[LinkPreview]` (in `src/aspen_client/types.py`) is the ground truth for which preview cards a row renders. REST responses carry it inline on the message; later revisions arrive via `messageLinkPreviewsReady`, which `ChatWindow._handle_message_link_previews_ready` routes into `ClientState.apply_link_previews_ready` and then through `MessagePane.handle_link_previews_ready`. A row displayed against a `Message` whose `link_previews` is `[]` shows no preview row, even if the body contains URLs — that means the server deliberately skipped them (crawl refused by robots, fetch failed, content-type not HTML, etc.), and the client must not override that decision.
-- `_render_markdown_to_html` in `src/aspen_client/ui_messages.py` is **only** responsible for turning the body into sanitised rich text (see `MarkdownNoHTML` + `_disarm_misleading_links`). It does not extract URLs, does not return a URL list, and must not grow one; the preview card stack is built entirely from `message.link_previews` in `_build_preview_cards` / `_reset_preview_cards`.
-- Preview **thumbnail images** are the one remaining network hop the client makes, and that hop goes to the Aspen media store directly via the server-templated `LinkPreview.image_url`. `LinkPreviewImageCache` in `src/aspen_client/link_preview.py` calls `AspenApiClient.download_media_bytes(image_url)` to pull the bytes; the call is unauthenticated because the media store's read endpoint is anonymous-read by design. The cache mirrors the `IconCache` pattern (synchronous `get_pixmap` / `has_settled` for the render hot-path, async background fetch through `TaskSpawner`, `on_image_ready` callback, dedupe of in-flight URLs). `MessagePane._image_subscribers` maps `image_url → set(message_id)` so a landed thumbnail only repaints the rows that actually asked for it. When a row is evicted (`_evict_ui_rows_not_in_window`, `_drop_preview_subscriptions`) or its preview stack is replaced (`_reset_preview_cards`, `handle_link_previews_ready`), the subscription entries are pruned in the same pass — otherwise a thumbnail arriving after eviction would try to repaint a widget Qt has already freed.
-- On the QML path, `AspenImageProvider` keeps the `image://aspen/preview/<percent-encoded image_url>` URL shape so the epoch-based cache-busting story still works; the path segment is percent-encoded with `urllib.parse.quote(..., safe='')` (and decoded again inside the provider) so the colons and slashes from the URL's scheme and host don't collide with the provider's own path syntax. `LinkPreviewCard.qml` mirrors that with `encodeURIComponent(preview.imageUrl)`.
-- The `messageLinkPreviewsReady` event replaces the cached message's `link_previews` **wholesale**; the server always publishes the full authoritative list (even an empty one on an edit that stripped every URL). Do not try to diff against the previous list to preserve "existing" cards — the server has already reasoned about which URLs survived the edit.
-
-Out-of-scope "improvements" in this area, for the same reason as the other non-negotiables:
-
-- Re-scanning `message.content` for URLs on the client. This puts the client and server out of sync on what counts as a preview-worthy URL and re-introduces the network fan-out the server design was built to eliminate.
-- Fetching third-party hosts directly from the client (Open Graph metadata, favicons, preview images). All outbound link traffic must originate from the server so the user's IP is never exposed to URL targets by merely viewing a message. The thumbnail hop is exempt because `image_url` points at the Aspen media store, not at the third-party origin.
-- A client-side cap on previews per message, or hiding preview cards whose metadata "looks empty". The server already applies the cap and already filters out previews it considers unusable; anything that reaches `Message.link_previews` is meant to render.
-
-## What's explicitly out of scope
-
-The following are tempting "improvements" that you should not make without a fresh, human-approved plan:
-
-- Switching from `QListWidget` to `QListView` + a custom model. Not needed while `MESSAGE_WINDOW_CAP` keeps widget count bounded. If the cap grows past a few thousand, revisit.
-- Unbounded caching of message history "because we already fetched it". The whole point of eviction is that memory is bounded across many visited channels.
-- Eagerly prefetching multiple pages on channel switch. One `initial` fetch per switch is enough; the scroll handler handles everything else.
-- Awaiting `AspenApiClient` methods anywhere outside a coroutine scheduled via `self._tasks.run(...)` or `self._tasks.spawn(...)`, or "just calling" a coroutine from a sync slot without scheduling it. See the "every `AspenApiClient` call is awaited from a `TaskSpawner`-spawned coroutine" rule above — that rule is the canonical statement of this constraint and applies during channel switch, login, event handling, row rendering, icon lookup, and profile resolution.
-
-## Code-generation boundary
-
-`src/aspen_client/generated/` is produced from the server's `openapi.yaml` and `event_schema.json`. Do not edit files under that directory by hand. If types need to change, change the server, regenerate the schemas, then regenerate the client models.
-
-## Qt Quick layer (opt-in)
-
-A parallel Qt Quick (QML) UI lives in `src/aspen_client/qml_ui/`, opt-in via `ASPEN_UI=quick`. It is **not** the default and is not yet at full parity with the Widgets path. The four non-negotiables above apply identically to it; the points below restate them in QML terms so a contributor working only inside `qml_ui/` doesn't lose them.
-
-- **Every `AspenApiClient` call still goes through `TaskSpawner`.** QML never references the API client. `LoginController`, `ChatController`, and `MessagePaneController` are the only objects in the Quick layer that hold `AspenApiClient` and `TaskSpawner`; QML calls into them via `@Slot` invocations (`chat.selectChannel(...)`, `messagePane.sendMessage(...)`, etc.) and the slot dispatches the work through `self._tasks.run(...)` exactly the way `ChatWindow` does. `Connections { target: chat; function on...() { ... } }` blocks in QML must never await; they're for receiving signals, not for calling the network.
-- **45s reconnect grace + state resync still applies.** `ChatController` connects the four `EventStreamClient` signals (`event_received`, `connection_lost`, `connected`, `state_resync_required`) and `_reset_client_state` rebuilds `ClientState`, clears the four caches (`IconCache`, `UserDirectory`, `LinkPreviewImageCache`) and the four models (`CommunityListModel`, `ChannelListModel`, `UserListModel`, `MessageListModel`), re-points the image provider's `_state` reference, and re-runs the initial communities load. Any new server-derived cache added to the Quick layer must get cleared here too.
-- **Sliding window invariants live in `MessageListModel`.** The model is the *only* mutator of the visible message list — controllers do not reach into it past the published `set_window` / `prepend_page` / `append_page` / `upsert_message` / `remove_message` / `replace_previews` / `evict_older_to_cap` / `evict_newer_to_cap` surface, and those methods continue to write through `ClientState.channel_windows` so `MESSAGE_WINDOW_CAP` and the `has_newer ⇒ drop live appends` rule keep firing. The 500-row cap, the per-channel dedupe of in-flight older/newer fetches (in `MessagePaneController._pending`), and the top-anchor preservation across older-prepend (driven by `MessagePaneController.pagePrepended` → `MessagePane.qml`'s `Qt.callLater(...) contentY += acc` shift) are part of this contract.
-- **Link previews remain server-authoritative.** `MessageListModel.LinkPreviewsRole` reads `Message.link_previews` straight from `ClientState`; `MessageDelegate.qml` renders cards from that list and from nothing else. No body-scanning for URLs anywhere in the QML or controller layer. The `_image_subscribers` map in `MessagePaneController` mirrors the Widgets-side `MessagePane._image_subscribers` so a landed thumbnail only patches the rows that asked for it.
-- **Image cache invalidation works through epoch ints.** `AspenImageProvider` resolves `image://aspen/<kind>/<key>[/<size>]` URLs against the existing caches; QML `Image.source` bindings embed a per-row (or per-user) `iconEpoch` / `avatarEpoch` integer as a `?v=<epoch>` query string. `_on_user_icon_ready`, `_on_community_icon_ready`, `_on_user_profile_loaded`, and `_on_link_preview_image_ready` bump the relevant epoch on the affected model row, which forces QML to re-issue the request and pick up the now-cached bytes. Adding a new cache means adding a matching epoch on the model and bumping it from the cache's ready-callback; never wire `Image.source` to a constant URL or the bytes will be permanently stuck on the placeholder.
-- **`MarkdownBridge.render(...)` is the only sanctioned path for body rendering.** `Text { textFormat: Text.MarkdownText }` does not strip raw HTML; the bridge proxies through `_render_markdown_to_html` (which already runs `MarkdownNoHTML` + `_disarm_misleading_links`). Link clicks are routed back through `messagePane.openLink(url)`, which enforces the same `_SAFE_LINK_SCHEMES` allowlist (`http`/`https`/`mailto`) the Widgets path enforces.
-- **Shutdown is `QGuiApplication.aboutToQuit` + an async cleanup mirror of `_async_shutdown`.** `app.py` connects `aboutToQuit` to a coroutine that calls `events.stop()` synchronously, awaits `tasks.shutdown()`, awaits `api.aclose()`, and finally sets `app_close_event` so `main()`'s `run_until_complete(app_close_event.wait())` returns cleanly. The shutdown coroutine is dispatched via `asyncio.ensure_future` and **not** through `TaskSpawner.spawn`; spawning it through the spawner would have `tasks.shutdown()` cancel the very coroutine driving the cleanup.
-
-Out of scope inside the Quick layer (fresh, human-approved plan required first):
-
-- Deleting `ui.py`, `ui_messages.py`, `ui_login.py`, or `keyed_list.py`. They stay until the Quick path is the default and at least one human pass has signed off on parity.
-- Flipping the default of `ASPEN_UI` from `widgets` to `quick`.
-- Adding mobile-specific layouts. The QML structure is friendly to a future phone-shaped layout, but no phone-specific QML files in this PR.
-- Adding animations. The user will iterate on those once parity lands.
-
-## Repository-wide rules
-
-The repository root `AGENTS.md` still applies here (tech stack, two insanities, localization, git policy, etc.). Nothing in this file overrides it.
+Run `pnpm e2e` when a change touches the login flow or anything the Playwright specs cover. The
+suite runs against a stubbed server in Chromium, Firefox, and WebKit; add browser-specific
+regressions there rather than in unit tests.

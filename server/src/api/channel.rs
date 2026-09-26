@@ -1,49 +1,12 @@
-use crate::api::message::message_to_api;
-use crate::api::message_enum::command::{
-    ChannelCreateCommand, ChannelCreateCommandResponse, ChannelDeleteCommand,
-    ChannelDeleteCommandResponse, ChannelReadCommand, ChannelReadCommandResponse,
-    ChannelUpdateCommand, ChannelUpdateCommandResponse,
-};
-use crate::api::message_enum::{Message, Pin};
-use crate::api::{GlobalServerContext, message_enum};
+use crate::api::auth::SessionUser;
+use crate::api::error::{ApiResult, Problem};
+use crate::api::extract::{Created, Json, NoContent, Path};
+use crate::api::message_enum::Pin;
+use crate::api::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_CHANNELS, message_enum};
 use crate::app;
-use crate::app::{ChannelId, Error, MaybeLoaded, MessageId};
-use axum::Json;
+use crate::app::{ChannelId, MaybeLoaded};
 use axum::extract::State;
-use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use tracing::error;
-use utoipa::ToSchema;
-
-#[utoipa::path(post, path = "/channel", responses((status = OK, body=ChannelCreateCommandResponse)))]
-pub async fn create_channel(
-    State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelCreateCommand>,
-) -> (StatusCode, Json<ChannelCreateCommandResponse>) {
-    match app::channel::create_channel(
-        &state,
-        command.name,
-        command.sort_index,
-        command.ty,
-        command.community,
-        command.parent_category,
-    )
-    .await
-    {
-        Ok(c) => (
-            StatusCode::OK,
-            ChannelCreateCommandResponse::CreateOk(channel_to_api(c)).into(),
-        ),
-        Err(e) => {
-            error!(error = e.to_string(), "channel create command error");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ChannelCreateCommandResponse::Error { cause: None }.into(),
-            )
-        }
-    }
-}
 
 pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
     message_enum::Channel {
@@ -56,199 +19,138 @@ pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
     }
 }
 
-#[utoipa::path(get, path = "/channel", responses((status = OK, body=ChannelReadCommandResponse)))]
-pub async fn read_channel(
+/// Creates a channel. A channel may belong to a community and optionally to a category within it;
+/// both references are set through the request body because either may be absent.
+#[utoipa::path(
+    post,
+    path = "/channels",
+    tag = TAG_CHANNELS,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = message_enum::Channel, headers(("Location" = String, description = "URL of the new channel"))),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn create_channel(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelReadCommand>,
-) -> (StatusCode, Json<ChannelReadCommandResponse>) {
-    match app::channel::read_channel(&state, command.id).await {
-        Ok(c) => (
-            StatusCode::OK,
-            ChannelReadCommandResponse::Channel(channel_to_api(c)).into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                ChannelReadCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error reading channel");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ChannelReadCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Json(request): Json<ChannelCreateRequest>,
+) -> ApiResult<Created<message_enum::Channel>> {
+    let c = app::channel::create_channel(
+        &state,
+        request.name,
+        request.sort_index,
+        request.ty,
+        request.community,
+        request.parent_category,
+    )
+    .await?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/channels/{}", c.id.0),
+        channel_to_api(c),
+    ))
 }
 
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ChannelMessagesReadCommand {
-    channel: ChannelId,
-    view_description: ChannelViewDescription,
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", tag = "adjective")]
-pub enum ChannelViewDescription {
-    Before {
-        message: MessageId,
-        count: u32,
-    },
-    After {
-        message: MessageId,
-        count: u32,
-    },
-    Around {
-        message: MessageId,
-        radius: u32,
-    },
-    Search {
-        // TODO
-    },
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum ChannelMessagesReadCommandResponse {
-    Messages { data: Vec<Message> },
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/channel/messages", responses((status = OK, body=ChannelMessagesReadCommandResponse)))]
-pub async fn read_channel_messages(
+#[utoipa::path(
+    get,
+    path = "/channels/{channel}",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = message_enum::Channel),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_channel(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelMessagesReadCommand>,
-) -> (StatusCode, Json<ChannelMessagesReadCommandResponse>) {
-    match app::channel::read_channel_messages(&state, command.channel, command.view_description)
-        .await
-    {
-        Ok(messages) => (
-            StatusCode::OK,
-            ChannelMessagesReadCommandResponse::Messages {
-                data: messages
-                    .into_iter()
-                    .map(|m| message_to_api(m.message, m.attachments, m.link_previews))
-                    .collect(),
-            }
-            .into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                ChannelMessagesReadCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error reading channel messages");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ChannelMessagesReadCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(channel): Path<ChannelId>,
+) -> ApiResult<Json<message_enum::Channel>> {
+    let c = app::channel::read_channel(&state, channel).await?;
+    Ok(Json(channel_to_api(c)))
 }
 
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ChannelPinsReadCommand {
-    channel: ChannelId,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum ChannelPinsReadCommandResponse {
-    Pins { data: Vec<Pin> },
-    NotAllowed { reason: Option<Cow<'static, str>> },
-    Error { cause: Option<Cow<'static, str>> },
-}
-
-#[utoipa::path(get, path = "/channel/pins", responses((status = OK, body=ChannelPinsReadCommandResponse)))]
-pub async fn read_channel_pins(
+/// Pinned messages in the channel, in pin order.
+#[utoipa::path(
+    get,
+    path = "/channels/{channel}/pins",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<Pin>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_channel_pins(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelPinsReadCommand>,
-) -> (StatusCode, Json<ChannelPinsReadCommandResponse>) {
-    match app::channel::read_channel_pins(&state, command.channel).await {
-        Ok(pins) => (
-            StatusCode::OK,
-            ChannelPinsReadCommandResponse::Pins {
-                data: pins
-                    .into_iter()
-                    .map(|p| Pin {
-                        message_id: p.message_id,
-                        timestamp: p.timestamp,
-                        sort_index: p.sort_index,
-                    })
-                    .collect(),
-            }
-            .into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                ChannelPinsReadCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error reading channel pins");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ChannelPinsReadCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(channel): Path<ChannelId>,
+) -> ApiResult<Json<Vec<Pin>>> {
+    let pins = app::channel::read_channel_pins(&state, channel).await?;
+    Ok(Json(
+        pins.into_iter()
+            .map(|p| Pin {
+                message_id: p.message_id,
+                timestamp: p.timestamp,
+                sort_index: p.sort_index,
+            })
+            .collect(),
+    ))
 }
 
-#[utoipa::path(patch, path = "/channel", responses((status = OK, body=ChannelUpdateCommandResponse)))]
+#[utoipa::path(
+    patch,
+    path = "/channels/{channel}",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = message_enum::Channel),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn update_channel(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelUpdateCommand>,
-) -> (StatusCode, Json<ChannelUpdateCommandResponse>) {
-    match app::channel::update_channel(&state, command).await {
-        Ok(_) => (
-            StatusCode::OK,
-            ChannelUpdateCommandResponse::UpdateOk.into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                ChannelUpdateCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error updating channel");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ChannelUpdateCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(channel): Path<ChannelId>,
+    Json(request): Json<ChannelUpdateRequest>,
+) -> ApiResult<Json<message_enum::Channel>> {
+    let c = app::channel::update_channel(&state, channel, request).await?;
+    Ok(Json(channel_to_api(c)))
 }
 
-#[utoipa::path(delete, path = "/channel", responses((status = OK, body=ChannelDeleteCommandResponse)))]
+#[utoipa::path(
+    delete,
+    path = "/channels/{channel}",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
 pub async fn delete_channel(
     State(state): State<GlobalServerContext>,
-    Json(command): Json<ChannelDeleteCommand>,
-) -> (StatusCode, Json<ChannelDeleteCommandResponse>) {
-    match app::channel::delete_channel(&state, command.id).await {
-        Ok(()) => (
-            StatusCode::OK,
-            ChannelDeleteCommandResponse::DeleteOk.into(),
-        ),
-        Err(e) => match e {
-            Error::Diesel(diesel::result::Error::NotFound) => (
-                StatusCode::NOT_FOUND,
-                ChannelDeleteCommandResponse::Error { cause: None }.into(),
-            ),
-            _ => {
-                error!(error = e.to_string(), "error deleting channel");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ChannelDeleteCommandResponse::Error { cause: None }.into(),
-                )
-            }
-        },
-    }
+    _: SessionUser,
+    Path(channel): Path<ChannelId>,
+) -> ApiResult<NoContent> {
+    app::channel::delete_channel(&state, channel).await?;
+    Ok(NoContent)
 }
