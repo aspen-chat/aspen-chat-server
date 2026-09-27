@@ -133,10 +133,9 @@ impl Dimension {
                     Dimension::UserPer(param.to_string())
                 } else if let Some(param) = name.strip_prefix("ip_per_") {
                     Dimension::IpPer(param.to_string())
-                } else if let Some(param) = name.strip_prefix("per_") {
-                    Dimension::Per(param.to_string())
                 } else {
-                    return None;
+                    let param = name.strip_prefix("per_")?;
+                    Dimension::Per(param.to_string())
                 }
             }
         })
