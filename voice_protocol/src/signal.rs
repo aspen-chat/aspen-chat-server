@@ -98,6 +98,12 @@ pub enum ClientMessage {
     CloseProducer {
         producer_id: String,
     },
+    /// A producer fed by RTP the client sends itself rather than through a WebRTC transport:
+    /// the desktop shell's game capture, whose helper encodes H.264 and sends SRTP straight to
+    /// the voice server. The server answers `rtpProduced` with where and how to send.
+    ProduceRtp {
+        source: MediaSource,
+    },
     /// The client has set the consumer up and wants media on it.
     ResumeConsumer {
         consumer_id: String,
@@ -108,6 +114,38 @@ pub enum ClientMessage {
         deafened: bool,
     },
     Leave,
+}
+
+impl ClientMessage {
+    /// Every frame type's name, its `type` on the wire.
+    pub const KINDS: [&'static str; 10] = [
+        "identify",
+        "setCapabilities",
+        "createTransport",
+        "connectTransport",
+        "produce",
+        "closeProducer",
+        "produceRtp",
+        "resumeConsumer",
+        "setState",
+        "leave",
+    ];
+
+    /// This frame's type, as on the wire.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ClientMessage::Identify { .. } => "identify",
+            ClientMessage::SetCapabilities { .. } => "setCapabilities",
+            ClientMessage::CreateTransport { .. } => "createTransport",
+            ClientMessage::ConnectTransport { .. } => "connectTransport",
+            ClientMessage::Produce { .. } => "produce",
+            ClientMessage::CloseProducer { .. } => "closeProducer",
+            ClientMessage::ProduceRtp { .. } => "produceRtp",
+            ClientMessage::ResumeConsumer { .. } => "resumeConsumer",
+            ClientMessage::SetState { .. } => "setState",
+            ClientMessage::Leave => "leave",
+        }
+    }
 }
 
 /// Frames a voice server sends.
@@ -139,6 +177,20 @@ pub enum ServerMessage {
     Produced {
         producer_id: String,
         source: MediaSource,
+    },
+    /// The answer to `produceRtp`: an H.264 producer awaiting SRTP at `ip`:`port` (RTP and
+    /// RTCP multiplexed, so RTCP feedback comes back from the same address) with the given
+    /// SSRC and payload type, encrypted both ways with the key. The client's own preview of
+    /// what it sends arrives as a `newConsumer` naming the client itself.
+    RtpProduced {
+        producer_id: String,
+        source: MediaSource,
+        ip: String,
+        port: u16,
+        ssrc: u32,
+        payload_type: u8,
+        srtp_crypto_suite: String,
+        srtp_key_base64: String,
     },
     /// A consumer the server created for one of another participant's producers. It starts
     /// paused; the client answers with `resumeConsumer`.
@@ -205,4 +257,30 @@ pub enum KickReason {
 pub struct VoiceSignalProtocol {
     pub client_message: ClientMessage,
     pub server_message: ServerMessage,
+}
+
+#[cfg(test)]
+mod client_message_kinds {
+    use super::ClientMessage;
+
+    /// `KINDS` is exactly the `type` values the schema allows.
+    #[test]
+    fn kinds_are_the_wire_types() {
+        let schema = serde_json::to_value(schemars::schema_for!(ClientMessage)).unwrap();
+        let mut wire: Vec<String> = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| {
+                variant["properties"]["type"]["const"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        wire.sort();
+        let mut kinds: Vec<String> = ClientMessage::KINDS.iter().map(|k| k.to_string()).collect();
+        kinds.sort();
+        assert_eq!(wire, kinds);
+    }
 }

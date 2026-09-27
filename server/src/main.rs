@@ -214,10 +214,10 @@ async fn run(options: Opt) -> Result<()> {
 
     loop {
         let mut listeners = FuturesUnordered::from_iter(listeners.iter().map(|l| l.accept()));
-        let socket = tokio::select! {
+        let (socket, remote_addr) = tokio::select! {
             maybe_socket = listeners.next() => {
                 match maybe_socket {
-                    Some(Ok((socket, _remote_addr))) => socket,
+                    Some(Ok((socket, remote_addr))) => (socket, remote_addr),
                     Some(Err(e)) => {
                         error!("TCP I/O error {e}");
                         continue;
@@ -234,9 +234,14 @@ async fn run(options: Opt) -> Result<()> {
         let tls_acceptor = tls_acceptor.clone();
         let service = app.clone();
         tokio::spawn(async move {
-            let hyper_service = hyper::service::service_fn(move |request: Request<Incoming>| {
-                service.clone().call(request)
-            });
+            let hyper_service =
+                hyper::service::service_fn(move |mut request: Request<Incoming>| {
+                    // Rate limits count by the client's address, which starts from the peer's.
+                    request
+                        .extensions_mut()
+                        .insert(api::rate_limit::PeerAddr(remote_addr));
+                    service.clone().call(request)
+                });
 
             /// Using a macro to do compile time duck typing over TlsStream and TcpStream.
             macro_rules! handle_stream {

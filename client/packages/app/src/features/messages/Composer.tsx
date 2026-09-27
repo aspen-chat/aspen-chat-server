@@ -29,12 +29,23 @@ const toolButtonClass =
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
- * upload at once and are sent with the next message; a message may be files alone.
+ * upload at once and are sent with the next message; a message may be files alone. In a thread,
+ * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
+ * clears after each message.
  */
-export function Composer({ channelId, placeholder }: { channelId: string; placeholder: string }) {
+export function Composer({
+  channelId,
+  placeholder,
+  echoTarget,
+}: {
+  channelId: string;
+  placeholder: string;
+  echoTarget?: string;
+}) {
   const m = useMessages();
   const sync = useSync();
   const [draft, setDraft] = useState("");
+  const [echo, setEcho] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,9 +113,12 @@ export function Composer({ channelId, placeholder }: { channelId: string; placeh
     setSending(true);
     setError(null);
     try {
-      await sync.sendMessage(channelId, draft.trim(), readyIds);
+      await sync.sendMessage(channelId, draft.trim(), readyIds, {
+        echoToParent: echoTarget !== undefined && echo,
+      });
       setDraft("");
       setPending([]);
+      setEcho(false);
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
@@ -211,6 +225,19 @@ export function Composer({ channelId, placeholder }: { channelId: string; placeh
           {m.send}
         </Button>
       </div>
+      {echoTarget !== undefined && (
+        <label className="mt-2 flex w-fit items-center gap-2 text-sm text-ink-muted">
+          <input
+            type="checkbox"
+            checked={echo}
+            onChange={(event) => {
+              setEcho(event.target.checked);
+            }}
+            className="h-4 w-4 accent-accent"
+          />
+          {format(m.threads.echoToParent, { channel: echoTarget })}
+        </label>
+      )}
     </form>
   );
 }

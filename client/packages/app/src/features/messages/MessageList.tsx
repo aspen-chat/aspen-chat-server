@@ -8,7 +8,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Button } from "react-aria-components";
-import { useMessageWindow, useSync } from "@/api/hooks";
+import { useChannel, useMessageWindow, useSync } from "@/api/hooks";
+import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useMessages } from "@/i18n/context";
 
@@ -45,17 +46,21 @@ interface Anchor {
 
 export function MessageList({
   channelId,
-  communityId,
+  home,
   highlightId,
 }: {
   channelId: string;
-  communityId: string;
+  home: ChannelHome;
   highlightId: string | undefined;
 }) {
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
   const window = useMessageWindow(channelId);
+  const channel = useChannel(channelId);
+  // A thread's messages cannot start threads, and link to the thread rather than to a place in
+  // a channel's history.
+  const parentId = channel?.ty === "thread" ? (channel.parentChannel ?? null) : null;
   const scroller = useRef<HTMLDivElement>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
@@ -226,11 +231,7 @@ export function MessageList({
     loadNearEnds();
     const byUser = Date.now() - userScrollAt.current < USER_SCROLL_MS;
     if (highlightId !== undefined && byUser && Date.now() > programmaticUntil.current) {
-      void navigate({
-        to: "/communities/$communityId/channels/$channelId",
-        params: { communityId, channelId },
-        replace: true,
-      });
+      void navigate({ ...channelLink(home, channelId), replace: true });
     }
   }
 
@@ -260,11 +261,7 @@ export function MessageList({
     anchor.current = null;
     void sync.loadLatest(channelId);
     if (highlightId !== undefined) {
-      void navigate({
-        to: "/communities/$communityId/channels/$channelId",
-        params: { communityId, channelId },
-        replace: true,
-      });
+      void navigate({ ...channelLink(home, channelId), replace: true });
     }
   }
 
@@ -296,8 +293,9 @@ export function MessageList({
           <MessageItem
             key={id}
             id={id}
-            communityId={communityId}
+            home={home}
             channelId={channelId}
+            parentId={parentId}
             highlighted={id === highlightId}
           />
         ))}

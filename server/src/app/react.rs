@@ -1,9 +1,11 @@
 use crate::api::message_enum::server_event::{ReactEvent, ServerEvent};
 use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
-use crate::app::{MessageId, UserId, publish_event};
+use crate::app::{EventScope, MessageId, UserId, publish_event};
 use crate::database::schema::react;
-use diesel::{BoolExpressionMethods, ExpressionMethods, Insertable, Queryable, Selectable};
+use diesel::{
+    BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,
+};
 use diesel_async::RunQueryDsl;
 use rust_i18n::t;
 
@@ -32,6 +34,12 @@ pub async fn create_react(
 ) -> app::error::Result<React> {
     validate_emoji(&emoji)?;
     let mut conn = state.connection_pool.get().await?;
+    let channel: crate::app::ChannelId = crate::database::schema::message::table
+        .select(crate::database::schema::message::channel)
+        .filter(crate::database::schema::message::id.eq(message_id))
+        .first(conn.as_mut())
+        .await?;
+    crate::app::dm::ensure_can_see(state, conn.as_mut(), author, channel).await?;
     let react = React {
         emoji: emoji.clone(),
         author,
@@ -47,7 +55,13 @@ pub async fn create_react(
         emoji,
         user_id: author,
     }));
-    publish_event(state, &event).await?;
+    publish_event(
+        state,
+        conn.as_mut(),
+        EventScope::Message(message_id),
+        &event,
+    )
+    .await?;
     Ok(react)
 }
 
@@ -73,7 +87,13 @@ pub async fn delete_react(
             emoji,
             user_id: author,
         });
-        publish_event(state, &event).await?;
+        publish_event(
+            state,
+            conn.as_mut(),
+            EventScope::Message(message_id),
+            &event,
+        )
+        .await?;
     }
     Ok(())
 }

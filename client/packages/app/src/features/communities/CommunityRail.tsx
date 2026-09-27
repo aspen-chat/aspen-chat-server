@@ -1,7 +1,7 @@
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useCommunities, useSync } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
-import { DotsSixVerticalIcon, PlusIcon } from "@phosphor-icons/react";
+import { ChatsTeardropIcon, DotsSixVerticalIcon, PlusIcon } from "@phosphor-icons/react";
 import {
   Button,
   DropIndicator,
@@ -13,6 +13,7 @@ import { format } from "@/i18n/messages";
 import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { Avatar } from "@/features/communities/Avatar";
 import { reorderIds } from "@/features/layout/reorder";
+import { Tooltip } from "@/features/layout/Tooltip";
 
 /** The drag type rail rows carry, so nothing else accepts them and they accept nothing else. */
 const COMMUNITY_DRAG_TYPE = "application/x-aspen-community";
@@ -30,6 +31,8 @@ export function CommunityRail() {
   const navigate = useNavigate();
   const communities = useCommunities();
   const { communityId: current } = useParams({ strict: false });
+  const matchRoute = useMatchRoute();
+  const inDms = matchRoute({ to: "/dms", fuzzy: true }) !== false;
   const { dragAndDropHooks } = useDragAndDrop({
     getItems: (keys) => Array.from(keys, (key) => ({ [COMMUNITY_DRAG_TYPE]: String(key) })),
     acceptedDragTypes: [COMMUNITY_DRAG_TYPE],
@@ -54,9 +57,26 @@ export function CommunityRail() {
       aria-label={m.communitiesLabel}
       className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-line bg-surface-sunken py-3"
     >
+      <Tooltip text={m.dms.label}>
+        <Link
+          to="/dms"
+          aria-label={m.dms.label}
+          aria-current={inDms ? "page" : undefined}
+          className={
+            "flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
+            (inDms ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-sunken" : "")
+          }
+        >
+          <ChatsTeardropIcon size={22} aria-hidden="true" />
+        </Link>
+      </Tooltip>
+      <div aria-hidden="true" className="h-px w-8 bg-line" />
       <GridList
         aria-label={m.communitiesLabel}
         items={communities}
+        // The list caches each item's rendering by its data; the ring around the current
+        // community comes from the route, so the route is declared as a dependency.
+        dependencies={[current]}
         selectionMode="none"
         onAction={(key) => {
           void navigate({ to: "/communities/$communityId", params: { communityId: String(key) } });

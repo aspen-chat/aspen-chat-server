@@ -1,20 +1,23 @@
 import type { Channel } from "@aspen/protocol";
+import { userMuted } from "@aspen/protocol";
 import {
   HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
   PhoneIcon,
-  ScreencastIcon,
   SpeakerHighIcon,
+  SpeakerSlashIcon,
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "react-aria-components";
-import { useChannelVoice, useMe, useSync, useUser, useVoiceCall } from "@/api/hooks";
+import { useChannelVoice, useMe, usePreference, useSync, useUser, useVoiceCall } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { Avatar } from "@/features/communities/Avatar";
 import { displayNameOf } from "@/features/users/profile";
-import { ParticipantMenu } from "@/features/voice/ParticipantMenu";
+import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
+import { ShareControl } from "@/features/voice/ShareControl";
+import { Identity } from "@/features/voice/VoiceParticipants";
 import { ScreenTile } from "@/features/voice/ScreenTile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -46,18 +49,6 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
     : [];
   const focused = screens.find((screen) => screen.id === focusedId) ?? screens[0];
 
-  const share = async () => {
-    setShareError(null);
-    try {
-      await sync.voice.startScreenShare();
-    } catch (error) {
-      // Declining the browser's picker is an ordinary outcome, not an error to show.
-      if (!(error instanceof DOMException && error.name === "NotAllowedError")) {
-        setShareError(error instanceof Error ? error.message : String(error));
-      }
-    }
-  };
-
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <ChannelHeader
@@ -65,27 +56,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
         glyph={<SpeakerHighIcon size={16} aria-hidden="true" />}
         name={channel.name}
       >
-        {inThisCall && (
-          <Button
-            onPress={() => {
-              if (call.sharingScreen) {
-                sync.voice.stopScreenShare();
-              } else {
-                void share();
-              }
-            }}
-            aria-pressed={call.sharingScreen}
-            className={
-              "flex items-center gap-1.5 rounded-md px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
-              (call.sharingScreen
-                ? "bg-danger-soft text-danger hover:bg-danger-soft/80"
-                : "text-ink-muted hover:bg-surface-hover hover:text-ink")
-            }
-          >
-            <ScreencastIcon size={18} aria-hidden="true" />
-            {call.sharingScreen ? m.voice.stopSharing : m.voice.shareScreen}
-          </Button>
-        )}
+        {inThisCall && <ShareControl variant="panel" onError={setShareError} />}
       </ChannelHeader>
       {shareError !== null && (
         <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
@@ -211,38 +182,81 @@ function ParticipantTile({
   const m = useMessages();
   const user = useUser(userId);
   const self = useMe()?.id === userId;
+  const mutedForMe = usePreference(userMuted(userId));
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  const tile = useRef<HTMLLIElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const avatar = <TileAvatar speaking={speaking} name={name} iconId={user?.icon} />;
   return (
     <li
+      ref={tile}
       data-voice-tile={userId}
       data-speaking={speaking ? "true" : undefined}
+      onContextMenu={(event) => {
+        if (!self) {
+          event.preventDefault();
+          setMenuOpen(true);
+        }
+      }}
       className="relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3"
     >
       {!self && (
-        <ParticipantMenu
-          channelId={channelId}
-          userId={userId}
-          name={name}
-          muted={muted}
-          className="absolute top-1 right-1"
-        />
+        <>
+          <ParticipantMenuButton
+            name={name}
+            onPress={() => {
+              setMenuOpen((open) => !open);
+            }}
+            className="absolute top-1 right-1"
+          />
+          <ParticipantMenu
+            channelId={channelId}
+            userId={userId}
+            name={name}
+            muted={muted}
+            anchorRef={tile}
+            isOpen={menuOpen}
+            onOpenChange={setMenuOpen}
+          />
+        </>
       )}
-      <span
-        className={
-          "rounded-full " +
-          (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
-        }
-        role={speaking ? "img" : undefined}
-        aria-label={speaking ? format(m.voice.speaking, { name }) : undefined}
-      >
-        <Avatar name={name} iconId={user?.icon} size="lg" />
-      </span>
-      <span className="max-w-full truncate text-sm">{name}</span>
+      <Identity user={user} name={name} avatar={avatar} className="flex-col" anchorRef={tile} />
       <span className="flex gap-1 text-ink-faint">
         {muted && <MicrophoneSlashIcon size={14} aria-label={m.voice.mutedMark} />}
         {deafened && <HeadphonesIcon size={14} aria-label={m.voice.deafenedMark} />}
         {sharingScreen && <MonitorIcon size={14} aria-label={m.voice.sharingMark} />}
+        {!self && mutedForMe && (
+          <SpeakerSlashIcon
+            size={14}
+            aria-label={m.voice.mutedForYouMark}
+            className="text-danger"
+          />
+        )}
       </span>
     </li>
+  );
+}
+
+function TileAvatar({
+  speaking,
+  name,
+  iconId,
+}: {
+  speaking: boolean;
+  name: string;
+  iconId: string | null | undefined;
+}) {
+  const m = useMessages();
+  return (
+    <span
+      className={
+        "rounded-full " +
+        (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
+      }
+      role={speaking ? "img" : undefined}
+      aria-label={speaking ? format(m.voice.speaking, { name }) : undefined}
+    >
+      <Avatar name={name} iconId={iconId} size="lg" />
+    </span>
   );
 }

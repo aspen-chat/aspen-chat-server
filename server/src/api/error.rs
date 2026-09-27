@@ -42,8 +42,28 @@ pub enum ProblemCode {
     PollClosed,
     /// Login: the username or password is wrong.
     InvalidCredentials,
-    /// The presented refresh token is unknown or expired.
+    /// The presented refresh token or sign-in ticket is unknown, expired, or used.
     InvalidToken,
+    /// A password, authenticator code, or recovery code presented to verify the caller was
+    /// wrong or already used.
+    VerificationFailed,
+    /// Security settings: the session must verify its user again (`POST
+    /// /auth/reauthenticate`) before this change.
+    ReauthenticationRequired,
+    /// The server requires a second factor this account has not added; the session may only
+    /// add one, or sign out.
+    TwoFactorEnrollmentRequired,
+    /// Too many wrong codes or passwords recently; try again later.
+    TooManyAttempts,
+    /// Too many requests to this endpoint recently. `Retry-After` says how many seconds to
+    /// wait.
+    RateLimited,
+    /// The server requires a second factor, so the account's last one cannot be removed.
+    LastSecondFactor,
+    /// The authenticator's response to a passkey ceremony did not verify.
+    PasskeyRejected,
+    /// Passkeys are not configured on this server.
+    PasskeysUnavailable,
     /// Registration: the requested username is already in use.
     UsernameTaken,
     /// Invite creation: the requested custom code is already in use.
@@ -63,12 +83,22 @@ impl ProblemCode {
             ProblemCode::Unauthorized
             | ProblemCode::InvalidCredentials
             | ProblemCode::InvalidToken => StatusCode::UNAUTHORIZED,
-            ProblemCode::Forbidden | ProblemCode::OldPasswordIncorrect => StatusCode::FORBIDDEN,
+            ProblemCode::Forbidden
+            | ProblemCode::OldPasswordIncorrect
+            | ProblemCode::VerificationFailed
+            | ProblemCode::ReauthenticationRequired
+            | ProblemCode::TwoFactorEnrollmentRequired => StatusCode::FORBIDDEN,
+            ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+            ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
+            ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::NotFound => StatusCode::NOT_FOUND,
             ProblemCode::Conflict
             | ProblemCode::PollClosed
             | ProblemCode::UsernameTaken
-            | ProblemCode::InviteCodeTaken => StatusCode::CONFLICT,
+            | ProblemCode::InviteCodeTaken
+            | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -85,6 +115,14 @@ impl ProblemCode {
             ProblemCode::PollClosed => t!("problemPollClosed"),
             ProblemCode::InvalidCredentials => t!("problemInvalidCredentials"),
             ProblemCode::InvalidToken => t!("problemInvalidToken"),
+            ProblemCode::VerificationFailed => t!("problemVerificationFailed"),
+            ProblemCode::ReauthenticationRequired => t!("problemReauthenticationRequired"),
+            ProblemCode::TwoFactorEnrollmentRequired => t!("problemTwoFactorEnrollmentRequired"),
+            ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
+            ProblemCode::RateLimited => t!("problemRateLimited"),
+            ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
+            ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
+            ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
@@ -124,6 +162,8 @@ pub struct Problem {
 pub struct ApiError {
     status: StatusCode,
     problem: Problem,
+    /// Sent as `Retry-After`, in whole seconds rounded up.
+    retry_after: Option<std::time::Duration>,
 }
 
 impl ApiError {
@@ -138,7 +178,13 @@ impl ApiError {
                 detail: None,
                 requirement: None,
             },
+            retry_after: None,
         }
+    }
+
+    pub fn with_retry_after(mut self, retry_after: std::time::Duration) -> Self {
+        self.retry_after = Some(retry_after);
+        self
     }
 
     pub fn with_detail(mut self, detail: impl Into<Cow<'static, str>>) -> Self {
@@ -170,6 +216,20 @@ impl From<app::Error> for ApiError {
                     min = app::login::PASSWORD_MIN_LENGTH
                 )),
             app::Error::Unauthorized => Self::new(ProblemCode::Forbidden),
+            app::Error::Unauthenticated => Self::new(ProblemCode::Unauthorized),
+            app::Error::Conflict(reason) => Self::new(ProblemCode::Conflict).with_detail(reason),
+            app::Error::VerificationFailed => Self::new(ProblemCode::VerificationFailed),
+            app::Error::ReauthenticationRequired => {
+                Self::new(ProblemCode::ReauthenticationRequired)
+            }
+            app::Error::TooManyAttempts => Self::new(ProblemCode::TooManyAttempts),
+            app::Error::LastSecondFactor => Self::new(ProblemCode::LastSecondFactor),
+            app::Error::InvalidTicket => Self::new(ProblemCode::InvalidToken),
+            app::Error::PasskeysUnavailable => Self::new(ProblemCode::PasskeysUnavailable),
+            app::Error::PasskeyRejected(reason) => {
+                tracing::debug!(reason, "passkey rejected");
+                Self::new(ProblemCode::PasskeyRejected)
+            }
             app::Error::PollClosed => Self::new(ProblemCode::PollClosed),
             other => {
                 error!(error = other.to_string(), "request failed");
@@ -181,12 +241,20 @@ impl From<app::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             [(CONTENT_TYPE, PROBLEM_JSON)],
             axum::Json(self.problem),
         )
-            .into_response()
+            .into_response();
+        if let Some(retry_after) = self.retry_after {
+            let seconds = retry_after.as_millis().div_ceil(1000).max(1);
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(u64::try_from(seconds).unwrap_or(u64::MAX)),
+            );
+        }
+        response
     }
 }
 

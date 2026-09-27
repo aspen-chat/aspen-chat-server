@@ -1,4 +1,6 @@
+use aspen_limits::RuleTable;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use uuid::Uuid;
 
@@ -23,6 +25,80 @@ pub struct VoiceServerConfig {
     /// of CPUs.
     #[serde(default = "default_workers")]
     pub workers: usize,
+    /// What `voice_server.toml` says about limits; `rate_limits` is the result.
+    #[serde(default, rename = "rate_limits")]
+    pub rate_limit_overrides: LimitOverrides,
+    /// The limits in force: the built-in ones (`limits.toml`) with the overrides laid over them.
+    #[serde(skip)]
+    pub rate_limits: LimitSettings,
+}
+
+/// The limits in force (`limits.rs`); `limits.toml` documents each.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LimitSettings {
+    pub enabled: bool,
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+    pub ipv6_prefix: u8,
+    pub max_message_bytes: usize,
+    pub max_pending_sockets_per_ip: u32,
+    /// By route: `health`, `signalling`.
+    #[serde(default)]
+    pub http: HashMap<String, RuleTable>,
+    /// By frame type, or `any`.
+    #[serde(default)]
+    pub frames: HashMap<String, RuleTable>,
+}
+
+/// The `[rate_limits]` of `voice_server.toml`. Each limit given replaces the built-in one for
+/// the same place and dimension whole, so one written without `burst` has the default burst
+/// rather than the built-in one's; everything not given keeps its built-in value.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LimitOverrides {
+    pub enabled: Option<bool>,
+    pub trusted_proxies: Option<Vec<String>>,
+    pub ipv6_prefix: Option<u8>,
+    pub max_message_bytes: Option<usize>,
+    pub max_pending_sockets_per_ip: Option<u32>,
+    #[serde(default)]
+    pub http: HashMap<String, RuleTable>,
+    #[serde(default)]
+    pub frames: HashMap<String, RuleTable>,
+}
+
+const BUILT_IN_LIMITS: &str = include_str!("limits.toml");
+
+impl LimitSettings {
+    pub fn built_in() -> Result<Self, config::ConfigError> {
+        config::Config::builder()
+            .add_source(config::File::from_str(
+                BUILT_IN_LIMITS,
+                config::FileFormat::Toml,
+            ))
+            .build()?
+            .get("rate_limits")
+    }
+
+    pub fn overlay(mut self, overrides: LimitOverrides) -> Self {
+        if let Some(enabled) = overrides.enabled {
+            self.enabled = enabled;
+        }
+        if let Some(proxies) = overrides.trusted_proxies {
+            self.trusted_proxies = proxies;
+        }
+        if let Some(prefix) = overrides.ipv6_prefix {
+            self.ipv6_prefix = prefix;
+        }
+        if let Some(bytes) = overrides.max_message_bytes {
+            self.max_message_bytes = bytes;
+        }
+        if let Some(sockets) = overrides.max_pending_sockets_per_ip {
+            self.max_pending_sockets_per_ip = sockets;
+        }
+        aspen_limits::overlay_tables(&mut self.http, overrides.http);
+        aspen_limits::overlay_tables(&mut self.frames, overrides.frames);
+        self
+    }
 }
 
 /// Where WebRTC media is received.
@@ -96,15 +172,23 @@ impl RtcConfig {
 }
 
 pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
+    // Sources added later take precedence: the environment overrides the file.
     config::Config::builder()
+        .add_source(
+            config::File::new("voice_server.toml", config::FileFormat::Toml).required(false),
+        )
         .add_source(
             config::Environment::with_prefix("ASPEN_VOICE_SERVER")
                 .prefix_separator("_")
                 .separator("__"),
         )
-        .add_source(
-            config::File::new("voice_server.toml", config::FileFormat::Toml).required(false),
-        )
         .build()?
-        .try_deserialize()
+        .try_deserialize::<VoiceServerConfig>()
+        .and_then(|mut config| {
+            // Merged here rather than as one more config source, which would merge a limit
+            // given in `voice_server.toml` into the built-in one field by field.
+            config.rate_limits = LimitSettings::built_in()?
+                .overlay(std::mem::take(&mut config.rate_limit_overrides));
+            Ok(config)
+        })
 }

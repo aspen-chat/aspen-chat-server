@@ -4,7 +4,7 @@ use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::create_channel;
 use crate::app::icon::Icon;
-use crate::app::{CommunityId, IconId, Loadable, MaybeLoaded, UserId, publish_event};
+use crate::app::{CommunityId, EventScope, IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::channel;
 use crate::database::schema::community;
 use crate::database::schema::community_user;
@@ -127,6 +127,8 @@ pub(crate) async fn update_community(
             };
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::Community(id),
                 &ServerEvent::Community(CommunityEvent::Update {
                     id,
                     name: command.name,
@@ -165,6 +167,8 @@ pub(crate) async fn delete_community(
             }
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::Community(id),
                 &ServerEvent::Community(CommunityEvent::Delete { id }),
             )
             .await?;
@@ -197,6 +201,15 @@ pub(crate) async fn join_community(
                     return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
                 }
             }
+            let held: i64 = community_user::table
+                .filter(community_user::user.eq(user))
+                .count()
+                .get_result(conn)
+                .await?;
+            let cap = state.config.limits.max_communities_per_user;
+            if held >= i64::from(cap) {
+                return Err(app::Error::Validation(t!("communityLimit", max = cap)));
+            }
             // A new membership goes after everything the user already has in their list.
             let last: Option<i32> = community_user::table
                 .filter(community_user::user.eq(user))
@@ -218,7 +231,13 @@ pub(crate) async fn join_community(
                 sort_index,
             };
             let event = ServerEvent::UserCommunity(UserCommunityEvent::Create(membership.clone()));
-            app::publish_event(state, &event).await?;
+            app::publish_event(
+                state,
+                conn,
+                EventScope::Membership { community, user },
+                &event,
+            )
+            .await?;
             Ok(membership)
         }
         .scope_boxed()
@@ -273,6 +292,8 @@ pub(crate) async fn reorder_membership(
             }
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::Membership { community, user },
                 &ServerEvent::UserCommunity(UserCommunityEvent::Update {
                     community,
                     user,
@@ -307,7 +328,13 @@ pub(crate) async fn leave_community(
         .await?;
     if deleted > 0 {
         let event = ServerEvent::UserCommunity(UserCommunityEvent::Delete { community, user });
-        app::publish_event(state, &event).await?;
+        app::publish_event(
+            state,
+            conn.as_mut(),
+            EventScope::Membership { community, user },
+            &event,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -422,6 +449,8 @@ pub(crate) async fn read_communities_channels(
         .filter(
             channel::community
                 .eq_any(communities)
+                // Threads record their community too, but belong under their parent channel.
+                .and(channel::parent_channel.is_null())
                 .and(channel::deleted_at.is_null()),
         )
         .order_by((channel::community.asc(), channel::sort_index.asc()))
@@ -441,6 +470,7 @@ pub(crate) async fn read_community_channels(
             channel::community
                 .eq(community)
                 .and(channel::parent_category.is_null())
+                .and(channel::parent_channel.is_null())
                 .and(channel::deleted_at.is_null()),
         )
         .order_by(channel::sort_index.asc())

@@ -4,7 +4,7 @@ use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
-use crate::app::{CategoryId, CommunityId, Loadable, MaybeLoaded, publish_event};
+use crate::app::{CategoryId, CommunityId, EventScope, Loadable, MaybeLoaded, publish_event};
 use crate::database::schema::{category, channel};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
@@ -66,7 +66,13 @@ pub(crate) async fn create_category(
         name,
         sort_index,
     }));
-    app::publish_event(state, &event).await?;
+    app::publish_event(
+        state,
+        conn.as_mut(),
+        EventScope::Community(community),
+        &event,
+    )
+    .await?;
     Ok(category)
 }
 
@@ -182,6 +188,8 @@ pub(crate) async fn update_category(
             };
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::CommunityOfCategory(id),
                 &ServerEvent::Category(CategoryEvent::Update {
                     id,
                     name: command.name,
@@ -211,7 +219,13 @@ pub(crate) async fn delete_category(
             if deleted == 0 {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            publish_event(state, &ServerEvent::Category(CategoryEvent::Delete { id })).await?;
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::CommunityOfCategory(id),
+                &ServerEvent::Category(CategoryEvent::Delete { id }),
+            )
+            .await?;
             Ok(())
         }
         .scope_boxed()

@@ -76,7 +76,7 @@ function Steps({ category, close }: { category: Category; close: () => void }) {
           </StepHeading>
           <CreateChannelForm
             communityId={category.community}
-            ty="Text"
+            ty="text"
             parentCategory={category.id}
             onDone={close}
           />
@@ -90,7 +90,7 @@ function Steps({ category, close }: { category: Category; close: () => void }) {
           </StepHeading>
           <CreateChannelForm
             communityId={category.community}
-            ty="Voice"
+            ty="voice"
             parentCategory={category.id}
             onDone={close}
           />

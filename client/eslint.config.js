@@ -56,8 +56,13 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
-    files: ["**/*.js", "**/*.config.ts"],
+    files: ["**/*.js", "**/*.mjs", "**/*.config.ts"],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Node build scripts, not part of any tsconfig, so they are not type-checked above.
+    files: ["**/*.mjs"],
+    languageOptions: { globals: globals.node },
   },
   prettier,
 );

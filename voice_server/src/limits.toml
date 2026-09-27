@@ -1,0 +1,63 @@
+# A voice server's built-in limits. The `[rate_limits]` of `voice_server.toml` (or its
+# `ASPEN_VOICE_SERVER_RATE_LIMITS__…` environment variables) is laid over them: a limit given
+# there replaces the built-in one for the same place and dimension whole, `false` removes it,
+# and everything else keeps its value here. `limits.rs` describes the model.
+#
+# A limit is `{ requests, per_seconds, burst?, bucket? }`, as in the API server's
+# `rate_limits.toml`: `requests` spread evenly over `per_seconds`, up to `burst` back to back
+# (`requests` when omitted), and limits naming the same `bucket` share one budget.
+#
+# `http` limits its two routes, `health` (the latency probe) and `signalling` (opening the
+# socket), along `ip` and `global`. `frames` limits signalling frames by type (their `type` on
+# the wire, `createTransport` for instance, or `any` for every frame) along `user` (one caller,
+# on this server), `ip`, `channel` (one call, whoever sends), and `global`.
+
+[rate_limits]
+enabled = true
+# Reverse proxies whose X-Forwarded-For is believed, as addresses or CIDR networks.
+trusted_proxies = []
+ipv6_prefix = 64
+# The largest signalling message taken, in bytes. The biggest a client sends are its RTP
+# capabilities, a few kilobytes.
+max_message_bytes = 262144
+# Sockets one address may hold open before they identify.
+max_pending_sockets_per_ip = 8
+
+[rate_limits.http.health]
+# Clients probe every candidate when they join a call; a whole office may share the address.
+ip = { requests = 120, per_seconds = 60, burst = 30 }
+
+[rate_limits.http.signalling]
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.frames.any]
+# Joining a big call resumes one consumer per producer already in it.
+user = { requests = 50, per_seconds = 1, burst = 400 }
+
+[rate_limits.frames.identify]
+user = { requests = 20, per_seconds = 60, burst = 10 }
+
+[rate_limits.frames.setCapabilities]
+user = { requests = 10, per_seconds = 60, burst = 5 }
+
+# Each transport takes ports from the media range.
+[rate_limits.frames.createTransport]
+user = { requests = 12, per_seconds = 60, burst = 6 }
+
+[rate_limits.frames.connectTransport]
+user = { requests = 12, per_seconds = 60, burst = 6 }
+
+[rate_limits.frames.produce]
+user = { requests = 20, per_seconds = 60, burst = 10 }
+
+[rate_limits.frames.produceRtp]
+user = { requests = 10, per_seconds = 60, burst = 4 }
+
+[rate_limits.frames.closeProducer]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.frames.setState]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+# Every mute and deafen is reported to the API server and announced to everyone who can see
+# the call.
+channel = { requests = 120, per_seconds = 60, burst = 30 }

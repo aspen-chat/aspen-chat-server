@@ -2,6 +2,29 @@ import type { Page } from "@playwright/test";
 
 export const uuid = "0190f0a0-0000-7000-8000-000000000001";
 
+/** A completed sign-in, as `POST /auth/login` and the second-factor step answer it. */
+export function signedIn(status: "signedIn" | null = "signedIn"): string {
+  return JSON.stringify({
+    ...(status === null ? {} : { status }),
+    userId: uuid,
+    refreshToken: "r",
+    sessionToken: "s",
+    sessionTokenExpires: new Date(Date.now() + 3_600_000).toISOString(),
+    twoFactorEnrollmentRequired: false,
+  });
+}
+
+/** A server that offers passwords only, so the sign-in screen shows no passkey button. */
+export async function stubAuthMethods(page: Page): Promise<void> {
+  await page.route("**/api/v1/auth/methods", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ passkeys: null, twoFactorRequired: false }),
+    }),
+  );
+}
+
 /**
  * Stubs everything the app touches after signing in, so a spec never depends on a backend
  * behind the dev server's proxy: the caller's profile, an empty community list, the token

@@ -13,6 +13,12 @@ extraResources:
   # The renderer: the @aspen/app production build, loaded from `resources/app/index.html`.
   - from: ../app/dist
     to: app
+  # The libobs capture helper, built by `pnpm build:native` (`aspen-obs-capture.exe` on Windows).
+  - from: native
+    to: .
+    filter:
+      - aspen-obs-capture
+      - aspen-obs-capture.exe
 asar: true
 npmRebuild: false
 linux:

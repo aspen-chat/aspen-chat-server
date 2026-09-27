@@ -14,7 +14,9 @@ use crate::api::message_enum::server_event::{
 use crate::api::voice::VoiceSessionEndReason;
 use crate::api::{ChannelType, GlobalServerContext};
 use crate::app;
-use crate::app::{ChannelId, CommunityId, UserId, VoiceServerId, VoiceSessionId, publish_event};
+use crate::app::{
+    ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId, publish_event,
+};
 use crate::database::schema::{
     channel, voice_participant, voice_server, voice_server_failure, voice_session,
 };
@@ -665,6 +667,8 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                         Ok(_) => {
                             publish_event(
                                 state,
+                                conn.as_mut(),
+                                EventScope::Channel(row.channel),
                                 &ServerEvent::VoiceSession(VoiceSessionEvent::Create(
                                     session_record(&row),
                                 )),
@@ -709,6 +713,8 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     if inserted > 0 {
                         publish_event(
                             state,
+                            conn.as_mut(),
+                            EventScope::Channel(existing.channel),
                             &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Create(
                                 participant_record(&row, existing.channel),
                             )),
@@ -746,6 +752,8 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     };
                     publish_event(
                         state,
+                        conn.as_mut(),
+                        EventScope::Channel(existing.channel),
                         &ServerEvent::VoiceSpeaking {
                             channel: existing.channel,
                             user: UserId::from(user),
@@ -778,6 +786,8 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     if changed > 0 {
                         publish_event(
                             state,
+                            conn.as_mut(),
+                            EventScope::Session(session_id),
                             &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Update {
                                 session: session_id,
                                 user: UserId::from(user),
@@ -853,6 +863,8 @@ async fn remove_participant(
     if deleted > 0 {
         publish_event(
             state,
+            conn,
+            EventScope::Channel(session.channel),
             &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Delete {
                 session: session.id,
                 user,
@@ -924,6 +936,8 @@ async fn end_session(
     if deleted > 0 {
         publish_event(
             state,
+            conn,
+            EventScope::Channel(session.channel),
             &ServerEvent::VoiceSessionEnded {
                 id: session.id,
                 channel: session.channel,
@@ -933,6 +947,8 @@ async fn end_session(
         .await?;
         publish_event(
             state,
+            conn,
+            EventScope::Channel(session.channel),
             &ServerEvent::VoiceSession(VoiceSessionEvent::Delete { id: session.id }),
         )
         .await?;

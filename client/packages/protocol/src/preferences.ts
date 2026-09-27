@@ -1,0 +1,277 @@
+import { type AspenClient, problemOf } from "./http";
+import { ApiProblemError } from "./problem";
+
+/**
+ * User preferences. Each preference declares its scope: a `device` preference belongs to this
+ * install (this browser profile, this desktop or mobile app) and lives in the storage the
+ * store was given, which is `localStorage` in a page; an `account` preference belongs to the
+ * user and lives on the server, where every one of their devices sees it and a change on one
+ * reaches the others through the event stream. The store is the one place both are read and
+ * written, so the UI does not care which is which.
+ *
+ * Values are JSON. A definition carries a `parse` that turns whatever was stored into the
+ * value's type or `undefined`, so a stale or malformed entry falls back to the default
+ * instead of surprising the code that reads it.
+ */
+
+export type PreferenceScope = "device" | "account";
+
+export interface PreferenceDefinition<T> {
+  /** Stable, namespaced, such as `audio.input`. It is the storage key and the server key. */
+  readonly key: string;
+  readonly scope: PreferenceScope;
+  readonly fallback: T;
+  readonly parse: (raw: unknown) => T | undefined;
+}
+
+/** The subset of `Storage` the store uses, so tests and shells can supply their own. */
+export interface PreferenceStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+export interface PreferenceStoreOptions {
+  /** Where device preferences live; `null` keeps them in memory for the session only. */
+  storage?: PreferenceStorage | null;
+  /** The account preferences' server; absent, account preferences stay at their defaults. */
+  client?: AspenClient;
+}
+
+const STORAGE_PREFIX = "aspen.preference.";
+
+/** Whatever the system routes to. */
+export const DEFAULT_DEVICE = "default";
+/** For the notification output: the same device voice chat plays through. */
+export const SAME_AS_VOICE = "voice";
+
+/**
+ * A chosen microphone or speaker. Both the browser's id and the label are kept: ids are
+ * salted per site and can change across sessions and after permission changes, so when the
+ * id no longer matches a device the label finds it again.
+ */
+export interface NamedDevice {
+  readonly id: string;
+  readonly label: string;
+}
+
+export type DeviceChoice = typeof DEFAULT_DEVICE | NamedDevice;
+export type NotificationChoice = typeof SAME_AS_VOICE | DeviceChoice;
+
+function parseDevice(raw: unknown): DeviceChoice | undefined {
+  if (raw === DEFAULT_DEVICE) {
+    return raw;
+  }
+  if (typeof raw === "object" && raw !== null && "id" in raw && "label" in raw) {
+    const { id, label } = raw;
+    if (typeof id === "string" && id.length > 0 && id.length <= 512 && typeof label === "string") {
+      return { id, label: label.slice(0, 256) };
+    }
+  }
+  return undefined;
+}
+
+function parseNotification(raw: unknown): NotificationChoice | undefined {
+  return raw === SAME_AS_VOICE ? raw : parseDevice(raw);
+}
+
+/** The microphone voice chat captures. */
+export const AUDIO_INPUT: PreferenceDefinition<DeviceChoice> = {
+  key: "audio.input",
+  scope: "device",
+  fallback: DEFAULT_DEVICE,
+  parse: parseDevice,
+};
+
+/** The speaker voice chat plays through. */
+export const AUDIO_OUTPUT: PreferenceDefinition<DeviceChoice> = {
+  key: "audio.output",
+  scope: "device",
+  fallback: DEFAULT_DEVICE,
+  parse: parseDevice,
+};
+
+/** The speaker notification sounds play through; `SAME_AS_VOICE` follows `AUDIO_OUTPUT`. */
+export const NOTIFICATION_OUTPUT: PreferenceDefinition<NotificationChoice> = {
+  key: "audio.notificationOutput",
+  scope: "device",
+  fallback: SAME_AS_VOICE,
+  parse: parseNotification,
+};
+
+/** How loud one other person is to this user: a gain, 1 being as sent, up to double. */
+export const MAX_USER_VOLUME = 2;
+
+export function userVolume(userId: string): PreferenceDefinition<number> {
+  return {
+    key: `voice.volume.${userId}`,
+    scope: "device",
+    fallback: 1,
+    parse: (raw) =>
+      typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_USER_VOLUME
+        ? raw
+        : undefined,
+  };
+}
+
+/** Whether this user has silenced one other person for themself, keeping their volume for later. */
+export function userMuted(userId: string): PreferenceDefinition<boolean> {
+  return {
+    key: `voice.muted.${userId}`,
+    scope: "device",
+    fallback: false,
+    parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+  };
+}
+
+/** How loud one other person is heard: their volume, or silence while muted for this user. */
+export function effectiveUserVolume(store: PreferenceStore, userId: string): number {
+  return store.get(userMuted(userId)) ? 0 : store.get(userVolume(userId));
+}
+
+/**
+ * Which of the devices at hand a choice means, by id first and by label when the id is no
+ * longer among them; `null` for the system default or a device that is gone.
+ */
+export function resolveDevice(
+  choice: DeviceChoice,
+  devices: readonly Pick<MediaDeviceInfo, "deviceId" | "label">[],
+): string | null {
+  if (choice === DEFAULT_DEVICE) {
+    return null;
+  }
+  const byId = devices.find((device) => device.deviceId === choice.id);
+  if (byId !== undefined) {
+    return byId.deviceId;
+  }
+  const byLabel = devices.find((device) => device.label !== "" && device.label === choice.label);
+  return byLabel?.deviceId ?? null;
+}
+
+export class PreferenceStore {
+  readonly #storage: PreferenceStorage | null;
+  readonly #client: AspenClient | null;
+  readonly #device = new Map<string, unknown>();
+  #account: Record<string, unknown> = {};
+  /**
+   * Parsed values by scope and key. `get` returns the same object for the same stored value,
+   * as React's external-store hook requires of a snapshot; parsing afresh each time would
+   * hand out a new object per call.
+   */
+  readonly #parsed = new Map<string, unknown>();
+  readonly #listeners = new Set<() => void>();
+
+  constructor(options: PreferenceStoreOptions = {}) {
+    this.#storage = options.storage ?? null;
+    this.#client = options.client ?? null;
+  }
+
+  get<T>(definition: PreferenceDefinition<T>): T {
+    const cacheKey = `${definition.scope}:${definition.key}`;
+    if (this.#parsed.has(cacheKey)) {
+      return this.#parsed.get(cacheKey) as T;
+    }
+    const raw =
+      definition.scope === "device"
+        ? this.#readDevice(definition.key)
+        : this.#account[definition.key];
+    const value =
+      raw === undefined ? definition.fallback : (definition.parse(raw) ?? definition.fallback);
+    this.#parsed.set(cacheKey, value);
+    return value;
+  }
+
+  /** Writes the value; an account preference is on the server once this resolves. */
+  async set<T>(definition: PreferenceDefinition<T>, value: T): Promise<void> {
+    if (definition.scope === "device") {
+      this.#device.set(definition.key, value);
+      this.#parsed.delete(`device:${definition.key}`);
+      try {
+        this.#storage?.setItem(STORAGE_PREFIX + definition.key, JSON.stringify(value));
+      } catch {
+        // Storage may be unavailable or full; the value still holds for this session.
+      }
+      this.#notify();
+      return;
+    }
+    if (this.#client === null) {
+      throw new Error("account preferences need a server");
+    }
+    const result = await this.#client.api.PATCH("/api/v1/users/{user}/preferences", {
+      params: { path: { user: "@me" } },
+      body: { [definition.key]: value },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.#account = result.data.values;
+    this.#forgetAccountParses();
+    this.#notify();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  /** Reads the account preferences from the server, at sign-in and when an event says they changed. */
+  async loadAccount(): Promise<void> {
+    if (this.#client === null) {
+      return;
+    }
+    const result = await this.#client.api.GET("/api/v1/users/{user}/preferences", {
+      params: { path: { user: "@me" } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.#account = result.data.values;
+    this.#forgetAccountParses();
+    this.#notify();
+  }
+
+  /** Forgets the account preferences, at sign-out; device preferences stay with the install. */
+  clearAccount(): void {
+    this.#account = {};
+    this.#forgetAccountParses();
+    this.#notify();
+  }
+
+  #forgetAccountParses(): void {
+    for (const key of Array.from(this.#parsed.keys())) {
+      if (key.startsWith("account:")) {
+        this.#parsed.delete(key);
+      }
+    }
+  }
+
+  #readDevice(key: string): unknown {
+    if (this.#device.has(key)) {
+      return this.#device.get(key);
+    }
+    let raw: string | null;
+    try {
+      raw = this.#storage?.getItem(STORAGE_PREFIX + key) ?? null;
+    } catch {
+      raw = null;
+    }
+    let value: unknown;
+    if (raw !== null) {
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        value = undefined;
+      }
+    }
+    this.#device.set(key, value);
+    return value;
+  }
+
+  #notify(): void {
+    for (const listener of this.#listeners) {
+      listener();
+    }
+  }
+}

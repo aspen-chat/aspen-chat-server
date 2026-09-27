@@ -244,7 +244,7 @@ pub async fn delete_user(
     Path(user): Path<UserRef>,
 ) -> ApiResult<NoContent> {
     let user_id = user.resolve(&session);
-    app::user::delete_user(state, session.user.id, user_id)
+    app::user::delete_user(state, &session.caller, user_id)
         .await
         .map_err(not_your_account)?;
     Ok(NoContent)
@@ -258,7 +258,9 @@ pub struct ChangePasswordRequest {
 }
 
 /// Replaces the user's password. Every other session and refresh token belonging to the user is
-/// revoked; the session making this call remains valid.
+/// revoked; the session making this call remains valid. The current password is proof enough
+/// for an account without two-factor sign-in; one with it also needs a recently verified
+/// session.
 #[utoipa::path(
     put,
     path = "/users/{user}/password",
@@ -269,7 +271,7 @@ pub struct ChangePasswordRequest {
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden` or `oldPasswordIncorrect`", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`, `oldPasswordIncorrect`, or `reauthenticationRequired`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -291,10 +293,10 @@ pub async fn change_password(
         .map_err(app::Error::from)?;
     match app::login::try_change_password(
         conn,
-        user_id,
+        &session.caller,
+        &state.config.auth,
         &request.old_password,
         &request.new_password,
-        &session.session_token,
     )
     .await?
     {
@@ -311,11 +313,149 @@ pub async fn change_password(
     }
 }
 
-fn not_your_account(e: app::Error) -> ApiError {
+pub(crate) fn not_your_account(e: app::Error) -> ApiError {
     match e {
         app::Error::Unauthorized => {
             ApiError::new(ProblemCode::Forbidden).with_detail(t!("notYourAccount"))
         }
         other => other.into(),
     }
+}
+
+/// A user's account preferences: a JSON object whose keys the client namespaces, kept on the
+/// server so every device of the user sees the same values.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPreferences {
+    #[schema(value_type = HashMap<String, serde_json::Value>)]
+    pub values: serde_json::Map<String, serde_json::Value>,
+    /// When they were last written; absent until the user has written any.
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// A JSON Merge Patch of the preferences: a key present is written, `null` removes it, keys
+/// absent are untouched.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[schema(value_type = HashMap<String, serde_json::Value>)]
+pub struct UserPreferencesPatch(pub serde_json::Map<String, serde_json::Value>);
+
+fn preferences_to_api(preferences: app::preferences::Preferences) -> UserPreferences {
+    UserPreferences {
+        values: preferences.values,
+        updated_at: preferences.updated_at,
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/users/{user}/preferences",
+    tag = TAG_USERS,
+    params(("user" = inline(UserRef), Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = UserPreferences),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Only the user themself may read their preferences", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_preferences(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path(user): Path<UserRef>,
+) -> ApiResult<Json<UserPreferences>> {
+    let user_id = user.resolve(&session);
+    let preferences = app::preferences::read(&state, session.user.id, user_id)
+        .await
+        .map_err(not_your_account)?;
+    Ok(Json(preferences_to_api(preferences)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/users/{user}/preferences",
+    tag = TAG_USERS,
+    params(("user" = inline(UserRef), Path)),
+    request_body = UserPreferencesPatch,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = UserPreferences),
+        (status = BAD_REQUEST, description = "Not an object, or too large", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Only the user themself may write their preferences", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn update_preferences(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path(user): Path<UserRef>,
+    Json(patch): Json<UserPreferencesPatch>,
+) -> ApiResult<Json<UserPreferences>> {
+    let user_id = user.resolve(&session);
+    let preferences = app::preferences::merge(&state, session.user.id, user_id, patch.0)
+        .await
+        .map_err(not_your_account)?;
+    Ok(Json(preferences_to_api(preferences)))
+}
+
+/// The most users one statuses request may ask about.
+pub const STATUS_QUERY_LIMIT: usize = 100;
+
+/// `GET /users/statuses` parameters: the users to ask about, comma-separated.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct StatusesQuery {
+    /// Comma-separated user ids, at most `STATUS_QUERY_LIMIT` of them.
+    pub ids: String,
+}
+
+/// One user's presence, as `GET /users/statuses` returns it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStatusRecord {
+    pub id: UserId,
+    pub online_status: UserOnlineStatus,
+}
+
+#[utoipa::path(
+    get,
+    path = "/users/statuses",
+    tag = TAG_USERS,
+    params(StatusesQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, description = "The presence of each asked-for user, in the order asked; presence is pulled, never pushed", body = Vec<UserStatusRecord>),
+        (status = BAD_REQUEST, description = "A malformed id, or too many", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_statuses(
+    State(state): State<GlobalServerContext>,
+    _: SessionUser,
+    Query(query): Query<StatusesQuery>,
+) -> ApiResult<Json<Vec<UserStatusRecord>>> {
+    let mut ids = Vec::new();
+    for raw in query
+        .ids
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let id =
+            uuid::Uuid::parse_str(raw).map_err(|_| app::Error::Validation(t!("invalidUserId")))?;
+        ids.push(UserId::from(id));
+    }
+    if ids.len() > STATUS_QUERY_LIMIT {
+        return Err(app::Error::Validation(t!("tooManyIds", max = STATUS_QUERY_LIMIT)).into());
+    }
+    let statuses = app::user::users_online_status(&state, ids).await?;
+    Ok(Json(
+        statuses
+            .into_iter()
+            .map(|(id, online_status)| UserStatusRecord { id, online_status })
+            .collect(),
+    ))
 }

@@ -11,6 +11,7 @@ use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use crate::app::{AttachmentId, ChannelId, MessageId, PollId, UserId};
 use crate::{api, app};
 use axum::extract::State;
+use axum::http::StatusCode;
 use rust_i18n::t;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -21,18 +22,7 @@ pub fn message_to_api(
     attachments: Vec<AttachmentId>,
     link_previews: Vec<LinkPreview>,
 ) -> Message {
-    Message {
-        id: msg.id,
-        author: *msg.author.id(),
-        timestamp: msg.timestamp,
-        edited_at: msg.edited_at,
-        content: msg.content,
-        attachments,
-        channel_id: *msg.channel.id(),
-        link_previews,
-        kind: msg.kind,
-        poll: msg.poll,
-    }
+    app::message::record(&msg, attachments, link_previews)
 }
 
 fn with_relations_to_api(m: app::message::MessageWithRelations) -> Message {
@@ -51,6 +41,10 @@ pub enum MessageInclude {
     /// The polls the messages show or announce, as `included.polls`, with the caller's own
     /// votes on them as `included.pollVotes`.
     Polls,
+    /// The threads the messages started, as `included.channels`, for their reply summaries.
+    Threads,
+    /// The thread replies the messages that are echoes show, as `included.messages`.
+    Echoes,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -82,7 +76,7 @@ async fn sideload_messages(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let (users, attachments, polls) = tokio::try_join!(
+    let (users, attachments, polls, threads, echoes) = tokio::try_join!(
         async {
             if include.contains(MessageInclude::Authors) {
                 let authors: Vec<UserId> = messages
@@ -123,6 +117,24 @@ async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::Threads) {
+                let ids: Vec<ChannelId> = messages.iter().filter_map(|m| m.thread).collect();
+                app::thread::read_threads(state, &ids).await.map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(MessageInclude::Echoes) {
+                let ids: Vec<MessageId> = messages.iter().filter_map(|m| m.echo_of).collect();
+                app::message::read_messages(state, caller, &ids)
+                    .await
+                    .map(|rows| Some(rows.into_iter().map(with_relations_to_api).collect()))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes) = match polls {
         Some((polls, votes)) => (Some(polls), Some(votes)),
@@ -137,6 +149,8 @@ async fn sideload_messages(
         }),
         polls,
         poll_votes,
+        channels: threads,
+        messages: echoes,
         ..Included::default()
     })
 }
@@ -149,8 +163,9 @@ async fn sideload_messages(
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -166,6 +181,7 @@ pub async fn create_message(
         channel,
         request.content,
         request.attachments.clone(),
+        request.echo_to_parent.unwrap_or(false),
     )
     .await?;
     let location = format!("{API_PREFIX}/messages/{}", msg.id.0);
@@ -223,7 +239,7 @@ impl MessageListQuery {
 
 /// Messages are returned newest first for `before` and the default window, oldest first for
 /// `after`, and in ascending id order for `around`. `include` sideloads the messages' authors,
-/// attachments, and polls.
+/// attachments, polls, the threads they started, and the replies their echoes show.
 #[utoipa::path(
     get,
     path = "/channels/{channel}/messages",
@@ -246,11 +262,12 @@ pub async fn list_channel_messages(
 ) -> ApiResult<Json<MessageList>> {
     let include = query.include.clone();
     let window = query.into_window()?;
-    let messages: Vec<Message> = app::channel::read_channel_messages(&state, channel, window)
-        .await?
-        .into_iter()
-        .map(with_relations_to_api)
-        .collect();
+    let messages: Vec<Message> =
+        app::channel::read_channel_messages(&state, user.id, channel, window)
+            .await?
+            .into_iter()
+            .map(with_relations_to_api)
+            .collect();
     let included = sideload_messages(&state, user.id, &messages, &include).await?;
     Ok(Json(MessageList::new(messages, included)))
 }
@@ -276,7 +293,7 @@ pub async fn get_message(
     Path(message): Path<MessageId>,
     Query(query): Query<MessageReadQuery>,
 ) -> ApiResult<Json<MessageRead>> {
-    let m = with_relations_to_api(app::message::read_message(&state, message).await?);
+    let m = with_relations_to_api(app::message::read_message(&state, user.id, message).await?);
     let included =
         sideload_messages(&state, user.id, std::slice::from_ref(&m), &query.include).await?;
     Ok(Json(MessageRead::new(m, included)))
@@ -298,11 +315,11 @@ pub async fn get_message(
 )]
 pub async fn update_message(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(message): Path<MessageId>,
     Json(request): Json<MessageUpdateRequest>,
 ) -> ApiResult<Json<Message>> {
-    let m = app::message::update_message(&state, message, request).await?;
+    let m = app::message::update_message(&state, user.id, message, request).await?;
     Ok(Json(with_relations_to_api(m)))
 }
 
@@ -322,9 +339,40 @@ pub async fn update_message(
 )]
 pub async fn delete_message(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(message): Path<MessageId>,
 ) -> ApiResult<NoContent> {
-    app::message::delete_message(&state, message).await?;
+    app::message::delete_message(&state, user.id, message).await?;
     Ok(NoContent)
+}
+
+/// Opens the thread a message started: made the first time (`201`), returned as it is after
+/// that (`200`). A message in a thread, and an echo, cannot start one.
+#[utoipa::path(
+    put,
+    path = "/messages/{message}/thread",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "The thread, just made", body = crate::api::message_enum::Channel),
+        (status = OK, description = "The thread the message already started", body = crate::api::message_enum::Channel),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the message is in a thread, is an echo, or is in a voice channel)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn open_thread(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(message): Path<MessageId>,
+) -> ApiResult<(StatusCode, Json<crate::api::message_enum::Channel>)> {
+    let (thread, created) = app::thread::open_thread(&state, user.id, message).await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(app::channel::record(&thread, Vec::new()))))
 }

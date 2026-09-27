@@ -100,6 +100,19 @@ class FakeSocket {
         case "produce":
           this.frame({ type: "produced", producerId: `p-${frame.source}`, source: frame.source });
           break;
+        case "produceRtp":
+          this.frame({
+            type: "rtpProduced",
+            producerId: `rtp-${frame.source}`,
+            source: frame.source,
+            ip: "192.0.2.10",
+            port: 40000,
+            ssrc: 1234,
+            payloadType: 96,
+            srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
+            srtpKeyBase64: "a2V5",
+          });
+          break;
         default:
           break;
       }
@@ -116,6 +129,7 @@ class FakeTransport implements VoiceTransport {
   closed = false;
   produced: string[] = [];
   closedProducers: string[] = [];
+  replaced: MediaStreamTrack[] = [];
   consumed: string[] = [];
   connectionState = "new";
   /** Whether ICE succeeds once the microphone is produced. */
@@ -133,7 +147,15 @@ class FakeTransport implements VoiceTransport {
       (handler as (s: string) => void)(state);
     }
   }
-  async produce(options: { track: MediaStreamTrack; appData: Record<string, unknown> }) {
+  readonly codecOptions: Record<string, unknown>[] = [];
+  async produce(options: {
+    track: MediaStreamTrack;
+    appData: Record<string, unknown>;
+    codecOptions?: Record<string, unknown>;
+  }) {
+    if (options.codecOptions !== undefined) {
+      this.codecOptions.push({ source: options.appData.source, ...options.codecOptions });
+    }
     const connect = this.#handler("connect") as
       | ((p: { dtlsParameters: unknown }, cb: () => void, eb: (e: Error) => void) => void)
       | undefined;
@@ -165,6 +187,10 @@ class FakeTransport implements VoiceTransport {
       close: () => {
         this.closedProducers.push(id);
       },
+      replaceTrack: (replacement: { track: MediaStreamTrack }) => {
+        this.replaced.push(replacement.track);
+        return Promise.resolve();
+      },
     };
   }
   consume(options: { id: string }) {
@@ -183,6 +209,7 @@ class FakeTransport implements VoiceTransport {
 /** A media track with the two things the call uses: stopping it, and hearing it end. */
 class FakeTrack {
   stopped = false;
+  contentHint = "";
   #listeners: (() => void)[] = [];
   constructor(readonly kind: "audio" | "video") {}
   stop() {
@@ -201,6 +228,9 @@ class FakeTrack {
 function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = "ok") {
   const transports: FakeTransport[] = [];
   const screens: { video: FakeTrack; audio: FakeTrack }[] = [];
+  const microphones: (string | null)[] = [];
+  const outputs: (string | null)[] = [];
+  const volumes: string[] = [];
   let sendTransports = 0;
   const played: string[] = [];
   const device: VoiceDevice = {
@@ -220,10 +250,19 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   };
   const media: VoiceMedia = {
     createDevice: () => Promise.resolve(device),
-    getMicrophone: () =>
-      microphone === "ok"
+    getMicrophone: (choice) => {
+      microphones.push(choice === "default" ? null : choice.id);
+      return microphone === "ok"
         ? Promise.resolve(new FakeTrack("audio") as unknown as MediaStreamTrack)
-        : Promise.reject(new Error("Permission denied")),
+        : Promise.reject(new Error("Permission denied"));
+    },
+    setOutput: (choice) => {
+      outputs.push(choice === "default" ? null : choice.id);
+      return Promise.resolve();
+    },
+    setVolume: (consumerId, gain) => {
+      volumes.push(`${consumerId}=${String(gain)}`);
+    },
     getScreen: () => {
       const capture = { video: new FakeTrack("video"), audio: new FakeTrack("audio") };
       screens.push(capture);
@@ -236,7 +275,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     },
     stop: () => undefined,
   };
-  return { media, transports, played, screens };
+  return { media, transports, played, screens, microphones, outputs, volumes };
 }
 
 function makeCall(options: {
@@ -245,6 +284,7 @@ function makeCall(options: {
   existing?: boolean;
   unreachableSendTransports?: number;
   microphone?: "ok" | "denied";
+  userVolume?: (userId: string) => number;
 }) {
   FakeSocket.instances = [];
   const calls: string[] = [];
@@ -293,7 +333,7 @@ function makeCall(options: {
   const store = new MemorySessionStore();
   store.save(liveSession());
   const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
-  const { media, transports, played, screens } = fakeMedia(
+  const { media, transports, played, screens, microphones, outputs, volumes } = fakeMedia(
     options.unreachableSendTransports ?? 0,
     options.microphone ?? "ok",
   );
@@ -307,8 +347,9 @@ function makeCall(options: {
       return 0;
     }) as unknown as typeof setTimeout,
     random: () => 0.5,
+    ...(options.userVolume === undefined ? {} : { userVolume: options.userVolume }),
   });
-  return { call, calls, transports, played, screens, timers };
+  return { call, calls, transports, played, screens, microphones, outputs, volumes, timers };
 }
 
 describe("VoiceCall", () => {
@@ -478,11 +519,16 @@ describe("VoiceCall", () => {
     expect(call.state.sharingScreen).toBe(true);
     expect(call.state.localScreen).toBe(screens[0]?.video);
     const produced = socket?.sent.filter((f) => f.type === "produce");
-    expect(produced?.map((f) => (f.type === "produce" ? `${f.kind}:${f.source}` : ""))).toEqual([
+    expect(produced?.map((f) => `${f.kind}:${f.source}`)).toEqual([
       "audio:microphone",
       "video:screen",
       "audio:screenAudio",
     ]);
+    // the screen's sound goes out in stereo at a music bitrate; the microphone keeps the defaults
+    expect(transports[0]?.codecOptions).toEqual([
+      { source: "screenAudio", opusStereo: true, opusDtx: false, opusMaxAverageBitrate: 128_000 },
+    ]);
+    expect(screens[0]?.video.contentHint).toBe("");
     // a second start while sharing is a no-op
     await call.startScreenShare();
     expect(screens).toHaveLength(1);
@@ -508,11 +554,9 @@ describe("VoiceCall", () => {
     expect(call.state.sharingScreen).toBe(false);
     expect(call.state.localScreen).toBeNull();
     expect(transports[0]?.closedProducers).toEqual(["p-screen", "p-screenAudio"]);
-    expect(
-      socket?.sent
-        .filter((f) => f.type === "closeProducer")
-        .map((f) => (f.type === "closeProducer" ? f.producerId : "")),
-    ).toEqual(["p-screen", "p-screenAudio"]);
+    expect(socket?.sent.filter((f) => f.type === "closeProducer").map((f) => f.producerId)).toEqual(
+      ["p-screen", "p-screenAudio"],
+    );
     expect(screens[0]?.video.stopped && screens[0].audio.stopped).toBe(true);
     // sharing again, then leaving, releases the capture
     await call.startScreenShare();
@@ -520,6 +564,152 @@ describe("VoiceCall", () => {
     call.leave();
     expect(call.state.sharingScreen).toBe(false);
     expect(screens[1]?.video.stopped).toBe(true);
+  });
+
+  it("shares a capture made elsewhere, and releases one it cannot use", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, screens } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    const idle = { video: new FakeTrack("video"), audio: null };
+    await call.startScreenShare({
+      prepared: idle as unknown as { video: MediaStreamTrack; audio: null },
+    });
+    expect(idle.video.stopped).toBe(true);
+    await call.join(channel);
+    const prepared = { video: new FakeTrack("video"), audio: null };
+    await call.startScreenShare({
+      prepared: prepared as unknown as { video: MediaStreamTrack; audio: null },
+    });
+    expect(screens).toHaveLength(0);
+    expect(call.state.localScreen).toBe(prepared.video);
+    const produced = FakeSocket.instances[0]?.sent.filter((f) => f.type === "produce");
+    expect(produced?.map((f) => f.source)).toEqual(["microphone", "screen"]);
+    call.stopScreenShare();
+    expect(prepared.video.stopped).toBe(true);
+  });
+
+  it("shares the browser's picture with sound from outside the browser in its place", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports, screens } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    const socket = FakeSocket.instances[0];
+    const started: unknown[] = [];
+    let stopped = 0;
+    const audio = {
+      start: (target: unknown) => {
+        started.push(target);
+        return Promise.resolve();
+      },
+      stop: () => {
+        stopped += 1;
+      },
+    };
+    await call.startScreenShare({ audio, contentHint: "motion" });
+    expect(screens[0]?.video.contentHint).toBe("motion");
+    // the picture is the browser's; its own sound is dropped for the external one
+    expect(
+      socket?.sent.filter((f) => f.type === "produce").map((f) => `${f.kind}:${f.source}`),
+    ).toEqual(["audio:microphone", "video:screen"]);
+    expect(screens[0]?.audio.stopped).toBe(true);
+    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toEqual([
+      { type: "produceRtp", source: "screenAudio" },
+    ]);
+    expect(started).toEqual([
+      {
+        ip: "192.0.2.10",
+        port: 40000,
+        ssrc: 1234,
+        payloadType: 96,
+        srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
+        srtpKeyBase64: "a2V5",
+      },
+    ]);
+    expect(call.state).toMatchObject({ sharingScreen: true, localScreen: screens[0]?.video });
+    // an external share cannot start alongside it
+    const external = { audio: false, start: () => Promise.resolve(), stop: () => undefined };
+    await call.startExternalScreenShare(external);
+    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toHaveLength(1);
+    // stopping ends both the capture and the external sound
+    call.stopScreenShare();
+    expect(stopped).toBe(1);
+    expect(transports[0]?.closedProducers).toEqual(["p-screen"]);
+    expect(socket?.sent.filter((f) => f.type === "closeProducer").map((f) => f.producerId)).toEqual(
+      ["rtp-screenAudio", "p-screen"],
+    );
+    expect(call.state).toMatchObject({ sharingScreen: false, localScreen: null });
+    // sound that cannot start ends the share it was part of
+    const failing = { start: () => Promise.reject(new Error("no route")), stop: () => undefined };
+    await expect(call.startScreenShare({ audio: failing })).rejects.toThrow("no route");
+    expect(call.state.sharingScreen).toBe(false);
+    expect(screens[1]?.video.stopped).toBe(true);
+  });
+
+  it("shares an external sender through RTP producers and previews it from the server", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, played } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    const socket = FakeSocket.instances[0];
+    const started: unknown[] = [];
+    let stopped = 0;
+    const share = {
+      audio: true,
+      start: (targets: unknown) => {
+        started.push(targets);
+        return Promise.resolve();
+      },
+      stop: () => {
+        stopped += 1;
+      },
+    };
+    await call.startExternalScreenShare(share);
+    expect(socket?.sent.slice(-2)).toEqual([
+      { type: "produceRtp", source: "screen" },
+      { type: "produceRtp", source: "screenAudio" },
+    ]);
+    const target = {
+      ip: "192.0.2.10",
+      port: 40000,
+      ssrc: 1234,
+      payloadType: 96,
+      srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
+      srtpKeyBase64: "a2V5",
+    };
+    expect(started).toEqual([{ video: target, audio: target }]);
+    expect(call.state).toMatchObject({ sharingScreen: true, localScreen: null });
+    // the preview is a consumer of the call's own producer
+    socket?.frame({
+      type: "newConsumer",
+      consumerId: "self1",
+      producerId: "rtp-screen",
+      user: me,
+      kind: "video",
+      source: "screen",
+      rtpParameters: {},
+      producerPaused: false,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(call.state.localScreen).not.toBeNull();
+    expect(call.state.screens).toEqual([]);
+    expect(played).toEqual([]);
+    // a second external share while one runs is a no-op
+    await call.startExternalScreenShare(share);
+    expect(started).toHaveLength(1);
+    call.stopScreenShare();
+    expect(stopped).toBe(1);
+    expect(socket?.sent.slice(-2)).toEqual([
+      { type: "closeProducer", producerId: "rtp-screen" },
+      { type: "closeProducer", producerId: "rtp-screenAudio" },
+    ]);
+    expect(call.state).toMatchObject({ sharingScreen: false, localScreen: null });
+    // a share whose sender cannot start is closed again; one without audio asks for one producer
+    const failing = {
+      audio: false,
+      start: () => Promise.reject(new Error("no route")),
+      stop: () => undefined,
+    };
+    await expect(call.startExternalScreenShare(failing)).rejects.toThrow("no route");
+    expect(call.state.sharingScreen).toBe(false);
+    expect(socket?.sent.at(-1)).toEqual({ type: "closeProducer", producerId: "rtp-screen" });
+    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toHaveLength(3);
   });
 
   it("takes a moderator's mute as its own state and a kick as a reason to tell the user", async () => {
@@ -542,6 +732,74 @@ describe("VoiceCall", () => {
     FakeSocket.instances[2]?.frame({ type: "kicked", reason: "serverStopping" });
     expect(call.state.status).toBe("rejoining");
     expect(timers.at(-1)?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
+  });
+
+  it("captures the preferred microphone, swaps it mid-call, and moves playback to the preferred speaker", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports, microphones, outputs } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+    });
+    const micA = { id: "mic-a", label: "A" };
+    const micB = { id: "mic-b", label: "B" };
+    const spkA = { id: "spk-a", label: "S" };
+    await call.setAudioDevices({ input: micA, output: spkA });
+    expect(outputs).toEqual(["spk-a"]);
+    await call.join(channel);
+    expect(microphones).toEqual(["mic-a"]);
+    await call.setAudioDevices({ input: micB, output: spkA });
+    expect(microphones).toEqual(["mic-a", "mic-b"]);
+    expect(transports[0]?.replaced).toHaveLength(1);
+    expect(outputs).toEqual(["spk-a"]);
+    await call.setAudioDevices({ input: micB, output: "default" });
+    expect(outputs).toEqual(["spk-a", null]);
+    expect(transports[0]?.replaced).toHaveLength(1);
+    call.leave();
+    await call.setAudioDevices({ input: { id: "mic-c", label: "C" }, output: "default" });
+    expect(microphones).toEqual(["mic-a", "mic-b"]);
+  });
+
+  it("leaves a call it is already in alone when asked to join it again", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    const offers = () => calls.filter((c) => c.includes("/voice/join")).length;
+    expect(offers()).toBe(1);
+    await call.join(channel);
+    expect(offers()).toBe(1);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(call.state.status).toBe("connected");
+  });
+
+  it("applies each user's volume to their audio, present and future", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, volumes } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      userVolume: (userId) => (userId === "quiet" ? 1.5 : 1),
+    });
+    await call.join(channel);
+    const socket = FakeSocket.instances[0];
+    const arrive = (consumerId: string, user: string) => {
+      socket?.frame({
+        type: "newConsumer",
+        consumerId,
+        producerId: `p-${consumerId}`,
+        user,
+        kind: "audio",
+        source: "microphone",
+        rtpParameters: {},
+        producerPaused: false,
+      });
+    };
+    arrive("a1", "quiet");
+    arrive("a2", "loud");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(volumes).toEqual(["a1=1.5"]);
+    call.setUserVolume("loud", 0.25);
+    expect(volumes).toEqual(["a1=1.5", "a2=0.25"]);
+    call.setUserVolume("nobody", 2);
+    expect(volumes).toHaveLength(2);
   });
 
   it("ranks unreachable servers last and builds signalling URLs", () => {

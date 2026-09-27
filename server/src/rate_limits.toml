@@ -1,0 +1,181 @@
+# Aspen's built-in rate limits. The `[rate_limits]` of `aspen.toml` is laid over them: a limit
+# given there replaces the built-in one for the same place and dimension whole (a limit written
+# without `burst` has the default burst, not the built-in one's), and everything else keeps its
+# value here. `app::rate_limit` describes the model.
+#
+# Every endpoint has the `default` limits, where they apply, plus those of each group listing
+# it; its own `endpoints` entry replaces its groups' limits dimension by dimension. Setting a
+# dimension to `false` on a group or endpoint removes it there, the default's included; in
+# `default` it removes the built-in default.
+#
+# A limit is `{ requests, per_seconds, burst?, bucket? }`: `requests` spread evenly over
+# `per_seconds`, with up to `burst` of them allowed back to back (`requests` when omitted).
+# Requests counted in the same `bucket` share one budget; without a bucket each endpoint counts
+# on its own.
+#
+# Dimensions say whose requests count together:
+#   global            everyone's
+#   ip                one client address (an IPv6 address's /ipv6_prefix network)
+#   user              one signed-in user (authenticated endpoints only)
+#   username          one username given to `POST /auth/login`
+#   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
+#   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
+#   ip_per_<param>    one address's, per value of the path parameter
+#
+# Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
+# document, plus `GET /events` for the event stream and `GET /auth/passkey` for the passkey
+# page (which is served at that path, outside `/api/v1`).
+
+[rate_limits]
+enabled = true
+# Reverse proxies whose X-Forwarded-For is believed, as addresses or CIDR networks.
+trusted_proxies = []
+ipv6_prefix = 64
+
+# Applies to every endpoint, beneath any group or endpoint setting.
+[rate_limits.default]
+# Everything one user does, across the whole API. Generous: the client fetches in bursts when
+# it starts and when it meets unknown users.
+user = { requests = 1200, per_seconds = 60, burst = 300, bucket = "api" }
+# Everything from one address, signed in or not; many people may share one address.
+ip = { requests = 3000, per_seconds = 60, burst = 600, bucket = "api" }
+
+# What a stranger can call to get in: tight per address.
+[rate_limits.groups.sign_in]
+endpoints = [
+  "GET /auth/passkey",
+  "POST /auth/login",
+  "POST /auth/login/second-factor",
+  "POST /auth/passkey-ceremonies",
+  "GET /auth/passkey-ceremonies/{ceremony}",
+  "POST /auth/passkey-ceremonies/{ceremony}/credential",
+  "POST /auth/passkey-ceremonies/{ceremony}/claim",
+]
+limits = { ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" } }
+
+# Changing how an account signs in.
+[rate_limits.groups.security]
+endpoints = [
+  "POST /auth/reauthenticate",
+  "PUT /users/{user}/password",
+  "DELETE /users/{user}",
+  "POST /users/{user}/totp",
+  "DELETE /users/{user}/totp",
+  "POST /users/{user}/totp/confirmation",
+  "PATCH /users/{user}/passkeys/{passkey}",
+  "DELETE /users/{user}/passkeys/{passkey}",
+  "POST /users/{user}/recovery-codes",
+]
+limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "security" } }
+
+# Starting and finishing uploads to object storage.
+[rate_limits.groups.uploads]
+endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /icons", "POST /icons/{icon}/confirm"]
+limits = { user = { requests = 60, per_seconds = 600, burst = 20, bucket = "uploads" } }
+
+# Shaping communities, their channels and invites, calls, and the voice server registry.
+[rate_limits.groups.manage]
+endpoints = [
+  "PATCH /communities/{community}",
+  "DELETE /communities/{community}",
+  "POST /communities/{community}/categories",
+  "PATCH /categories/{category}",
+  "DELETE /categories/{category}",
+  "POST /channels",
+  "PATCH /channels/{channel}",
+  "DELETE /channels/{channel}",
+  "POST /communities/{community}/invites",
+  "PATCH /invites/{code}",
+  "DELETE /invites/{code}",
+  "PATCH /channels/{channel}/voice/participants/{user}",
+  "DELETE /channels/{channel}/voice/participants/{user}",
+  "POST /voice-servers",
+  "PATCH /voice-servers/{server}",
+  "DELETE /voice-servers/{server}",
+]
+limits = { user = { requests = 60, per_seconds = 60, burst = 20, bucket = "manage" } }
+
+[rate_limits.endpoints."POST /auth/login"]
+# Guessing one account's password from many addresses.
+username = { requests = 10, per_seconds = 600, burst = 5 }
+
+[rate_limits.endpoints."POST /users"]
+ip = { requests = 5, per_seconds = 3600, burst = 3 }
+
+[rate_limits.endpoints."POST /auth/token-refresh"]
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."GET /auth/methods"]
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."POST /auth/other-server-token"]
+user = { requests = 10, per_seconds = 60, burst = 5 }
+
+[rate_limits.endpoints."GET /events"]
+# Reconnecting event streams; a whole office may share the address.
+ip = { requests = 60, per_seconds = 60, burst = 30 }
+
+[rate_limits.endpoints."POST /channels/{channel}/messages"]
+user_per_channel = { requests = 5, per_seconds = 5, burst = 10 }
+user = { requests = 60, per_seconds = 60, burst = 20 }
+# A whole channel's flood, however many accounts take part.
+per_channel = { requests = 50, per_seconds = 10, burst = 50 }
+
+[rate_limits.endpoints."POST /channels/{channel}/polls"]
+user_per_channel = { requests = 3, per_seconds = 60, burst = 3 }
+
+[rate_limits.endpoints."PATCH /messages/{message}"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."DELETE /messages/{message}"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."PUT /messages/{message}/reactions/{emoji}/@me"]
+user = { requests = 120, per_seconds = 60, burst = 20, bucket = "reactions" }
+user_per_message = { requests = 20, per_seconds = 10, burst = 20, bucket = "reactions" }
+
+[rate_limits.endpoints."DELETE /messages/{message}/reactions/{emoji}/@me"]
+user = { requests = 120, per_seconds = 60, burst = 20, bucket = "reactions" }
+user_per_message = { requests = 20, per_seconds = 10, burst = 20, bucket = "reactions" }
+
+[rate_limits.endpoints."PUT /messages/{message}/thread"]
+user = { requests = 20, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."PUT /polls/{poll}/votes/{option}/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20, bucket = "votes" }
+
+[rate_limits.endpoints."DELETE /polls/{poll}/votes/{option}/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20, bucket = "votes" }
+
+[rate_limits.endpoints."POST /communities"]
+user = { requests = 10, per_seconds = 3600, burst = 3 }
+
+[rate_limits.endpoints."PUT /communities/{community}/members/@me"]
+user = { requests = 20, per_seconds = 3600, burst = 5 }
+ip = { requests = 60, per_seconds = 3600, burst = 20 }
+
+[rate_limits.endpoints."GET /invites/{code}"]
+# Guessing invite codes.
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."POST /users/@me/dms"]
+user = { requests = 30, per_seconds = 600, burst = 10 }
+
+[rate_limits.endpoints."PUT /channels/{channel}/recipients/{user}"]
+user = { requests = 30, per_seconds = 600, burst = 10 }
+
+[rate_limits.endpoints."GET /users/statuses"]
+# The client asks every thirty seconds per device, and again when a page comes into view.
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."PATCH /users/{user}"]
+user = { requests = 20, per_seconds = 60, burst = 5 }
+
+[rate_limits.endpoints."PATCH /users/{user}/preferences"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."POST /channels/{channel}/voice/join"]
+user = { requests = 20, per_seconds = 60, burst = 5 }
+
+[rate_limits.endpoints."POST /voice-servers/{server}/failures"]
+user = { requests = 10, per_seconds = 60, burst = 5 }

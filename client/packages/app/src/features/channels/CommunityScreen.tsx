@@ -56,7 +56,7 @@ export function CommunityIndex() {
   const m = useMessages();
   const { communityId } = useParams({ from: communityRoute.id });
   const channels = useChannels(communityId);
-  const first = channels.find((c) => c.ty === "Text");
+  const first = channels.find((c) => c.ty === "text");
   if (first !== undefined) {
     return (
       <Navigate

@@ -6,10 +6,35 @@ export {
   unwrap,
   type AspenClientOptions,
   type AspenHttpClient,
+  type AuthMethods,
+  type LoginOutcome,
+  type PasskeyOutcome,
+  type PasskeyRequest,
   type Paths,
+  type ReauthenticationMethod,
   type Schemas,
+  type SecondFactorMethod,
   type SessionListener,
+  type TypedSecondFactor,
 } from "./http";
+export {
+  PasskeyCancelledError,
+  canRunInPage,
+  creationOptions,
+  encodeCredential,
+  fromBase64url,
+  handoffPageUrl,
+  parseHandoffReturn,
+  pkcePair,
+  requestOptions,
+  toBase64url,
+  type HandoffReturn,
+  type HandoffSession,
+  type Passkey,
+  type PasskeyHandoff,
+  type PasskeyPurpose,
+  type PasskeyTransport,
+} from "./passkeys";
 export {
   ApiProblemError,
   isProblem,
@@ -38,6 +63,7 @@ export {
   RecordStore,
   WINDOW_MAX_MESSAGES,
   groupChannels,
+  isDm,
   type Attachment,
   type ChannelVoice,
   type Icon,
@@ -50,6 +76,7 @@ export {
   type Topic,
 } from "./store";
 export {
+  ACTIVITY_INTERVAL_MS,
   AspenSync,
   EVENT_REPLAY_WINDOW_MS,
   MESSAGE_AROUND_RADIUS,
@@ -80,6 +107,7 @@ export type {
   VoiceSessionEndReason,
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
+export { PRESENCE_BATCH, PRESENCE_POLL_MS } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
   MicrophoneError,
@@ -89,7 +117,11 @@ export {
   VoiceCall,
   rankCandidates,
   signallingUrl,
+  type ExternalAudio,
+  type ExternalShare,
+  type ExternalTargets,
   type RankedCandidate,
+  type RtpTarget,
   type RemoteScreen,
   type ScreenCapture,
   type TransportParams,
@@ -101,4 +133,24 @@ export {
   type VoiceMedia,
   type VoiceTransport,
 } from "./voice";
-export { browserVoiceMedia } from "./browserMedia";
+export { browserVoiceMedia, canChooseOutput } from "./browserMedia";
+export {
+  AUDIO_INPUT,
+  AUDIO_OUTPUT,
+  DEFAULT_DEVICE,
+  NOTIFICATION_OUTPUT,
+  MAX_USER_VOLUME,
+  PreferenceStore,
+  SAME_AS_VOICE,
+  effectiveUserVolume,
+  resolveDevice,
+  userMuted,
+  userVolume,
+  type DeviceChoice,
+  type NamedDevice,
+  type NotificationChoice,
+  type PreferenceDefinition,
+  type PreferenceScope,
+  type PreferenceStorage,
+  type PreferenceStoreOptions,
+} from "./preferences";

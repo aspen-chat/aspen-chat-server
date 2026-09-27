@@ -10,6 +10,11 @@ export interface Session {
   sessionToken: string;
   /** RFC 3339 timestamp. */
   sessionTokenExpires: string;
+  /**
+   * The server requires a second factor this account has not added. Until it adds one, the
+   * session can do nothing but add one or sign out.
+   */
+  twoFactorEnrollmentRequired?: boolean;
 }
 
 /**

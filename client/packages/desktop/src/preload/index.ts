@@ -1,4 +1,4 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 /**
  * The only surface the renderer sees from the host. Keep it small and data-only; every entry
@@ -10,5 +10,45 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
+  },
+  // Screen sharing's picker: the main process lists the sources, the page shows them and
+  // answers with the one chosen.
+  displayPicker: {
+    onPick: (listener: (request: unknown) => void) => {
+      const handler = (_event: unknown, request: unknown) => {
+        listener(request);
+      };
+      ipcRenderer.on("display:pick-source", handler);
+      return () => {
+        ipcRenderer.off("display:pick-source", handler);
+      };
+    },
+    choose: (choice: unknown) => {
+      ipcRenderer.send("display:source-chosen", choice);
+    },
+  },
+  // Passkey ceremonies in the system browser; the main process listens for the browser's return.
+  passkeyHandoff: {
+    prepare: () => ipcRenderer.invoke("passkey:prepare"),
+    open: (id: unknown, url: unknown) => ipcRenderer.invoke("passkey:open", id, url),
+    dispose: (id: unknown) => {
+      ipcRenderer.send("passkey:dispose", id);
+    },
+  },
+  // Game capture through libobs; the main process owns the helper that captures and sends it.
+  gameCapture: {
+    kinds: () => ipcRenderer.invoke("voice:capture-kinds"),
+    start: (options: unknown) => ipcRenderer.invoke("voice:capture-start", options),
+    startAudio: (audio: unknown) => ipcRenderer.invoke("voice:capture-start-audio", audio),
+    stop: () => ipcRenderer.invoke("voice:capture-stop"),
+    onEnded: (listener: () => void) => {
+      const handler = () => {
+        listener();
+      };
+      ipcRenderer.on("voice:capture-ended", handler);
+      return () => {
+        ipcRenderer.off("voice:capture-ended", handler);
+      };
+    },
   },
 });

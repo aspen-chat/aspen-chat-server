@@ -27,6 +27,8 @@ import type {
 } from "./generated/events";
 import type { components } from "./generated/openapi";
 
+type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
+
 export type Attachment = components["schemas"]["Attachment"];
 export type Icon = components["schemas"]["Icon"];
 export type Included = components["schemas"]["Included"];
@@ -43,7 +45,10 @@ export type Listener = () => void;
  *   `attachment:<id>`: one record
  * - `channels:<communityId>`, `categories:<communityId>`, `members:<communityId>`: a
  *   community's children, as ids or records
- * - `messages:<channelId>`: the loaded window of a channel's history
+ * - `messages:<channelId>`: the loaded window of a channel's history (a thread's too)
+ * - `dms`: the caller's DMs and group DMs, the most recently active first
+ * - `people`: everyone the caller shares a community with, as far as the members read so far
+ *   show, which is who they may start a DM with
  * - `reactions:<messageId>`: who reacted with what
  * - `poll:<id>`: one poll with its tally, and the calling user's own votes on it
  * - `icon:<id>`: one uploaded icon, which users and communities name by id
@@ -177,6 +182,19 @@ export class RecordStore {
   readonly #myCommunities = new Set<string>();
   /** `community -> sortIndex` from the caller's own memberships: the order of their list. */
   readonly #myOrder = new Map<string, number>();
+  /** The caller's DMs in the order the server listed them, most recently active first. */
+  #dmOrder: string[] = [];
+  /**
+   * The newest activity seen in each DM since it was listed: the id of its latest message, or
+   * the DM's own id when it was made. Both are UUIDv7, so they compare by time, and anything
+   * seen live is newer than the listing.
+   */
+  readonly #dmActivity = new Map<string, string>();
+  /**
+   * Channels that were held and then removed (deleted, or a DM the caller left), so a screen
+   * showing one can tell it is gone rather than not yet read.
+   */
+  readonly #removedChannels = new Set<string>();
 
   readonly #listeners = new Map<Topic, Set<Listener>>();
   readonly #memo = new Map<Topic, unknown>();
@@ -225,6 +243,11 @@ export class RecordStore {
 
   community(id: string): Community | undefined {
     return this.#communities.get(id);
+  }
+
+  /** Topic `channel:<id>`: whether the channel was held and has since been removed. */
+  channelRemoved(id: string): boolean {
+    return this.#removedChannels.has(id);
   }
 
   channel(id: string): Channel | undefined {
@@ -321,11 +344,60 @@ export class RecordStore {
     return this.#memoized(`channels:${communityId}`, () => {
       const list: Channel[] = [];
       for (const channel of this.#channels.values()) {
-        if (channel.community === communityId) {
+        // A thread records its community too, but belongs under its parent channel.
+        if (channel.community === communityId && channel.ty !== "thread") {
           list.push(channel);
         }
       }
       return list.sort(compareBySortIndex);
+    });
+  }
+
+  /**
+   * Topic `dms`: the caller's DMs and group DMs, those with activity seen since they were
+   * listed first (newest first), then the rest in the server's order.
+   */
+  dms(): readonly Channel[] {
+    return this.#memoized("dms", () => {
+      const list: Channel[] = [];
+      for (const channel of this.#channels.values()) {
+        if (isDm(channel)) {
+          list.push(channel);
+        }
+      }
+      const listed = new Map(this.#dmOrder.map((id, index) => [id, index]));
+      return list.sort((a, b) => {
+        const activeA = this.#dmActivity.get(a.id);
+        const activeB = this.#dmActivity.get(b.id);
+        if (activeA !== undefined || activeB !== undefined) {
+          if (activeA === undefined) {
+            return 1;
+          }
+          if (activeB === undefined) {
+            return -1;
+          }
+          return activeB.localeCompare(activeA);
+        }
+        return (listed.get(a.id) ?? Infinity) - (listed.get(b.id) ?? Infinity);
+      });
+    });
+  }
+
+  /**
+   * Topic `people`: the ids of everyone in the caller's communities besides the caller, from
+   * the member lists read so far, sorted.
+   */
+  people(): readonly string[] {
+    return this.#memoized("people", () => {
+      const ids = new Set<string>();
+      for (const communityId of this.#myCommunities) {
+        for (const userId of this.#members.get(communityId) ?? []) {
+          if (userId !== this.#myUserId) {
+            ids.add(userId);
+          }
+        }
+      }
+      return Array.from(ids).sort();
     });
   }
 
@@ -494,6 +566,10 @@ export class RecordStore {
       for (const channel of included.channels ?? []) {
         this.#putChannel(channel);
       }
+      // Messages outside any loaded window, such as the thread replies echoes show.
+      for (const message of included.messages ?? []) {
+        this.#putMessage(message);
+      }
       for (const category of included.categories ?? []) {
         this.#putCategory(category);
       }
@@ -648,6 +724,7 @@ export class RecordStore {
         this.#putMessage(message);
       }
       this.#appendToWindow(message);
+      this.#noteDmActivity(message.channelId, message.id);
     });
   }
 
@@ -714,6 +791,27 @@ export class RecordStore {
   }
 
   /** Forgets everything, for sign-out. */
+  /**
+   * Installs the caller's DMs as the server listed them, most recently active first, dropping
+   * any the cache held that the list no longer has.
+   */
+  setDms(dms: readonly Channel[]): void {
+    this.#batch(() => {
+      const listed = new Set(dms.map((dm) => dm.id));
+      for (const channel of Array.from(this.#channels.values())) {
+        if (isDm(channel) && !listed.has(channel.id)) {
+          this.#removeChannel(channel.id);
+        }
+      }
+      this.#dmOrder = dms.map((dm) => dm.id);
+      this.#dmActivity.clear();
+      for (const dm of dms) {
+        this.#putChannel(dm);
+      }
+      this.#touch("dms");
+    });
+  }
+
   clear(): void {
     this.#batch(() => {
       for (const topic of this.#listeners.keys()) {
@@ -737,6 +835,9 @@ export class RecordStore {
       this.#invites.clear();
       this.#myCommunities.clear();
       this.#myOrder.clear();
+      this.#dmOrder = [];
+      this.#dmActivity.clear();
+      this.#removedChannels.clear();
       this.#myUserId = null;
       this.#memo.clear();
     });
@@ -766,13 +867,6 @@ export class RecordStore {
             this.#removeUser(event.id);
           }
           break;
-        case "userStatus": {
-          const user = this.#users.get(event.id);
-          if (user !== undefined && user.onlineStatus !== event.status) {
-            this.#putUser({ ...user, onlineStatus: event.status });
-          }
-          break;
-        }
         case "community":
           if (event.type === "create") {
             this.#putCommunity(created(event));
@@ -811,7 +905,17 @@ export class RecordStore {
           } else if (event.type === "update") {
             const channel = this.#channels.get(event.id);
             if (channel !== undefined) {
-              this.#putChannel(mergePatch(channel, event));
+              const updated = mergePatch(channel, event);
+              // A DM whose recipients no longer include the caller is one they left.
+              if (
+                isDm(updated) &&
+                this.#myUserId !== null &&
+                !updated.recipients.includes(this.#myUserId)
+              ) {
+                this.#removeChannel(updated.id);
+              } else {
+                this.#putChannel(updated);
+              }
             }
           } else {
             this.#removeChannel(event.id);
@@ -834,6 +938,7 @@ export class RecordStore {
             const message = created(event);
             this.#putMessage(message);
             this.#appendToWindow(message);
+            this.#noteDmActivity(message.channelId, message.id);
           } else if (event.type === "update") {
             const message = this.#messages.get(event.id);
             if (message !== undefined) {
@@ -878,12 +983,8 @@ export class RecordStore {
           break;
         }
         case "invite":
-          // Only invites of the caller's own communities are kept; every other invite event
-          // is noise under the current everyone-gets-every-event routing.
           if (event.type === "create") {
-            if (this.#myCommunities.has(event.community)) {
-              this.#putInvite(created(event));
-            }
+            this.#putInvite(created(event));
           } else if (event.type === "update") {
             const invite = this.#invites.get(event.code);
             if (invite !== undefined) {
@@ -995,6 +1096,40 @@ export class RecordStore {
     }
   }
 
+  /**
+   * The presence of users, as `GET /users/statuses` answered. Presence is pulled for the users
+   * on screen rather than pushed, so this is the only way it changes after a bootstrap.
+   */
+  applyStatuses(statuses: readonly { id: string; onlineStatus: UserOnlineStatus }[]): void {
+    this.#batch(() => {
+      for (const { id, onlineStatus } of statuses) {
+        const user = this.#users.get(id);
+        if (user !== undefined && user.onlineStatus !== onlineStatus) {
+          this.#putUser({ ...user, onlineStatus });
+        }
+      }
+    });
+  }
+
+  /**
+   * The users whose presence is worth asking for: the members shown for every community the
+   * user is in, and everyone in a call.
+   */
+  presenceCandidates(): string[] {
+    const ids = new Set<string>();
+    for (const community of this.communities()) {
+      for (const id of this.memberIds(community.id)) {
+        ids.add(id);
+      }
+      for (const channel of this.channels(community.id)) {
+        for (const participant of this.channelVoice(channel.id).participants) {
+          ids.add(participant.user);
+        }
+      }
+    }
+    return Array.from(ids);
+  }
+
   #putUser(user: User): void {
     this.#users.set(user.id, user);
     this.#touch(`user:${user.id}`);
@@ -1010,6 +1145,7 @@ export class RecordStore {
   #touchMembers(communityId: string): void {
     this.#memo.delete(`members-records:${communityId}`);
     this.#touch(`members:${communityId}`);
+    this.#touch("people");
   }
 
   #removeUser(id: string): void {
@@ -1059,7 +1195,15 @@ export class RecordStore {
   #putChannel(channel: Channel): void {
     const previous = this.#channels.get(channel.id);
     this.#channels.set(channel.id, channel);
+    this.#removedChannels.delete(channel.id);
     this.#touch(`channel:${channel.id}`);
+    if (isDm(channel)) {
+      // A DM the listing did not have is new, so newer than everything listed.
+      if (!this.#dmOrder.includes(channel.id) && !this.#dmActivity.has(channel.id)) {
+        this.#dmActivity.set(channel.id, channel.id);
+      }
+      this.#touch("dms");
+    }
     if (previous?.community != null) {
       this.#touch(`channels:${previous.community}`);
     }
@@ -1074,7 +1218,13 @@ export class RecordStore {
       return;
     }
     this.#channels.delete(id);
+    this.#removedChannels.add(id);
     this.#touch(`channel:${id}`);
+    if (isDm(channel)) {
+      this.#dmOrder = this.#dmOrder.filter((other) => other !== id);
+      this.#dmActivity.delete(id);
+      this.#touch("dms");
+    }
     for (const session of Array.from(this.#voiceSessions.values())) {
       if (session.channel === id) {
         this.#removeVoiceSession(session.id);
@@ -1123,6 +1273,19 @@ export class RecordStore {
     if (this.#myOrder.get(communityId) !== sortIndex) {
       this.#myOrder.set(communityId, sortIndex);
       this.#touch("communities");
+    }
+  }
+
+  /** Moves a DM up the list when a message arrives in it. */
+  #noteDmActivity(channelId: string, messageId: string): void {
+    const channel = this.#channels.get(channelId);
+    if (channel === undefined || !isDm(channel)) {
+      return;
+    }
+    const seen = this.#dmActivity.get(channelId);
+    if (seen === undefined || messageId > seen) {
+      this.#dmActivity.set(channelId, messageId);
+      this.#touch("dms");
     }
   }
 
@@ -1316,6 +1479,11 @@ export class RecordStore {
 }
 
 /** Splits a community's channels into those under each category and the top-level rest. */
+/** Whether a channel is a DM or group DM. */
+export function isDm(channel: Channel): boolean {
+  return channel.ty === "dm" || channel.ty === "groupDm";
+}
+
 export function groupChannels(
   channels: readonly Channel[],
   categories: readonly Category[],

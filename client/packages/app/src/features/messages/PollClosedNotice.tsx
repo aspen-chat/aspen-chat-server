@@ -1,6 +1,7 @@
 import { ChartBarIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { usePoll } from "@/api/hooks";
+import { messageLink, type ChannelHome } from "@/features/messages/links";
 import { outcomeText } from "@/features/messages/poll";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -12,11 +13,11 @@ import { format } from "@/i18n/messages";
  */
 export function PollClosedNotice({
   pollId,
-  communityId,
+  home,
   channelId,
 }: {
   pollId: string;
-  communityId: string;
+  home: ChannelHome;
   channelId: string;
 }) {
   const m = useMessages();
@@ -30,8 +31,7 @@ export function PollClosedNotice({
         <span>
           {format(m.poll.closedNotice, { question: poll.question })} {outcomeText(m, poll)}{" "}
           <Link
-            to="/communities/$communityId/channels/$channelId/messages/$messageId"
-            params={{ communityId, channelId, messageId: poll.messageId }}
+            {...messageLink(home, channelId, poll.messageId)}
             className="text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             {m.poll.showPoll}

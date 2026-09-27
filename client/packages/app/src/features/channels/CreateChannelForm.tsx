@@ -75,7 +75,7 @@ export function CreateChannelForm({
         parentCategory: category === NO_CATEGORY ? null : category,
       });
       onDone();
-      if (channel.ty === "Text") {
+      if (channel.ty === "text") {
         await navigate({
           to: "/communities/$communityId/channels/$channelId",
           params: { communityId, channelId: channel.id },

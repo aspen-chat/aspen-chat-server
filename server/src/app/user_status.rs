@@ -1,130 +1,73 @@
-use crate::api::message_enum::server_event::ServerEvent;
+//! Presence. Two Valkey keys per user describe it:
+//!
+//! - `user:{uuid}:online` exists while the user has a connection: it is set with a short expiry
+//!   when they connect the event stream (or make any authenticated request) and refreshed by the
+//!   stream's pings, so it expires shortly after their last connection goes.
+//! - `user:{uuid}:active` exists while they are using Aspen: a client sends an `activity` frame
+//!   on its event stream while its user interacts with it, and each sets the key to expire after
+//!   `[presence] away_after_seconds`.
+//!
+//! A user is online while both exist, away while only the first does, and offline otherwise.
+//! Because both keys are the user's, not a connection's, any active device keeps them online and
+//! any connected one keeps them from going offline, whichever API server each device talks to.
+//! Nothing announces a change: clients ask for the status of the users they show
+//! (`GET /users/statuses`) when they need it.
+
+use crate::api::GlobalServerContext;
 use crate::api::user::UserOnlineStatus;
-use crate::app::{self, ASPEN_NATS_STREAM_NAME, UserId};
-use std::sync::Arc;
-use tracing::warn;
+use crate::app::UserId;
+use fred::interfaces::KeysInterface;
+use fred::types::Expiration;
 
-async fn publish_status_event(
-    nats: &async_nats::jetstream::Context,
-    user_id: UserId,
-    status: UserOnlineStatus,
-) -> app::error::Result<()> {
-    let event = ServerEvent::UserStatus {
-        id: user_id,
-        status,
-    };
-    nats.publish(
-        ASPEN_NATS_STREAM_NAME,
-        serde_json::to_string(&event)?.into_bytes().into(),
-    )
-    .await?
-    .await?;
-    Ok(())
-}
-
-pub async fn publish_online(
-    nats: &async_nats::jetstream::Context,
-    user_id: UserId,
-) -> app::error::Result<()> {
-    publish_status_event(nats, user_id, UserOnlineStatus::Online).await
-}
-
-pub async fn publish_offline(
-    nats: &async_nats::jetstream::Context,
-    user_id: UserId,
-) -> app::error::Result<()> {
-    publish_status_event(nats, user_id, UserOnlineStatus::Offline).await
-}
-
-const ONLINE_KEY_PREFIX: &str = "user:";
+const KEY_PREFIX: &str = "user:";
 const ONLINE_KEY_SUFFIX: &str = ":online";
+const ACTIVE_KEY_SUFFIX: &str = ":active";
 
-/// The Valkey key whose presence means the user is online: `user:{uuid}:online`. The uuid is
-/// written bare, not through `UserId`'s `Display`, so that `parse_user_id_from_key` can read
-/// it back when the key expires.
+/// The Valkey key whose presence means the user has a connection: `user:{uuid}:online`.
 pub fn online_key(user_id: UserId) -> String {
-    format!("{ONLINE_KEY_PREFIX}{}{ONLINE_KEY_SUFFIX}", user_id.0)
+    format!("{KEY_PREFIX}{}{ONLINE_KEY_SUFFIX}", user_id.0)
 }
 
-/// Parse a user ID from a Valkey key of the form `user:{uuid}:online`.
-fn parse_user_id_from_key(key: &str) -> Option<UserId> {
-    let rest = key.strip_prefix(ONLINE_KEY_PREFIX)?;
-    let uuid_str = rest.strip_suffix(ONLINE_KEY_SUFFIX)?;
-    uuid::Uuid::parse_str(uuid_str).ok().map(UserId::from)
+/// The Valkey key whose presence means the user has recently used Aspen: `user:{uuid}:active`.
+pub fn active_key(user_id: UserId) -> String {
+    format!("{KEY_PREFIX}{}{ACTIVE_KEY_SUFFIX}", user_id.0)
 }
 
-/// Subscribes to Valkey keyspace expiry notifications and publishes offline events.
-///
-/// Uses a distributed lock (`SET NX EX 5`) to ensure only one server instance
-/// publishes the offline event when multiple API servers are behind a load balancer.
-///
-/// `subscriber` is the connection that holds the `psubscribe`; `commands` is an ordinary
-/// connection. They must be different clients: a connection in subscribe mode accepts nothing
-/// but subscription commands, so the lock's `SET` would be refused on `subscriber`.
-pub fn spawn_expiry_listener(
-    subscriber: fred::clients::Client,
-    commands: fred::clients::Client,
-    nats: Arc<async_nats::jetstream::Context>,
-) -> tokio::task::JoinHandle<Result<(), fred::error::Error>> {
-    use fred::prelude::{EventInterface, KeysInterface};
+/// A user's status from the values of their two keys.
+pub fn status(online: Option<i64>, active: Option<i64>) -> UserOnlineStatus {
+    match (online, active) {
+        (Some(_), Some(_)) => UserOnlineStatus::Online,
+        (Some(_), None) => UserOnlineStatus::Away,
+        (None, _) => UserOnlineStatus::Offline,
+    }
+}
 
-    subscriber.on_keyspace_event(move |event| {
-        let nats = nats.clone();
-        let valkey = commands.clone();
-        async move {
-            if event.operation != "expired" {
-                return Ok(());
-            }
-            let Some(key_str) = event.key.as_str() else {
-                return Ok(());
-            };
-            let Some(user_id) = parse_user_id_from_key(key_str) else {
-                return Ok(());
-            };
-
-            // Attempt to acquire a short-lived distributed lock.
-            // Only the server that wins the lock publishes the offline event.
-            let lock_key = format!("user:{}:offline_lock", user_id);
-            let acquired: bool = match valkey
-                .set::<fred::types::Value, _, _>(
-                    &lock_key,
-                    "1",
-                    Some(fred::types::Expiration::EX(5)),
-                    Some(fred::types::SetOptions::NX),
-                    false,
-                )
-                .await
-            {
-                Ok(v) => !v.is_null(),
-                Err(e) => {
-                    warn!(error = %e, "failed to acquire offline lock in Valkey");
-                    return Ok(());
-                }
-            };
-
-            if acquired && let Err(e) = publish_offline(&nats, user_id).await {
-                warn!(error = %e, %user_id, "failed to publish user offline event");
-            }
-
-            Ok(())
+/// Records that the user is using Aspen, for `[presence] away_after_seconds`. Fire and forget:
+/// presence is best effort.
+pub fn mark_active(state: &GlobalServerContext, user: UserId) {
+    let valkey = state.valkey.clone();
+    let key = active_key(user);
+    let ttl = i64::try_from(state.config.presence.away_after_seconds).unwrap_or(i64::MAX);
+    tokio::spawn(async move {
+        if let Err(e) = valkey
+            .set::<(), _, i64>(key, 1, Some(Expiration::EX(ttl)), None, false)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to record the user as active");
         }
-    })
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The key the presence writer produces must be the key the expiry listener recognises,
-    /// or users never go offline.
     #[test]
-    fn online_key_round_trips_through_the_parser() {
-        let id = UserId::new();
-        assert_eq!(parse_user_id_from_key(&online_key(id)), Some(id));
-        assert_eq!(parse_user_id_from_key(&format!("user:{id}:online")), None);
-        assert_eq!(
-            parse_user_id_from_key(&format!("user:{}:offline_lock", id.0)),
-            None
-        );
+    fn a_connection_without_recent_activity_is_away() {
+        assert!(matches!(status(Some(1), Some(1)), UserOnlineStatus::Online));
+        assert!(matches!(status(Some(1), None), UserOnlineStatus::Away));
+        assert!(matches!(status(None, None), UserOnlineStatus::Offline));
+        // Activity outliving the last connection does not keep anyone online.
+        assert!(matches!(status(None, Some(1)), UserOnlineStatus::Offline));
     }
 }

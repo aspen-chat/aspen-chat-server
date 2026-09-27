@@ -11,7 +11,8 @@ services:
     ports:
       - "5432:5432"
   nats:
-    image: nats:alpine
+    # 2.10 or later: the event stream reads several subjects with one consumer.
+    image: nats:2.11-alpine
     command: --jetstream --auth aspen_test
     ports:
       - "4222:4222"

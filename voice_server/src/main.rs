@@ -2,6 +2,7 @@
 //! clients, `rooms` for the calls it carries, and `voice_server.toml` for its settings.
 
 mod config;
+mod limits;
 mod reporter;
 mod rooms;
 mod signalling;
@@ -46,6 +47,10 @@ async fn main() -> anyhow::Result<()> {
     }
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
+    let limits = Arc::new(
+        limits::Limits::new(&config.rate_limits)
+            .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,
+    );
 
     let manager = WorkerManager::new();
     let mut workers = Vec::new();
@@ -54,9 +59,6 @@ async fn main() -> anyhow::Result<()> {
         settings.log_level = WorkerLogLevel::Warn;
         settings.log_tags = vec![WorkerLogTag::Info];
         settings.rtc_port_range = config.rtc.min_port..=config.rtc.max_port;
-        // io_uring needs locked memory the worker may not be allowed; the worker falls back
-        // to libuv either way, so it is left off rather than logged as a failure every start.
-        settings.enable_liburing = false;
         workers.push(manager.create_worker(settings).await?);
     }
     info!(workers = workers.len(), "mediasoup workers started");
@@ -112,25 +114,39 @@ async fn main() -> anyhow::Result<()> {
         server: config.id,
         token_secret: config.token_secret.clone().into(),
         rooms: Arc::clone(&rooms),
+        limits,
     };
-    // The health check is what clients measure latency against, from any origin.
+    // The health check is what clients measure latency against, from any origin. The limits
+    // run inside the CORS layer, so a refusal still reaches the page that asked.
     let app = Router::new()
         .route("/health", get(|| async { StatusCode::NO_CONTENT }))
         .route("/ws", get(signalling::upgrade))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            signalling::limit_http,
+        ))
         .with_state(state)
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any));
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .expose_headers([axum::http::header::RETRY_AFTER]),
+        );
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     info!(
         addr = config.listen_addr.to_string(),
         server = config.id.to_string(),
         "voice server listening"
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            info!("shutting down");
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+        info!("shutting down");
+    })
+    .await?;
     rooms.shutdown().await;
     Ok(())
 }

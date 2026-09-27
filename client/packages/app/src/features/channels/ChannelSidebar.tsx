@@ -1,11 +1,5 @@
 import { groupChannels, type Channel, type Community } from "@aspen/protocol";
-import {
-  DotsSixVerticalIcon,
-  HashIcon,
-  ImageIcon,
-  SignOutIcon,
-  SpeakerHighIcon,
-} from "@phosphor-icons/react";
+import { DotsSixVerticalIcon, HashIcon, ImageIcon, SpeakerHighIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   Button,
@@ -16,7 +10,6 @@ import {
   useDragAndDrop,
   type DropItem,
 } from "react-aria-components";
-import { useAspenClient } from "@/api/context";
 import { useCategories, useChannels, useMe, useSync } from "@/api/hooks";
 import { AddDialog } from "@/features/channels/AddDialog";
 import { AddToCategoryDialog } from "@/features/channels/AddToCategoryDialog";
@@ -25,12 +18,12 @@ import { InviteDialog } from "@/features/invites/InviteDialog";
 import { insertIds, reorderIds } from "@/features/layout/reorder";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { IconPicker } from "@/features/media/IconPicker";
+import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import { EditProfileDialog } from "@/features/users/EditProfileDialog";
 import { CallBar } from "@/features/voice/CallBar";
 import { VoiceEndedDialog } from "@/features/voice/VoiceEndedDialog";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
 import { displayNameOf, statusLine } from "@/features/users/profile";
-import { ThemePicker } from "@/theme/ThemePicker";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -166,6 +159,9 @@ function ChannelGroup({
     <GridList
       aria-label={label}
       items={channels}
+      // Each row's rendering is cached by its channel; the highlight on the current channel
+      // comes from the route, so the route is declared as a dependency.
+      dependencies={[current]}
       selectionMode="none"
       renderEmptyState={() => (
         <p className="rounded-md border border-dashed border-line px-2 py-1 text-xs text-ink-faint">
@@ -174,12 +170,12 @@ function ChannelGroup({
       )}
       onAction={(key) => {
         const channel = channels.find((c) => c.id === key);
-        if (channel?.ty === "Text") {
+        if (channel?.ty === "text") {
           void navigate({
             to: "/communities/$communityId/channels/$channelId",
             params: { communityId: channel.community ?? "", channelId: channel.id },
           });
-        } else if (channel?.ty === "Voice") {
+        } else if (channel?.ty === "voice") {
           void navigate({
             to: "/communities/$communityId/channels/$channelId",
             params: { communityId: channel.community ?? "", channelId: channel.id },
@@ -200,7 +196,7 @@ function ChannelGroup({
             (channel.id === current ? "bg-surface-hover font-medium text-ink" : "")
           }
         >
-          {channel.ty === "Text" ? (
+          {channel.ty === "text" ? (
             <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
           ) : (
             <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
@@ -214,7 +210,7 @@ function ChannelGroup({
           >
             <DotsSixVerticalIcon size={14} aria-hidden="true" />
           </Button>
-          {channel.ty === "Voice" && (
+          {channel.ty === "voice" && (
             <div className="basis-full">
               <VoiceParticipants channelId={channel.id} />
             </div>
@@ -234,9 +230,7 @@ const footerButtonClass =
   "focus-visible:ring-2 focus-visible:ring-accent/50";
 
 function UserFooter() {
-  const m = useMessages();
   const me = useMe();
-  const client = useAspenClient();
   return (
     <div className="flex items-center gap-2 border-t border-line px-3 py-2">
       {me !== null && <Avatar name={displayNameOf(me)} iconId={me.icon} size="sm" />}
@@ -249,18 +243,7 @@ function UserFooter() {
         )}
       </span>
       {me !== null && <EditProfileDialog user={me} triggerClassName={footerButtonClass} />}
-      <ThemePicker />
-      <Tooltip text={m.signOut}>
-        <Button
-          aria-label={m.signOut}
-          onPress={() => {
-            void client.logout();
-          }}
-          className={footerButtonClass}
-        >
-          <SignOutIcon size={16} aria-hidden="true" />
-        </Button>
-      </Tooltip>
+      <SettingsDialog triggerClassName={footerButtonClass} />
     </div>
   );
 }

@@ -1,14 +1,43 @@
-import { ApiProblemError } from "@aspen/protocol";
+import {
+  ApiProblemError,
+  PasskeyCancelledError,
+  type PasskeyTransport,
+  type SecondFactorMethod,
+  type TypedSecondFactor,
+} from "@aspen/protocol";
+import { KeyIcon } from "@phosphor-icons/react";
 import { useState, type SyntheticEvent } from "react";
 import { Button, FieldError, Form, Input, Label, TextField } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
-import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
+import { usePasskeyTransport } from "./passkeyTransport";
+import { SecondFactorFields } from "./SecondFactorFields";
+import {
+  alertClass,
+  fieldClass,
+  inputClass,
+  labelClass,
+  linkButtonClass,
+  outlineButtonClass,
+  primaryButtonClass,
+} from "./styles";
+
+type Step =
+  { kind: "password" } | { kind: "secondFactor"; ticket: string; methods: SecondFactorMethod[] };
+
+/** Why an attempt failed, as the form shows it; `null` when the user backed out. */
+function failure(e: unknown): string | null {
+  if (e instanceof PasskeyCancelledError) {
+    return null;
+  }
+  return e instanceof ApiProblemError ? e.message : String(e);
+}
 
 /**
- * Username and password against the currently selected server. Failures show the server's
- * localized Problem text.
+ * Signing in to the currently selected server: a username and password, then a second factor
+ * when the account has two-factor sign-in on; or a passkey on its own. Failures show the
+ * server's localized Problem text.
  */
 export function LoginForm({
   serverUrl,
@@ -19,20 +48,204 @@ export function LoginForm({
   onChangeServer: () => void;
   onSwitchToRegister: () => void;
 }) {
+  const transport = usePasskeyTransport();
+  const [step, setStep] = useState<Step>({ kind: "password" });
+  const [error, setError] = useState<string | null>(null);
+
+  if (step.kind === "secondFactor") {
+    return (
+      <SecondFactorStep
+        ticket={step.ticket}
+        methods={step.methods}
+        transport={transport}
+        onStartOver={(reason) => {
+          setError(reason);
+          setStep({ kind: "password" });
+        }}
+      />
+    );
+  }
+  return (
+    <PasswordStep
+      serverUrl={serverUrl}
+      transport={transport}
+      error={error}
+      setError={setError}
+      onSecondFactor={(ticket, methods) => {
+        setError(null);
+        setStep({ kind: "secondFactor", ticket, methods });
+      }}
+      onChangeServer={onChangeServer}
+      onSwitchToRegister={onSwitchToRegister}
+    />
+  );
+}
+
+function PasswordStep({
+  serverUrl,
+  transport,
+  error,
+  setError,
+  onSecondFactor,
+  onChangeServer,
+  onSwitchToRegister,
+}: {
+  serverUrl: string;
+  transport: PasskeyTransport | null;
+  error: string | null;
+  setError: (error: string | null) => void;
+  onSecondFactor: (ticket: string, methods: SecondFactorMethod[]) => void;
+  onChangeServer: () => void;
+  onSwitchToRegister: () => void;
+}) {
   const m = useMessages();
   const client = useAspenClient();
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<"password" | "passkey" | null>(null);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    setPending("password");
+    setError(null);
+    try {
+      const outcome = await client.login(
+        formString(data, "username"),
+        formString(data, "password"),
+      );
+      if (outcome.status === "secondFactorRequired") {
+        onSecondFactor(outcome.ticket, outcome.methods);
+      }
+    } catch (e) {
+      setError(failure(e));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function passkey(transport: PasskeyTransport) {
+    setPending("passkey");
+    setError(null);
+    try {
+      await client.runPasskeyCeremony({ purpose: "signIn" }, transport);
+    } catch (e) {
+      setError(failure(e));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="flex w-full max-w-sm flex-col gap-4">
+      <Form
+        onSubmit={(e) => {
+          void submit(e);
+        }}
+        className="flex flex-col gap-4"
+      >
+        <h1 className="text-2xl font-semibold">{m.loginHeading}</h1>
+        <div className="flex items-baseline justify-between text-sm text-ink-muted">
+          <span>
+            {m.serverLabel}: <span className="font-mono">{serverUrl}</span>
+          </span>
+          <Button onPress={onChangeServer} className={linkButtonClass}>
+            {m.changeServer}
+          </Button>
+        </div>
+        <TextField
+          name="username"
+          isRequired
+          autoComplete="username webauthn"
+          className={fieldClass}
+        >
+          <Label className={labelClass}>{m.usernameLabel}</Label>
+          <Input className={inputClass} />
+          <FieldError className="text-sm text-danger" />
+        </TextField>
+        <TextField
+          name="password"
+          type="password"
+          isRequired
+          autoComplete="current-password"
+          className={fieldClass}
+        >
+          <Label className={labelClass}>{m.passwordLabel}</Label>
+          <Input className={inputClass} />
+          <FieldError className="text-sm text-danger" />
+        </TextField>
+        {error !== null && (
+          <p role="alert" className={alertClass}>
+            {error}
+          </p>
+        )}
+        <Button type="submit" isDisabled={pending !== null} className={primaryButtonClass}>
+          {pending === "password" ? m.signingIn : m.signIn}
+        </Button>
+      </Form>
+      {transport !== null && (
+        <>
+          <div className="flex items-center gap-3 text-xs text-ink-muted" aria-hidden="true">
+            <span className="h-px flex-1 bg-line" />
+            {m.orDivider}
+            <span className="h-px flex-1 bg-line" />
+          </div>
+          <Button
+            isDisabled={pending !== null}
+            onPress={() => {
+              void passkey(transport);
+            }}
+            className={outlineButtonClass}
+          >
+            <KeyIcon size={18} aria-hidden="true" />
+            {pending === "passkey"
+              ? transport.kind === "handoff"
+                ? m.passkeyWaitingBrowser
+                : m.passkeyWaiting
+              : m.signInWithPasskey}
+          </Button>
+        </>
+      )}
+      <p className="text-sm text-ink-muted">
+        {m.noAccountYet}{" "}
+        <Button onPress={onSwitchToRegister} className={linkButtonClass}>
+          {m.createAccount}
+        </Button>
+      </p>
+    </div>
+  );
+}
+
+function SecondFactorStep({
+  ticket,
+  methods,
+  transport,
+  onStartOver,
+}: {
+  ticket: string;
+  methods: SecondFactorMethod[];
+  transport: PasskeyTransport | null;
+  onStartOver: (reason: string | null) => void;
+}) {
+  const m = useMessages();
+  const client = useAspenClient();
+  const totpAvailable = methods.includes("totp");
+  const recoveryAvailable = methods.includes("recoveryCode");
+  const passkeyAvailable = methods.includes("passkey") && transport !== null;
+  const [method, setMethod] = useState<TypedSecondFactor>(totpAvailable ? "totp" : "recoveryCode");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function attempt(run: () => Promise<unknown>) {
     setPending(true);
     setError(null);
     try {
-      await client.login(formString(data, "username"), formString(data, "password"));
+      await run();
     } catch (e) {
-      setError(e instanceof ApiProblemError ? e.message : String(e));
+      // The ticket expired or was used: the password has to be given again.
+      if (e instanceof ApiProblemError && e.code === "invalidToken") {
+        onStartOver(e.message);
+        return;
+      }
+      setError(failure(e));
     } finally {
       setPending(false);
     }
@@ -40,50 +253,55 @@ export function LoginForm({
 
   return (
     <Form
-      onSubmit={(e) => {
-        void submit(e);
+      onSubmit={(event) => {
+        event.preventDefault();
+        const code = formString(new FormData(event.currentTarget), "code");
+        void attempt(() => client.completeSecondFactor(ticket, method, code));
       }}
       className="flex w-full max-w-sm flex-col gap-4"
     >
-      <h1 className="text-2xl font-semibold">{m.loginHeading}</h1>
-      <div className="flex items-baseline justify-between text-sm text-ink-muted">
-        <span>
-          {m.serverLabel}: <span className="font-mono">{serverUrl}</span>
-        </span>
-        <Button onPress={onChangeServer} className={linkButtonClass}>
-          {m.changeServer}
-        </Button>
-      </div>
-      <TextField name="username" isRequired autoComplete="username" className={fieldClass}>
-        <Label className={labelClass}>{m.usernameLabel}</Label>
-        <Input className={inputClass} />
-        <FieldError className="text-sm text-danger" />
-      </TextField>
-      <TextField
-        name="password"
-        type="password"
-        isRequired
-        autoComplete="current-password"
-        className={fieldClass}
-      >
-        <Label className={labelClass}>{m.passwordLabel}</Label>
-        <Input className={inputClass} />
-        <FieldError className="text-sm text-danger" />
-      </TextField>
+      <h1 className="text-2xl font-semibold">{m.twoFactor.heading}</h1>
+      {(totpAvailable || recoveryAvailable) && (
+        <SecondFactorFields
+          method={method}
+          onMethodChange={(next) => {
+            setError(null);
+            setMethod(next);
+          }}
+          totpAvailable={totpAvailable}
+          recoveryAvailable={recoveryAvailable}
+        />
+      )}
       {error !== null && (
-        <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
+        <p role="alert" className={alertClass}>
           {error}
         </p>
       )}
-      <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
-        {pending ? m.signingIn : m.signIn}
-      </Button>
-      <p className="text-sm text-ink-muted">
-        {m.noAccountYet}{" "}
-        <Button onPress={onSwitchToRegister} className={linkButtonClass}>
-          {m.createAccount}
+      {(totpAvailable || recoveryAvailable) && (
+        <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
+          {pending ? m.twoFactor.verifying : m.twoFactor.verify}
         </Button>
-      </p>
+      )}
+      {passkeyAvailable && (
+        <Button
+          isDisabled={pending}
+          onPress={() => {
+            void attempt(() => client.runPasskeyCeremony({ purpose: "signIn", ticket }, transport));
+          }}
+          className={outlineButtonClass}
+        >
+          <KeyIcon size={18} aria-hidden="true" />
+          {m.twoFactor.usePasskey}
+        </Button>
+      )}
+      <Button
+        onPress={() => {
+          onStartOver(null);
+        }}
+        className={linkButtonClass + " self-start text-sm"}
+      >
+        {m.twoFactor.startOver}
+      </Button>
     </Form>
   );
 }

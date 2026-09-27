@@ -1,0 +1,10 @@
+[package]
+name = "aspen_limits"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Rate limit settings, the GCRA arithmetic, and client addresses behind trusted proxies, shared by the API and voice servers."
+
+[dependencies]
+ipnet = "2.12"
+serde = { version = "1.0.219", features = ["derive"] }

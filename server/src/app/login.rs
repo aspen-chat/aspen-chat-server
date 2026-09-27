@@ -13,26 +13,48 @@ use rand::RngExt;
 use tracing::error;
 
 use crate::api::error::PasswordRequirement;
+use crate::app::two_factor::{self, SecondFactor, SecondFactorMethods};
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
 use crate::{api::GlobalServerContext, app::user::UserPg};
+use diesel::OptionalExtension;
+use serde::{Deserialize, Serialize};
 
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
 const OTHER_SERVER_AUTH_LIFETIME: Duration = Duration::minutes(10);
 pub const PASSWORD_MIN_LENGTH: usize = 8;
 
-/// Credentials issued by a successful login.
+/// Credentials issued by a completed sign-in.
 pub struct Session {
     pub user_id: UserId,
     pub refresh_token: String,
     pub session_token: String,
     pub session_token_expires: DateTime<Utc>,
+    /// The server requires a second factor this account does not have yet; until it adds one,
+    /// the session may do nothing else.
+    pub enrollment_required: bool,
 }
 
 pub enum LoginOutcome {
-    Ok(Session),
+    SignedIn(Session),
+    /// The password was right and the account has two-factor sign-in on. `ticket` stands for
+    /// the half-finished sign-in in `complete_second_factor` or a passkey sign-in.
+    SecondFactorRequired {
+        ticket: String,
+        methods: SecondFactorMethods,
+    },
     InvalidCredentials,
 }
+
+/// A sign-in waiting for its second factor.
+#[derive(Serialize, Deserialize)]
+struct Ticket {
+    user: UserId,
+}
+
+const TICKET_PREFIX: &str = "auth:ticket";
+/// Long enough to find a phone and open an authenticator app.
+const TICKET_LIFETIME_SECONDS: i64 = 5 * 60;
 
 pub async fn hash_password(password: String) -> app::Result<String> {
     // Prevent CPU blocking work from hoarding tokio workers
@@ -89,55 +111,143 @@ pub async fn try_login(
 
     let mut conn = state.connection_pool.get().await?;
     let conn = conn.as_mut();
-    let user_entry: Result<UserPg, _> = user
+    let user_entry: Option<UserPg> = user
         .select(UserPg::as_select())
         .filter(name.eq(username))
         .filter(deleted_at.is_null())
         .first(conn)
-        .await;
-    match user_entry {
-        Ok(u) => {
-            if check_password(password.to_string(), u.password_hash).await? {
-                use crate::database::schema::{refresh_token, session};
-                let session_token = make_token();
-                let refresh_token = make_token();
-                let now = Utc::now();
-                let session_token_expires = now + SESSION_TOKEN_LIFETIME;
-                diesel::insert_into(refresh_token::table)
-                    .values((
-                        refresh_token::dsl::token.eq(&refresh_token),
-                        refresh_token::dsl::user.eq(u.id),
-                        refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
-                    ))
-                    .execute(conn)
-                    .await?;
-
-                diesel::insert_into(session::table)
-                    .values((
-                        session::dsl::token.eq(&session_token),
-                        session::dsl::refresh_token.eq(&refresh_token),
-                        session::dsl::expires.eq(session_token_expires.naive_utc()),
-                    ))
-                    .execute(conn)
-                    .await?;
-                Ok(LoginOutcome::Ok(Session {
-                    user_id: u.id,
-                    refresh_token,
-                    session_token,
-                    session_token_expires,
-                }))
-            } else {
-                Ok(LoginOutcome::InvalidCredentials)
-            }
-        }
-        Err(e) => {
-            if let diesel::result::Error::NotFound = e {
-                Ok(LoginOutcome::InvalidCredentials)
-            } else {
-                Err(e.into())
-            }
-        }
+        .await
+        .optional()?;
+    let Some(u) = user_entry else {
+        return Ok(LoginOutcome::InvalidCredentials);
+    };
+    if !check_password(password.to_string(), u.password_hash).await? {
+        return Ok(LoginOutcome::InvalidCredentials);
     }
+    let methods = two_factor::methods(conn, u.id).await?;
+    if methods.any_factor() {
+        let ticket = make_token();
+        two_factor::put_token(
+            state,
+            TICKET_PREFIX,
+            &ticket,
+            &Ticket { user: u.id },
+            TICKET_LIFETIME_SECONDS,
+        )
+        .await?;
+        return Ok(LoginOutcome::SecondFactorRequired { ticket, methods });
+    }
+    Ok(LoginOutcome::SignedIn(
+        issue_session(state, conn, u.id, false).await?,
+    ))
+}
+
+/// Starts a sign-in for `user_id`: a refresh token, verified now, and its first session token.
+pub async fn issue_session(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    has_second_factor: bool,
+) -> app::Result<Session> {
+    use crate::database::schema::{refresh_token, session};
+    let session_token = make_token();
+    let refresh_token = make_token();
+    let now = Utc::now();
+    let session_token_expires = now + SESSION_TOKEN_LIFETIME;
+    conn.transaction(|conn| {
+        let (refresh_token, session_token) = (&refresh_token, &session_token);
+        async move {
+            diesel::insert_into(refresh_token::table)
+                .values((
+                    refresh_token::dsl::token.eq(refresh_token),
+                    refresh_token::dsl::user.eq(user_id),
+                    refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
+                    refresh_token::dsl::verified_at.eq(now),
+                ))
+                .execute(conn)
+                .await?;
+            diesel::insert_into(session::table)
+                .values((
+                    session::dsl::token.eq(session_token),
+                    session::dsl::refresh_token.eq(refresh_token),
+                    session::dsl::expires.eq(session_token_expires.naive_utc()),
+                ))
+                .execute(conn)
+                .await?;
+            app::Result::Ok(())
+        }
+        .scope_boxed()
+    })
+    .await?;
+    Ok(Session {
+        user_id,
+        refresh_token,
+        session_token,
+        session_token_expires,
+        enrollment_required: state.config.auth.require_two_factor && !has_second_factor,
+    })
+}
+
+pub enum SecondFactorOutcome {
+    SignedIn(Session),
+    /// The ticket is unknown, expired, or already used.
+    InvalidTicket,
+    /// The code was wrong or already used.
+    Rejected,
+}
+
+/// Finishes a sign-in that `try_login` left waiting for a second factor.
+pub async fn complete_second_factor(
+    state: &GlobalServerContext,
+    ticket: &str,
+    factor: &SecondFactor,
+) -> app::Result<SecondFactorOutcome> {
+    let Some(waiting) =
+        two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false).await?
+    else {
+        return Ok(SecondFactorOutcome::InvalidTicket);
+    };
+    if !two_factor::verify(state, waiting.user, factor).await? {
+        return Ok(SecondFactorOutcome::Rejected);
+    }
+    finish_ticket(state, ticket, Some(waiting.user))
+        .await
+        .map(|session| {
+            session.map_or(
+                SecondFactorOutcome::InvalidTicket,
+                SecondFactorOutcome::SignedIn,
+            )
+        })
+}
+
+/// The user a waiting sign-in belongs to, without using it up.
+pub async fn ticket_user(state: &GlobalServerContext, ticket: &str) -> app::Result<Option<UserId>> {
+    Ok(
+        two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false)
+            .await?
+            .map(|waiting| waiting.user),
+    )
+}
+
+/// Uses up a waiting sign-in whose second factor has been verified and issues its session.
+/// `None` when the ticket was used or expired meanwhile, or belongs to someone other than
+/// `expected_user`.
+pub async fn finish_ticket(
+    state: &GlobalServerContext,
+    ticket: &str,
+    expected_user: Option<UserId>,
+) -> app::Result<Option<Session>> {
+    let Some(waiting) = two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, true).await?
+    else {
+        return Ok(None);
+    };
+    if expected_user.is_some_and(|expected| expected != waiting.user) {
+        return Ok(None);
+    }
+    let mut conn = state.connection_pool.get().await?;
+    Ok(Some(
+        issue_session(state, &mut conn, waiting.user, true).await?,
+    ))
 }
 
 pub async fn try_token_refresh(
@@ -213,16 +323,22 @@ pub enum ChangePasswordOutcome {
     RequirementNotMet(PasswordRequirement),
 }
 
-/// Changes `user_id`'s password and expires every other session and refresh token belonging to
-/// the user, so a stolen credential stops working the moment the owner rotates their password.
-/// The session performing the change (`current_session_token`) stays valid.
+/// Changes the caller's password and expires every other session and refresh token belonging
+/// to them, so a stolen credential stops working the moment the owner rotates their password.
+/// The session performing the change stays valid. The old password proves who the caller is
+/// for an account without two-factor sign-in; one with it also needs a recent verification.
 pub async fn try_change_password(
     mut conn: impl AsMut<AsyncPgConnection>,
-    user_id: UserId,
+    caller: &two_factor::Caller,
+    config: &crate::aspen_config::AuthConfig,
     old_password: &str,
     new_password: &str,
-    current_session_token: &str,
 ) -> Result<ChangePasswordOutcome, app::Error> {
+    if caller.has_second_factor {
+        caller.ensure_recently_verified(config)?;
+    }
+    let user_id = caller.user;
+    let current_session_token = caller.session_token.as_str();
     let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
         .select(schema::user::password_hash)
@@ -242,6 +358,7 @@ pub async fn try_change_password(
         ));
     }
     let new_password_hash = hash_password(new_password.to_string()).await?;
+    let current_session_token = current_session_token.to_string();
     conn.transaction(|conn| {
         async move {
             diesel::update(
@@ -254,43 +371,53 @@ pub async fn try_change_password(
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
             .await?;
-            diesel::sql_query(
-                "
-                UPDATE session
-                SET expires = now()
-                FROM refresh_token
-                WHERE refresh_token.token = session.refresh_token
-                    AND session.token != $1
-                    AND refresh_token.user = $2
-                    AND session.expires > now();
-            ",
-            )
-            .bind::<diesel::sql_types::Text, _>(current_session_token)
-            .bind::<diesel::sql_types::Uuid, _>(&user_id)
-            .execute(conn)
-            .await?;
-            diesel::sql_query(
-                "
-                UPDATE refresh_token
-                SET expires = now()
-                FROM session
-                WHERE refresh_token.token = session.refresh_token
-                    AND session.token != $1
-                    AND refresh_token.user = $2
-                    AND refresh_token.expires > now();
-            ",
-            )
-            .bind::<diesel::sql_types::Text, _>(current_session_token)
-            .bind::<diesel::sql_types::Uuid, _>(&user_id)
-            .execute(conn)
-            .await?;
-            Result::<(), app::Error>::Ok(())
+            revoke_other_sessions(conn, user_id, &current_session_token).await
         }
         .scope_boxed()
     })
     .await?;
 
     Ok(ChangePasswordOutcome::Ok)
+}
+
+/// Expires every session and sign-in of `user_id` except the one `current_session_token`
+/// belongs to, so a stolen credential stops working once its owner secures the account.
+pub async fn revoke_other_sessions(
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    current_session_token: &str,
+) -> app::Result<()> {
+    diesel::sql_query(
+        "
+        UPDATE session
+        SET expires = now()
+        FROM refresh_token
+        WHERE refresh_token.token = session.refresh_token
+            AND session.token != $1
+            AND refresh_token.user = $2
+            AND session.expires > now();
+    ",
+    )
+    .bind::<diesel::sql_types::Text, _>(current_session_token)
+    .bind::<diesel::sql_types::Uuid, _>(&user_id)
+    .execute(conn)
+    .await?;
+    diesel::sql_query(
+        "
+        UPDATE refresh_token
+        SET expires = now()
+        WHERE refresh_token.user = $2
+            AND refresh_token.expires > now()
+            AND refresh_token.token != (
+                SELECT session.refresh_token FROM session WHERE session.token = $1
+            );
+    ",
+    )
+    .bind::<diesel::sql_types::Text, _>(current_session_token)
+    .bind::<diesel::sql_types::Uuid, _>(&user_id)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 pub async fn try_other_server_auth(

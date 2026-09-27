@@ -41,6 +41,9 @@ export interface EventStreamHandlers {
   onInvalidEvent?: (raw: unknown, errors: string) => void;
 }
 
+/** How many recent event ids are remembered for dropping repeated copies. */
+const SEEN_EVENT_IDS = 4096;
+
 export interface EventStreamOptions extends EventStreamHandlers {
   /** `wss://host/api/v1/events`; see `eventStreamUrl`. */
   url: string;
@@ -83,6 +86,9 @@ export class EventStream {
   #tokenRejected = false;
   /** Sequence of the last event handed to `onEvent`; `null` until the first one. */
   #lastSequence: number | null = null;
+  /** Ids of recent events, so a copy already applied is dropped; see `SEEN_EVENT_IDS`. */
+  readonly #seenIds = new Set<string>();
+  readonly #seenOrder: string[] = [];
   #timer: ReturnType<typeof setTimeout> | null = null;
   /** Increments on every start/stop so a stale async connect attempt can notice and bail. */
   #generation = 0;
@@ -101,6 +107,20 @@ export class EventStream {
   /** Sequence to resume from on the next connection, for callers that persist it. */
   get lastSequence(): number | null {
     return this.#lastSequence;
+  }
+
+  /**
+   * Tells the server the user is using the app. Sent only on a connection that has identified;
+   * returns whether it was.
+   */
+  sendActivity(): boolean {
+    const socket = this.#socket;
+    if (this.#status !== "open" || socket === null || socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    const frame: ClientMessage = { type: "activity" };
+    socket.send(JSON.stringify(frame));
+    return true;
   }
 
   start(): void {
@@ -248,6 +268,21 @@ export class EventStream {
       }
       case "event":
         this.#lastSequence = frame.sequence;
+        // An event about a user reaches this connection once per community shared with them,
+        // each copy with the same id; every copy after the first is dropped.
+        if (frame.eventId != null) {
+          if (this.#seenIds.has(frame.eventId)) {
+            break;
+          }
+          this.#seenIds.add(frame.eventId);
+          this.#seenOrder.push(frame.eventId);
+          if (this.#seenOrder.length > SEEN_EVENT_IDS) {
+            const oldest = this.#seenOrder.shift();
+            if (oldest !== undefined) {
+              this.#seenIds.delete(oldest);
+            }
+          }
+        }
         this.#options.onEvent?.(frame.event);
         break;
       case "error":

@@ -2,7 +2,7 @@ use crate::CHACHA_RNG;
 use crate::api::message_enum::server_event::{InviteEvent, ServerEvent};
 use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
-use crate::app::{CommunityId, UserId, publish_event};
+use crate::app::{CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::community_user;
 use crate::database::schema::invite;
 use chrono::Utc;
@@ -104,6 +104,8 @@ pub(crate) async fn create_invite(
         .await?;
     publish_event(
         state,
+        conn.as_mut(),
+        EventScope::Community(community),
         &ServerEvent::Invite(InviteEvent::Create(message_enum::Invite {
             code: invite.code.clone(),
             created_by: invite.created_by,
@@ -183,6 +185,8 @@ pub(crate) async fn update_invite(
             };
             publish_event(
                 state,
+                conn,
+                EventScope::Community(updated.community),
                 &ServerEvent::Invite(InviteEvent::Update { code, expires_at }),
             )
             .await?;
@@ -228,7 +232,13 @@ pub(crate) async fn revoke_invite(
                 .filter(invite::code.eq(&code).and(invite::deleted_at.is_null()))
                 .execute(conn)
                 .await?;
-            publish_event(state, &ServerEvent::Invite(InviteEvent::Delete { code })).await?;
+            publish_event(
+                state,
+                conn,
+                EventScope::CommunityOfInvite(code.clone()),
+                &ServerEvent::Invite(InviteEvent::Delete { code }),
+            )
+            .await?;
             Ok(())
         }
         .scope_boxed()

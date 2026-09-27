@@ -155,6 +155,37 @@ describe("EventStream", () => {
     expect(stream.lastSequence).toBe(41);
   });
 
+  it("delivers each event id once, however many copies arrive", async () => {
+    const { stream, log, sockets } = harness();
+    stream.start();
+    await Promise.resolve();
+    const socket = sockets[0];
+    socket?.ready(false);
+    const frame = (sequence: number, eventId: string | undefined) =>
+      socket?.onmessage?.({
+        data: JSON.stringify({
+          type: "event",
+          sequence,
+          ...(eventId === undefined ? {} : { eventId }),
+          event: {
+            serverEvent: "user",
+            type: "update",
+            id: "0190f0a0-0000-7000-8000-000000000001",
+          },
+        }),
+      });
+    frame(10, "evt-a");
+    frame(11, "evt-a");
+    frame(12, "evt-a");
+    frame(13, "evt-b");
+    frame(14, undefined);
+    frame(15, undefined);
+    expect(log.filter((entry) => entry === "event:user")).toHaveLength(4);
+    // every copy still advances the resume position
+    expect(stream.lastSequence).toBe(15);
+    stream.stop();
+  });
+
   it("resumes from the last sequence and needs no resync when the server honours it", async () => {
     const { stream, timers, log, sockets } = harness();
     stream.start();

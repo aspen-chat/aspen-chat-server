@@ -30,7 +30,9 @@ const general: Channel = {
   parentCategory: null,
   name: "general",
   sortIndex: 0,
-  ty: "Text",
+  ty: "text",
+  replyCount: 0,
+  recipients: [],
 };
 
 function message(n: number, author = me.id): Message {
@@ -58,6 +60,14 @@ function json(body: unknown, status = 200): Response {
 function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
+    "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
+    "/api/v1/users/statuses": (url) =>
+      json(
+        (url.searchParams.get("ids") ?? "")
+          .split(",")
+          .filter((id) => id !== "")
+          .map((id) => ({ id, onlineStatus: id === me.id ? "online" : "offline" })),
+      ),
     "/api/v1/users/@me/communities": (url) => {
       expect(url.searchParams.get("include")).toBe("channels,categories,members,voice");
       return json({
@@ -69,6 +79,10 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
           userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
         },
       });
+    },
+    "/api/v1/users/@me/dms": (url) => {
+      expect(url.searchParams.get("include")).toBe("users");
+      return json({ data: [], included: { users: [] } });
     },
   };
 }
@@ -166,6 +180,34 @@ async function goLive(sync: AspenSync): Promise<FakeSocket> {
 }
 
 describe("AspenSync", () => {
+  it("reports activity at most once a minute, and recent activity once the stream is up", async () => {
+    let now = 0;
+    const { sync } = makeSync(bootstrapResponses(), () => now);
+    // Activity before the stream is up is reported when it comes up.
+    sync.noteActivity();
+    const socket = await goLive(sync);
+    const activity = () => socket.sent.filter((f) => (f as { type: string }).type === "activity");
+    expect(activity()).toHaveLength(1);
+    now = 30_000;
+    sync.noteActivity();
+    expect(activity()).toHaveLength(1);
+    now = 60_000;
+    sync.noteActivity();
+    expect(activity()).toHaveLength(2);
+    // A reconnect long after the last activity does not claim the user is active.
+    now = 200_000;
+    socket.close();
+    await settle();
+    const again = FakeSocket.instances[1];
+    if (again === undefined) {
+      throw new Error("no reconnect attempt");
+    }
+    again.onopen?.();
+    again.frame({ type: "ready", userId: me.id, resumed: true });
+    expect(again.sent.filter((f) => (f as { type: string }).type === "activity")).toHaveLength(0);
+    sync.stop();
+  });
+
   it("bootstraps from REST before connecting the stream, then applies events", async () => {
     const { sync, calls } = makeSync(bootstrapResponses());
     expect(FakeSocket.instances).toHaveLength(0);
@@ -173,6 +215,9 @@ describe("AspenSync", () => {
     expect(calls.map((u) => u.pathname)).toEqual([
       "/api/v1/users/%40me",
       "/api/v1/users/%40me/communities",
+      "/api/v1/users/@me/dms",
+      "/api/v1/users/%40me/preferences",
+      "/api/v1/users/statuses",
     ]);
     expect(sync.store.communities()).toEqual([aspen]);
     expect(sync.store.channels(aspen.id)).toEqual([general]);
@@ -306,7 +351,7 @@ describe("AspenSync", () => {
     const { sync, calls } = makeSync({
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/messages`]: (url) => {
-        expect(url.searchParams.get("include")).toBe("authors,attachments,polls");
+        expect(url.searchParams.get("include")).toBe("authors,attachments,polls,threads,echoes");
         if (url.searchParams.get("before") !== null) {
           return json({ data: [message(50)], included: { users: [], attachments: [] } });
         }
@@ -499,7 +544,9 @@ describe("AspenSync", () => {
       parentCategory: null,
       name: "random",
       sortIndex: 1,
-      ty: "Text",
+      ty: "text",
+      replyCount: 0,
+      recipients: [],
     };
     const { sync } = makeSync({
       ...bootstrapResponses(),
@@ -508,7 +555,7 @@ describe("AspenSync", () => {
     await goLive(sync);
     const channel = await sync.createChannel(aspen.id, {
       name: "random",
-      ty: "Text",
+      ty: "text",
       parentCategory: null,
     });
     expect(channel).toEqual(created);

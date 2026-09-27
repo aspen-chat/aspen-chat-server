@@ -267,7 +267,7 @@ pub fn message_enum_source(
             #(#event_variant_types)*
 
             #[derive(::serde::Serialize, ::schemars::JsonSchema)]
-            #[serde(rename_all = "camelCase")]
+            #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
             #[serde(tag = "serverEvent")]
             pub enum ServerEvent {
                 #(#event_variants),*

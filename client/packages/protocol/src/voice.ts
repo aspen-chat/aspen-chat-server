@@ -14,6 +14,7 @@
  * mediasoup device sit behind `VoiceMedia`, so the flow runs and is tested without them.
  */
 
+import { DEFAULT_DEVICE, type DeviceChoice } from "./preferences";
 import type { components } from "./generated/openapi";
 import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
@@ -29,6 +30,17 @@ export const CONNECT_TIMEOUT_MS = 15_000;
 export const PING_TIMEOUT_MS = 3_000;
 /** How long a candidate has to answer `identify` with `ready`. */
 export const READY_TIMEOUT_MS = 6_000;
+
+/**
+ * How a screen share's own sound is encoded: stereo (a browser decodes Opus as mono unless the
+ * producer says otherwise), without discontinuous transmission, which cuts quiet passages of
+ * music, and at 128 kbps, where cymbals and other dense sound stay clean.
+ */
+export const SCREEN_AUDIO_CODEC = {
+  opusStereo: true,
+  opusDtx: false,
+  opusMaxAverageBitrate: 128_000,
+} as const;
 /** The most a lost call waits before rejoining. */
 export const REJOIN_DELAY_MAX_MS = 1_000;
 
@@ -69,6 +81,44 @@ export interface RemoteScreen {
   readonly track: MediaStreamTrack;
 }
 
+/** Where and how an external sender delivers SRTP for a producer the voice server made for it. */
+export interface RtpTarget {
+  readonly ip: string;
+  readonly port: number;
+  readonly ssrc: number;
+  readonly payloadType: number;
+  readonly srtpCryptoSuite: string;
+  readonly srtpKeyBase64: string;
+}
+
+/** Where an external share sends: the picture, and the sound when the share carries any. */
+export interface ExternalTargets {
+  readonly video: RtpTarget;
+  readonly audio: RtpTarget | null;
+}
+
+/**
+ * A share produced outside the browser, such as the desktop shell's game capture: the call
+ * asks the voice server for an RTP producer per stream, then `start` sends to them until
+ * `stop`. `audio` says whether the share brings sound of its own, which needs a producer too.
+ */
+export interface ExternalShare {
+  readonly audio: boolean;
+  start(targets: ExternalTargets): Promise<void>;
+  stop(): void;
+}
+
+/**
+ * Sound for a browser screen share that comes from outside the browser, such as one
+ * application's audio captured by the desktop shell: the call asks the voice server for an RTP
+ * producer, then `start` sends to it until `stop`. It stands in for any sound the browser
+ * captured with the picture.
+ */
+export interface ExternalAudio {
+  start(target: RtpTarget): Promise<void>;
+  stop(): void;
+}
+
 /** What `getDisplayMedia` gave: the picture, and the sound that came with it when the browser offered any. */
 export interface ScreenCapture {
   readonly video: MediaStreamTrack;
@@ -98,7 +148,12 @@ export interface VoiceTransport {
   produce(options: {
     track: MediaStreamTrack;
     appData: Record<string, unknown>;
-  }): Promise<{ id: string; close(): void }>;
+    codecOptions?: { opusStereo?: boolean; opusDtx?: boolean; opusMaxAverageBitrate?: number };
+  }): Promise<{
+    id: string;
+    close(): void;
+    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
+  }>;
   consume(options: {
     id: string;
     producerId: string;
@@ -126,12 +181,17 @@ export interface TransportParams {
 /** What the call needs from the browser: media capture, the mediasoup device, and playback. */
 export interface VoiceMedia {
   createDevice(): Promise<VoiceDevice>;
-  getMicrophone(): Promise<MediaStreamTrack>;
+  /** Opens the microphone the choice names, or the system's default. */
+  getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack>;
+  /** Routes everything played to the speaker the choice names, or the system's default. */
+  setOutput(choice: DeviceChoice): Promise<void>;
   /** Asks the user for a screen, window, or tab to share; rejects when they decline. */
   getScreen(): Promise<ScreenCapture>;
   /** Plays a remote track; called once per consumer. */
   play(consumerId: string, track: MediaStreamTrack): void;
   stop(consumerId: string): void;
+  /** Scales what a playing consumer is heard at: 1 is as sent, 0 silent, up to 2. */
+  setVolume(consumerId: string, gain: number): void;
 }
 
 export interface VoiceCallOptions {
@@ -143,6 +203,8 @@ export interface VoiceCallOptions {
   now?: () => number;
   /** Uniform in [0, 1); seeds the rejoin delay. */
   random?: () => number;
+  /** How loud each other user should be to this one; consulted as their audio arrives. */
+  userVolume?: (userId: string) => number;
 }
 
 export type VoiceCallListener = () => void;
@@ -179,6 +241,13 @@ const IDLE: VoiceCallState = {
   error: null,
   endedReason: null,
 };
+
+function sameChoice(a: DeviceChoice, b: DeviceChoice): boolean {
+  if (a === DEFAULT_DEVICE || b === DEFAULT_DEVICE) {
+    return a === b;
+  }
+  return a.id === b.id && a.label === b.label;
+}
 
 /** The microphone could not be opened; `cause` is the browser's error. */
 export class MicrophoneError extends Error {
@@ -277,7 +346,20 @@ export class VoiceCall {
   #microphone: MediaStreamTrack | null = null;
   #screen: ScreenCapture | null = null;
   #screenProducers: { id: string; close(): void }[] = [];
-  readonly #consumers = new Map<string, { close(): void }>();
+  /** The external sound of the browser screen share, and the RTP producer it feeds. */
+  #screenAudio: { producerId: string; audio: ExternalAudio } | null = null;
+  #microphoneProducer: {
+    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
+  } | null = null;
+  #devices: { input: DeviceChoice; output: DeviceChoice } = {
+    input: DEFAULT_DEVICE,
+    output: DEFAULT_DEVICE,
+  };
+  #external: { producerIds: string[]; share: ExternalShare } | null = null;
+  /** The consumer carrying the call's own preview of an external share. */
+  #previewConsumerId: string | null = null;
+  readonly #consumers = new Map<string, { close(): void; user: string }>();
+  readonly #userVolume: (userId: string) => number;
   /** Increments on every join and leave so a stale async step can notice and bail. */
   #generation = 0;
 
@@ -287,6 +369,7 @@ export class VoiceCall {
     this.#Socket = options.WebSocket ?? globalThis.WebSocket;
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
+    this.#userVolume = options.userVolume ?? (() => 1);
     this.#now = options.now ?? (() => Date.now());
     this.#random = options.random ?? Math.random;
   }
@@ -311,6 +394,15 @@ export class VoiceCall {
 
   /** Joins a channel's call, leaving any current one first. */
   async join(channelId: string): Promise<void> {
+    // Already in, or on the way into, this very call: nothing to do.
+    if (
+      this.#state.channelId === channelId &&
+      (this.#state.status === "connected" ||
+        this.#state.status === "joining" ||
+        this.#state.status === "rejoining")
+    ) {
+      return;
+    }
     if (this.#state.channelId !== null) {
       this.#teardown();
     }
@@ -363,22 +455,49 @@ export class VoiceCall {
   }
 
   /**
-   * Shares a screen into the call: the user picks one, its video is produced as `screen` and
+   * Shares the screen: asks the browser for a capture and produces the picture as `screen` and
    * any audio the browser captured with it as `screenAudio`. Ends on its own when the user
-   * stops the capture from the browser's own control.
+   * stops the capture from the browser's own control. `prepared` shares a capture already
+   * made instead of asking the browser. `audio` replaces the browser's sound with sound from
+   * outside it, fed to an RTP producer of source `screenAudio`. `contentHint` tells the encoder
+   * what the picture is: `motion` (a game or video) keeps the frame rate and gives up
+   * resolution when bandwidth runs short, where the browser's default for a screen keeps the
+   * resolution and drops frames.
    */
-  async startScreenShare(): Promise<void> {
+  async startScreenShare(
+    options: {
+      prepared?: ScreenCapture;
+      audio?: ExternalAudio;
+      contentHint?: "motion" | "detail" | "text";
+    } = {},
+  ): Promise<void> {
+    const { prepared, audio, contentHint } = options;
     const transport = this.#sendTransport;
-    if (this.#state.status !== "connected" || transport === null || this.#screen !== null) {
+    const signal = this.#signal;
+    if (
+      this.#state.status !== "connected" ||
+      transport === null ||
+      signal === null ||
+      this.#screen !== null ||
+      this.#external !== null
+    ) {
+      prepared?.video.stop();
+      prepared?.audio?.stop();
       return;
     }
-    const capture = await this.#media.getScreen();
+    const capture = prepared ?? (await this.#media.getScreen());
     // The picker took time; the call may have moved on or another share started meanwhile.
-    const stale: boolean = this.#sendTransport !== transport || this.#screen !== null;
-    if (stale) {
+    if (this.#sendTransport !== transport || this.#sharing()) {
       capture.video.stop();
       capture.audio?.stop();
       return;
+    }
+    // Sound from outside the browser stands in for the browser's own.
+    if (audio !== undefined) {
+      capture.audio?.stop();
+    }
+    if (contentHint !== undefined) {
+      capture.video.contentHint = contentHint;
     }
     this.#screen = capture;
     this.#set({ sharingScreen: true, localScreen: capture.video });
@@ -391,9 +510,21 @@ export class VoiceCall {
       this.#screenProducers.push(
         await transport.produce({ track: capture.video, appData: { source: "screen" } }),
       );
-      if (capture.audio !== null) {
+      if (audio !== undefined) {
+        const produced = await this.#produceRtp(signal, "screenAudio");
+        if (this.#screen !== capture) {
+          signal.send({ type: "closeProducer", producerId: produced.producerId });
+          return;
+        }
+        this.#screenAudio = { producerId: produced.producerId, audio };
+        await audio.start(produced.target);
+      } else if (capture.audio !== null) {
         this.#screenProducers.push(
-          await transport.produce({ track: capture.audio, appData: { source: "screenAudio" } }),
+          await transport.produce({
+            track: capture.audio,
+            appData: { source: "screenAudio" },
+            codecOptions: SCREEN_AUDIO_CODEC,
+          }),
         );
       }
     } catch (error) {
@@ -402,13 +533,95 @@ export class VoiceCall {
     }
   }
 
+  /** Asks the voice server for a producer fed from outside the browser, and where to send it. */
+  async #produceRtp(
+    signal: Signal,
+    source: "screen" | "screenAudio",
+  ): Promise<{ producerId: string; target: RtpTarget }> {
+    const produced = signal.next((f) => f.type === "rtpProduced" && f.source === source);
+    signal.send({ type: "produceRtp", source });
+    const timeout = new Promise<never>((_, reject) => {
+      this.#setTimeout(() => {
+        reject(new Error("the voice server did not answer in time"));
+      }, READY_TIMEOUT_MS);
+    });
+    const frame = await Promise.race([produced, timeout]);
+    if (frame.type !== "rtpProduced") {
+      throw new Error("unexpected frame");
+    }
+    return {
+      producerId: frame.producerId,
+      target: {
+        ip: frame.ip,
+        port: frame.port,
+        ssrc: frame.ssrc,
+        payloadType: frame.payloadType,
+        srtpCryptoSuite: frame.srtpCryptoSuite,
+        srtpKeyBase64: frame.srtpKeyBase64,
+      },
+    };
+  }
+
+  /**
+   * Shares something produced outside the browser: the voice server makes an RTP producer for
+   * it and the share sends there. The preview comes back from the server as a consumer of the
+   * call's own producer, so `localScreen` fills in once media flows.
+   */
+  async startExternalScreenShare(share: ExternalShare): Promise<void> {
+    const signal = this.#signal;
+    if (
+      this.#state.status !== "connected" ||
+      signal === null ||
+      this.#screen !== null ||
+      this.#external !== null
+    ) {
+      return;
+    }
+    const video = await this.#produceRtp(signal, "screen");
+    const audio = share.audio ? await this.#produceRtp(signal, "screenAudio") : null;
+    if (this.#signal !== signal) {
+      return;
+    }
+    this.#external = {
+      producerIds: [video.producerId, ...(audio === null ? [] : [audio.producerId])],
+      share,
+    };
+    this.#set({ sharingScreen: true });
+    try {
+      await share.start({ video: video.target, audio: audio?.target ?? null });
+    } catch (error) {
+      this.stopScreenShare();
+      throw error;
+    }
+  }
+
+  /** Whether a browser capture is being shared; read after an await, where narrowing is stale. */
+  #sharing(): boolean {
+    return this.#screen !== null;
+  }
+
   /** Stops sharing the screen, if sharing. Safe to call at any time. */
   stopScreenShare(): void {
+    const external = this.#external;
+    if (external !== null) {
+      this.#external = null;
+      external.share.stop();
+      for (const producerId of external.producerIds) {
+        this.#signal?.send({ type: "closeProducer", producerId });
+      }
+      this.#set({ sharingScreen: false, localScreen: null });
+    }
     const capture = this.#screen;
     if (capture === null) {
       return;
     }
     this.#screen = null;
+    const screenAudio = this.#screenAudio;
+    if (screenAudio !== null) {
+      this.#screenAudio = null;
+      screenAudio.audio.stop();
+      this.#signal?.send({ type: "closeProducer", producerId: screenAudio.producerId });
+    }
     for (const producer of this.#screenProducers) {
       producer.close();
       this.#signal?.send({ type: "closeProducer", producerId: producer.id });
@@ -417,6 +630,41 @@ export class VoiceCall {
     capture.video.stop();
     capture.audio?.stop();
     this.#set({ sharingScreen: false, localScreen: null });
+  }
+
+  /**
+   * The devices voice chat uses, from the user's preferences. Takes effect at once, in a call
+   * or not: the microphone producer swaps to the new input and playback moves to the new
+   * output.
+   */
+  async setAudioDevices(devices: { input: DeviceChoice; output: DeviceChoice }): Promise<void> {
+    const previous = this.#devices;
+    this.#devices = devices;
+    if (!sameChoice(devices.output, previous.output)) {
+      await this.#media.setOutput(devices.output);
+    }
+    if (!sameChoice(devices.input, previous.input) && this.#microphoneProducer !== null) {
+      const producer = this.#microphoneProducer;
+      const track = await this.#media.getMicrophone(devices.input);
+      // The call may have ended or been rejoined while the microphone opened.
+      const current: typeof producer | null = this.#microphoneProducer;
+      if (current !== producer) {
+        track.stop();
+        return;
+      }
+      await producer.replaceTrack({ track });
+      this.#microphone?.stop();
+      this.#microphone = track;
+    }
+  }
+
+  /** Sets how loud `userId` is heard right now; the preference behind it is the caller's to keep. */
+  setUserVolume(userId: string, gain: number): void {
+    for (const [consumerId, consumer] of this.#consumers) {
+      if (consumer.user === userId) {
+        this.#media.setVolume(consumerId, gain);
+      }
+    }
   }
 
   #sendState(): void {
@@ -493,6 +741,7 @@ export class VoiceCall {
     this.#recvTransport = null;
     this.#microphone?.stop();
     this.#microphone = null;
+    this.#microphoneProducer = null;
     if (this.#signal !== null) {
       this.#signal.send({ type: "leave" });
       this.#signal.close();
@@ -505,7 +754,7 @@ export class VoiceCall {
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.
     try {
-      this.#microphone = await this.#media.getMicrophone();
+      this.#microphone = await this.#media.getMicrophone(this.#devices.input);
     } catch (error) {
       throw new MicrophoneError(error);
     }
@@ -655,7 +904,7 @@ export class VoiceCall {
     if (this.#microphone === null) {
       throw new Error("microphone missing");
     }
-    await this.#sendTransport.produce({
+    this.#microphoneProducer = await this.#sendTransport.produce({
       track: this.#microphone,
       appData: { source: "microphone" },
     });
@@ -774,6 +1023,12 @@ export class VoiceCall {
             screens: this.#state.screens.filter((screen) => screen.consumerId !== frame.consumerId),
           });
         }
+        if (this.#previewConsumerId === frame.consumerId) {
+          this.#previewConsumerId = null;
+          if (this.#external !== null) {
+            this.#set({ localScreen: null });
+          }
+        }
         break;
       }
       case "kicked":
@@ -819,8 +1074,17 @@ export class VoiceCall {
         kind: frame.kind,
         rtpParameters: frame.rtpParameters,
       });
-      this.#consumers.set(frame.consumerId, consumer);
-      if (frame.kind === "video") {
+      this.#consumers.set(frame.consumerId, {
+        close: () => {
+          consumer.close();
+        },
+        user: frame.user,
+      });
+      if (frame.kind === "video" && frame.user === this.#lastReady?.user) {
+        // The call's own external share, back from the server as its preview.
+        this.#previewConsumerId = frame.consumerId;
+        this.#set({ localScreen: consumer.track });
+      } else if (frame.kind === "video") {
         this.#set({
           screens: [
             ...this.#state.screens,
@@ -829,6 +1093,10 @@ export class VoiceCall {
         });
       } else {
         this.#media.play(frame.consumerId, consumer.track);
+        const gain = this.#userVolume(frame.user);
+        if (gain !== 1) {
+          this.#media.setVolume(frame.consumerId, gain);
+        }
       }
       signal.send({ type: "resumeConsumer", consumerId: frame.consumerId });
     } catch {

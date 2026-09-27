@@ -273,6 +273,8 @@ pub(crate) async fn update_user(
             };
             publish_event(
                 &state,
+                conn.as_mut(),
+                app::EventScope::UserEverywhere(id),
                 &message_enum::server_event::ServerEvent::User(UserEvent::Update {
                     id,
                     name: command.name,
@@ -294,14 +296,17 @@ pub(crate) async fn update_user(
     .await
 }
 
+/// Deletes the caller's account, which is a change to security settings and so needs a recent
+/// verification. Its credentials go with it.
 pub(crate) async fn delete_user(
     state: GlobalServerContext,
-    requesting_user: UserId,
+    caller: &app::two_factor::Caller,
     id: UserId,
 ) -> Result<(), app::Error> {
-    if requesting_user != id {
+    if caller.user != id {
         return Err(app::Error::Unauthorized);
     }
+    caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -313,8 +318,11 @@ pub(crate) async fn delete_user(
             if deleted == 0 {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
+            app::two_factor::remove_all(conn.as_mut(), id).await?;
             publish_event(
                 &state,
+                conn.as_mut(),
+                app::EventScope::UserEverywhere(id),
                 &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
             )
             .await?;
@@ -325,17 +333,22 @@ pub(crate) async fn delete_user(
     .await
 }
 
-/// Resolves a session token to its user. `None` means the token is unknown, expired, or belongs
-/// to a deleted user.
+/// Resolves a session token to its user and the sign-in it belongs to. `None` means the token
+/// is unknown, expired, or belongs to a deleted user.
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
-) -> crate::app::Result<Option<UserPg>> {
+) -> crate::app::Result<Option<(UserPg, app::two_factor::Caller)>> {
     let mut conn = state.connection_pool.get().await?;
     let now = Utc::now().naive_utc();
-    let user = schema::user::table
-        .select(UserPg::as_select())
+    let found = schema::user::table
         .inner_join(refresh_token::table.inner_join(session::table))
+        .select((
+            UserPg::as_select(),
+            refresh_token::token,
+            refresh_token::verified_at,
+            diesel::dsl::sql::<diesel::sql_types::Bool>(app::two_factor::HAS_SECOND_FACTOR_SQL),
+        ))
         .filter(
             session::dsl::token
                 .eq(&token)
@@ -343,26 +356,34 @@ pub async fn user_for_token(
                 .and(refresh_token::dsl::expires.ge(now))
                 .and(schema::user::deleted_at.is_null()),
         )
-        .first(conn.as_mut())
+        .first::<(UserPg, String, chrono::DateTime<Utc>, bool)>(conn.as_mut())
         .await
         .optional()?;
-    Ok(user)
+    Ok(
+        found.map(|(user, refresh_token, verified_at, has_second_factor)| {
+            let caller = app::two_factor::Caller {
+                user: user.id,
+                session_token: token.to_string(),
+                refresh_token,
+                verified_at,
+                has_second_factor,
+            };
+            (user, caller)
+        }),
+    )
 }
 
 pub async fn user_online_status(
     state: &GlobalServerContext,
     user_id: UserId,
 ) -> crate::app::Result<UserOnlineStatus> {
-    let online_value: Option<i64> = state
-        .valkey
-        .get(app::user_status::online_key(user_id))
-        .await?;
-    Ok(match online_value {
-        Some(1) => UserOnlineStatus::Online,
-        _ => UserOnlineStatus::Offline,
-    })
+    Ok(users_online_status(state, vec![user_id])
+        .await?
+        .pop()
+        .map_or(UserOnlineStatus::Offline, |(_, status)| status))
 }
 
+/// The presence of each user (`app::user_status`), read in one round trip.
 pub async fn users_online_status(
     state: &GlobalServerContext,
     user_ids: Vec<UserId>,
@@ -371,71 +392,52 @@ pub async fn users_online_status(
     if user_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let online_values: Vec<Option<i64>> = state
-        .valkey
-        .mget(
-            user_ids
-                .iter()
-                .map(|user_id| app::user_status::online_key(*user_id))
-                .collect::<Vec<_>>(),
-        )
-        .await?;
+    let keys: Vec<String> = user_ids
+        .iter()
+        .flat_map(|user_id| {
+            [
+                app::user_status::online_key(*user_id),
+                app::user_status::active_key(*user_id),
+            ]
+        })
+        .collect();
+    let values: Vec<Option<i64>> = state.valkey.mget(keys).await?;
     Ok(user_ids
         .into_iter()
         .zip(
-            online_values
-                .into_iter()
-                .map(|online_value| match online_value {
-                    Some(1) => UserOnlineStatus::Online,
-                    _ => UserOnlineStatus::Offline,
-                }),
+            values
+                .chunks(2)
+                .map(|pair| app::user_status::status(pair[0], pair.get(1).copied().flatten())),
         )
         .collect())
 }
 
+/// Records that the user has a connection for `ONLINE_TTL_SECONDS`; the event stream calls this
+/// when they connect and while they stay, and so does every authenticated request. Fire and
+/// forget: presence is best effort.
 pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
+    mark_user_online_id(state, user.id);
+}
+
+pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId) {
+    use fred::interfaces::KeysInterface;
     let valkey = state.valkey.clone();
-    let nats = state.nats_context.clone();
-    let user_id = user.id;
+    let key = app::user_status::online_key(user);
     tokio::spawn(async move {
-        use fred::prelude::KeysInterface;
-        let key = app::user_status::online_key(user_id);
-        // SET NX: only succeeds if the key doesn't exist (user was offline)
-        let became_online: bool = match valkey
-            .set::<fred::types::Value, _, i64>(
-                &key,
+        if let Err(e) = valkey
+            .set::<(), _, i64>(
+                key,
                 1,
-                Some(fred::types::Expiration::EX(60)),
-                Some(fred::types::SetOptions::NX),
+                Some(fred::types::Expiration::EX(ONLINE_TTL_SECONDS)),
+                None,
                 false,
             )
             .await
         {
-            Ok(v) => !v.is_null(),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to update user online status in Valkey");
-                return;
-            }
-        };
-        if became_online {
-            // User just came online — publish event
-            if let Err(e) = crate::app::user_status::publish_online(&nats, user_id).await {
-                tracing::warn!(error = %e, "failed to publish user online event");
-            }
-        } else {
-            // Already online — just refresh the TTL
-            if let Err(e) = valkey
-                .set::<(), _, _>(
-                    &key,
-                    "1",
-                    Some(fred::types::Expiration::EX(60)),
-                    None,
-                    false,
-                )
-                .await
-            {
-                tracing::warn!(error = %e, "failed to refresh user online TTL in Valkey");
-            }
+            tracing::warn!(error = %e, "failed to record the user as online");
         }
     });
 }
+
+/// How long a presence key lives; the event stream refreshes it while the user is connected.
+pub const ONLINE_TTL_SECONDS: i64 = 60;

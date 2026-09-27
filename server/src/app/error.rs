@@ -30,6 +30,8 @@ pub enum Error {
     NatsSubscribe(String),
     #[error("could not send a voice command: {0}")]
     VoiceCommand(String),
+    #[error("event published with the wrong scope: {0}")]
+    EventRouting(String),
     #[error("error serializing as YAML {0}")]
     SerdeNorway(#[from] serde_norway::Error),
     #[error("error serializing as JSON {0}")]
@@ -64,6 +66,28 @@ pub enum Error {
     S3Presign(#[from] aws_sdk_s3::presigning::PresigningConfigError),
     #[error("user not authorized")]
     Unauthorized,
+    #[error("the session must verify its user again before changing security settings")]
+    ReauthenticationRequired,
+    #[error("the password or code presented was wrong")]
+    VerificationFailed,
+    #[error("conflict: {0}")]
+    Conflict(Cow<'static, str>),
+    #[error("too many failed attempts")]
+    TooManyAttempts,
+    #[error("the server requires a second factor, so the last one cannot be removed")]
+    LastSecondFactor,
+    #[error("passkeys are not configured on this server")]
+    PasskeysUnavailable,
+    #[error("the passkey was not accepted: {0}")]
+    PasskeyRejected(String),
+    #[error("the sign-in ticket is unknown, expired, or used")]
+    InvalidTicket,
+    #[error("the request needs a session")]
+    Unauthenticated,
+    #[error("webauthn error {0}")]
+    Webauthn(#[from] webauthn_rs::prelude::WebauthnError),
+    #[error("authenticator app secret error {0}")]
+    Totp(String),
     #[error("tokio join error {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
 }

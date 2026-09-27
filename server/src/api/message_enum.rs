@@ -30,10 +30,12 @@ enum MessageEnumSource {
         bio: Option<String>,
         status: Option<CustomStatus>,
     },
+    // The user's account preferences were written, by one of their devices; the others fetch
+    // them. The values themselves stay out of the stream, which everyone receives.
     #[message_gen(custom_event)]
-    UserStatus {
-        id: UserId,
-        status: UserOnlineStatus,
+    UserPreferencesChanged {
+        user: UserId,
+        updated_at: chrono::DateTime<Utc>,
     },
     Message {
         #[message_gen(id)]
@@ -59,6 +61,18 @@ enum MessageEnumSource {
         kind: MessageKind,
         #[message_gen(server_authoritative)]
         poll: Option<PollId>,
+        // The thread this message started, once someone replies to it in a thread; announced
+        // by an `Update` event when the thread is made.
+        #[message_gen(server_authoritative = "mutable")]
+        thread: Option<ChannelId>,
+        // For a `ThreadEcho`, the thread reply it shows in the parent channel; the echo has no
+        // content of its own.
+        #[message_gen(server_authoritative)]
+        echo_of: Option<MessageId>,
+        // On a reply posted to a thread, also show it in the thread's parent channel, as a
+        // `ThreadEcho` message there.
+        #[message_gen(secret)]
+        echo_to_parent: Option<bool>,
     },
     Poll {
         #[message_gen(id)]
@@ -118,6 +132,19 @@ enum MessageEnumSource {
         #[message_gen(permanent)]
         ty: ChannelType,
         sort_index: i32,
+        // A thread's parent channel and the message in it the thread started.
+        #[message_gen(server_authoritative)]
+        parent_channel: Option<ChannelId>,
+        #[message_gen(server_authoritative)]
+        starter_message: Option<MessageId>,
+        // A thread's replies and the time of the latest, for the summary under its starter.
+        #[message_gen(server_authoritative = "mutable")]
+        reply_count: i32,
+        #[message_gen(server_authoritative = "mutable")]
+        last_reply_at: Option<chrono::DateTime<Utc>>,
+        // The people in a DM or group DM; empty for every other channel.
+        #[message_gen(server_authoritative = "mutable")]
+        recipients: Vec<UserId>,
     },
     Category {
         #[message_gen(id)]
@@ -274,6 +301,7 @@ mod tests {
             attachments: None,
             edited_at: Some(Some(edited_at)),
             link_previews: None,
+            thread: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -291,6 +319,7 @@ mod tests {
             attachments: Some(Vec::new()),
             edited_at: None,
             link_previews: None,
+            thread: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),

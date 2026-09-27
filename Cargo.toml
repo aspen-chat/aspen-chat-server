@@ -1,4 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["server", "message_gen", "migrate", "voice_protocol", "voice_server"]
+members = ["server", "message_gen", "migrate", "voice_protocol", "voice_server", "limits"]
+# The desktop shell's libobs addon links libobs, which nothing else needs; it is its own
+# workspace and built by `pnpm build:native` in client/packages/desktop.
+exclude = ["client/packages/desktop/native/obs-capture"]
 default-members = ["server"]

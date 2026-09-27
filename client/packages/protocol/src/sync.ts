@@ -18,6 +18,15 @@ import type { ServerEvent } from "./generated/events";
 import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
+import {
+  AUDIO_INPUT,
+  AUDIO_OUTPUT,
+  PreferenceStore,
+  effectiveUserVolume,
+  userMuted,
+  userVolume,
+  type PreferenceStorage,
+} from "./preferences";
 import { RecordStore } from "./store";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
@@ -56,6 +65,19 @@ export const EVENT_REPLAY_WINDOW_MS = 60_000;
  * that fell out of the replay window, so it is redone once the stream is up.
  */
 const BOOTSTRAP_STALE_AFTER_MS = EVENT_REPLAY_WINDOW_MS - 10_000;
+/**
+ * How often presence is asked for while the sync is live and the page is visible. Presence is
+ * pulled for the users on screen rather than pushed to everyone.
+ */
+export const PRESENCE_POLL_MS = 30_000;
+/**
+ * The least time between two activity reports; mirrors the event stream's `ACTIVITY_INTERVAL`,
+ * which ignores reports closer together.
+ */
+export const ACTIVITY_INTERVAL_MS = 60_000;
+
+/** The most users one presence request names; mirrors the server's limit. */
+export const PRESENCE_BATCH = 100;
 
 export type SyncStatus =
   /** `start()` has not been called, or `stop()` has. */
@@ -94,6 +116,11 @@ export interface AspenSyncOptions {
   uploadFetch?: typeof globalThis.fetch;
   /** The browser's media for voice calls; `browserVoiceMedia()` in the app, a fake in tests. */
   voiceMedia?: VoiceMedia;
+  /**
+   * Where device preferences live. Defaults to the page's `localStorage` when there is one;
+   * `null` keeps them for the session only.
+   */
+  preferenceStorage?: PreferenceStorage | null;
   /** Uniform in [0, 1); seeds the voice rejoin delay. */
   random?: () => number;
 }
@@ -104,6 +131,8 @@ export class AspenSync {
   readonly store: RecordStore;
   /** The voice call, if any; a `VoiceCall` even when idle so the UI can subscribe once. */
   readonly voice: VoiceCall;
+  /** The user's preferences, device-scoped and account-scoped alike. */
+  readonly preferences: PreferenceStore;
   readonly #client: AspenClient;
   readonly #stream: EventStream;
   readonly #now: () => number;
@@ -118,6 +147,11 @@ export class AspenSync {
   #generation = 0;
   readonly #windowLoads = new Map<string, Promise<void>>();
   readonly #userLoads = new Map<string, Promise<void>>();
+  readonly #setTimeout: typeof globalThis.setTimeout;
+  #presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the user last did something in the app, and when the server was last told. */
+  #lastActivityAt = Number.NEGATIVE_INFINITY;
+  #activityReportedAt = Number.NEGATIVE_INFINITY;
   /** Users the server said do not exist; asked once, not again. */
   readonly #missingUsers = new Set<string>();
   readonly #attachmentLoads = new Map<string, Promise<void>>();
@@ -146,7 +180,32 @@ export class AspenSync {
     if (options.random !== undefined) {
       voiceOptions.random = options.random;
     }
+    voiceOptions.userVolume = (userId) => effectiveUserVolume(this.preferences, userId);
     this.voice = new VoiceCall(voiceOptions);
+    this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
+    if (typeof document !== "undefined") {
+      // A page coming back into view gets fresh presence at once rather than at the next tick.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && this.#status === "live") {
+          void this.#pollPresence();
+        }
+      });
+    }
+    this.preferences = new PreferenceStore({
+      storage: options.preferenceStorage === undefined ? pageStorage() : options.preferenceStorage,
+      client: this.#client,
+    });
+    // The devices voice chat uses follow the preferences, now and whenever they change.
+    const applyDevices = () => {
+      void this.voice
+        .setAudioDevices({
+          input: this.preferences.get(AUDIO_INPUT),
+          output: this.preferences.get(AUDIO_OUTPUT),
+        })
+        .catch(() => undefined);
+    };
+    this.preferences.subscribe(applyDevices);
+    applyDevices();
     const streamOptions: EventStreamOptions = {
       url: eventStreamUrl(options.client.baseUrl),
       authenticate: (o) => options.client.freshSessionToken(o),
@@ -220,7 +279,12 @@ export class AspenSync {
   stop(): void {
     this.#generation += 1;
     this.#stream.stop();
+    if (this.#presenceTimer !== null) {
+      clearTimeout(this.#presenceTimer);
+      this.#presenceTimer = null;
+    }
     this.voice.leave();
+    this.preferences.clearAccount();
     this.#held = null;
     this.#windowLoads.clear();
     this.#userLoads.clear();
@@ -502,24 +566,131 @@ export class AspenSync {
   }
 
   /**
-   * Posts a message, optionally naming uploaded attachments. The result is cached at once
-   * unless the stream delivered the message first, in which case the streamed copy is newer
-   * and is kept.
+   * Posts a message, optionally naming uploaded attachments. In a thread, `echoToParent` also
+   * shows it in the thread's parent channel. The result is cached at once unless the stream
+   * delivered the message first, in which case the streamed copy is newer and is kept.
    */
   async sendMessage(
     channelId: string,
     content: string,
     attachments: readonly string[] = [],
+    options: { echoToParent?: boolean } = {},
   ): Promise<Message> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/messages", {
       params: { path: { channel: channelId } },
-      body: { content, attachments: [...attachments] },
+      body: {
+        content,
+        attachments: [...attachments],
+        ...(options.echoToParent === true ? { echoToParent: true } : {}),
+      },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.addMessage(result.data);
     return result.data;
+  }
+
+  /**
+   * Opens the thread a message started, which the server makes the first time. The thread is
+   * cached at once and the message learns its thread, as the events that follow would say.
+   */
+  async openThread(messageId: string): Promise<Channel> {
+    const result = await this.#client.api.PUT("/api/v1/messages/{message}/thread", {
+      params: { path: { message: messageId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const thread = result.data;
+    this.store.ingest({ channels: [thread] });
+    this.store.applyEvent({
+      serverEvent: "message",
+      type: "update",
+      id: messageId,
+      thread: thread.id,
+    });
+    return thread;
+  }
+
+  /**
+   * Reads one channel into the store when it is not there yet: a thread opened from a link, or
+   * a DM from before the last listing. Resolves to the channel, or rejects when it is gone or
+   * not the caller's to see.
+   */
+  async loadChannel(channelId: string): Promise<Channel> {
+    const held = this.store.channel(channelId);
+    if (held !== undefined) {
+      return held;
+    }
+    const result = await this.#client.api.GET("/api/v1/channels/{channel}", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ channels: [result.data] });
+    return result.data;
+  }
+
+  /**
+   * Reads one message into the store when it is not there yet, such as the message a thread
+   * opened from a link started. Its author, attachments, poll, and thread come with it.
+   */
+  async loadMessage(messageId: string): Promise<Message> {
+    const held = this.store.message(messageId);
+    if (held !== undefined) {
+      return held;
+    }
+    const result = await this.#client.api.GET("/api/v1/messages/{message}", {
+      params: {
+        path: { message: messageId },
+        query: { include: ["authors", "attachments", "polls", "threads"] },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ ...result.data.included, messages: [result.data.data] });
+    return result.data.data;
+  }
+
+  /**
+   * Opens a DM with the people named: with one person their one-to-one DM, which the server
+   * returns as it is when it exists; with more, a new group DM.
+   */
+  async openDm(recipients: readonly string[]): Promise<Channel> {
+    const result = await this.#client.api.POST("/api/v1/users/@me/dms", {
+      body: { recipients: [...recipients] },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ channels: [result.data] });
+    return result.data;
+  }
+
+  /** Adds someone to a group DM; the change arrives as the DM's event. */
+  async addDmRecipient(channelId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/channels/{channel}/recipients/{user}", {
+      params: { path: { channel: channelId, user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Leaves a group DM. The DM's event, which names its recipients without the caller, is what
+   * takes it out of the store.
+   */
+  async leaveDm(channelId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/channels/{channel}/recipients/@me", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /**
@@ -715,6 +886,18 @@ export class AspenSync {
    * `null` clearing one. The cache is left to the update event, which the server publishes
    * before it answers.
    */
+  /** How loud `userId` is to this user on this install: a gain, 1 as sent. Silent while muted for them. */
+  async setUserVolume(userId: string, gain: number): Promise<void> {
+    await this.preferences.set(userVolume(userId), gain);
+    this.voice.setUserVolume(userId, effectiveUserVolume(this.preferences, userId));
+  }
+
+  /** Silences `userId` for this user alone, or hears them again at their volume. */
+  async setUserMuted(userId: string, muted: boolean): Promise<void> {
+    await this.preferences.set(userMuted(userId), muted);
+    this.voice.setUserVolume(userId, effectiveUserVolume(this.preferences, userId));
+  }
+
   /** Server-mutes or unmutes someone in a channel's call; their `update` event confirms it. */
   async muteVoiceParticipant(channelId: string, userId: string, muted: boolean): Promise<void> {
     const result = await this.#client.api.PATCH(
@@ -898,6 +1081,9 @@ export class AspenSync {
     for (const listener of Array.from(this.#listeners)) {
       listener();
     }
+    if (status === "live") {
+      void this.#pollPresence();
+    }
   }
 
   /** Reads the caller and their communities into the store. Returns whether it succeeded. */
@@ -905,13 +1091,16 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities] = await Promise.all([
+      const [me, communities, dms] = await Promise.all([
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
             path: { user: "@me" },
             query: { include: ["channels", "categories", "members", "voice"] },
           },
+        }),
+        this.#client.api.GET("/api/v1/users/@me/dms", {
+          params: { query: { include: ["users"] } },
         }),
       ]);
       if (generation !== this.#generation) {
@@ -923,7 +1112,13 @@ export class AspenSync {
       if (communities.data === undefined) {
         throw new ApiProblemError(problemOf(communities.error, communities.response));
       }
+      if (dms.data === undefined) {
+        throw new ApiProblemError(problemOf(dms.error, dms.response));
+      }
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
+      this.store.ingest(dms.data.included);
+      this.store.setDms(dms.data.data);
+      await this.preferences.loadAccount();
       this.#bootstrappedAt = startedAt;
       const held = this.#held;
       this.#held = null;
@@ -943,6 +1138,53 @@ export class AspenSync {
     }
   }
 
+  /**
+   * Asks the server for the presence of everyone on screen, then again after
+   * `PRESENCE_POLL_MS` for as long as the sync stays live. A hidden page skips the request.
+   */
+  async #pollPresence(): Promise<void> {
+    if (this.#presenceTimer !== null) {
+      clearTimeout(this.#presenceTimer);
+      this.#presenceTimer = null;
+    }
+    if (this.#status !== "live") {
+      return;
+    }
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    if (!hidden) {
+      const ids = this.store.presenceCandidates();
+      const batches: string[][] = [];
+      for (let i = 0; i < ids.length; i += PRESENCE_BATCH) {
+        batches.push(ids.slice(i, i + PRESENCE_BATCH));
+      }
+      await Promise.all(
+        batches.map(async (batch) => {
+          const result = await this.#client.api.GET("/api/v1/users/statuses", {
+            params: { query: { ids: batch.join(",") } },
+          });
+          if (result.data !== undefined) {
+            this.store.applyStatuses(result.data);
+          }
+        }),
+      ).catch(() => undefined);
+    }
+    // Read afresh after the awaits, where narrowing is stale.
+    if (this.#isLive() && !this.#presencePollScheduled()) {
+      this.#presenceTimer = this.#setTimeout(() => {
+        this.#presenceTimer = null;
+        void this.#pollPresence();
+      }, PRESENCE_POLL_MS);
+    }
+  }
+
+  #isLive(): boolean {
+    return this.#status === "live";
+  }
+
+  #presencePollScheduled(): boolean {
+    return this.#presenceTimer !== null;
+  }
+
   async #resync(): Promise<void> {
     if (this.#status === "stopped" || this.#held !== null) {
       return;
@@ -954,7 +1196,31 @@ export class AspenSync {
     }
   }
 
+  /**
+   * The user did something in the app. The server hears of it at most once every
+   * `ACTIVITY_INTERVAL_MS`, which keeps them showing as online rather than away; activity while
+   * the stream is down is reported when it comes back, if it is still recent.
+   */
+  noteActivity(): void {
+    this.#lastActivityAt = this.#now();
+    this.#reportActivity();
+  }
+
+  #reportActivity(): void {
+    const now = this.#now();
+    if (
+      now - this.#lastActivityAt >= ACTIVITY_INTERVAL_MS ||
+      now - this.#activityReportedAt < ACTIVITY_INTERVAL_MS
+    ) {
+      return;
+    }
+    if (this.#stream.sendActivity()) {
+      this.#activityReportedAt = now;
+    }
+  }
+
   #onReady(resumed: boolean): void {
+    this.#reportActivity();
     if (this.#status === "resyncing" || this.#status === "failed") {
       return;
     }
@@ -979,6 +1245,14 @@ export class AspenSync {
     this.store.applyEvent(event);
     if (event.serverEvent === "message" && event.type === "create") {
       this.ensureUser(event.author);
+    }
+    if (event.serverEvent === "userPreferencesChanged") {
+      // Another of the user's devices changed something; the values are fetched rather than
+      // carried by the event, so they never reach anyone else's stream.
+      if (event.user === this.store.me()?.id) {
+        void this.preferences.loadAccount().catch(() => undefined);
+      }
+      return;
     }
     if (event.serverEvent === "voiceSessionEnded") {
       this.voice.onSessionEnded(event);
@@ -1013,7 +1287,7 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/messages", {
       params: {
         path: { channel: channelId },
-        query: { ...query, include: ["authors", "attachments", "polls"] },
+        query: { ...query, include: ["authors", "attachments", "polls", "threads", "echoes"] },
       },
     });
     if (result.data === undefined) {
@@ -1039,8 +1313,14 @@ function lazyBrowserMedia(): VoiceMedia {
   };
   return {
     createDevice: async () => (await media()).createDevice(),
-    getMicrophone: async () => (await media()).getMicrophone(),
+    getMicrophone: async (choice) => (await media()).getMicrophone(choice),
+    setOutput: async (choice) => (await media()).setOutput(choice),
     getScreen: async () => (await media()).getScreen(),
+    setVolume: (consumerId, gain) => {
+      if (real !== null) {
+        real.setVolume(consumerId, gain);
+      }
+    },
     play: (id, track) => {
       real?.play(id, track);
     },
@@ -1048,4 +1328,13 @@ function lazyBrowserMedia(): VoiceMedia {
       real?.stop(id);
     },
   };
+}
+
+/** The page's `localStorage`, when there is one and it can be touched. */
+function pageStorage(): PreferenceStorage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
 }

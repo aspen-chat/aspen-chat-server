@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title data-text="passkeyPageTitle"></title>
+<style>
+  :root { color-scheme: light dark; --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #5f5f5a; --accent: #2f6f4f; --accent-ink: #ffffff; --danger: #a23a2a; --line: #dcdcd6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --panel: #20201e; --ink: #ececea; --muted: #a3a39d; --accent: #5fae84; --accent-ink: #0d1a13; --danger: #e27d6c; --line: #34342f; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px 24px; }
+  h1 { font-size: 1.25rem; margin: 0 0 8px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  p.error { color: var(--danger); }
+  .actions { display: flex; gap: 8px; }
+  button { font: inherit; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="heading"></h1>
+  <p id="status" role="status"></p>
+  <div class="actions">
+    <button id="continue" class="primary" type="button" data-text="passkeyPageContinue" hidden></button>
+    <button id="cancel" type="button" data-text="passkeyPageCancel" hidden></button>
+  </div>
+</main>
+<script>
+"use strict";
+// Strings and nothing else are put here by the server, localized.
+const T = /*STRINGS*/{};
+
+// The ceremony id travels in the fragment so it never reaches a server log or a Referer.
+// `finished` is how an app that has taken the browser's return sends the tab back here to
+// close the conversation.
+const fragment = new URLSearchParams(location.hash.slice(1));
+const ceremony = fragment.get("ceremony") ?? "";
+const finished = fragment.get("finished");
+const endpoint = "/api/v1/auth/passkey-ceremonies/" + encodeURIComponent(ceremony);
+const heading = document.getElementById("heading");
+const status = document.getElementById("status");
+const continueButton = document.getElementById("continue");
+const cancelButton = document.getElementById("cancel");
+let description = null;
+let busy = false;
+
+for (const element of document.querySelectorAll("[data-text]")) {
+  element.textContent = T[element.dataset.text] ?? "";
+}
+
+function show(message, isError) {
+  status.textContent = message;
+  status.className = isError ? "error" : "";
+}
+
+function fromBase64url(text) {
+  const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64 + "===".slice((base64.length + 3) % 4));
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+}
+
+function toBase64url(buffer) {
+  let binary = "";
+  for (const byte of new Uint8Array(buffer)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// The options arrive as JSON with binary fields in base64url; the WebAuthn API wants bytes.
+function decodeOptions(publicKey) {
+  const options = { ...publicKey, challenge: fromBase64url(publicKey.challenge) };
+  if (publicKey.user) options.user = { ...publicKey.user, id: fromBase64url(publicKey.user.id) };
+  for (const key of ["excludeCredentials", "allowCredentials"]) {
+    if (publicKey[key]) options[key] = publicKey[key].map((c) => ({ ...c, id: fromBase64url(c.id) }));
+  }
+  return options;
+}
+
+function encodeCredential(credential) {
+  const response = credential.response;
+  const encoded = {
+    id: credential.id,
+    rawId: toBase64url(credential.rawId),
+    type: credential.type,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response: { clientDataJSON: toBase64url(response.clientDataJSON) },
+  };
+  if (response.attestationObject) {
+    encoded.response.attestationObject = toBase64url(response.attestationObject);
+    if (response.getTransports) encoded.response.transports = response.getTransports();
+  } else {
+    encoded.response.authenticatorData = toBase64url(response.authenticatorData);
+    encoded.response.signature = toBase64url(response.signature);
+    if (response.userHandle) encoded.response.userHandle = toBase64url(response.userHandle);
+  }
+  return encoded;
+}
+
+function returnTo(outcome) {
+  const target = new URL(description.returnTo);
+  target.searchParams.set("ceremony", ceremony);
+  target.searchParams.set("outcome", outcome);
+  return target.toString();
+}
+
+async function run() {
+  if (busy) return;
+  busy = true;
+  continueButton.hidden = true;
+  show(T.passkeyPageWorking, false);
+  try {
+    const publicKey = decodeOptions(description.options.publicKey);
+    const credential = description.purpose === "register"
+      ? await navigator.credentials.create({ publicKey })
+      : await navigator.credentials.get({ publicKey });
+    const response = await fetch(endpoint + "/credential", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: encodeCredential(credential) }),
+    });
+    if (response.status === 404) {
+      show(T.passkeyPageExpired, true);
+      cancelButton.hidden = true;
+      return;
+    }
+    const body = await response.json();
+    if (!response.ok) {
+      // The ceremony is used up; the app has to start another.
+      show(body.detail ?? body.title ?? T.passkeyPageFailed, true);
+      return;
+    }
+    cancelButton.hidden = true;
+    show(T.passkeyPageReturning + " " + T.passkeyPageReturnHint, false);
+    location.href = body.returnTo;
+  } catch (error) {
+    // The user dismissed the prompt, or the authenticator failed; the ceremony is still open.
+    console.warn(error);
+    show(T.passkeyPageFailed, true);
+    continueButton.hidden = false;
+  } finally {
+    busy = false;
+  }
+}
+
+async function start() {
+  if (finished !== null) {
+    heading.textContent = T.passkeyPageTitle;
+    show(finished === "done" ? T.passkeyPageFinished : T.passkeyPageCancelled, false);
+    return;
+  }
+  if (!window.PublicKeyCredential) {
+    show(T.passkeyPageUnsupported, true);
+    return;
+  }
+  const response = await fetch(endpoint).catch(() => null);
+  if (response === null || !response.ok) {
+    show(T.passkeyPageExpired, true);
+    return;
+  }
+  description = await response.json();
+  heading.textContent = {
+    signIn: T.passkeyPageSignIn,
+    register: T.passkeyPageRegister,
+    reauthenticate: T.passkeyPageReauthenticate,
+  }[description.purpose] ?? "";
+  cancelButton.hidden = !description.returnTo;
+  continueButton.hidden = false;
+  // Browsers that allow a prompt without a click get one straight away; the others wait for
+  // Continue.
+  void run();
+}
+
+continueButton.addEventListener("click", () => void run());
+// Opening the page again for another ceremony changes only the fragment, which does not reload
+// the document on its own.
+window.addEventListener("hashchange", () => location.reload());
+cancelButton.addEventListener("click", () => {
+  show(T.passkeyPageCancelled, false);
+  location.href = returnTo("cancelled");
+});
+void start();
+</script>
+</body>
+</html>

@@ -55,7 +55,7 @@
   --palette-danger: light-dark(#b91c1c, #fca5a5);
   --palette-danger-soft: light-dark(#fee2e2, #450a0a);
   --palette-online: light-dark(#16a34a, #4ade80);
-  --palette-away: light-dark(#d97706, #fbbf24);
+  --palette-away: light-dark(#eab308, #facc15);
   --palette-code-keyword: light-dark(#7c3aed, #c4b5fd);
   --palette-code-string: light-dark(#047857, #6ee7b7);
   --palette-code-comment: light-dark(#8a8a8a, #737373);
@@ -81,7 +81,7 @@
   --palette-danger: light-dark(#be123c, #fda4af);
   --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
   --palette-online: light-dark(#0d9488, #2dd4bf);
-  --palette-away: light-dark(#c2410c, #fb923c);
+  --palette-away: light-dark(#ca8a04, #fde047);
   --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
   --palette-code-string: light-dark(#0f766e, #5eead4);
   --palette-code-comment: light-dark(#8f8ba8, #6f6b8a);

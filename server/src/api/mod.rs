@@ -1,6 +1,6 @@
 use crate::app;
 use crate::app::ASPEN_NATS_STREAM_NAME;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use axum::http::{HeaderValue, Method};
 use axum::routing::any;
 use diesel_async::{
@@ -17,6 +17,7 @@ pub(crate) mod auth;
 pub(crate) mod category;
 pub(crate) mod channel;
 pub(crate) mod community;
+pub(crate) mod dm;
 pub(crate) mod error;
 mod event_stream;
 pub(crate) mod extract;
@@ -26,8 +27,11 @@ pub(crate) mod invite;
 pub(crate) mod link_preview;
 pub(crate) mod message;
 pub(crate) mod message_enum;
+pub(crate) mod passkey_page;
 pub mod poll;
+pub(crate) mod rate_limit;
 pub(crate) mod react;
+pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
 
@@ -41,7 +45,8 @@ use diesel::pg::Pg;
 use diesel::serialize::{IsNull, Output, ToSql};
 use schemars::schema_for;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
@@ -64,6 +69,8 @@ pub const TAG_VOICE: &str = "voice";
 pub const TAG_INVITES: &str = "invites";
 pub const TAG_ATTACHMENTS: &str = "attachments";
 pub const TAG_ICONS: &str = "icons";
+pub const TAG_DMS: &str = "dms";
+pub const TAG_SECURITY: &str = "security";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -84,18 +91,21 @@ pub const TAG_ICONS: &str = "icons";
     components(schemas(
         community::CommunityInclude,
         message::MessageInclude,
+        dm::DmInclude,
         poll::PollInclude,
         poll::PollOption,
         poll::PollVote,
         invite::InviteInclude
     )),
     tags(
-        (name = TAG_AUTH, description = "Login, logout, and session refresh"),
+        (name = TAG_AUTH, description = "Signing in (password, second factor, passkey), re-verifying, signing out, and session refresh"),
         (name = TAG_USERS, description = "Accounts. `@me` addresses the calling user."),
+        (name = TAG_SECURITY, description = "A user's second factors: authenticator app, passkeys, and recovery codes"),
         (name = TAG_COMMUNITIES, description = "Communities and their membership"),
         (name = TAG_CATEGORIES, description = "Groupings of channels inside a community"),
-        (name = TAG_CHANNELS, description = "Text and voice channels"),
-        (name = TAG_MESSAGES, description = "Messages within a channel"),
+        (name = TAG_CHANNELS, description = "Text and voice channels, threads, and DMs"),
+        (name = TAG_MESSAGES, description = "Messages within a channel, and the threads they start"),
+        (name = TAG_DMS, description = "Direct messages: DMs between two people and group DMs, outside any community"),
         (name = TAG_REACTIONS, description = "Emoji reactions on messages"),
         (name = TAG_POLLS, description = "Timed polls posted to a channel, and votes on them"),
         (name = TAG_VOICE, description = "Voice calls: joining a channel's call, the voice server registry, and failure reports"),
@@ -165,14 +175,22 @@ fn cors_layer(config: &CorsConfig) -> Option<CorsLayer> {
                 Method::DELETE,
             ])
             .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-            .expose_headers([LOCATION])
+            .expose_headers([LOCATION, RETRY_AFTER])
             .max_age(Duration::from_secs(60 * 60)),
     )
 }
 
-pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
-    let v1 = OpenApiRouter::new()
+/// Every API route, relative to `API_PREFIX`.
+fn api_routes() -> OpenApiRouter<GlobalServerContext> {
+    OpenApiRouter::new()
         .routes(routes!(auth::login))
+        .routes(routes!(auth::login_second_factor))
+        .routes(routes!(auth::auth_methods))
+        .routes(routes!(auth::reauthenticate))
+        .routes(routes!(auth::start_passkey_ceremony))
+        .routes(routes!(auth::get_passkey_ceremony))
+        .routes(routes!(auth::complete_passkey_ceremony))
+        .routes(routes!(auth::claim_passkey_ceremony))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
         .routes(routes!(auth::other_server_token))
@@ -182,8 +200,15 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             user::update_user,
             user::delete_user
         ))
+        .routes(routes!(user::get_preferences, user::update_preferences))
+        .routes(routes!(user::get_statuses))
         .routes(routes!(user::list_user_communities))
         .routes(routes!(user::change_password))
+        .routes(routes!(security::get_security))
+        .routes(routes!(security::begin_totp, security::remove_totp))
+        .routes(routes!(security::confirm_totp))
+        .routes(routes!(security::rename_passkey, security::remove_passkey))
+        .routes(routes!(security::regenerate_recovery_codes))
         .routes(routes!(community::create_community))
         .routes(routes!(
             community::get_community,
@@ -232,6 +257,10 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             message::update_message,
             message::delete_message
         ))
+        .routes(routes!(message::open_thread))
+        .routes(routes!(dm::open_dm, dm::list_dms))
+        .routes(routes!(dm::add_recipient))
+        .routes(routes!(dm::leave_dm))
         .routes(routes!(react::add_reaction, react::remove_reaction))
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))
@@ -262,11 +291,21 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         .routes(routes!(icon::get_icon, icon::delete_icon))
         // The event stream is a WebSocket and has no OpenAPI representation; its frames are
         // described by `event_schema.json`.
-        .route("/events", any(event_stream::event_stream));
-    let mut router = OpenApiRouter::with_openapi(ApiDoc::openapi()).nest(API_PREFIX, v1);
+        .route("/events", any(event_stream::event_stream))
+}
+
+/// The OpenAPI document of every API route.
+pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
+    let mut openapi = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .nest(API_PREFIX, api_routes())
+        .to_openapi();
+    rate_limit::document_rate_limits(&mut openapi);
+    openapi
+}
+
+pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
     if write_schema {
-        let openapi = router.to_openapi();
-        fs::write("openapi.yaml", openapi.to_yaml()?)?;
+        fs::write("openapi.yaml", openapi().to_yaml()?)?;
         let event_schema = schema_for!(event_stream::EventStreamProtocol);
         fs::write(
             "event_schema.json",
@@ -274,7 +313,27 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         )?;
         std::process::exit(0);
     }
-    let context = GlobalServerContext::new().await?;
+    let context = GlobalServerContext::new(&rate_limit::routes()).await?;
+    // A route layer runs only for matched routes, after routing, so it knows the route's
+    // template.
+    let v1 = api_routes().route_layer(axum::middleware::from_fn_with_state(
+        context.clone(),
+        rate_limit::limit_requests,
+    ));
+    // A page, not an API: the desktop and mobile apps open it in the system browser to run a
+    // passkey ceremony (`api::passkey_page`). It is limited like the API.
+    let page = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::PASSKEY_PAGE.1,
+            axum::routing::get(passkey_page::page),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ));
+    let router = OpenApiRouter::<GlobalServerContext>::new()
+        .nest(API_PREFIX, v1)
+        .merge(page);
     app::poll::spawn_closer(context.clone());
     app::voice::seed_servers(&context).await?;
     app::voice::spawn_report_listener(context.clone()).await?;
@@ -291,6 +350,8 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     Debug,
     Clone,
     Copy,
+    PartialEq,
+    Eq,
     Deserialize,
     Serialize,
     utoipa::ToSchema,
@@ -298,10 +359,17 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     FromSqlRow,
     AsExpression,
 )]
+#[serde(rename_all = "camelCase")]
 #[diesel(sql_type = crate::database::schema::sql_types::ChannelType)]
 pub enum ChannelType {
     Text,
     Voice,
+    /// Replies to one message of a text channel, DM, or group DM; see `Channel.parentChannel`.
+    Thread,
+    /// A conversation between two people, outside any community.
+    Dm,
+    /// A conversation among up to `app::dm::MAX_RECIPIENTS` people, outside any community.
+    GroupDm,
 }
 
 impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
@@ -309,6 +377,9 @@ impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType 
         out.write_all(match self {
             ChannelType::Text => b"text",
             ChannelType::Voice => b"voice",
+            ChannelType::Thread => b"thread",
+            ChannelType::Dm => b"dm",
+            ChannelType::GroupDm => b"group_dm",
         })?;
         Ok(IsNull::No)
     }
@@ -321,6 +392,9 @@ impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelTyp
         match bytes.as_bytes() {
             b"voice" => Ok(ChannelType::Voice),
             b"text" => Ok(ChannelType::Text),
+            b"thread" => Ok(ChannelType::Thread),
+            b"dm" => Ok(ChannelType::Dm),
+            b"group_dm" => Ok(ChannelType::GroupDm),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())
@@ -330,8 +404,8 @@ impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelTyp
     }
 }
 
-/// What a message is. Both poll kinds carry no `content`; the client renders them from the poll
-/// record the message's `poll` field names.
+/// What a message is. Both poll kinds and echoes carry no `content`; the client renders the poll
+/// kinds from the poll record the message's `poll` field names, and an echo from its reply.
 #[derive(
     Debug,
     Clone,
@@ -354,6 +428,9 @@ pub enum MessageKind {
     Poll,
     /// The system message announcing a poll's outcome; its `author` is the poll's creator.
     PollClosed,
+    /// A thread reply shown in the thread's parent channel, by reference: `echoOf` names the
+    /// reply, and the echo has no content of its own. Its `author` is the reply's.
+    ThreadEcho,
 }
 
 impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -362,6 +439,7 @@ impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind 
             MessageKind::Standard => b"standard",
             MessageKind::Poll => b"poll",
             MessageKind::PollClosed => b"poll_closed",
+            MessageKind::ThreadEcho => b"thread_echo",
         })?;
         Ok(IsNull::No)
     }
@@ -375,6 +453,7 @@ impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKin
             b"standard" => Ok(MessageKind::Standard),
             b"poll" => Ok(MessageKind::Poll),
             b"poll_closed" => Ok(MessageKind::PollClosed),
+            b"thread_echo" => Ok(MessageKind::ThreadEcho),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())
@@ -391,11 +470,21 @@ pub struct GlobalServerContext {
     pub valkey: fred::clients::Client,
     pub media_store: Arc<app::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
+    pub rate_limiter: Arc<app::rate_limit::RateLimiter>,
+    /// The WebAuthn relying party, when `[auth.passkeys]` is configured.
+    pub webauthn: Option<Arc<webauthn_rs::Webauthn>>,
+    /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
+    /// channel never moves.
+    pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
 }
 
 impl GlobalServerContext {
-    pub async fn new() -> Result<Self, app::Error> {
+    /// Connects to everything the server needs. `routes` are the API's routes, which the rate
+    /// limits are checked against.
+    pub async fn new(routes: &[app::rate_limit::Route]) -> Result<Self, app::Error> {
         let config = load_config()?;
+        let rate_limiter = app::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
+            .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
         let client = async_nats::connect_with_options(
             &config.nats_url,
             ConnectOptions::new().token(config.nats_auth_token.clone()),
@@ -405,6 +494,7 @@ impl GlobalServerContext {
         context
             .create_or_update_stream(async_nats::jetstream::stream::Config {
                 name: ASPEN_NATS_STREAM_NAME.to_string(),
+                subjects: vec![format!("{}.>", app::events::SUBJECT_ROOT)],
                 discard: DiscardPolicy::Old,
                 max_messages: 1_000_000_000,
                 max_bytes: 8 * 1024 * 1024 * 1024,
@@ -421,36 +511,21 @@ impl GlobalServerContext {
         let valkey = fred::prelude::Client::new(valkey_config.clone(), None, None, None);
         valkey.init().await?;
 
-        let valkey_subscribe = fred::prelude::Client::new(valkey_config, None, None, None);
-        valkey_subscribe.init().await?;
-
-        // Enable expired key notifications and subscribe
-        use fred::interfaces::ConfigInterface;
-        use fred::prelude::PubsubInterface;
-        valkey_subscribe
-            .config_set("notify-keyspace-events", "Ex")
-            .await?;
-        valkey_subscribe
-            .psubscribe("__keyevent@*__:expired")
-            .await?;
-
-        let nats_arc: Arc<async_nats::jetstream::Context> = context.into();
-        app::user_status::spawn_expiry_listener(
-            valkey_subscribe.clone(),
-            valkey.clone(),
-            nats_arc.clone(),
-        );
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
+        let webauthn = app::passkey::relying_party(&config.auth)?;
 
         Ok(Self {
+            channel_homes: Arc::new(Mutex::new(HashMap::new())),
             connection_pool: {
                 let conn_manager =
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
                 Pool::builder(conn_manager).build()?
             },
-            nats_context: nats_arc,
+            nats_context: Arc::new(context),
             valkey,
             media_store,
+            rate_limiter: Arc::new(rate_limiter),
+            webauthn,
             config: config.into(),
         })
     }

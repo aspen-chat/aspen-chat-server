@@ -1,5 +1,14 @@
 import createClient, { type Client } from "openapi-fetch";
 import type { components, paths } from "./generated/openapi";
+import {
+  handoffPageUrl,
+  pkcePair,
+  PasskeyCancelledError,
+  runInPage,
+  type Passkey,
+  type PasskeyPurpose,
+  type PasskeyTransport,
+} from "./passkeys";
 import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
 import { API_PREFIX } from "./urls";
@@ -23,9 +32,42 @@ export interface AspenClientOptions {
   refreshLeewayMs?: number;
   /** Called after a login, refresh, or logout changes the stored session. */
   onSessionChange?: (session: Session | null) => void;
+  /** Waits the given milliseconds; tests replace it. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
+/**
+ * A read the server refuses for going too fast is tried once more after the `Retry-After` it
+ * gives, if that is at most this long; a longer wait, or a refused write, is the caller's.
+ */
+export const RATE_LIMIT_RETRY_MAX_MS = 5_000;
+
 export type SessionListener = (session: Session | null) => void;
+
+export type SecondFactorMethod = Schemas["SecondFactorMethod"];
+export type TypedSecondFactor = Schemas["TypedSecondFactor"];
+export type ReauthenticationMethod = Schemas["ReauthenticationMethod"];
+export type AuthMethods = Schemas["AuthMethods"];
+
+/** How a password sign-in ended. */
+export type LoginOutcome =
+  | { status: "signedIn"; session: Session }
+  | { status: "secondFactorRequired"; ticket: string; methods: SecondFactorMethod[] };
+
+/** What a passkey ceremony asks for. */
+export interface PasskeyRequest {
+  purpose: PasskeyPurpose;
+  /** `signIn` as the second factor of a password sign-in: the ticket it left waiting. */
+  ticket?: string;
+  /** `register`: what to call the passkey. */
+  name?: string;
+}
+
+/** How a passkey ceremony ended. A `signedIn` session is already stored. */
+export type PasskeyOutcome =
+  | { outcome: "signedIn"; session: Session }
+  | { outcome: "passkeyAdded"; passkey: Passkey; recoveryCodes: string[] | null }
+  | { outcome: "reauthenticated"; verifiedUntil: string };
 
 /**
  * Everything a shell needs to talk to one Aspen server: a typed REST client whose requests
@@ -42,6 +84,7 @@ export class AspenClient {
   readonly #fetch: typeof globalThis.fetch;
   readonly #refreshLeewayMs: number;
   readonly #onSessionChange: SessionListener | undefined;
+  readonly #sleep: (ms: number) => Promise<void>;
   readonly #listeners = new Set<SessionListener>();
   /**
    * The session as last read from or written to the store. Cached so `session` returns the same
@@ -58,6 +101,8 @@ export class AspenClient {
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.#refreshLeewayMs = options.refreshLeewayMs ?? 60_000;
     this.#onSessionChange = options.onSessionChange;
+    this.#sleep =
+      options.sleep ?? ((ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)));
     this.#session = this.#store.load();
     this.api = createClient<paths>({
       baseUrl: this.baseUrl,
@@ -87,19 +132,137 @@ export class AspenClient {
     return this.session !== null;
   }
 
-  /** Logs in and stores the resulting session. Throws `ApiProblemError` on failure. */
-  async login(username: string, password: string): Promise<Session> {
+  /**
+   * Signs in with a password. An account with two-factor sign-in on is not signed in yet: the
+   * outcome carries the ticket to finish with `completeSecondFactor` or a passkey. Throws
+   * `ApiProblemError` on failure.
+   */
+  async login(username: string, password: string): Promise<LoginOutcome> {
     const { data, error, response } = await this.api.POST(`${API_PREFIX}/auth/login`, {
       body: { username, password },
     });
     if (data === undefined) {
       throw new ApiProblemError(problemOf(error, response));
     }
+    if (data.status === "secondFactorRequired") {
+      return { status: "secondFactorRequired", ticket: data.ticket, methods: data.methods };
+    }
+    return { status: "signedIn", session: this.#adopt(data) };
+  }
+
+  /** Finishes a password sign-in with an authenticator code or a recovery code. */
+  async completeSecondFactor(
+    ticket: string,
+    method: TypedSecondFactor,
+    code: string,
+  ): Promise<Session> {
+    const response = await this.api.POST(`${API_PREFIX}/auth/login/second-factor`, {
+      body: { ticket, method, code },
+    });
+    return this.#adopt(unwrap(response));
+  }
+
+  /** How this server lets people sign in: whether it offers passkeys, and on which domain. */
+  async authMethods(): Promise<AuthMethods> {
+    return unwrap(await this.api.GET(`${API_PREFIX}/auth/methods`));
+  }
+
+  /**
+   * Proves again who the user is, so the session may change security settings for a while.
+   * Returns until when.
+   */
+  async reauthenticate(method: ReauthenticationMethod, secret: string): Promise<string> {
+    const response = await this.api.POST(`${API_PREFIX}/auth/reauthenticate`, {
+      body: { method, secret },
+    });
+    return unwrap(response).verifiedUntil;
+  }
+
+  /**
+   * Runs a passkey ceremony end to end: in this page, or handed to the server's page in the
+   * system browser. Throws `PasskeyCancelledError` when the user backs out, and
+   * `ApiProblemError` when the server refuses.
+   */
+  async runPasskeyCeremony(
+    request: PasskeyRequest,
+    transport: PasskeyTransport,
+  ): Promise<PasskeyOutcome> {
+    if (transport.kind === "inPage") {
+      const started = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
+      );
+      const credential = await runInPage(started.purpose, started.options);
+      const completed = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`, {
+          params: { path: { ceremony: started.id } },
+          body: { credential },
+        }),
+      );
+      return this.#passkeyOutcome(completed);
+    }
+    const handoff = await transport.handoff.prepare();
+    try {
+      const { verifier, challenge } = await pkcePair();
+      const started = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, {
+          body: { ...request, handoff: { codeChallenge: challenge, returnTo: handoff.returnTo } },
+        }),
+      );
+      const returned = await handoff.open(handoffPageUrl(this.baseUrl, started.id));
+      if (returned.ceremony !== started.id || returned.outcome === "cancelled") {
+        throw new PasskeyCancelledError();
+      }
+      const claimed = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/claim`, {
+          params: { path: { ceremony: started.id } },
+          body: { codeVerifier: verifier },
+        }),
+      );
+      return this.#passkeyOutcome(claimed);
+    } finally {
+      handoff.dispose();
+    }
+  }
+
+  #passkeyOutcome(result: Schemas["PasskeyCeremonyOutcome"]): PasskeyOutcome {
+    switch (result.outcome) {
+      case "signedIn":
+        return { outcome: "signedIn", session: this.#adopt(result) };
+      case "passkeyAdded":
+        return {
+          outcome: "passkeyAdded",
+          passkey: result.passkey,
+          recoveryCodes: result.recoveryCodes ?? null,
+        };
+      case "reauthenticated":
+        return { outcome: "reauthenticated", verifiedUntil: result.verifiedUntil };
+      case "handedOff":
+        // Only a handed-off completion answers this, and the page, not the app, receives it.
+        throw new Error("unexpected handedOff outcome");
+    }
+  }
+
+  /**
+   * Records that the account now has a second factor, lifting a server's requirement that it
+   * add one. The app calls it once the user has seen the recovery codes that came with the
+   * first factor, since lifting the requirement takes the enrollment screen, and anything it
+   * shows, away.
+   */
+  markEnrolled(): void {
+    const session = this.session;
+    if (session?.twoFactorEnrollmentRequired === true) {
+      this.#setSession({ ...session, twoFactorEnrollmentRequired: false });
+    }
+  }
+
+  /** Stores the credentials of a completed sign-in. */
+  #adopt(response: Schemas["LoginResponse"]): Session {
     const session: Session = {
-      userId: data.userId,
-      refreshToken: data.refreshToken,
-      sessionToken: data.sessionToken,
-      sessionTokenExpires: data.sessionTokenExpires,
+      userId: response.userId,
+      refreshToken: response.refreshToken,
+      sessionToken: response.sessionToken,
+      sessionTokenExpires: response.sessionTokenExpires,
+      twoFactorEnrollmentRequired: response.twoFactorEnrollmentRequired,
     };
     this.#setSession(session);
     return session;
@@ -191,6 +354,20 @@ export class AspenClient {
   }
 
   async #authenticatedFetch(request: Request): Promise<Response> {
+    const retry = request.method === "GET" || request.method === "HEAD" ? request.clone() : null;
+    const response = await this.#sessionFetch(request);
+    if (response.status !== 429 || retry === null) {
+      return response;
+    }
+    const waitMs = Number(response.headers.get("retry-after")) * 1000;
+    if (!Number.isFinite(waitMs) || waitMs <= 0 || waitMs > RATE_LIMIT_RETRY_MAX_MS) {
+      return response;
+    }
+    await this.#sleep(waitMs);
+    return this.#sessionFetch(retry);
+  }
+
+  async #sessionFetch(request: Request): Promise<Response> {
     let session = this.session;
     if (session !== null && sessionTokenExpiresSoon(session, this.#refreshLeewayMs)) {
       await this.refreshSession();
@@ -202,6 +379,9 @@ export class AspenClient {
     // Keep an unread copy so the request can be replayed after a refresh.
     const retry = request.clone();
     const response = await this.#fetch(withBearer(request, session.sessionToken));
+    if (response.status === 403) {
+      await this.#noticeEnrollmentRequired(response);
+    }
     if (response.status !== 401) {
       return response;
     }
@@ -211,6 +391,29 @@ export class AspenClient {
       return response;
     }
     return this.#fetch(withBearer(retry, fresh.sessionToken));
+  }
+
+  /**
+   * A server that has started requiring a second factor answers every request of an account
+   * without one this way. Flagging the session lets the app show the enrollment screen instead
+   * of failing everywhere.
+   */
+  async #noticeEnrollmentRequired(response: Response): Promise<void> {
+    let body: unknown;
+    try {
+      body = await response.clone().json();
+    } catch {
+      return;
+    }
+    const session = this.session;
+    if (
+      isProblem(body) &&
+      body.code === "twoFactorEnrollmentRequired" &&
+      session !== null &&
+      session.twoFactorEnrollmentRequired !== true
+    ) {
+      this.#setSession({ ...session, twoFactorEnrollmentRequired: true });
+    }
   }
 
   #setSession(session: Session | null): void {

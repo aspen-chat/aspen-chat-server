@@ -1,11 +1,16 @@
 //! One client's WebSocket: frames in are dispatched to the rooms, frames out come from the
-//! participant's outbox. The first frame must be `identify` with a valid join token.
+//! participant's outbox. The first frame must be `identify` with a valid join token. Every
+//! route and frame is limited (`limits`).
 
+use crate::limits::{Caller, HEALTH, Limits, PendingSocket, SIGNALLING};
 use crate::rooms::{RoomError, Rooms};
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -22,10 +27,61 @@ pub struct AppState {
     pub server: Uuid,
     pub token_secret: Arc<str>,
     pub rooms: Arc<Rooms>,
+    pub limits: Arc<Limits>,
 }
 
-pub async fn upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| handle(socket, state))
+/// The client address of a request, behind any trusted proxies.
+fn client_ip(state: &AppState, peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
+    let forwarded = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    state.limits.client(peer.ip(), forwarded)
+}
+
+fn too_many(wait: Duration) -> Response {
+    let seconds = u64::try_from(wait.as_millis().div_ceil(1000).max(1)).unwrap_or(u64::MAX);
+    let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+    response
+        .headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from(seconds));
+    response
+}
+
+/// Middleware on both routes: counts the request against its route's limits.
+pub async fn limit_http(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    matched: MatchedPath,
+    request: Request,
+    next: Next,
+) -> Response {
+    let route = match matched.as_str() {
+        "/health" => HEALTH,
+        "/ws" => SIGNALLING,
+        _ => return next.run(request).await,
+    };
+    let ip = client_ip(&state, peer, request.headers());
+    match state.limits.check_http(route, ip) {
+        Ok(()) => next.run(request).await,
+        Err(wait) => too_many(wait),
+    }
+}
+
+pub async fn upgrade(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let ip = client_ip(&state, peer, &headers);
+    let Some(pending) = state.limits.pending_socket(ip) else {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    };
+    let max = state.limits.max_message_bytes;
+    ws.max_message_size(max)
+        .max_frame_size(max)
+        .on_upgrade(move |socket| handle(socket, state, ip, pending))
 }
 
 fn now() -> i64 {
@@ -38,7 +94,7 @@ fn now() -> i64 {
     .unwrap_or(i64::MAX)
 }
 
-async fn handle(socket: WebSocket, state: AppState) {
+async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut inbox) = mpsc::unbounded_channel::<ServerMessage>();
     // Frames for the client are written by their own task so room work never waits on a
@@ -78,7 +134,26 @@ async fn handle(socket: WebSocket, state: AppState) {
             return;
         }
     };
+    // Identified: the socket no longer counts against its address's unidentified ones.
+    drop(pending);
     let JoinClaims { user, channel, .. } = claims;
+    let caller = Caller {
+        ip: Some(ip),
+        user: Some(user),
+        channel: Some(channel),
+    };
+    if let Err(wait) = state.limits.check_frame("identify", &caller) {
+        let _ = outbox.send(ServerMessage::Error {
+            detail: format!(
+                "too many identify frames; try again in {}s",
+                wait.as_secs().max(1)
+            ),
+            fatal: true,
+        });
+        drop(outbox);
+        let _ = writer.await;
+        return;
+    }
     if let Err(e) = state.rooms.join(channel, user, outbox.clone()).await {
         warn!(error = e.to_string(), "join failed");
         let _ = outbox.send(ServerMessage::Error {
@@ -91,6 +166,17 @@ async fn handle(socket: WebSocket, state: AppState) {
     }
 
     while let Some(frame) = next_frame(&mut stream).await {
+        let kind = frame.kind();
+        if let Err(wait) = state.limits.check_frame(kind, &caller) {
+            let _ = outbox.send(ServerMessage::Error {
+                detail: format!(
+                    "too many {kind} frames; try again in {}s",
+                    wait.as_secs().max(1)
+                ),
+                fatal: false,
+            });
+            continue;
+        }
         let result = match frame {
             ClientMessage::Identify { .. } => {
                 Err(RoomError::BadParameters("already identified".to_string()))
@@ -123,6 +209,9 @@ async fn handle(socket: WebSocket, state: AppState) {
                     .rooms
                     .produce(channel, user, &transport_id, kind, source, rtp_parameters)
                     .await
+            }
+            ClientMessage::ProduceRtp { source } => {
+                state.rooms.produce_rtp(channel, user, source).await
             }
             ClientMessage::CloseProducer { producer_id } => {
                 state

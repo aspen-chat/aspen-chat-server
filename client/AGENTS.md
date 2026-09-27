@@ -34,6 +34,32 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 - Every request goes through `AspenClient` (`packages/protocol/src/http.ts`). It attaches the
   bearer token, refreshes the session token before it expires and on a `401`, and replays the
   request once. Do not call `fetch` directly for API traffic.
+- Signing in: `AspenClient.login` answers `signedIn` or `secondFactorRequired` with a ticket,
+  finished by `completeSecondFactor` or a passkey; `runPasskeyCeremony` runs any passkey
+  ceremony (`signIn`, `register`, `reauthenticate`) end to end and stores the session a
+  `signIn` produces. A ceremony reaches an authenticator by a `PasskeyTransport`
+  (`packages/protocol/src/passkeys.ts`), chosen in `src/features/auth/passkeyTransport.ts`: the
+  web client runs it in its own page when served under the server's `rpId` and offers no
+  passkeys otherwise; the desktop and mobile shells hand it to the server's `/auth/passkey` page
+  in the system browser, never running one in their own page. On the desktop the main process
+  opens that page and listens on a one-shot loopback port for the browser's return
+  (`packages/desktop/src/main/passkeyHandoff.ts`), then sends the tab back to the page to say
+  it is done. On mobile the return is the `aspen://auth/passkey` URL, caught with
+  `@capacitor/app` while `@capacitor/browser` shows the page, so the native projects must
+  register the `aspen` URL scheme (`CFBundleURLTypes` on iOS, an intent filter on Android) when
+  they are generated; this path has not yet run on a device.
+- A server that requires two-factor sign-in answers every request of an account without a
+  second factor with `twoFactorEnrollmentRequired`. `AspenClient` notices it on any response
+  and flags the session (`twoFactorEnrollmentRequired`), and the root layout then shows the
+  enrollment screen instead of the app until a factor is added and its recovery codes have
+  been dismissed (`markEnrolled`). Security changes the server says need a fresh verification
+  go through `useReauth()` (`src/features/security/reauthContext.ts`), which asks the user to
+  confirm it's them and tries once more.
+- Every endpoint is rate limited and may answer `429` `rateLimited` with `Retry-After`.
+  `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
+  refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized
+  text says to slow down. Code that polls must stay well inside the server's built-in limits
+  (`server/src/rate_limits.toml`), as presence polling does.
 - Errors are RFC 9457 Problems. Branch on `problem.code`, never on `title` or `detail`, which are
   localized prose for display. `unwrap()` converts a failed openapi-fetch result into an
   `ApiProblemError` for callers that prefer exceptions.
@@ -134,7 +160,7 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   transport's ICE and DTLS to connect (`CONNECT_TIMEOUT_MS`): the server accepting the producer
   says nothing about media, and a transport that fails or times out counts as that server's
   failure, so it is reported and the next candidate tried. A transport that fails mid-call
-  rejoins. Every `newConsumer` the server announces is consumed: audio is played through a hidden element, video is a `RemoteScreen` in `state.screens` for the app to render. `startScreenShare()` asks `VoiceMedia.getScreen()` (`getDisplayMedia` with audio) and produces the picture as `screen` and any sound as `screenAudio`; `stopScreenShare()` closes both, and the share also ends when the browser's own stop control ends the track. `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share. In Electron, `getDisplayMedia` only works because the main process answers it in `setDisplayMediaRequestHandler` (`packages/desktop/src/main/index.ts`): the system picker where there is one, else the primary screen. The signalling frames are the generated
+  rejoins. Every `newConsumer` the server announces is consumed: audio is played through a hidden element, video is a `RemoteScreen` in `state.screens` for the app to render. `startScreenShare()` asks `VoiceMedia.getScreen()` (`getDisplayMedia` with audio) and produces the picture as `screen` and any sound as `screenAudio`, the sound as stereo Opus at 128 kbps without DTX (`SCREEN_AUDIO_CODEC`; mediasoup-client sends mono unless told, and a listener decodes whatever the producer declares); its `contentHint` option marks a picture that moves, such as a game, so the encoder gives up resolution rather than frames when bandwidth runs short; `stopScreenShare()` closes both, and the share also ends when the browser's own stop control ends the track. `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share. In Electron, `getDisplayMedia` only works because the main process answers it in `setDisplayMediaRequestHandler` (`packages/desktop/src/main/index.ts`), with a picker as described under screen sharing on the desktop shell below. The signalling frames are the generated
   `src/generated/voiceSignal.ts` (from `voice_signal_schema.json`, which `pnpm codegen` builds by
   running the voice server with `--gen-signal-schema`). `VoiceCallState` is read with
   `useVoiceCall()`; it keeps `channelId` while `failed` so the call bar can show why. A call
@@ -150,18 +176,143 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   participant carries `speaking` and `lastSpokeAt`, and `src/features/voice/voiceList.ts` picks
   the fifteen to show under a channel (most recent speakers first once a call is larger than
   that). `VoiceParticipants` draws them with a green ring while speaking and a monitor mark while
-  sharing; `CallBar` above the user footer holds mute, deafen, share, and leave. Clicking a
-  voice channel row joins it and opens `VoiceScreen`, the channel's screen in place of a
+  sharing. Clicking a person shows their `ProfilePopover` beside the row (anchored to the row,
+  not the name); clicking them again or anywhere else closes it. Right-clicking a person, or
+  the dots beside them, opens `ParticipantMenu`: how loud they are to this user alone (a gain
+  from 0 to `MAX_USER_VOLUME`, the `userVolume(userId)` device preference), "mute for me"
+  (the `userMuted(userId)` device preference, which silences them for this user while keeping
+  their volume, nothing the server or they can see), and the moderation actions. Both go
+  through `AspenSync.setUserVolume` and `setUserMuted`, which apply `effectiveUserVolume` to
+  whatever of theirs is playing; playback runs through a Web Audio gain node because an
+  element's own volume stops at 1. `CallBar` above the user footer holds mute, deafen, share, and leave. Clicking a
+  voice channel row joins it (a call the user is already in, or joining, is left alone) and
+  opens `VoiceScreen`, the channel's screen in place of a
   history: the shared screens (one large, the others as thumbnails to pick), everyone in the
   call as tiles, and a Join button when the user is not in it. `ChannelHeader` is the bar both
-  channel screens share. Moderation is `ParticipantMenu` on every other participant's tile and
-  sidebar row: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
+  channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
   (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's
   own events. A `participantState` frame about the user themself overwrites `muted` and
   `deafened` in the call state, which is how a server mute shows on their own controls; a
   `kicked` frame with reason `kicked` sets `endedReason: "kicked"` for `VoiceEndedDialog`,
   `replaced` (another of their own clients took over) ends the call silently, and
   `serverStopping` rejoins.
+- Game capture is the desktop shell's own way to share, through libobs, which reaches games
+  that display capture cannot (`game_capture` hooks Direct3D and OpenGL on Windows). The
+  helper `packages/desktop/native/obs-capture` (a Rust crate, its own Cargo workspace, built
+  by `pnpm build:native` in `packages/desktop`, which can run while a shell is open on Linux
+  and macOS; it needs libobs development files, which on Linux and macOS `pkg-config` finds
+  and on Windows `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name) captures one source, encodes
+  it as H.264 constrained baseline, and sends it as SRTP straight to the voice server's plain
+  RTP transport, answering the server's RTCP itself. With it goes the captured window's own
+  sound: Windows through `wasapi_process_output_capture` and macOS through `sck_audio_capture`
+  (both beta OBS features), each pointed at the same window as the picture. The audio is
+  encoded as Opus by obs-ffmpeg and sent as its own SRTP stream to a second producer
+  (`produceRtp` with source `screenAudio`), which the sharer does not consume back. The
+  helper's RTCP answers: NACKs from a buffer of recent packets, the receiver's bandwidth
+  estimate by re-tuning the encoder's bitrate, and keyframe requests by relying on a
+  one-second keyframe interval, since libobs cannot be asked for one. The video never passes
+  through the shell or the browser, so it is encoded once. It is a separate executable, not a
+  Node addon, because x264's aligned allocations trip Chromium's allocator in every Electron
+  process and because native capture code must not be able to take the app down; its request
+  protocol is documented at the top of its `main.rs`. `packages/desktop/src/main/gameCapture.ts`
+  spawns it on first use; the preload exposes it as `window.aspenDesktop.gameCapture`. In the
+  renderer, `src/features/voice/gameCapture.ts` wraps it as an `ExternalShare` for
+  `VoiceCall.startExternalScreenShare`, which asks the voice server for the producers
+  (`produceRtp`, answered by `rtpProduced`), hands the targets to the helper, and shows the
+  preview the server sends back as a consumer of the call's own producer.
+- Linux has no game hook, and its window and screen capture goes through the desktop portal,
+  whose picker only the process owning the requesting window can raise, which the helper is
+  not. So on Linux, X11 and Wayland alike, a game is shared as a browser screen share (the
+  picture, picked in the system's picker) whose sound comes from the helper instead of the
+  browser, marked `contentHint: "motion"`: `VoiceCall.startScreenShare({ audio })` takes an `ExternalAudio`, asks the voice
+  server for a `screenAudio` RTP producer, and hands its target to it, dropping any sound the
+  browser captured. The helper's `startAudio` request captures that sound alone through its
+  own libobs source `aspen_pipewire_app_audio` (`native/obs-capture/src/pipewire_audio.rs`),
+  which opens a PipeWire capture stream and links one application's output ports to it,
+  following that application by process id while it runs and by name across a restart, so the
+  game keeps playing to its own output while the call hears it. The helper advertises no video
+  kinds there, and lists the applications playing sound as `applicationAudio` in its catalogue.
+- `GameCaptureDialog` (opened from `ShareControl`, the share button the call bar and the
+  voice channel header both use) follows the platform. On Windows and macOS it lists the
+  windows the capture source can be pointed at, with a checkbox for their sound. On Linux it
+  lists the applications playing sound as a "Game audio" picker (preselecting the only one when
+  just one plays), and its button opens the system's picker for the picture. Choosing the sound
+  and the picture separately is a known weakness, not a design goal: one choice of "this game"
+  is the better experience, and it is out of reach only because the portal tells the app
+  nothing about the application behind the window the user picked. Look for ways to close
+  that gap: a video track's label names the window on X11, which could identify its
+  application, and a future portal may report the window's application. In development the
+  dialog also offers a test pattern: the clip `ASPEN_TEST_MEDIA` names, looped through
+  libobs's media source with its sound, or a colour source without one. A shell without the
+  helper on disk shows no game option. The drives run the shell headlessly with
+  `ASPEN_DESKTOP_HIDDEN=1`, `ASPEN_DESKTOP_FAKE_MEDIA=1` (with which Chromium answers
+  `getDisplayMedia` itself with a synthetic screen, so no picker is shown), and
+  `ASPEN_DESKTOP_USER_DATA` pointing at a scratch profile.
+- Screen sharing on the desktop shell always goes through a picker. Where the platform has
+  one it is used: the desktop portal on Wayland and the system picker on macOS 15 and later.
+  Everywhere else the main process lists every screen and window with a thumbnail and the
+  renderer shows `SourcePickerDialog` (mounted in `RootLayout`), which answers over the
+  `displayPicker` bridge with the chosen source and, on Windows, whether to take the system's
+  audio along; dismissing it answers with nothing and the share does not start.
+- Preferences are `PreferenceStore` in `packages/protocol/src/preferences.ts`, reached as
+  `AspenSync.preferences` and read in components with `usePreference(definition)`. Each
+  preference is a `PreferenceDefinition` with a namespaced key, a scope, a fallback, and a
+  `parse` that turns whatever was stored into the value or `undefined` (so a stale entry falls
+  back rather than surprising a reader). `device` scope lives in the install's storage
+  (`localStorage` in a page; the sync options can supply another) and never leaves it;
+  `account` scope lives on the server (`/users/@me/preferences`), is loaded at bootstrap,
+  written as a merge patch, and re-fetched when a `userPreferencesChanged` event names the
+  user. `get` returns the same object for the same stored value, as an external-store snapshot
+  must. The audio preferences are device-scoped: `AUDIO_INPUT` and `AUDIO_OUTPUT` (the system
+  default or a `NamedDevice`, id and label both, since browsers salt device ids per site and
+  they can change; `resolveDevice` finds the device by id, then by label) and
+  `NOTIFICATION_OUTPUT`, which defaults to following the voice output and is resolved by
+  `notificationOutputDevice` for whatever plays notification sounds. `AspenSync` feeds the
+  audio choices to `VoiceCall.setAudioDevices`, which swaps the microphone producer's track
+  mid-call and re-routes playback with `setSinkId` where the browser has it. `SettingsDialog`
+  (`src/features/settings`, the gear in the user footer) is where preferences are edited; its
+  device lists come from `useAudioDevices`, which asks for the microphone once so devices are
+  named and follows `devicechange`.
+- Threads are channels of type `thread`, so a thread's history is a window like any channel's
+  and its replies arrive as ordinary message events. A message that started one names it in
+  `thread`, and the thread record carries `replyCount` and `lastReplyAt`, which
+  `MessageItem` shows as a summary under the starter; message reads sideload `threads` for
+  those summaries. "Reply in thread" calls `AspenSync.openThread`, which the server answers with
+  the thread it makes the first time, and routes to `.../threads/{thread}`, where
+  `ChannelScreen` shows `ThreadPanel` (`src/features/threads`) beside the channel, in place of
+  it on small screens: the starter, the replies, and a `Composer` whose `echoTarget` offers to
+  also show the reply in the parent channel (`echoToParent`). Messages in a thread cannot start
+  threads. An echo is a message of kind `threadEcho` naming the reply in `echoOf`; it is drawn
+  from the reply record itself (sideloaded with `echoes`, or fetched with
+  `AspenSync.loadMessage`), so the reply's edits show in it. `RecordStore.channels` leaves
+  threads out of their community's list though they record its id. A thread's own link, like
+  any channel link that names one, redirects to it open beside its parent.
+- DMs and group DMs are channels of type `dm` and `groupDm` with no community and their people
+  in `recipients`. `AspenSync` reads them at bootstrap (`GET /users/@me/dms`, with their
+  people) into `RecordStore.dms()` (topic `dms`): the server's order, most recently active
+  first, with any DM that sees a message or is made afterwards moved to the top. A DM whose
+  update no longer lists the caller is one they left, and the store drops it with its history;
+  `channelRemoved(id)` then tells a screen still showing it that it is gone, not unread, so it
+  is not fetched again. `/dms` is `DmLayout` (`src/features/dms`): the DM list beside the
+  route's content, with "New message" opening `PeoplePicker`, which lists `RecordStore.people()`
+  (everyone in the caller's communities' member lists, since a DM needs a shared community).
+  A profile card's Message button opens the one-to-one DM (`AspenSync.openDm`). `DmHeader`
+  titles a DM with the other people's names (`useDmTitle`) and, for a group, offers
+  `addDmRecipient` and `leaveDm`. `ChannelScreen` serves DMs and community channels alike.
+- Presence is pulled. The server pushes no status events; `AspenSync` asks
+  `GET /users/statuses` for `RecordStore.presenceCandidates()` (the members shown for every
+  community and everyone in a call), in batches of `PRESENCE_BATCH`, when the sync goes live,
+  every `PRESENCE_POLL_MS` while the page is visible, and when the page becomes visible again;
+  `applyStatuses` is the only way a user's `onlineStatus` changes after the bootstrap.
+  What makes the server show the user as online rather than away is `AspenSync.noteActivity`,
+  which `SyncProvider` calls on pointer, keyboard, wheel, and touch input and when the window
+  gains focus or comes into view (`src/api/activity.ts`); it sends an `activity` frame at most
+  every `ACTIVITY_INTERVAL_MS`, and on reconnecting only if the user was active within that
+  interval. Nothing else may call it: background work is not the user using the app.
+- Events are routed by the server to the communities the user belongs to and to the user
+  alone, so the client filters nothing itself. An event about a user reaches the client once
+  per community shared with them; every copy carries the same `eventId` on its frame and
+  `EventStream` drops all but the first of the last few thousand ids it has seen.
 - Update events and update requests are JSON Merge Patches: an absent field is unchanged, `null`
   clears a nullable field. Apply them field by field; never replace a cached record wholesale
   with an update payload.
@@ -189,9 +340,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   from `file://` or an app-local origin and route after a `#`). Never write an absolute
   `/assets/…` URL by hand; let Vite resolve assets so both builds work.
 - Routing is TanStack Router (`src/router.tsx`), code-based, one route tree for every shell.
-  Anything a user might want to share is a route: `/communities/{id}/channels/{id}` and
-  `.../messages/{id}`. Read params with `useParams`; navigate with `Link` and `Navigate` rather
-  than by building URLs. A message link's id segment leaves the URL once the reader scrolls on
+  Anything a user might want to share is a route: `/communities/{id}/channels/{id}`,
+  `.../messages/{id}`, and `.../threads/{id}`, and the same under `/dms/{id}` for DMs. Read
+  params with `useParams`; navigate with `Link` and `Navigate` rather than by building URLs.
+  The message components live under both trees, so they take the channel's home (a community
+  id, or `null` for a DM) and build their links with `src/features/messages/links.ts`. A message link's id segment leaves the URL once the reader scrolls on
   their own (wheel, touch, scrollbar, or a navigation key, tracked in `MessageList.tsx`); scroll
   events the browser fires for layout changes, image loads, or scripted scrolling do not count,
   and dropping the segment never reloads the window. History pages in on its own as the reader

@@ -27,7 +27,9 @@ const general: Channel = {
   parentCategory: null,
   name: "general",
   sortIndex: 0,
-  ty: "Text",
+  ty: "text",
+  replyCount: 0,
+  recipients: [],
 };
 const dev: Channel = {
   id: id(21),
@@ -35,7 +37,9 @@ const dev: Channel = {
   parentCategory: id(30),
   name: "dev",
   sortIndex: 1,
-  ty: "Text",
+  ty: "text",
+  replyCount: 0,
+  recipients: [],
 };
 const work: Category = { id: id(30), community: aspen.id, name: "Work", sortIndex: 0 };
 
@@ -187,7 +191,7 @@ describe("RecordStore events", () => {
     store.subscribe(`members:${aspen.id}`, onMembers);
     const before = store.members(aspen.id);
     expect(before.map((u) => u.name)).toEqual(["kate", "bob"]);
-    store.applyEvent({ serverEvent: "userStatus", id: bob.id, status: "online" });
+    store.applyStatuses([{ id: bob.id, onlineStatus: "online" }]);
     expect(onMembers).toHaveBeenCalledTimes(1);
     const after = store.members(aspen.id);
     expect(after).not.toBe(before);
@@ -223,8 +227,9 @@ describe("RecordStore events", () => {
   it("patches online status and link previews", () => {
     const store = bootstrapped();
     store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
-    store.applyEvent({ serverEvent: "userStatus", id: bob.id, status: "online" });
+    store.applyStatuses([{ id: bob.id, onlineStatus: "online" }]);
     expect(store.user(bob.id)?.onlineStatus).toBe("online");
+    expect(store.presenceCandidates()).toEqual(expect.arrayContaining([me.id, bob.id]));
     // Link previews arrive as an ordinary update once the server has fetched them.
     store.applyEvent({
       serverEvent: "message",
@@ -367,12 +372,12 @@ describe("RecordStore invites", () => {
     expect(store.invite("old")).toBeUndefined();
   });
 
-  it("applies invite events, but only creates for the caller's own communities", () => {
+  it("applies invite events for whatever community they name, since the server routes them", () => {
     const store = bootstrapped();
     store.applyEvent({ serverEvent: "invite", type: "create", ...invite("mine") });
     store.applyEvent({ serverEvent: "invite", type: "create", ...invite("theirs", id(99)) });
     expect(store.invite("mine")).toBeDefined();
-    expect(store.invite("theirs")).toBeUndefined();
+    expect(store.invite("theirs")).toBeDefined();
     store.applyEvent({
       serverEvent: "invite",
       type: "update",
@@ -667,5 +672,106 @@ describe("RecordStore voice", () => {
     store.applyEvent({ serverEvent: "voiceSession", type: "create", ...session });
     store.applyEvent({ serverEvent: "channel", type: "delete", id: general.id });
     expect(store.channelVoice(general.id).session).toBeNull();
+  });
+});
+
+describe("RecordStore threads and DMs", () => {
+  const thread: Channel = {
+    id: id(40),
+    community: aspen.id,
+    parentCategory: null,
+    name: "",
+    sortIndex: 0,
+    ty: "thread",
+    parentChannel: general.id,
+    starterMessage: id(1001),
+    replyCount: 1,
+    lastReplyAt: "2026-09-25T12:00:00Z",
+    recipients: [],
+  };
+  const dm = (n: number, recipients: string[], ty: "dm" | "groupDm" = "dm"): Channel => ({
+    id: id(n),
+    community: null,
+    parentCategory: null,
+    name: "",
+    sortIndex: 0,
+    ty,
+    replyCount: 0,
+    recipients,
+  });
+
+  it("keeps threads out of their community's channel list while holding them as channels", () => {
+    const store = bootstrapped();
+    store.ingest({ channels: [thread] });
+    expect(store.channels(aspen.id).map((c) => c.id)).toEqual([general.id, dev.id]);
+    expect(store.channel(thread.id)?.replyCount).toBe(1);
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: thread.id,
+      replyCount: 2,
+      lastReplyAt: "2026-09-25T13:00:00Z",
+    });
+    expect(store.channel(thread.id)?.replyCount).toBe(2);
+  });
+
+  it("holds the replies echoes show, which no window of the channel includes", () => {
+    const store = bootstrapped();
+    const reply = { ...message(7, thread.id), content: "a reply" };
+    store.ingest({ messages: [reply] });
+    expect(store.message(reply.id)?.content).toBe("a reply");
+    expect(store.messages(general.id)).toBeUndefined();
+  });
+
+  it("lists DMs in the server's order until activity moves one up", () => {
+    const store = bootstrapped();
+    const older = dm(50, [me.id, bob.id]);
+    const newer = dm(51, [me.id, bob.id, id(3)], "groupDm");
+    store.setDms([newer, older]);
+    expect(store.dms().map((c) => c.id)).toEqual([newer.id, older.id]);
+    expect(store.channels(aspen.id).some((c) => c.id === older.id)).toBe(false);
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(9, older.id, bob.id) });
+    expect(store.dms().map((c) => c.id)).toEqual([older.id, newer.id]);
+    // A DM made after the listing is newer than anything in it.
+    const fresh = dm(2000, [me.id, id(3)]);
+    store.applyEvent({ serverEvent: "channel", type: "create", ...fresh });
+    expect(store.dms()[0]?.id).toBe(fresh.id);
+  });
+
+  it("drops a DM the caller left, with its history", () => {
+    const store = bootstrapped();
+    const group = dm(52, [me.id, bob.id, id(3)], "groupDm");
+    store.setDms([group]);
+    store.replaceWindow(group.id, [message(3, group.id)], { hasOlder: false, atLatest: true });
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: group.id,
+      recipients: [me.id, bob.id],
+    });
+    expect(store.channel(group.id)?.recipients).toEqual([me.id, bob.id]);
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: group.id,
+      recipients: [bob.id],
+    });
+    expect(store.channel(group.id)).toBeUndefined();
+    expect(store.channelRemoved(group.id)).toBe(true);
+    expect(store.dms()).toEqual([]);
+    expect(store.messages(group.id)).toBeUndefined();
+    // Added back, it is held again.
+    store.applyEvent({ serverEvent: "channel", type: "create", ...group });
+    expect(store.channelRemoved(group.id)).toBe(false);
+  });
+
+  it("forgets DMs a new listing no longer has", () => {
+    const store = bootstrapped();
+    const kept = dm(53, [me.id, bob.id]);
+    const gone = dm(54, [me.id, id(3)]);
+    store.setDms([kept, gone]);
+    store.setDms([kept]);
+    expect(store.dms().map((c) => c.id)).toEqual([kept.id]);
+    expect(store.channel(gone.id)).toBeUndefined();
   });
 });

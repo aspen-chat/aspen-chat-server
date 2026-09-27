@@ -10,7 +10,7 @@ axum = { version = "0.8.4", features = ["macros", "ws"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive"] }
 ctrlc = { version = "3.4.6", features = ["termination"] }
-diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2"] }
+diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2", "serde_json"] }
 directories-next = "2.0.0"
 futures-util = "0.3.31"
 rcgen = "0.14.7"
@@ -52,7 +52,7 @@ time = "0.3.47"
 tungstenite = "0.28.0"
 vecmap-rs = "0.2.4"
 emojis = "0.8.0"
-fred = { version = "10.1.0", features = ["i-config"] }
+fred = { version = "10.1.0", features = ["i-config", "i-scripts"] }
 aws-config = "1.8.8"
 aws-sdk-s3 = "1.106.0"
 aws-credential-types = "1.2.8"
@@ -62,6 +62,13 @@ pulldown-cmark = { version = "0.13.3", default-features = false }
 html5ever = "0.39.0"
 url = "2.5.8"
 lru = "0.17.0"
+webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation", "conditional-ui"] }
+sha2 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
+data-encoding = "2.9"
+subtle = "2.6"
+aspen_limits = { version = "0.1.0", path = "../limits" }
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

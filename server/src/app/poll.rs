@@ -15,7 +15,7 @@ use crate::api::{GlobalServerContext, MessageKind, message_enum};
 use crate::app;
 use crate::app::message::Message;
 use crate::app::react::validate_emoji;
-use crate::app::{ChannelId, MaybeLoaded, MessageId, PollId, UserId, publish_event};
+use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
 use crate::database::schema::{message, poll, poll_option, poll_vote};
 use chrono::{DateTime, Utc};
 use diesel::{
@@ -142,6 +142,7 @@ pub async fn create_poll(
     };
     let message_row = poll_message(&row, MessageKind::Poll, now);
     let mut conn = state.connection_pool.get().await?;
+    app::dm::ensure_can_see(state, conn.as_mut(), creator, channel).await?;
     conn.transaction(|conn| {
         async move {
             diesel::insert_into(poll::table)
@@ -172,14 +173,19 @@ pub async fn create_poll(
             // The poll goes out first so a client holds it by the time its message arrives.
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::Channel(*message_row.channel.id()),
                 &ServerEvent::Poll(PollEvent::Create(poll_record.clone())),
             )
             .await?;
             publish_event(
                 state,
+                conn.as_mut(),
+                EventScope::Channel(*message_row.channel.id()),
                 &ServerEvent::Message(MessageEvent::Create(message_record.clone())),
             )
             .await?;
+            app::thread::record_if_reply(state, conn.as_mut(), channel, now).await?;
             Ok((poll_record, message_record))
         }
         .scope_boxed()
@@ -199,22 +205,13 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         edited_at: None,
         kind,
         poll: Some(poll.id),
+        thread: None,
+        echo_of: None,
     }
 }
 
 fn message_record(row: &Message) -> message_enum::Message {
-    message_enum::Message {
-        id: row.id,
-        channel_id: *row.channel.id(),
-        author: *row.author.id(),
-        timestamp: row.timestamp,
-        edited_at: row.edited_at,
-        content: row.content.clone(),
-        attachments: Vec::new(),
-        link_previews: Vec::new(),
-        kind: row.kind,
-        poll: row.poll,
-    }
+    app::message::record(row, Vec::new(), Vec::new())
 }
 
 fn empty_results(poll: &Poll, option_count: usize) -> Vec<PollOptionResult> {
@@ -352,8 +349,18 @@ async fn load_records(
         .collect())
 }
 
-pub async fn read_poll(state: &GlobalServerContext, id: PollId) -> app::Result<message_enum::Poll> {
+pub async fn read_poll(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: PollId,
+) -> app::Result<message_enum::Poll> {
     let mut conn = state.connection_pool.get().await?;
+    let channel: ChannelId = poll::table
+        .select(poll::channel)
+        .filter(poll::id.eq(id))
+        .first(conn.as_mut())
+        .await?;
+    app::dm::ensure_can_see(state, conn.as_mut(), caller, channel).await?;
     load_polls(conn.as_mut(), &[id])
         .await?
         .into_iter()
@@ -432,6 +439,8 @@ async fn publish_results(
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
     publish_event(
         state,
+        conn,
+        EventScope::Message(record.message_id),
         &ServerEvent::Poll(PollEvent::Update {
             id: record.id,
             closed_at: record.closed_at.map(Some),
@@ -455,6 +464,7 @@ pub async fn add_vote(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
+            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
             let option_count: i64 = poll_option::table
                 .filter(poll_option::poll.eq(id))
@@ -536,13 +546,20 @@ pub async fn delete_poll(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     id: PollId,
+    channel: ChannelId,
 ) -> app::Result<()> {
     let deleted = diesel::delete(poll::table)
         .filter(poll::id.eq(id))
         .execute(conn)
         .await?;
     if deleted > 0 {
-        publish_event(state, &ServerEvent::Poll(PollEvent::Delete { id })).await?;
+        publish_event(
+            state,
+            conn,
+            EventScope::Channel(channel),
+            &ServerEvent::Poll(PollEvent::Delete { id }),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -590,7 +607,16 @@ async fn close_due_polls(state: &GlobalServerContext) -> app::Result<()> {
                 publish_results(state, conn.as_mut(), row).await?;
                 publish_event(
                     state,
+                    conn.as_mut(),
+                    EventScope::Channel(*announcement.channel.id()),
                     &ServerEvent::Message(MessageEvent::Create(message_record(&announcement))),
+                )
+                .await?;
+                app::thread::record_if_reply(
+                    state,
+                    conn.as_mut(),
+                    *announcement.channel.id(),
+                    announcement.timestamp,
                 )
                 .await?;
             }

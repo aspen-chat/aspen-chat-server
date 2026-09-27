@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ApiProblemError, AspenClient, MemorySessionStore, type Session } from "../src";
+import {
+  ApiProblemError,
+  AspenClient,
+  MemorySessionStore,
+  PasskeyCancelledError,
+  type Session,
+} from "../src";
 
 const baseUrl = "https://aspen.test";
 const uuid = "0190f0a0-0000-7000-8000-000000000001";
@@ -62,19 +68,222 @@ describe("AspenClient", () => {
     const { fetch, calls } = scriptedFetch([
       () =>
         jsonResponse(200, {
+          status: "signedIn",
           userId: uuid,
           refreshToken: "r",
           sessionToken: "s",
           sessionTokenExpires: farFuture(),
+          twoFactorEnrollmentRequired: false,
         }),
     ]);
     const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
-    const session = await client.login("kate", "hunter22");
-    expect(session.sessionToken).toBe("s");
-    expect(store.load()).toEqual(session);
+    const outcome = await client.login("kate", "hunter22");
+    if (outcome.status !== "signedIn") {
+      throw new Error("expected a completed sign-in");
+    }
+    expect(outcome.session.sessionToken).toBe("s");
+    expect(store.load()).toEqual(outcome.session);
     expect(calls[0]?.url).toBe(`${baseUrl}/api/v1/auth/login`);
     expect(calls[0]?.authorization).toBeNull();
     expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ username: "kate", password: "hunter22" });
+  });
+
+  it("leaves a two-factor sign-in waiting and finishes it with a code", async () => {
+    const store = new MemorySessionStore();
+    const { fetch, calls } = scriptedFetch([
+      () =>
+        jsonResponse(200, {
+          status: "secondFactorRequired",
+          ticket: "ticket-1",
+          methods: ["totp", "recoveryCode"],
+        }),
+      () =>
+        jsonResponse(200, {
+          userId: uuid,
+          refreshToken: "r",
+          sessionToken: "s",
+          sessionTokenExpires: farFuture(),
+          twoFactorEnrollmentRequired: false,
+        }),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const outcome = await client.login("kate", "hunter22");
+    expect(outcome).toEqual({
+      status: "secondFactorRequired",
+      ticket: "ticket-1",
+      methods: ["totp", "recoveryCode"],
+    });
+    expect(store.load()).toBeNull();
+    const session = await client.completeSecondFactor("ticket-1", "totp", "123456");
+    expect(session.sessionToken).toBe("s");
+    expect(store.load()).toEqual(session);
+    expect(calls[1]?.url).toBe(`${baseUrl}/api/v1/auth/login/second-factor`);
+    expect(JSON.parse(calls[1]?.body ?? "")).toEqual({
+      ticket: "ticket-1",
+      method: "totp",
+      code: "123456",
+    });
+  });
+
+  it("flags the session when the server requires a second factor it lacks", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const { fetch } = scriptedFetch([() => problem(403, "twoFactorEnrollmentRequired")]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const seen: (boolean | undefined)[] = [];
+    client.subscribe((session) => seen.push(session?.twoFactorEnrollmentRequired));
+    const { error } = await client.api.GET("/api/v1/users/{user}", {
+      params: { path: { user: "@me" } },
+    });
+    expect(error?.code).toBe("twoFactorEnrollmentRequired");
+    expect(client.session?.twoFactorEnrollmentRequired).toBe(true);
+    expect(seen).toEqual([true]);
+    client.markEnrolled();
+    expect(client.session?.twoFactorEnrollmentRequired).toBe(false);
+  });
+
+  it("leaves the session alone on other 403s", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const { fetch } = scriptedFetch([() => problem(403, "forbidden")]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    await client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } });
+    expect(client.session?.twoFactorEnrollmentRequired).toBeUndefined();
+  });
+
+  it("hands a passkey ceremony to the browser and claims it with the PKCE verifier", async () => {
+    const store = new MemorySessionStore();
+    let challenge = "";
+    const { fetch, calls } = scriptedFetch([
+      (r) => {
+        const body = JSON.parse(r.body) as { handoff: { codeChallenge: string } };
+        challenge = body.handoff.codeChallenge;
+        return jsonResponse(201, {
+          id: "cer-1",
+          purpose: "signIn",
+          options: {},
+          expiresAt: farFuture(),
+        });
+      },
+      () =>
+        jsonResponse(200, {
+          outcome: "signedIn",
+          userId: uuid,
+          refreshToken: "r",
+          sessionToken: "s",
+          sessionTokenExpires: farFuture(),
+          twoFactorEnrollmentRequired: false,
+        }),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const opened: string[] = [];
+    let disposed = false;
+    const outcome = await client.runPasskeyCeremony(
+      { purpose: "signIn" },
+      {
+        kind: "handoff",
+        handoff: {
+          prepare: () =>
+            Promise.resolve({
+              returnTo: "http://127.0.0.1:4000/passkey",
+              open: (url: string) => {
+                opened.push(url);
+                return Promise.resolve({ ceremony: "cer-1", outcome: "done" as const });
+              },
+              dispose: () => {
+                disposed = true;
+              },
+            }),
+        },
+      },
+    );
+    expect(opened).toEqual([`${baseUrl}/auth/passkey#ceremony=cer-1`]);
+    expect(disposed).toBe(true);
+    expect(outcome.outcome).toBe("signedIn");
+    expect(store.load()?.sessionToken).toBe("s");
+    const claim = JSON.parse(calls[1]?.body ?? "") as { codeVerifier: string };
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(claim.codeVerifier),
+    );
+    expect(Buffer.from(digest).toString("base64url")).toBe(challenge);
+    expect(calls[1]?.url).toBe(`${baseUrl}/api/v1/auth/passkey-ceremonies/cer-1/claim`);
+  });
+
+  it("treats a cancelled handoff as a cancellation and claims nothing", async () => {
+    const { fetch, calls } = scriptedFetch([
+      () =>
+        jsonResponse(201, { id: "cer-2", purpose: "signIn", options: {}, expiresAt: farFuture() }),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    await expect(
+      client.runPasskeyCeremony(
+        { purpose: "signIn" },
+        {
+          kind: "handoff",
+          handoff: {
+            prepare: () =>
+              Promise.resolve({
+                returnTo: "http://127.0.0.1:4000/passkey",
+                open: () => Promise.resolve({ ceremony: "cer-2", outcome: "cancelled" as const }),
+                dispose: () => undefined,
+              }),
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(PasskeyCancelledError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("retries a read once after a short Retry-After, and leaves writes alone", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const limited = () =>
+      new Response(JSON.stringify({ code: "rateLimited", title: "slow down", status: 429 }), {
+        status: 429,
+        headers: { "content-type": "application/problem+json", "retry-after": "2" },
+      });
+    const { fetch, calls } = scriptedFetch([
+      limited,
+      () => jsonResponse(200, { id: uuid, name: "kate", icon: null, onlineStatus: "online" }),
+      limited,
+    ]);
+    const waits: number[] = [];
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: store,
+      fetch,
+      sleep: (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      },
+    });
+    const { data } = await client.api.GET("/api/v1/users/{user}", {
+      params: { path: { user: "@me" } },
+    });
+    expect(data?.name).toBe("kate");
+    expect(waits).toEqual([2000]);
+    const { error } = await client.api.POST("/api/v1/communities", { body: { name: "x" } });
+    expect(error?.code).toBe("rateLimited");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("does not wait out a long Retry-After", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const { fetch, calls } = scriptedFetch([
+      () =>
+        new Response(JSON.stringify({ code: "rateLimited", title: "slow down", status: 429 }), {
+          status: 429,
+          headers: { "content-type": "application/problem+json", "retry-after": "60" },
+        }),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const { error } = await client.api.GET("/api/v1/users/{user}", {
+      params: { path: { user: "@me" } },
+    });
+    expect(error?.code).toBe("rateLimited");
+    expect(calls).toHaveLength(1);
   });
 
   it("registers an account without touching the session", async () => {

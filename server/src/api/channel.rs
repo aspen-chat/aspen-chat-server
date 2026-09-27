@@ -5,18 +5,12 @@ use crate::api::message_enum::Pin;
 use crate::api::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_CHANNELS, message_enum};
 use crate::app;
-use crate::app::{ChannelId, MaybeLoaded};
+use crate::app::ChannelId;
 use axum::extract::State;
 
+/// A community channel's wire record; a DM's carries its recipients too (`app::channel::record`).
 pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
-    message_enum::Channel {
-        id: c.id,
-        parent_category: c.parent_category.as_ref().map(MaybeLoaded::id).cloned(),
-        community: c.community.as_ref().map(MaybeLoaded::id).cloned(),
-        name: c.name,
-        sort_index: c.sort_index,
-        ty: c.ty,
-    }
+    app::channel::record(&c, Vec::new())
 }
 
 /// Creates a channel. A channel may belong to a community and optionally to a category within it;
@@ -69,11 +63,12 @@ pub async fn create_channel(
 )]
 pub async fn get_channel(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<message_enum::Channel>> {
-    let c = app::channel::read_channel(&state, channel).await?;
-    Ok(Json(channel_to_api(c)))
+    Ok(Json(
+        app::channel::read_channel(&state, user.id, channel).await?,
+    ))
 }
 
 /// Pinned messages in the channel, in pin order.
@@ -93,10 +88,10 @@ pub async fn get_channel(
 )]
 pub async fn list_channel_pins(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<Vec<Pin>>> {
-    let pins = app::channel::read_channel_pins(&state, channel).await?;
+    let pins = app::channel::read_channel_pins(&state, user.id, channel).await?;
     Ok(Json(
         pins.into_iter()
             .map(|p| Pin {

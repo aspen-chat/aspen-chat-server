@@ -15,6 +15,7 @@ pub mod attachment;
 pub mod category;
 pub mod channel;
 pub mod community;
+pub mod dm;
 mod error;
 pub mod icon;
 pub mod invite;
@@ -22,13 +23,17 @@ pub mod link_preview;
 pub mod login;
 pub mod media_store;
 pub mod message;
+pub mod passkey;
 pub mod poll;
+pub mod preferences;
+pub mod rate_limit;
 pub mod react;
+pub mod thread;
+pub mod two_factor;
 pub mod user;
 pub mod user_status;
 pub mod voice;
 use crate::api::GlobalServerContext;
-use crate::api::message_enum::server_event::ServerEvent;
 pub use error::Error;
 pub use error::Result;
 
@@ -109,6 +114,8 @@ id_type!(AttachmentId);
 id_type!(IconId);
 
 id_type!(LinkPreviewImageId);
+
+id_type!(PasskeyId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {
@@ -217,14 +224,5 @@ where
 
 pub const ASPEN_NATS_STREAM_NAME: &str = "aspen_omni_stream";
 
-async fn publish_event(state: &GlobalServerContext, event: &ServerEvent) -> Result<()> {
-    state
-        .nats_context
-        .publish(
-            ASPEN_NATS_STREAM_NAME,
-            serde_json::to_string(&event)?.into_bytes().into(),
-        )
-        .await?
-        .await?;
-    Ok(())
-}
+pub mod events;
+pub use events::{EventScope, publish_event};

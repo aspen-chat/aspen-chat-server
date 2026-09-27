@@ -8,6 +8,7 @@ import type {
   Attachment,
   Category,
   ChannelVoice,
+  PreferenceDefinition,
   Channel,
   Community,
   Icon,
@@ -74,6 +75,63 @@ export function useCategories(communityId: string): readonly Category[] {
 
 export function useChannel(id: string): Channel | undefined {
   return useTopic(`channel:${id}`, (s) => s.channel(id));
+}
+
+/**
+ * Several users at once, in the order of `ids`, each `undefined` until it is cached; missing
+ * ones are fetched on demand. One subscription per id, one re-render per change.
+ */
+export function useUsers(ids: readonly string[]): readonly (User | undefined)[] {
+  const sync = useSync();
+  const store = sync.store;
+  const key = ids.join("\n");
+  const stableIds = useMemo(() => (key.length === 0 ? [] : key.split("\n")), [key]);
+  const cache = useRef<{ key: string; value: (User | undefined)[] } | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const unsubscribes = stableIds.map((id) =>
+        store.subscribe(`user:${id}`, () => {
+          cache.current = null;
+          listener();
+        }),
+      );
+      return () => {
+        for (const unsubscribe of unsubscribes) {
+          unsubscribe();
+        }
+      };
+    },
+    [store, stableIds],
+  );
+  const users = useSyncExternalStore(subscribe, () => {
+    if (cache.current?.key !== key) {
+      cache.current = { key, value: stableIds.map((id) => store.user(id)) };
+    }
+    return cache.current.value;
+  });
+  useEffect(() => {
+    stableIds.forEach((id, i) => {
+      if (users[i] === undefined) {
+        sync.ensureUser(id);
+      }
+    });
+  }, [sync, stableIds, users]);
+  return users;
+}
+
+/** Whether a channel the cache held has since been removed: deleted, or a DM the caller left. */
+export function useChannelRemoved(id: string): boolean {
+  return useTopic(`channel:${id}`, (s) => s.channelRemoved(id));
+}
+
+/** The caller's DMs and group DMs, the most recently active first. */
+export function useDms(): readonly Channel[] {
+  return useTopic("dms", (s) => s.dms());
+}
+
+/** The ids of everyone the caller shares a community with, whom they may start a DM with. */
+export function usePeople(): readonly string[] {
+  return useTopic("people", (s) => s.people());
 }
 
 /** A user by id, fetched on demand when the cache lacks them. `undefined` id reads nothing. */
@@ -174,6 +232,16 @@ export function useAttachments(ids: readonly string[]): readonly (Attachment | u
 /** The call on a voice channel and who is in it. */
 export function useChannelVoice(channelId: string): ChannelVoice {
   return useTopic(`voice:${channelId}`, (s) => s.channelVoice(channelId));
+}
+
+/** One of the user's preferences, current as it changes here or on another device. */
+export function usePreference<T>(definition: PreferenceDefinition<T>): T {
+  const sync = useSync();
+  const subscribe = useCallback(
+    (listener: () => void) => sync.preferences.subscribe(listener),
+    [sync],
+  );
+  return useSyncExternalStore(subscribe, () => sync.preferences.get(definition));
 }
 
 /** The user's own call, idle or not. */

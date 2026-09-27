@@ -5,25 +5,94 @@
  */
 
 import { Device } from "mediasoup-client";
+import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
 import type { ScreenCapture, VoiceDevice, VoiceMedia } from "./voice";
 
+/** The device id a choice means right now, among the devices of `kind`; `null` is the default. */
+async function deviceIdFor(choice: DeviceChoice, kind: MediaDeviceKind): Promise<string | null> {
+  if (choice === DEFAULT_DEVICE) {
+    return null;
+  }
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind);
+  return resolveDevice(choice, devices);
+}
+
+/** Whether this browser can route playback to a chosen speaker. */
+export function canChooseOutput(): boolean {
+  return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+}
+
+/**
+ * One playing consumer: the element that plays it and, when the browser has Web Audio, the
+ * gain node that scales it. Web Audio is used because an element's own volume stops at 1 and
+ * a quiet person needs more.
+ */
+interface Player {
+  audio: HTMLAudioElement;
+  source: MediaStreamAudioSourceNode | null;
+  gain: GainNode | null;
+  destination: MediaStreamAudioDestinationNode | null;
+}
+
 export function browserVoiceMedia(): VoiceMedia {
-  const players = new Map<string, HTMLAudioElement>();
+  const players = new Map<string, Player>();
+  let context: AudioContext | null = null;
+  const audioContext = (): AudioContext | null => {
+    if (context === null && typeof AudioContext !== "undefined") {
+      context = new AudioContext();
+    }
+    if (context !== null && context.state === "suspended") {
+      void context.resume().catch(() => undefined);
+    }
+    return context;
+  };
+  let output: DeviceChoice = DEFAULT_DEVICE;
+  const route = async (audio: HTMLAudioElement) => {
+    if (!canChooseOutput()) {
+      return;
+    }
+    try {
+      await audio.setSinkId((await deviceIdFor(output, "audiooutput")) ?? "");
+    } catch {
+      // The device is gone or refused; the element keeps playing through the default.
+    }
+  };
   return {
     createDevice(): Promise<VoiceDevice> {
       // The mediasoup-client types are the same shapes narrowed by `VoiceDevice`.
       return Promise.resolve(new Device() as unknown as VoiceDevice);
     },
-    async getMicrophone(): Promise<MediaStreamTrack> {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      });
+    async getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack> {
+      const deviceId = await deviceIdFor(choice, "audioinput");
+      const processing = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const open = (constraints: MediaTrackConstraints) =>
+        navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
+      let stream: MediaStream;
+      try {
+        stream = await open(
+          deviceId === null ? processing : { ...processing, deviceId: { exact: deviceId } },
+        );
+      } catch (error) {
+        // A remembered microphone that is unplugged is no reason to refuse the call.
+        if (
+          deviceId !== null &&
+          error instanceof DOMException &&
+          error.name === "OverconstrainedError"
+        ) {
+          stream = await open(processing);
+        } else {
+          throw error;
+        }
+      }
       const [track] = stream.getAudioTracks();
       if (track === undefined) {
         throw new Error("no microphone");
       }
       return track;
+    },
+    async setOutput(choice: DeviceChoice): Promise<void> {
+      output = choice;
+      await Promise.all(Array.from(players.values(), (player) => route(player.audio)));
     },
     async getScreen(): Promise<ScreenCapture> {
       // Audio is asked for so a shared tab or window can bring its sound; browsers that
@@ -39,18 +108,46 @@ export function browserVoiceMedia(): VoiceMedia {
       const audio = document.createElement("audio");
       audio.autoplay = true;
       audio.dataset.voiceConsumer = consumerId;
-      audio.srcObject = new MediaStream([track]);
       audio.style.display = "none";
+      const stream = new MediaStream([track]);
+      const player: Player = { audio, source: null, gain: null, destination: null };
+      const ctx = audioContext();
+      if (ctx !== null) {
+        player.source = ctx.createMediaStreamSource(stream);
+        player.gain = ctx.createGain();
+        player.destination = ctx.createMediaStreamDestination();
+        player.source.connect(player.gain);
+        player.gain.connect(player.destination);
+        audio.srcObject = player.destination.stream;
+      } else {
+        audio.srcObject = stream;
+      }
       document.body.append(audio);
-      players.set(consumerId, audio);
-      void audio.play().catch(() => undefined);
+      players.set(consumerId, player);
+      void route(audio)
+        .then(() => audio.play())
+        .catch(() => undefined);
     },
     stop(consumerId: string): void {
-      const audio = players.get(consumerId);
-      if (audio !== undefined) {
-        audio.srcObject = null;
-        audio.remove();
+      const player = players.get(consumerId);
+      if (player !== undefined) {
+        player.source?.disconnect();
+        player.gain?.disconnect();
+        player.audio.srcObject = null;
+        player.audio.remove();
         players.delete(consumerId);
+      }
+    },
+    setVolume(consumerId: string, gain: number): void {
+      const player = players.get(consumerId);
+      if (player === undefined) {
+        return;
+      }
+      if (player.gain !== null) {
+        player.gain.gain.value = gain;
+      } else {
+        // Without Web Audio the element's own volume is all there is, and it stops at 1.
+        player.audio.volume = Math.min(1, gain);
       }
     },
   };

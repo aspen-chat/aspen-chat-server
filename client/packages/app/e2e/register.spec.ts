@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { stubSignedInBackend, uuid } from "./stubs";
+import { signedIn, stubAuthMethods, stubSignedInBackend, uuid } from "./stubs";
 
 async function openRegistration(page: Page) {
   await page.goto("/");
@@ -8,6 +8,10 @@ async function openRegistration(page: Page) {
 }
 
 test.describe("registration", () => {
+  test.beforeEach(async ({ page }) => {
+    await stubAuthMethods(page);
+  });
+
   test("creates the account, signs in, and lands on the welcome screen", async ({ page }) => {
     const bodies: unknown[] = [];
     await page.route("**/api/v1/users", (route) => {
@@ -23,12 +27,7 @@ test.describe("registration", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          userId: uuid,
-          refreshToken: "r",
-          sessionToken: "s",
-          sessionTokenExpires: new Date(Date.now() + 3_600_000).toISOString(),
-        }),
+        body: signedIn(),
       }),
     );
     await stubSignedInBackend(page, "kate");

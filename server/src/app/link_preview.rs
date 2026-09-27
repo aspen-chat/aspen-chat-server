@@ -1555,8 +1555,15 @@ async fn run_preview_fetch(
                     attachments: None,
                     edited_at: None,
                     link_previews: Some(wire_previews),
+                    thread: None,
                 });
-                app::publish_event(state, &event).await?;
+                app::publish_event(
+                    state,
+                    conn.as_mut(),
+                    app::EventScope::Message(message_id),
+                    &event,
+                )
+                .await?;
                 Ok(stale_ids.into_iter().flatten().collect::<Vec<_>>())
             }
             .scope_boxed()

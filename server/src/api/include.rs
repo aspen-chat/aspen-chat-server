@@ -15,7 +15,8 @@
 
 use crate::api::attachment::Attachment;
 use crate::api::message_enum::{
-    Category, Channel, Community, Poll, User, UserCommunity, VoiceParticipant, VoiceSession,
+    Category, Channel, Community, Message, Poll, User, UserCommunity, VoiceParticipant,
+    VoiceSession,
 };
 use crate::api::poll::PollVote;
 use serde::Serialize;
@@ -83,6 +84,10 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub user_communities: Option<Vec<UserCommunity>>,
+    /// Messages other than those read: the thread replies that echoes in the read name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub messages: Option<Vec<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub attachments: Option<Vec<Attachment>>,

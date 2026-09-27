@@ -89,14 +89,14 @@ function Steps({ community, close }: { community: Community; close: () => void }
       return (
         <>
           <StepHeading onBack={back}>{m.newTextChannel}</StepHeading>
-          <CreateChannelForm communityId={community.id} ty="Text" onDone={close} />
+          <CreateChannelForm communityId={community.id} ty="text" onDone={close} />
         </>
       );
     case "voice":
       return (
         <>
           <StepHeading onBack={back}>{m.newVoiceChannel}</StepHeading>
-          <CreateChannelForm communityId={community.id} ty="Voice" onDone={close} />
+          <CreateChannelForm communityId={community.id} ty="voice" onDone={close} />
         </>
       );
     case "category":

@@ -5,3 +5,4 @@ out
 release
 pnpm-lock.yaml
 packages/protocol/src/generated
+packages/desktop/native/obs-capture/target

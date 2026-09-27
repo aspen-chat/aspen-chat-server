@@ -1,4 +1,6 @@
+pub use aspen_limits::{Limit, LimitSetting, RuleTable};
 use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AspenConfig {
@@ -14,6 +16,224 @@ pub struct AspenConfig {
     pub cors: CorsConfig,
     #[serde(default)]
     pub voice: VoiceConfig,
+    #[serde(default)]
+    pub limits: LimitsConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub presence: PresenceConfig,
+    /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
+    #[serde(default, rename = "rate_limits")]
+    pub rate_limit_overrides: RateLimitOverrides,
+    /// The rate limits in force: the built-in ones with `rate_limit_overrides` laid over them.
+    #[serde(skip)]
+    pub rate_limits: RateLimitConfig,
+}
+
+/// Rate limits (`app::rate_limit`), as resolved from the built-in `rate_limits.toml` and the
+/// `[rate_limits]` of `aspen.toml` (see `RateLimitOverrides`).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RateLimitConfig {
+    pub enabled: bool,
+    /// Reverse proxies whose `X-Forwarded-For` is believed: addresses or CIDR networks.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+    /// An IPv6 client is counted by its network of this many leading bits, since one
+    /// subscriber usually holds a whole /64.
+    pub ipv6_prefix: u8,
+    /// Limits every endpoint has, in addition to its groups' and its own.
+    #[serde(default)]
+    pub default: RuleTable,
+    /// Named families of endpoints sharing limits.
+    #[serde(default)]
+    pub groups: BTreeMap<String, RateLimitGroup>,
+    /// Limits of single endpoints, keyed by method and path template (`"POST
+    /// /channels/{channel}/messages"`).
+    #[serde(default)]
+    pub endpoints: HashMap<String, RuleTable>,
+}
+
+/// The `[rate_limits]` of `aspen.toml`, laid over the built-in limits. Each limit given
+/// replaces the built-in one for the same place and dimension whole, so a limit written without
+/// `burst` has the default burst rather than the built-in one's; everything not given keeps its
+/// built-in value. A group given here with a name the built-ins use keeps their endpoint list
+/// unless it lists its own.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RateLimitOverrides {
+    pub enabled: Option<bool>,
+    pub trusted_proxies: Option<Vec<String>>,
+    pub ipv6_prefix: Option<u8>,
+    #[serde(default)]
+    pub default: RuleTable,
+    #[serde(default)]
+    pub groups: BTreeMap<String, RateLimitGroupOverride>,
+    #[serde(default)]
+    pub endpoints: HashMap<String, RuleTable>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RateLimitGroupOverride {
+    pub endpoints: Option<Vec<String>>,
+    #[serde(default)]
+    pub limits: RuleTable,
+}
+
+impl RateLimitConfig {
+    /// Lays `overrides` over these limits.
+    pub fn overlay(mut self, overrides: RateLimitOverrides) -> Result<Self, config::ConfigError> {
+        if let Some(enabled) = overrides.enabled {
+            self.enabled = enabled;
+        }
+        if let Some(proxies) = overrides.trusted_proxies {
+            self.trusted_proxies = proxies;
+        }
+        if let Some(prefix) = overrides.ipv6_prefix {
+            self.ipv6_prefix = prefix;
+        }
+        self.default.extend(overrides.default);
+        for (name, group) in overrides.groups {
+            match self.groups.get_mut(&name) {
+                Some(existing) => {
+                    if let Some(endpoints) = group.endpoints {
+                        existing.endpoints = endpoints;
+                    }
+                    existing.limits.extend(group.limits);
+                }
+                None => {
+                    let endpoints = group.endpoints.ok_or_else(|| {
+                        config::ConfigError::Message(format!(
+                            "rate_limits.groups.{name} is a new group and must list its endpoints"
+                        ))
+                    })?;
+                    self.groups.insert(
+                        name,
+                        RateLimitGroup {
+                            endpoints,
+                            limits: group.limits,
+                        },
+                    );
+                }
+            }
+        }
+        aspen_limits::overlay_tables(&mut self.endpoints, overrides.endpoints);
+        Ok(self)
+    }
+
+    /// The built-in limits (`rate_limits.toml`).
+    pub fn built_in() -> Result<Self, config::ConfigError> {
+        config::Config::builder()
+            .add_source(config::File::from_str(
+                DEFAULT_RATE_LIMITS,
+                config::FileFormat::Toml,
+            ))
+            .build()?
+            .get("rate_limits")
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RateLimitGroup {
+    /// Endpoint names; `*` in one matches any run of characters.
+    pub endpoints: Vec<String>,
+    pub limits: RuleTable,
+}
+
+/// Whether people show as online, away, or offline (`app::user_status`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PresenceConfig {
+    /// A connected user who has not used Aspen for this long shows as away. Clients report
+    /// activity at most once a minute, so values much under a few minutes make people flicker
+    /// between away and online.
+    #[serde(default = "default_presence_away_after_seconds")]
+    pub away_after_seconds: u64,
+}
+
+impl Default for PresenceConfig {
+    fn default() -> Self {
+        Self {
+            away_after_seconds: default_presence_away_after_seconds(),
+        }
+    }
+}
+
+/// Ten minutes.
+fn default_presence_away_after_seconds() -> u64 {
+    600
+}
+
+/// Sign-in: second factors, passkeys, and how recent a verification must be.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AuthConfig {
+    /// Every account must have a second factor. A session of an account without one can only
+    /// add one (or sign out) until it does.
+    #[serde(default)]
+    pub require_two_factor: bool,
+    /// How the server names itself to authenticators: the label beside an authenticator app's
+    /// codes and the name a passkey prompt shows.
+    #[serde(default = "default_auth_service_name")]
+    pub service_name: String,
+    /// A change to security settings needs the session to have proved who its user is within
+    /// this many seconds.
+    #[serde(default = "default_auth_reverify_seconds")]
+    pub reverify_seconds: u64,
+    /// Passkeys are offered only when this is set.
+    #[serde(default)]
+    pub passkeys: Option<PasskeyConfig>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            require_two_factor: false,
+            service_name: default_auth_service_name(),
+            reverify_seconds: default_auth_reverify_seconds(),
+            passkeys: None,
+        }
+    }
+}
+
+/// WebAuthn relying party settings.
+///
+/// A passkey belongs to one domain, `rp_id`, and a browser offers it only to pages whose host is
+/// that domain or under it. `origins` lists every page origin allowed to complete a passkey
+/// ceremony: this server's own public origin, which serves the page the desktop and mobile
+/// apps open in the system browser, and any web client origin under `rp_id` (such as
+/// `https://chat.example.org` for `rp_id = "chat.example.org"`). Changing `rp_id` orphans every
+/// passkey already registered.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PasskeyConfig {
+    pub rp_id: String,
+    pub origins: Vec<String>,
+}
+
+fn default_auth_service_name() -> String {
+    "Aspen".to_string()
+}
+
+/// Ten minutes.
+fn default_auth_reverify_seconds() -> u64 {
+    600
+}
+
+/// Ceilings that keep one user's footprint bounded.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LimitsConfig {
+    /// The most communities one user may belong to. It bounds how many subjects an event
+    /// stream connection reads and how many copies of a profile change are published.
+    #[serde(default = "default_max_communities_per_user")]
+    pub max_communities_per_user: u32,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_communities_per_user: default_max_communities_per_user(),
+        }
+    }
+}
+
+fn default_max_communities_per_user() -> u32 {
+    500
 }
 
 /// Voice calls. The servers listed here are seeded into the `voice_server` table at startup,
@@ -213,9 +433,14 @@ fn default_media_s3_upload_url_ttl_seconds() -> u64 {
     900
 }
 
+/// The built-in rate limits, beneath whatever `aspen.toml` sets.
+const DEFAULT_RATE_LIMITS: &str = include_str!("rate_limits.toml");
+
 /// Loads or reloads the config.
 pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
-    let loaded = config::Config::builder()
+    let mut loaded = config::Config::builder()
+        .add_source(config::File::new("aspen.toml", config::FileFormat::Toml))
+        // Sources added later take precedence, so the environment overrides `aspen.toml`.
         // `ASPEN_DATABASE_URL` sets `database_url`; `ASPEN_VOICE__IDLE_SESSION_SECONDS` sets
         // `voice.idle_session_seconds`. The prefix separator is set explicitly because it would
         // otherwise follow the nesting separator and every flat key would need two underscores.
@@ -224,8 +449,11 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
                 .prefix_separator("_")
                 .separator("__"),
         )
-        .add_source(config::File::new("aspen.toml", config::FileFormat::Toml))
         .build()?
         .try_deserialize::<AspenConfig>()?;
+    // Merged here rather than as one more config source, which would merge a limit given in
+    // `aspen.toml` into the built-in one field by field.
+    loaded.rate_limits =
+        RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     Ok(loaded)
 }

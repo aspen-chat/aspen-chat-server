@@ -1,12 +1,12 @@
 use crate::api::link_preview::LinkPreview;
 use crate::api::message_enum::request::MessageUpdateRequest;
 use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
-use crate::api::{GlobalServerContext, MessageKind, message_enum};
+use crate::api::{ChannelType, GlobalServerContext, MessageKind, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
 use crate::app::user::User;
-use crate::app::{AttachmentId, ChannelId, PollId, UserId, publish_event};
+use crate::app::{AttachmentId, ChannelId, EventScope, PollId, UserId, dm, publish_event, thread};
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
 use crate::database::schema::channel;
@@ -14,8 +14,8 @@ use crate::database::schema::message;
 use crate::database::schema::message_attachment;
 use chrono::Utc;
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
-    Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl, QueryDsl,
+    Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -34,6 +34,30 @@ pub struct Message {
     pub edited_at: Option<chrono::DateTime<Utc>>,
     pub kind: MessageKind,
     pub poll: Option<PollId>,
+    pub thread: Option<ChannelId>,
+    pub echo_of: Option<MessageId>,
+}
+
+/// The message's wire record, with the relations it carries from child tables.
+pub fn record(
+    row: &Message,
+    attachments: Vec<AttachmentId>,
+    link_previews: Vec<LinkPreview>,
+) -> message_enum::Message {
+    message_enum::Message {
+        id: row.id,
+        channel_id: *row.channel.id(),
+        author: *row.author.id(),
+        timestamp: row.timestamp,
+        edited_at: row.edited_at,
+        content: row.content.clone(),
+        attachments,
+        link_previews,
+        kind: row.kind,
+        poll: row.poll,
+        thread: row.thread,
+        echo_of: row.echo_of,
+    }
 }
 
 /// A message together with the child-table relations its wire record carries: attachment ids
@@ -79,69 +103,98 @@ async fn ensure_attachments_ready(
     Ok(())
 }
 
+/// Posts a message. In a thread it counts toward the thread's summary, and with
+/// `echo_to_parent` it is also shown in the parent channel as a `ThreadEcho`. In a DM, or a
+/// thread in one, only a recipient may post.
 pub async fn create_message(
     state: &GlobalServerContext,
     author: UserId,
     channel_id: ChannelId,
     content: String,
     attachments: Vec<AttachmentId>,
+    echo_to_parent: bool,
 ) -> Result<Message, app::Error> {
-    let id = MessageId::new();
-    let timestamp = Utc::now();
     let mut conn = state.connection_pool.get().await?;
-    let message = Message {
-        id,
-        channel: MaybeLoaded::from_id(channel_id),
-        content: content.clone(),
-        author: MaybeLoaded::from_id(author),
-        timestamp,
-        deleted_at: None,
-        edited_at: None,
-        kind: MessageKind::Standard,
-        poll: None,
-    };
-    ensure_attachments_ready(conn.as_mut(), &attachments).await?;
-    diesel::insert_into(message::table)
-        .values(&message)
-        .execute(conn.as_mut())
+    let message = conn
+        .transaction(|conn| {
+            async move {
+                let target: Channel = channel::table
+                    .select(Channel::as_select())
+                    .filter(
+                        channel::id
+                            .eq(channel_id)
+                            .and(channel::deleted_at.is_null()),
+                    )
+                    .first(conn.as_mut())
+                    .await?;
+                dm::ensure_can_see(state, conn.as_mut(), author, channel_id).await?;
+                if echo_to_parent && target.ty != ChannelType::Thread {
+                    return Err(app::Error::Validation(t!("echoOutsideThread")));
+                }
+                ensure_attachments_ready(conn.as_mut(), &attachments).await?;
+                let message = Message {
+                    id: MessageId::new(),
+                    channel: MaybeLoaded::from_id(channel_id),
+                    content,
+                    author: MaybeLoaded::from_id(author),
+                    timestamp: Utc::now(),
+                    deleted_at: None,
+                    edited_at: None,
+                    kind: MessageKind::Standard,
+                    poll: None,
+                    thread: None,
+                    echo_of: None,
+                };
+                diesel::insert_into(message::table)
+                    .values(&message)
+                    .execute(conn.as_mut())
+                    .await?;
+                for attachment in &attachments {
+                    diesel::insert_into(message_attachment::table)
+                        .values(&MessageAttachment {
+                            message_id: message.id,
+                            attachment_id: *attachment,
+                        })
+                        .execute(conn.as_mut())
+                        .await?;
+                }
+                // The new message goes out with no link previews; the fetcher spawned below
+                // publishes an `Update` with them once it has settled (see `app::link_preview`).
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::Channel(channel_id),
+                    &ServerEvent::Message(MessageEvent::Create(record(
+                        &message,
+                        attachments,
+                        Vec::new(),
+                    ))),
+                )
+                .await?;
+                if target.ty == ChannelType::Thread {
+                    thread::record_reply(state, conn.as_mut(), channel_id, message.timestamp)
+                        .await?;
+                    if echo_to_parent && let Some(parent) = target.parent_channel {
+                        thread::echo(state, conn.as_mut(), parent, &message).await?;
+                    }
+                }
+                Ok::<_, app::Error>(message)
+            }
+            .scope_boxed()
+        })
         .await?;
-    for attachment in &attachments {
-        diesel::insert_into(message_attachment::table)
-            .values(&MessageAttachment {
-                message_id: id,
-                attachment_id: *attachment,
-            })
-            .execute(conn.as_mut())
-            .await?;
-    }
-    // The freshly-created message goes out with an empty `link_previews`
-    // list; the async fetcher spawned below publishes an `Update` carrying
-    // the actual preview data once it has settled. See `app::link_preview`
-    // for the full flow.
-    let event = ServerEvent::Message(MessageEvent::Create(message_enum::Message {
-        id,
-        author,
-        timestamp,
-        edited_at: None,
-        content: content.clone(),
-        attachments,
-        channel_id,
-        link_previews: Vec::new(),
-        kind: MessageKind::Standard,
-        poll: None,
-    }));
-    app::publish_event(state, &event).await?;
-    spawn_preview_fetch(state.clone(), id, content);
+    spawn_preview_fetch(state.clone(), message.id, message.content.clone());
     Ok(message)
 }
 
 pub async fn read_message(
     state: &GlobalServerContext,
+    caller: UserId,
     id: MessageId,
 ) -> Result<MessageWithRelations, app::Error> {
     let mut conn = state.connection_pool.get().await?;
     let msg = message::table
-        .inner_join(channel::table)
+        .inner_join(channel::table.on(channel::id.eq(message::channel)))
         .select(Message::as_select())
         .filter(
             message::id
@@ -151,6 +204,7 @@ pub async fn read_message(
         )
         .first(conn.as_mut())
         .await?;
+    dm::ensure_can_see(state, conn.as_mut(), caller, *msg.channel.id()).await?;
     let attachments: Vec<AttachmentId> = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.eq(id))
@@ -167,6 +221,70 @@ pub async fn read_message(
     })
 }
 
+/// The live messages among `ids` that `caller` may see, with their relations: the thread
+/// replies echoes name, which a window of the parent channel does not include.
+pub async fn read_messages(
+    state: &GlobalServerContext,
+    caller: UserId,
+    ids: &[MessageId],
+) -> Result<Vec<MessageWithRelations>, app::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<Message> = message::table
+        .select(Message::as_select())
+        .filter(message::id.eq_any(ids).and(message::deleted_at.is_null()))
+        .load(conn.as_mut())
+        .await?;
+    // Whether the caller may see a channel is asked once per channel, however many of the
+    // messages are in it; a window's echoes all name replies in its own channel's threads.
+    let mut allowed: std::collections::HashMap<ChannelId, bool> = std::collections::HashMap::new();
+    let mut visible = Vec::with_capacity(rows.len());
+    for row in rows {
+        let channel = *row.channel.id();
+        let may_see = match allowed.get(&channel) {
+            Some(may_see) => *may_see,
+            None => {
+                let may_see = dm::ensure_can_see(state, conn.as_mut(), caller, channel)
+                    .await
+                    .is_ok();
+                allowed.insert(channel, may_see);
+                may_see
+            }
+        };
+        if may_see {
+            visible.push(row);
+        }
+    }
+    let ids: Vec<MessageId> = visible.iter().map(|m| m.id).collect();
+    let mut attachments: std::collections::HashMap<MessageId, Vec<AttachmentId>> =
+        std::collections::HashMap::new();
+    for (message_id, attachment_id) in message_attachment::table
+        .select((
+            message_attachment::message_id,
+            message_attachment::attachment_id,
+        ))
+        .filter(message_attachment::message_id.eq_any(&ids))
+        .load::<(MessageId, AttachmentId)>(conn.as_mut())
+        .await?
+    {
+        attachments
+            .entry(message_id)
+            .or_default()
+            .push(attachment_id);
+    }
+    let mut previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &ids).await?;
+    Ok(visible
+        .into_iter()
+        .map(|message| MessageWithRelations {
+            attachments: attachments.remove(&message.id).unwrap_or_default(),
+            link_previews: previews.remove(&message.id).unwrap_or_default(),
+            message,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, AsChangeset)]
 #[diesel(table_name = message)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -177,10 +295,21 @@ pub struct MessageChangeset {
 
 pub async fn update_message(
     state: &GlobalServerContext,
+    caller: UserId,
     id: MessageId,
     command: MessageUpdateRequest,
 ) -> Result<MessageWithRelations, app::Error> {
     let mut conn = state.connection_pool.get().await?;
+    let (channel_id, kind): (ChannelId, MessageKind) = message::table
+        .select((message::channel, message::kind))
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
+    dm::ensure_can_see(state, conn.as_mut(), caller, channel_id).await?;
+    // An echo shows its reply's content; there is nothing of its own to edit.
+    if kind == MessageKind::ThreadEcho {
+        return Err(app::Error::Validation(t!("echoNotEditable")));
+    }
     let content_changed = command.content.is_some();
     let new_content_for_refetch = command.content.clone();
     let (message, attachments, previews_cleared) = conn
@@ -236,6 +365,8 @@ pub async fn update_message(
 
                 publish_event(
                     state,
+                    conn.as_mut(),
+                    EventScope::Message(id),
                     &ServerEvent::Message(MessageEvent::Update {
                         id,
                         content: command.content,
@@ -244,6 +375,7 @@ pub async fn update_message(
                         // Clients drop their stale cards with the edit itself; the
                         // fetcher's own update brings the new set.
                         link_previews: previews_cleared.then(Vec::new),
+                        thread: None,
                     }),
                 )
                 .await?;
@@ -274,8 +406,20 @@ pub async fn update_message(
     })
 }
 
-pub async fn delete_message(state: &GlobalServerContext, id: MessageId) -> Result<(), app::Error> {
+/// Deletes a message. A thread reply leaves its thread's summary and takes its echo with it;
+/// a thread's starter leaves the thread in place.
+pub async fn delete_message(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: MessageId,
+) -> Result<(), app::Error> {
     let mut conn = state.connection_pool.get().await?;
+    let channel_id: ChannelId = message::table
+        .select(message::channel)
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
+    dm::ensure_can_see(state, conn.as_mut(), caller, channel_id).await?;
     conn.transaction(|conn| {
         async move {
             // Drop link-preview image objects from S3 first — the FK cascade
@@ -298,13 +442,31 @@ pub async fn delete_message(state: &GlobalServerContext, id: MessageId) -> Resul
             else {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             };
-            publish_event(state, &ServerEvent::Message(MessageEvent::Delete { id })).await?;
+            // A reply's echo goes first, so no client ever holds an echo whose reply is gone.
+            if deleted.kind != MessageKind::ThreadEcho {
+                thread::delete_echo_of(state, conn.as_mut(), id).await?;
+            }
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Channel(*deleted.channel.id()),
+                &ServerEvent::Message(MessageEvent::Delete { id }),
+            )
+            .await?;
             // Deleting the message a poll is shown in ends the poll; its announcement, if
             // any, is an ordinary message and stays.
             if deleted.kind == MessageKind::Poll
                 && let Some(poll) = deleted.poll
             {
-                app::poll::delete_poll(state, conn.as_mut(), poll).await?;
+                app::poll::delete_poll(state, conn.as_mut(), poll, *deleted.channel.id()).await?;
+            }
+            let ty: ChannelType = channel::table
+                .select(channel::ty)
+                .filter(channel::id.eq(*deleted.channel.id()))
+                .first(conn.as_mut())
+                .await?;
+            if ty == ChannelType::Thread {
+                thread::record_removal(state, conn.as_mut(), *deleted.channel.id()).await?;
             }
             Ok(())
         }

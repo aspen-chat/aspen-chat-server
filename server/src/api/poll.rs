@@ -115,7 +115,7 @@ pub async fn get_poll(
     Path(poll): Path<PollId>,
     Query(query): Query<PollReadQuery>,
 ) -> ApiResult<Json<PollRead>> {
-    let record = app::poll::read_poll(&state, poll).await?;
+    let record = app::poll::read_poll(&state, user.id, poll).await?;
     let poll_votes = if query.include.contains(PollInclude::Votes) {
         Some(app::poll::read_votes(&state, user.id, &[poll]).await?)
     } else {

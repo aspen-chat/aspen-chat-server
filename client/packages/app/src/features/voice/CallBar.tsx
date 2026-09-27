@@ -3,12 +3,12 @@ import {
   MicrophoneIcon,
   MicrophoneSlashIcon,
   PhoneDisconnectIcon,
-  ScreencastIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
 import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
 
 const buttonClass =
@@ -84,24 +84,7 @@ export function CallBar() {
           )}
         </Button>
       </Tooltip>
-      {call.status === "connected" && (
-        <Tooltip text={call.sharingScreen ? m.voice.stopSharing : m.voice.shareScreen}>
-          <Button
-            aria-label={call.sharingScreen ? m.voice.stopSharing : m.voice.shareScreen}
-            aria-pressed={call.sharingScreen}
-            onPress={() => {
-              if (call.sharingScreen) {
-                sync.voice.stopScreenShare();
-              } else {
-                void sync.voice.startScreenShare().catch(() => undefined);
-              }
-            }}
-            className={buttonClass + (call.sharingScreen ? " text-accent" : "")}
-          >
-            <ScreencastIcon size={18} aria-hidden="true" />
-          </Button>
-        </Tooltip>
-      )}
+      {call.status === "connected" && <ShareControl variant="bar" />}
       <Tooltip text={m.voice.leave}>
         <Button
           aria-label={m.voice.leave}
