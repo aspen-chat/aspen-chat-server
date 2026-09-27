@@ -1,0 +1,41 @@
+name = "small-group"
+description = """
+A dozen friends in one community, all online at once in the evening: busy chat, a call most
+of them join, and someone sharing a game. The smallest deployment Aspen should serve well."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 12
+communities = 1
+largest_community = 12
+smallest_community = 12
+text_channels = 4
+voice_channels = 2
+history_per_channel = 500
+
+[load]
+online = 1.0
+ramp_up_seconds = 5
+duration_seconds = 600
+
+[behaviours.friend]
+share = 1.0
+messages_per_hour = 90
+reactions_per_hour = 40
+edits_per_hour = 5
+history_reads_per_hour = 30
+attachments_per_hour = 3
+attachment_bytes = 400000
+hot_channel_share = 0.6
+voice = { calls_per_hour = 1, call_minutes = 8, screen_share = 0.2, channels_used = 1 }
+
+[slo]
+delivery_p99_ms = 150
+request_p99_ms = 300
+connect_p99_ms = 2000
+error_rate = 0.001
+voice_loss = 0.01
+voice_jitter_ms = 30

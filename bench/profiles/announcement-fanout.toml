@@ -1,0 +1,40 @@
+name = "announcement-fanout"
+description = """
+Fan-out: 20,000 people online in one community when something happens, and everyone posts in
+the same channel for two minutes. Every message goes to every connected member."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 20000
+communities = 1
+largest_community = 20000
+smallest_community = 20000
+text_channels = 3
+voice_channels = 0
+history_per_channel = 100
+
+[load]
+online = 1.0
+ramp_up_seconds = 180
+duration_seconds = 300
+
+[behaviours.crowd]
+share = 1.0
+messages_per_hour = 0.5
+reactions_per_hour = 2
+history_reads_per_hour = 4
+hot_channel_share = 1.0
+
+[[events]]
+at_seconds = 60
+kind = "spike"
+factor = 20
+seconds = 120
+
+[slo]
+delivery_p99_ms = 1000
+request_p99_ms = 1000
+error_rate = 0.005

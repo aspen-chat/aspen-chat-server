@@ -12,11 +12,13 @@ use std::fmt::{Debug, Display, Formatter};
 use std::result::Result as StdResult;
 
 pub mod attachment;
+pub mod benchmark;
 pub mod category;
 pub mod channel;
 pub mod community;
 pub mod dm;
 mod error;
+pub mod event_feed;
 pub mod icon;
 pub mod invite;
 pub mod link_preview;

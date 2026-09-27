@@ -64,7 +64,10 @@ pub async fn limit_http(
     let ip = client_ip(&state, peer, request.headers());
     match state.limits.check_http(route, ip) {
         Ok(()) => next.run(request).await,
-        Err(wait) => too_many(wait),
+        Err(wait) => {
+            crate::metrics::http_refused(route);
+            too_many(wait)
+        }
     }
 }
 
@@ -76,6 +79,7 @@ pub async fn upgrade(
 ) -> Response {
     let ip = client_ip(&state, peer, &headers);
     let Some(pending) = state.limits.pending_socket(ip) else {
+        crate::metrics::http_refused(SIGNALLING);
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
     let max = state.limits.max_message_bytes;
@@ -167,7 +171,9 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
 
     while let Some(frame) = next_frame(&mut stream).await {
         let kind = frame.kind();
+        crate::metrics::frame(kind);
         if let Err(wait) = state.limits.check_frame(kind, &caller) {
+            crate::metrics::frame_refused(kind);
             let _ = outbox.send(ServerMessage::Error {
                 detail: format!(
                     "too many {kind} frames; try again in {}s",
@@ -213,6 +219,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ClientMessage::ProduceRtp { source } => {
                 state.rooms.produce_rtp(channel, user, source).await
             }
+            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(channel, user).await,
             ClientMessage::CloseProducer { producer_id } => {
                 state
                     .rooms

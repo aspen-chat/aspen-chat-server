@@ -1,0 +1,10 @@
+[package]
+name = "aspen_bench_protocol"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "What the benchmark tool and the servers exchange: seed plans and manifests, and the coordinator's messages to its agents."
+
+[dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+uuid = { version = "1.16.0", features = ["serde"] }

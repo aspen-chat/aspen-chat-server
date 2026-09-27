@@ -1,0 +1,49 @@
+name = "public-community"
+description = """
+A 100,000-member public community with a long tail of smaller ones: one in ten online, busy
+public channels, many lurkers. Needs several agents: run with --agents."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 100000
+communities = 200
+largest_community = 100000
+smallest_community = 30
+size_exponent = 1.1
+text_channels = 10
+voice_channels = 4
+history_per_channel = 200
+
+[load]
+online = 0.1
+ramp_up_seconds = 300
+duration_seconds = 900
+
+[behaviours.lurker]
+share = 0.85
+history_reads_per_hour = 10
+reactions_per_hour = 3
+messages_per_hour = 0.5
+reconnects_per_hour = 1
+
+[behaviours.regular]
+share = 0.14
+messages_per_hour = 20
+dm_messages_per_hour = 5
+reactions_per_hour = 15
+history_reads_per_hour = 15
+hot_channel_share = 0.5
+reconnects_per_hour = 1
+
+[behaviours.voice]
+share = 0.01
+voice = { calls_per_hour = 1, call_minutes = 30, screen_share = 0.05, channels_used = 4 }
+
+[slo]
+delivery_p99_ms = 500
+request_p99_ms = 800
+connect_p99_ms = 8000
+error_rate = 0.002

@@ -1,0 +1,41 @@
+name = "chaos"
+description = """
+Parts of the deployment fail under load: an API server, then NATS, restart mid-run, and the
+report shows what users saw. Edit the commands to match how the deployment is run."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 1000
+communities = 10
+largest_community = 1000
+smallest_community = 50
+
+[load]
+online = 0.5
+ramp_up_seconds = 60
+duration_seconds = 420
+
+[behaviours.member]
+share = 1.0
+messages_per_hour = 20
+reactions_per_hour = 10
+history_reads_per_hour = 10
+
+[[events]]
+at_seconds = 60
+kind = "command"
+run = "docker compose restart nats"
+
+[[events]]
+at_seconds = 240
+kind = "command"
+run = "systemctl restart aspen-api"
+
+# Failures are expected while parts restart; the service levels judge the whole steady phase.
+[slo]
+recovery_p99_ms = 15000
+delivery_p99_ms = 5000
+error_rate = 0.05

@@ -27,6 +27,7 @@ pub(crate) mod invite;
 pub(crate) mod link_preview;
 pub(crate) mod message;
 pub(crate) mod message_enum;
+pub(crate) mod metrics;
 pub(crate) mod passkey_page;
 pub mod poll;
 pub(crate) mod rate_limit;
@@ -294,6 +295,31 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .route("/events", any(event_stream::event_stream))
 }
 
+/// Refreshes the gauges that are sampled rather than kept current.
+fn spawn_samplers(context: GlobalServerContext) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(aspen_metrics::SAMPLE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let status = context.connection_pool.status();
+            for (state, value) in [
+                ("size", status.size),
+                ("available", status.available),
+                ("waiting", status.waiting),
+                ("max", status.max_size),
+            ] {
+                ::metrics::gauge!(aspen_metrics::api::DB_POOL, "state" => state).set(value as f64);
+            }
+            let suspended = context.rate_limiter.suspension().current().is_some();
+            ::metrics::gauge!(aspen_metrics::api::RATE_LIMITS_SUSPENDED).set(if suspended {
+                1.0
+            } else {
+                0.0
+            });
+        }
+    });
+}
+
 /// The OpenAPI document of every API route.
 pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
     let mut openapi = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -316,10 +342,13 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     let context = GlobalServerContext::new(&rate_limit::routes()).await?;
     // A route layer runs only for matched routes, after routing, so it knows the route's
     // template.
-    let v1 = api_routes().route_layer(axum::middleware::from_fn_with_state(
-        context.clone(),
-        rate_limit::limit_requests,
-    ));
+    // Layers run outermost last-added first: metrics see every request, refused ones too.
+    let v1 = api_routes()
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     // A page, not an API: the desktop and mobile apps open it in the system browser to run a
     // passkey ceremony (`api::passkey_page`). It is limited like the API.
     let page = OpenApiRouter::<GlobalServerContext>::new()
@@ -330,10 +359,16 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         .route_layer(axum::middleware::from_fn_with_state(
             context.clone(),
             rate_limit::limit_requests,
-        ));
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     let router = OpenApiRouter::<GlobalServerContext>::new()
         .nest(API_PREFIX, v1)
         .merge(page);
+    if context.config.metrics.enabled {
+        aspen_metrics::install(context.config.metrics.listen_addr)
+            .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
+        spawn_samplers(context.clone());
+    }
     app::poll::spawn_closer(context.clone());
     app::voice::seed_servers(&context).await?;
     app::voice::spawn_report_listener(context.clone()).await?;
@@ -476,6 +511,9 @@ pub struct GlobalServerContext {
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
+    /// The server's one reading of the event stream, which every event stream connection
+    /// registers with.
+    pub event_feed: app::event_feed::EventFeed,
 }
 
 impl GlobalServerContext {
@@ -483,6 +521,10 @@ impl GlobalServerContext {
     /// limits are checked against.
     pub async fn new(routes: &[app::rate_limit::Route]) -> Result<Self, app::Error> {
         let config = load_config()?;
+        app::login::configure_password_work(
+            config.auth.password_hashing_threads,
+            Duration::from_secs(config.auth.password_hashing_wait_seconds),
+        );
         let rate_limiter = app::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
             .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
         let client = async_nats::connect_with_options(
@@ -490,6 +532,7 @@ impl GlobalServerContext {
             ConnectOptions::new().token(config.nats_auth_token.clone()),
         )
         .await?;
+        aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
         let context = async_nats::jetstream::new(client);
         context
             .create_or_update_stream(async_nats::jetstream::stream::Config {
@@ -498,7 +541,7 @@ impl GlobalServerContext {
                 discard: DiscardPolicy::Old,
                 max_messages: 1_000_000_000,
                 max_bytes: 8 * 1024 * 1024 * 1024,
-                max_age: MAX_EVENT_AGE,
+                max_age: app::event_feed::MAX_EVENT_AGE,
                 storage: StorageType::Memory,
                 consumer_limits: Some(ConsumerLimits {
                     max_ack_pending: 1000,
@@ -521,6 +564,11 @@ impl GlobalServerContext {
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
                 Pool::builder(conn_manager).build()?
             },
+            event_feed: app::event_feed::EventFeed::start(
+                context.clone(),
+                config.event_queue_size,
+                config.event_feed_shards,
+            ),
             nats_context: Arc::new(context),
             valkey,
             media_store,
@@ -530,5 +578,3 @@ impl GlobalServerContext {
         })
     }
 }
-
-const MAX_EVENT_AGE: Duration = Duration::from_secs(60);

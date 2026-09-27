@@ -6,6 +6,10 @@ use std::collections::{BTreeMap, HashMap};
 pub struct AspenConfig {
     #[serde(default = "default_event_queue_size")]
     pub event_queue_size: usize,
+    /// Tasks that route events to this server's event stream connections, one per logical CPU
+    /// by default (`app::event_feed`).
+    #[serde(default = "default_event_feed_shards")]
+    pub event_feed_shards: usize,
     pub database_url: String,
     pub nats_url: String,
     pub nats_auth_token: String,
@@ -22,6 +26,8 @@ pub struct AspenConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub presence: PresenceConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -41,6 +47,8 @@ pub struct RateLimitConfig {
     /// An IPv6 client is counted by its network of this many leading bits, since one
     /// subscriber usually holds a whole /64.
     pub ipv6_prefix: u8,
+    /// The longest a suspension of the limits is honoured, from when it started.
+    pub max_suspension_seconds: u64,
     /// Limits every endpoint has, in addition to its groups' and its own.
     #[serde(default)]
     pub default: RuleTable,
@@ -63,6 +71,7 @@ pub struct RateLimitOverrides {
     pub enabled: Option<bool>,
     pub trusted_proxies: Option<Vec<String>>,
     pub ipv6_prefix: Option<u8>,
+    pub max_suspension_seconds: Option<u64>,
     #[serde(default)]
     pub default: RuleTable,
     #[serde(default)]
@@ -89,6 +98,9 @@ impl RateLimitConfig {
         }
         if let Some(prefix) = overrides.ipv6_prefix {
             self.ipv6_prefix = prefix;
+        }
+        if let Some(max) = overrides.max_suspension_seconds {
+            self.max_suspension_seconds = max;
         }
         self.default.extend(overrides.default);
         for (name, group) in overrides.groups {
@@ -138,6 +150,34 @@ pub struct RateLimitGroup {
     pub limits: RuleTable,
 }
 
+/// Prometheus metrics (`aspen_metrics`), served on a listener of their own.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+    /// Where `GET /metrics` is served. Loopback by default: the figures describe the
+    /// deployment's inside, so expose them only to whatever scrapes them.
+    #[serde(default = "default_metrics_listen_addr")]
+    pub listen_addr: std::net::SocketAddr,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_metrics_enabled(),
+            listen_addr: default_metrics_listen_addr(),
+        }
+    }
+}
+
+fn default_metrics_enabled() -> bool {
+    true
+}
+
+fn default_metrics_listen_addr() -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], 9464))
+}
+
 /// Whether people show as online, away, or offline (`app::user_status`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct PresenceConfig {
@@ -179,6 +219,14 @@ pub struct AuthConfig {
     /// Passkeys are offered only when this is set.
     #[serde(default)]
     pub passkeys: Option<PasskeyConfig>,
+    /// Threads password hashing and checking may use at once, one per logical CPU by default.
+    /// Each Argon2 hash holds 19 MiB while it runs.
+    #[serde(default = "crate::app::login::default_password_hashing_threads")]
+    pub password_hashing_threads: usize,
+    /// How long a sign-in or other password check waits for a thread before it is refused
+    /// with `serverBusy`.
+    #[serde(default = "default_password_hashing_wait_seconds")]
+    pub password_hashing_wait_seconds: u64,
 }
 
 impl Default for AuthConfig {
@@ -188,8 +236,14 @@ impl Default for AuthConfig {
             service_name: default_auth_service_name(),
             reverify_seconds: default_auth_reverify_seconds(),
             passkeys: None,
+            password_hashing_threads: crate::app::login::default_password_hashing_threads(),
+            password_hashing_wait_seconds: default_password_hashing_wait_seconds(),
         }
     }
+}
+
+fn default_password_hashing_wait_seconds() -> u64 {
+    10
 }
 
 /// WebAuthn relying party settings.
@@ -393,6 +447,10 @@ impl Default for MediaS3Config {
             upload_url_ttl_seconds: default_media_s3_upload_url_ttl_seconds(),
         }
     }
+}
+
+pub fn default_event_feed_shards() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 pub fn default_event_queue_size() -> usize {

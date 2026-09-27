@@ -1,0 +1,38 @@
+[package]
+name = "aspen_bench"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Aspen's benchmark: drives a deployment with a described workload and says whether it holds up."
+
+[[bin]]
+name = "aspen-bench"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+aspen_bench_protocol = { path = "../bench_protocol" }
+aspen_limits = { path = "../limits" }
+aspen_metrics = { path = "../metrics" }
+async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
+axum = { version = "0.8.4", features = ["ws"] }
+base64 = "0.22.1"
+bytes = "1"
+clap = { version = "4.5.37", features = ["derive"] }
+futures-util = "0.3.31"
+hdrhistogram = { version = "7.5", default-features = false, features = ["serialization"] }
+rand = "0.10.0"
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "http2"] }
+rtcp = "0.17"
+rtp = "0.17"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+tokio = { version = "1.44.2", features = ["full"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+toml = "0.9"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.16.0", features = ["serde", "v7"] }
+voice_protocol = { path = "../voice_protocol" }
+webrtc-srtp = "0.17"
+webrtc-util = "0.17"

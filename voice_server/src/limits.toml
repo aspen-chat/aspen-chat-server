@@ -17,6 +17,9 @@ enabled = true
 # Reverse proxies whose X-Forwarded-For is believed, as addresses or CIDR networks.
 trusted_proxies = []
 ipv6_prefix = 64
+# The longest this server honours a suspension of its limits (the API server's
+# `limits suspend`), counted from when it started: a day.
+max_suspension_seconds = 86400
 # The largest signalling message taken, in bytes. The biggest a client sends are its RTP
 # capabilities, a few kilobytes.
 max_message_bytes = 262144
@@ -51,6 +54,10 @@ user = { requests = 12, per_seconds = 60, burst = 6 }
 user = { requests = 20, per_seconds = 60, burst = 10 }
 
 [rate_limits.frames.produceRtp]
+user = { requests = 10, per_seconds = 60, burst = 4 }
+
+# Each takes a port from the media range too.
+[rate_limits.frames.consumeRtp]
 user = { requests = 10, per_seconds = 60, burst = 4 }
 
 [rate_limits.frames.closeProducer]

@@ -36,7 +36,7 @@ hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "serv
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
 tokio-rustls = "0.26.2"
-async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }
+async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
 bytes = "1.10.1"
 config = { version = "0.15.14", features = ["toml"] }
 rust-i18n = "3.1.5"
@@ -69,6 +69,12 @@ sha1 = "0.10"
 data-encoding = "2.9"
 subtle = "2.6"
 aspen_limits = { version = "0.1.0", path = "../limits" }
+aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"] }
+# The global allocator, replacing malloc for the whole process (C and C++ libraries included),
+# so its statistics describe all of the process's memory.
+tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
+metrics = "0.24"
+aspen_bench_protocol = { version = "0.1.0", path = "../bench_protocol" }
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

@@ -1,0 +1,41 @@
+name = "reconnect-storm"
+description = """
+After an outage: 5,000 people online lose their event streams at once, twice, and resume them
+together. Measures resumption, the replay window, and recovery time."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 5000
+communities = 10
+largest_community = 5000
+smallest_community = 100
+
+[load]
+online = 1.0
+ramp_up_seconds = 120
+duration_seconds = 300
+
+[behaviours.member]
+share = 1.0
+messages_per_hour = 6
+reactions_per_hour = 6
+history_reads_per_hour = 6
+
+[[events]]
+at_seconds = 60
+kind = "reconnect_storm"
+fraction = 1.0
+
+[[events]]
+at_seconds = 180
+kind = "reconnect_storm"
+fraction = 1.0
+
+[slo]
+recovery_p99_ms = 15000
+delivery_p99_ms = 1000
+request_p99_ms = 1000
+error_rate = 0.01

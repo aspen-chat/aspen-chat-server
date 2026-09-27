@@ -8,3 +8,9 @@ description = "Rate limit settings, the GCRA arithmetic, and client addresses be
 [dependencies]
 ipnet = "2.12"
 serde = { version = "1.0.219", features = ["derive"] }
+async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
+bytes = "1.10.1"
+futures-util = "0.3.31"
+serde_json = "1.0.140"
+tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1.41"

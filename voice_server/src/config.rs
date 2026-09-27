@@ -25,12 +25,41 @@ pub struct VoiceServerConfig {
     /// of CPUs.
     #[serde(default = "default_workers")]
     pub workers: usize,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
     /// What `voice_server.toml` says about limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: LimitOverrides,
     /// The limits in force: the built-in ones (`limits.toml`) with the overrides laid over them.
     #[serde(skip)]
     pub rate_limits: LimitSettings,
+}
+
+/// Prometheus metrics (`aspen_metrics::voice`), served on a listener of their own.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default = "default_metrics_enabled")]
+    pub enabled: bool,
+    /// Where `GET /metrics` is served; loopback by default.
+    #[serde(default = "default_metrics_listen_addr")]
+    pub listen_addr: SocketAddr,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_metrics_enabled(),
+            listen_addr: default_metrics_listen_addr(),
+        }
+    }
+}
+
+fn default_metrics_enabled() -> bool {
+    true
+}
+
+fn default_metrics_listen_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 9465))
 }
 
 /// The limits in force (`limits.rs`); `limits.toml` documents each.
@@ -40,6 +69,7 @@ pub struct LimitSettings {
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
     pub ipv6_prefix: u8,
+    pub max_suspension_seconds: u64,
     pub max_message_bytes: usize,
     pub max_pending_sockets_per_ip: u32,
     /// By route: `health`, `signalling`.
@@ -58,6 +88,7 @@ pub struct LimitOverrides {
     pub enabled: Option<bool>,
     pub trusted_proxies: Option<Vec<String>>,
     pub ipv6_prefix: Option<u8>,
+    pub max_suspension_seconds: Option<u64>,
     pub max_message_bytes: Option<usize>,
     pub max_pending_sockets_per_ip: Option<u32>,
     #[serde(default)]
@@ -88,6 +119,9 @@ impl LimitSettings {
         }
         if let Some(prefix) = overrides.ipv6_prefix {
             self.ipv6_prefix = prefix;
+        }
+        if let Some(max) = overrides.max_suspension_seconds {
+            self.max_suspension_seconds = max;
         }
         if let Some(bytes) = overrides.max_message_bytes {
             self.max_message_bytes = bytes;
@@ -171,8 +205,8 @@ impl RtcConfig {
     }
 }
 
-pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
-    // Sources added later take precedence: the environment overrides the file.
+/// Where settings come from: `voice_server.toml`, then the environment, which overrides it.
+fn sources() -> Result<config::Config, config::ConfigError> {
     config::Config::builder()
         .add_source(
             config::File::new("voice_server.toml", config::FileFormat::Toml).required(false),
@@ -182,7 +216,25 @@ pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
                 .prefix_separator("_")
                 .separator("__"),
         )
-        .build()?
+        .build()
+}
+
+/// The media settings alone, which `estimate-capacity` reads: it needs no registry id, secret,
+/// or NATS, so it runs on a machine not yet set up as a voice server.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MediaConfig {
+    #[serde(default)]
+    pub rtc: RtcConfig,
+    #[serde(default = "default_workers")]
+    pub workers: usize,
+}
+
+pub fn load_media_config() -> Result<MediaConfig, config::ConfigError> {
+    sources()?.try_deserialize::<MediaConfig>()
+}
+
+pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
+    sources()?
         .try_deserialize::<VoiceServerConfig>()
         .and_then(|mut config| {
             // Merged here rather than as one more config source, which would merge a limit

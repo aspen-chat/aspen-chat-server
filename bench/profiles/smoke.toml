@@ -1,0 +1,44 @@
+name = "smoke"
+description = """
+A quick check that a deployment works under light load: 200 users, half online, for a minute.
+Run it first, and after every deployment change."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 200
+communities = 3
+largest_community = 150
+smallest_community = 40
+text_channels = 3
+voice_channels = 1
+history_per_channel = 50
+
+[load]
+online = 0.5
+ramp_up_seconds = 15
+duration_seconds = 60
+
+[behaviours.lurker]
+share = 0.7
+history_reads_per_hour = 20
+reactions_per_hour = 10
+messages_per_hour = 2
+
+[behaviours.chatter]
+share = 0.3
+messages_per_hour = 60
+dm_messages_per_hour = 10
+edits_per_hour = 4
+deletes_per_hour = 1
+history_reads_per_hour = 20
+reactions_per_hour = 20
+hot_channel_share = 0.5
+
+[slo]
+delivery_p99_ms = 250
+request_p99_ms = 500
+connect_p99_ms = 3000
+error_rate = 0.001

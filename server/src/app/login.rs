@@ -56,9 +56,61 @@ const TICKET_PREFIX: &str = "auth:ticket";
 /// Long enough to find a phone and open an authenticator app.
 const TICKET_LIFETIME_SECONDS: i64 = 5 * 60;
 
+/// The server's allowance for password work: Argon2 takes a large block of memory and most of a
+/// core for a noticeable time per hash, so it runs on a fixed number of blocking threads and
+/// work beyond them queues for a bounded time. A burst of sign-ins (everyone reconnecting after
+/// a restart) then costs a known amount of memory and leaves the rest of the server its CPU,
+/// and the requests that cannot be served soon are refused with `serverBusy` rather than all
+/// slowing down together.
+struct PasswordWork {
+    permits: tokio::sync::Semaphore,
+    wait: std::time::Duration,
+}
+
+static PASSWORD_WORK: std::sync::OnceLock<PasswordWork> = std::sync::OnceLock::new();
+
+/// The blocking threads password work gets when nothing configured them: one per logical CPU.
+pub fn default_password_hashing_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// Sets the password work allowance; the first call wins. Called once at startup from `[auth]`;
+/// a process that never calls it (an operator command) gets one thread per CPU and a ten
+/// second queue.
+pub fn configure_password_work(threads: usize, wait: std::time::Duration) {
+    let _ = PASSWORD_WORK.set(PasswordWork {
+        permits: tokio::sync::Semaphore::new(threads.max(1)),
+        wait,
+    });
+}
+
+/// Runs `work` on a blocking thread once the allowance has room, or fails with `Busy` if it
+/// has none within the wait.
+async fn password_work<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> app::Result<T> {
+    let allowance = PASSWORD_WORK.get_or_init(|| PasswordWork {
+        permits: tokio::sync::Semaphore::new(default_password_hashing_threads()),
+        wait: std::time::Duration::from_secs(10),
+    });
+    allowance.run(work).await
+}
+
+impl PasswordWork {
+    async fn run<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> app::Result<T> {
+        let _permit = tokio::time::timeout(self.wait, self.permits.acquire())
+            .await
+            .map_err(|_| app::Error::Busy)?
+            .map_err(|_| app::Error::Busy)?;
+        Ok(tokio::task::spawn_blocking(work).await?)
+    }
+}
+
 pub async fn hash_password(password: String) -> app::Result<String> {
-    // Prevent CPU blocking work from hoarding tokio workers
-    tokio::task::spawn_blocking(|| {
+    password_work(|| {
         let argon2 = argon2::Argon2::default();
         CHACHA_RNG.with(|rng| {
             let bytes = rng.borrow_mut().random::<[u8; Salt::RECOMMENDED_LENGTH]>();
@@ -72,8 +124,7 @@ pub async fn hash_password(password: String) -> app::Result<String> {
 }
 
 pub async fn check_password(password: String, entry_password_hash: String) -> app::Result<bool> {
-    // Prevent CPU blocking work from hoarding tokio workers
-    tokio::task::spawn_blocking(move || {
+    password_work(move || {
         let argon2 = argon2::Argon2::default();
         let entry_hash = match PasswordHash::try_from(entry_password_hash.as_str()) {
             Ok(v) => v,
@@ -87,7 +138,6 @@ pub async fn check_password(password: String, entry_password_hash: String) -> ap
             .is_ok()
     })
     .await
-    .map_err(Into::into)
 }
 
 fn make_token() -> String {
@@ -439,4 +489,36 @@ pub async fn try_other_server_auth(
         .execute(&mut state.connection_pool.get().await?)
         .await?;
     Ok(other_server_auth_token)
+}
+
+#[cfg(test)]
+mod password_work_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn work_beyond_the_allowance_waits_and_then_is_refused() {
+        let allowance = std::sync::Arc::new(PasswordWork {
+            permits: tokio::sync::Semaphore::new(1),
+            wait: Duration::from_millis(100),
+        });
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = tokio::spawn({
+            let allowance = allowance.clone();
+            async move {
+                allowance
+                    .run(move || {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.recv();
+                    })
+                    .await
+            }
+        });
+        started_rx.await.unwrap();
+        assert!(matches!(allowance.run(|| ()).await, Err(app::Error::Busy)));
+        release_tx.send(()).unwrap();
+        holder.await.unwrap().unwrap();
+        assert_eq!(allowance.run(|| 7).await.unwrap(), 7);
+    }
 }

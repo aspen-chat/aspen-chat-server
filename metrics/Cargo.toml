@@ -1,0 +1,18 @@
+[package]
+name = "aspen_metrics"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "The Prometheus metrics the API and voice servers export, by name, and the exporter they share."
+
+[dependencies]
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+metrics-process = "2.4"
+tokio = { version = "1.44.2", features = ["rt", "time"] }
+tracing = "0.1.41"
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats"], optional = true }
+
+[features]
+# Exports the jemalloc allocator's own figures; for a process whose global allocator is jemalloc.
+jemalloc = ["dep:tikv-jemalloc-ctl"]

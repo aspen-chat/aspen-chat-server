@@ -4,35 +4,30 @@
 //! the client's first frame must be an [`ClientMessage::Identify`] carrying a session token,
 //! sent within [`IDENTIFY_TIMEOUT`]. The server answers with [`ServerMessage::Ready`] and then
 //! streams [`ServerMessage::Event`] frames, each tagged with its JetStream sequence number.
-//! A connection reads only the subjects its user is entitled to (`app::events`): their own
-//! and every community they belong to. When their memberships change, the connection reopens
-//! its consumer with the new filter from the last sequence it delivered, so nothing is missed
-//! and nothing from a community they left arrives after the leave.
+//! The events come from the server's shared feed (`app::event_feed`), which routes to each
+//! connection only what its user is entitled to (`app::events`): their own subject and every
+//! community they belong to, following their memberships as they change.
 //!
 //! A client that reconnects passes the last sequence it processed as `resumeAfter`. When that
 //! position is still inside the stream's retention window the server replays exactly what was
-//! missed and reports `resumed: true`; otherwise it falls back to the `MAX_EVENT_AGE` replay
-//! window and reports `resumed: false`, which tells the client its cached state has a gap it
-//! must repair from REST.
+//! missed and reports `resumed: true`; otherwise it replays the whole `MAX_EVENT_AGE` window
+//! and reports `resumed: false`, which tells the client its cached state has a gap it must
+//! repair from REST.
 //!
 //! Every frame in both directions is JSON. The full protocol is described by
 //! `event_schema.json` (root type [`EventStreamProtocol`]).
 
+use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::api::{GlobalServerContext, MAX_EVENT_AGE};
 use crate::app;
-use crate::app::ASPEN_NATS_STREAM_NAME;
-use crate::app::events::{EVENT_ID_HEADER, community_filter, memberships, user_subject};
+use crate::app::UserId;
+use crate::app::event_feed::{Delivery, FeedEvent, Subscription};
 use crate::app::user::UserPg;
-use crate::app::{CommunityId, UserId};
-use async_nats::ConnectOptions;
-use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
-use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};
-use async_nats::jetstream::stream::Stream;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
 use bytes::Bytes;
+use futures_util::SinkExt;
 use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -40,8 +35,6 @@ use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::error::Error;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio_stream::StreamExt;
 use tracing::{debug, error, warn};
 
 /// How long a freshly upgraded socket may stay silent before it is closed for not identifying.
@@ -51,6 +44,16 @@ const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// Consecutive unanswered pings after which the peer is presumed gone.
 const MAX_MISSED_PONGS: u32 = 2;
+
+/// The socket's read buffer.
+const READ_BUFFER_BYTES: usize = 4 * 1024;
+/// Frames are written through once this much is buffered, and on every flush.
+const WRITE_BUFFER_BYTES: usize = 16 * 1024;
+/// The most a socket may buffer for writing before the write fails; a client that cannot
+/// keep up is instead dropped by the feed when its queue fills.
+const MAX_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
+/// The largest frame a client may send.
+const MAX_CLIENT_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// Frames the client may send.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -123,7 +126,7 @@ impl EventStreamErrorCode {
 /// Frames the server sends.
 #[derive(Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ServerMessage {
+pub enum ServerMessage<'a> {
     /// Acknowledges a successful `identify`. Events follow.
     #[serde(rename_all = "camelCase")]
     Ready {
@@ -141,16 +144,16 @@ pub enum ServerMessage {
         /// The same for every copy of an event: an event about a user goes to each community
         /// they share with the reader, and this is how the reader keeps one.
         #[serde(skip_serializing_if = "Option::is_none")]
-        event_id: Option<String>,
+        event_id: Option<&'a str>,
         #[schemars(with = "ServerEvent")]
-        event: Box<RawValue>,
+        event: &'a RawValue,
     },
     /// Sent immediately before the server closes the connection because of a protocol or
     /// authentication failure. Never sent for an orderly shutdown.
     Error {
         code: EventStreamErrorCode,
         /// Localized explanation suitable for display.
-        detail: Cow<'static, str>,
+        detail: Cow<'a, str>,
     },
 }
 
@@ -160,14 +163,22 @@ pub enum ServerMessage {
 #[allow(dead_code)]
 pub struct EventStreamProtocol {
     pub client: ClientMessage,
-    pub server: ServerMessage,
+    pub server: ServerMessage<'static>,
 }
 
 pub async fn event_stream(
     ws: WebSocketUpgrade,
     State(state): State<GlobalServerContext>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_socket_conn(socket, state))
+    // Client frames are small (`identify`, `activity`), and events are written a few at a
+    // time, so the buffers are a small fraction of tungstenite's defaults, which are sized for
+    // bulk transfer and would otherwise dominate each connection's memory.
+    ws.read_buffer_size(READ_BUFFER_BYTES)
+        .write_buffer_size(WRITE_BUFFER_BYTES)
+        .max_write_buffer_size(MAX_WRITE_BUFFER_BYTES)
+        .max_message_size(MAX_CLIENT_MESSAGE_BYTES)
+        .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_socket_conn(socket, state))
 }
 
 struct Rejection(EventStreamErrorCode);
@@ -179,21 +190,50 @@ impl From<app::Error> for Rejection {
     }
 }
 
+/// Counts an identified stream as open for as long as it lives.
+struct OpenStream;
+
+impl OpenStream {
+    fn new() -> Self {
+        metrics::gauge!(aspen_metrics::api::EVENT_STREAMS).increment(1.0);
+        OpenStream
+    }
+}
+
+impl Drop for OpenStream {
+    fn drop(&mut self) {
+        metrics::gauge!(aspen_metrics::api::EVENT_STREAMS).decrement(1.0);
+    }
+}
+
+fn count_connect(outcome: &'static str) {
+    metrics::counter!(aspen_metrics::api::EVENT_STREAM_CONNECTS, "outcome" => outcome).increment(1);
+}
+
 async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
     let session = match identify(&mut socket, &state).await {
         Ok(session) => session,
         Err(Rejection(code)) => {
+            count_connect("rejected");
             reject(&mut socket, code).await;
             return;
         }
     };
-    let subscription = match subscribe(&state, session.user.id, session.resume_after).await {
-        Ok(subscription) => subscription,
-        Err(Rejection(code)) => {
-            reject(&mut socket, code).await;
-            return;
-        }
-    };
+    let subscription =
+        match app::event_feed::subscribe(&state, session.user.id, session.resume_after).await {
+            Ok(subscription) => subscription,
+            Err(e) => {
+                let Rejection(code) = e.into();
+                reject(&mut socket, code).await;
+                return;
+            }
+        };
+    count_connect(if subscription.resumed {
+        "resumed"
+    } else {
+        "replayed"
+    });
+    let _open = OpenStream::new();
     let ready = ServerMessage::Ready {
         user_id: session.user.id,
         resumed: subscription.resumed,
@@ -253,230 +293,79 @@ async fn identify(
     Ok(Identified { user, resume_after })
 }
 
-struct Subscription {
-    messages: Ordered,
-    resumed: bool,
-    /// The stream the consumer reads, kept so the consumer can be reopened with new filters.
-    stream: Stream,
-    /// Fires when NATS flags this connection as a slow consumer; the socket is then dropped
-    /// rather than allowed to fall arbitrarily far behind.
-    force_shutdown_rx: mpsc::Receiver<()>,
-}
+/// Most frames written to the socket before it is flushed, so a burst goes out in few writes
+/// without one connection holding the task for long.
+const FLUSH_EVERY: usize = 64;
 
-/// The subjects a user's connection reads: their own, and every community they belong to.
-async fn filters_for(state: &GlobalServerContext, user: UserId) -> Result<Vec<String>, Rejection> {
-    let mut conn = state
-        .connection_pool
-        .get()
-        .await
-        .map_err(app::Error::from)?;
-    let mut filters = vec![user_subject(user)];
-    filters.extend(
-        memberships(conn.as_mut(), user)
-            .await?
-            .into_iter()
-            .map(community_filter),
-    );
-    Ok(filters)
-}
-
-async fn open_messages(
-    stream: &Stream,
-    state: &GlobalServerContext,
-    deliver_policy: DeliverPolicy,
-    filters: Vec<String>,
-) -> Result<Ordered, app::Error> {
-    let consumer = stream
-        .create_consumer(OrderedConfig {
-            replay_policy: ReplayPolicy::Instant,
-            deliver_policy,
-            filter_subjects: filters,
-            max_batch: state.config.event_queue_size as i64,
-            max_bytes: 1024 * 1024,
-            max_expires: Duration::from_secs(5),
-            ..Default::default()
-        })
-        .await?;
-    Ok(consumer.messages().await?)
-}
-
-async fn subscribe(
-    state: &GlobalServerContext,
-    user: UserId,
-    resume_after: Option<u64>,
-) -> Result<Subscription, Rejection> {
-    let (force_shutdown_tx, force_shutdown_rx) = mpsc::channel(1);
-    let client = async_nats::connect_with_options(
-        &state.config.nats_url,
-        ConnectOptions::new()
-            .token(state.config.nats_auth_token.clone())
-            .subscription_capacity(state.config.event_queue_size)
-            .event_callback(move |event| {
-                let force_shutdown_tx = force_shutdown_tx.clone();
-                async move {
-                    if let async_nats::Event::SlowConsumer(_) = event {
-                        // Intentionally ignore errors, if the remote is already shutdown
-                        // then our objective is already accomplished.
-                        std::mem::drop(force_shutdown_tx.send(()));
-                    }
-                }
-            }),
-    )
-    .await
-    .map_err(app::Error::from)?;
-    let context = async_nats::jetstream::new(client);
-    let mut stream = context
-        .get_stream(ASPEN_NATS_STREAM_NAME)
-        .await
-        .map_err(app::Error::from)?;
-    let (deliver_policy, resumed) = match resume_after {
-        Some(last_seen) => {
-            let info = stream.info().await.map_err(app::Error::from)?;
-            let first = info.state.first_sequence;
-            let last = info.state.last_sequence;
-            // Resumable only if the next event is still retained and the client's position
-            // is not ahead of the stream (which happens when the in-memory stream was
-            // recreated and sequence numbers restarted).
-            if last_seen + 1 >= first && last_seen <= last {
-                (
-                    DeliverPolicy::ByStartSequence {
-                        start_sequence: last_seen + 1,
-                    },
-                    true,
-                )
-            } else {
-                (replay_window_policy(), false)
-            }
-        }
-        None => (replay_window_policy(), false),
+fn event_frame(event: &FeedEvent) -> Result<Message, axum::Error> {
+    let frame = ServerMessage::Event {
+        sequence: event.sequence,
+        event_id: event.event_id.as_deref(),
+        event: &event.payload,
     };
-    let filters = filters_for(state, user).await?;
-    let messages = open_messages(&stream, state, deliver_policy, filters).await?;
-    Ok(Subscription {
-        messages,
-        resumed,
-        stream,
-        force_shutdown_rx,
-    })
+    let text = serde_json::to_string(&frame).map_err(axum::Error::new)?;
+    Ok(Message::Text(text.into()))
 }
 
-fn replay_window_policy() -> DeliverPolicy {
-    DeliverPolicy::ByStartTime {
-        start_time: time::OffsetDateTime::now_utc() - MAX_EVENT_AGE,
-    }
-}
-
-/// A membership of this user coming or going, read off a delivered event without parsing the
-/// whole of it: the community and whether it was joined.
-fn membership_change(payload: &str, user: UserId) -> Option<(CommunityId, bool)> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Glance {
-        server_event: String,
-        #[serde(rename = "type")]
-        kind: Option<String>,
-        user: Option<UserId>,
-        community: Option<CommunityId>,
-    }
-    let glance: Glance = serde_json::from_str(payload).ok()?;
-    if glance.server_event != "userCommunity" || glance.user != Some(user) {
-        return None;
-    }
-    match (glance.kind.as_deref(), glance.community) {
-        (Some("create"), Some(community)) => Some((community, true)),
-        (Some("delete"), Some(community)) => Some((community, false)),
-        _ => None,
+/// Writes one delivery's frames without flushing, and says how many.
+async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<usize, axum::Error> {
+    match delivery {
+        Delivery::CatchUp(events) => {
+            for event in &events {
+                socket.feed(event_frame(event)?).await?;
+            }
+            Ok(events.len())
+        }
+        Delivery::Live(event) => {
+            socket.feed(event_frame(&event)?).await?;
+            Ok(1)
+        }
     }
 }
 
 async fn pump_events(
     mut socket: WebSocket,
-    subscription: Subscription,
+    mut subscription: Subscription,
     state: &GlobalServerContext,
     user: UserId,
 ) {
-    let Subscription {
-        mut messages,
-        mut force_shutdown_rx,
-        stream,
-        ..
-    } = subscription;
     let mut ping_interval =
         tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
     let mut unanswered_pings: u32 = 0;
     let mut last_activity: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
-            msg = messages.next() => {
-                let Some(msg) = msg else {
-                    break;
-                };
-                let msg = match msg {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        error!("NATS OrderedError {e}");
-                        return;
-                    }
-                };
-                let sequence = match msg.info() {
-                    Ok(info) => info.stream_sequence,
-                    Err(e) => {
-                        error!("NATS message without metadata {e}");
-                        return;
-                    }
-                };
-                let payload = match String::from_utf8(msg.message.payload.to_vec())
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| RawValue::from_string(s).map_err(|e| e.to_string()))
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        error!("NATS stream message was not JSON text {e}");
-                        continue;
-                    }
-                };
-                let event_id = msg
-                    .message
-                    .headers
-                    .as_ref()
-                    .and_then(|headers| headers.get(EVENT_ID_HEADER))
-                    .map(|value| value.to_string());
-                // Only the copy on the user's own subject counts: the community's copy of the
-                // same membership event arrives after the reopen and must not cause another.
-                let reopen = if msg.message.subject.as_str() == user_subject(user) {
-                    membership_change(payload.get(), user)
-                } else {
-                    None
-                };
-                let frame = ServerMessage::Event { sequence, event_id, event: payload };
-                if let Err(e) = send_json(&mut socket, &frame).await {
-                    log_send_error(&e);
+            delivery = subscription.deliveries.recv() => {
+                // The feed let go of this connection: it fell a whole queue behind, or the feed
+                // missed events. Either way the client resumes from what it last processed.
+                let Some(delivery) = delivery else {
+                    debug!("the event feed dropped a connection");
                     return;
-                }
-                if let Some((community, joined)) = reopen {
-                    // The user joined or left a community: read the new set of subjects from
-                    // right after this event, so nothing is missed and nothing more arrives
-                    // from a community they left. The event was published before its
-                    // transaction committed, so the change it announces is applied on top of
-                    // whatever the database shows.
-                    let mut filters = match filters_for(state, user).await {
-                        Ok(filters) => filters,
-                        Err(_) => return,
-                    };
-                    let filter = community_filter(community);
-                    filters.retain(|f| *f != filter);
-                    if joined {
-                        filters.push(filter);
+                };
+                let mut written = match feed_delivery(&mut socket, delivery).await {
+                    Ok(written) => written,
+                    Err(e) => {
+                        log_send_error(&e);
+                        return;
                     }
-                    let policy = DeliverPolicy::ByStartSequence { start_sequence: sequence + 1 };
-                    match open_messages(&stream, state, policy, filters).await {
-                        Ok(reopened) => messages = reopened,
+                };
+                while written < FLUSH_EVERY {
+                    let Ok(delivery) = subscription.deliveries.try_recv() else {
+                        break;
+                    };
+                    match feed_delivery(&mut socket, delivery).await {
+                        Ok(more) => written += more,
                         Err(e) => {
-                            error!("could not reopen the event consumer after a membership change: {e}");
+                            log_send_error(&e);
                             return;
                         }
                     }
                 }
+                if let Err(e) = socket.flush().await {
+                    log_send_error(&e);
+                    return;
+                }
+                metrics::counter!(aspen_metrics::api::EVENTS_DELIVERED).increment(written as u64);
             },
             _ = ping_interval.tick() => {
                 if unanswered_pings >= MAX_MISSED_PONGS {
@@ -532,15 +421,11 @@ async fn pump_events(
                     }
                 }
             },
-            _ = force_shutdown_rx.recv() => {
-                error!("forcefully disconnecting user due to slow events download");
-                break;
-            }
         }
     }
 }
 
-async fn send_json(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), axum::Error> {
+async fn send_json(socket: &mut WebSocket, message: &ServerMessage<'_>) -> Result<(), axum::Error> {
     let text = serde_json::to_string(message).map_err(axum::Error::new)?;
     socket.send(Message::Text(text.into())).await
 }
@@ -582,7 +467,8 @@ fn log_send_error(e: &axum::Error) {
 
 #[cfg(test)]
 mod tests {
-    use super::ClientMessage;
+    use super::{ClientMessage, ServerMessage};
+    use serde_json::value::RawValue;
 
     #[test]
     fn identify_parses_with_and_without_resume() {
@@ -605,6 +491,27 @@ mod tests {
             panic!("expected identify");
         };
         assert_eq!(resume_after, Some(41));
+    }
+
+    #[test]
+    fn event_frames_carry_the_event_verbatim() {
+        let payload = r#"{"serverEvent":"message","type":"delete","id":"x"}"#;
+        let event = RawValue::from_string(payload.into()).unwrap();
+        let frame = ServerMessage::Event {
+            sequence: 7,
+            event_id: Some("e"),
+            event: &event,
+        };
+        assert_eq!(
+            serde_json::to_string(&frame).unwrap(),
+            format!(r#"{{"type":"event","sequence":7,"eventId":"e","event":{payload}}}"#)
+        );
+        let frame = ServerMessage::Event {
+            sequence: 8,
+            event_id: None,
+            event: &event,
+        };
+        assert!(!serde_json::to_string(&frame).unwrap().contains("eventId"));
     }
 
     #[test]

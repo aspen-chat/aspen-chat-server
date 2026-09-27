@@ -97,6 +97,7 @@ pub enum LoginResult {
     responses(
         (status = OK, body = LoginResult),
         (status = UNAUTHORIZED, description = "`invalidCredentials`", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -262,6 +263,7 @@ pub struct Verification {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`verificationFailed`", body = Problem),
         (status = TOO_MANY_REQUESTS, description = "`tooManyAttempts`", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

@@ -1,6 +1,5 @@
-//! This example demonstrates an HTTP server that serves files from a directory.
-//!
-//! Checkout the `README.md` for guidance.
+//! The Aspen API server. Without a subcommand it serves the API; `limits` and `bench` hold
+//! commands an operator runs against a deployment (`operator`).
 
 use std::{
     cell::RefCell,
@@ -13,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use hyper::{Request, body::Incoming};
 use hyper_util::{
@@ -37,6 +36,18 @@ mod api;
 mod app;
 mod aspen_config;
 mod database;
+mod operator;
+
+/// jemalloc for the whole process (it also replaces `malloc`), which keeps memory from
+/// fragmenting across threads and reports what it holds (`aspen_metrics::memory`).
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// jemalloc's options, read when it starts. Freed memory goes back to the system on its own
+/// schedule through a background thread; without it, pages are returned only while the program
+/// allocates, and a server gone idle after a busy hour keeps its peak resident size.
+#[unsafe(export_name = "malloc_conf")]
+pub static MALLOC_CONF: &[u8; 23] = b"background_thread:true\0";
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -74,6 +85,22 @@ struct Opt {
     /// - icon-storage-key-backfill-v1
     #[clap(long)]
     run_companion_migration: Option<String>,
+    #[clap(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Operator commands for rate limits.
+    Limits {
+        #[clap(subcommand)]
+        action: operator::LimitsCommand,
+    },
+    /// Operator commands for benchmark populations.
+    Bench {
+        #[clap(subcommand)]
+        action: operator::BenchCommand,
+    },
 }
 
 thread_local! {
@@ -83,12 +110,18 @@ thread_local! {
 i18n!("locales");
 
 fn main() {
-    if let Err(e) = aspen_config::load_config() {
+    let opt = Opt::parse();
+    // Writing the API schemas reads no configuration, so it runs where there is none, as in CI.
+    if !opt.gen_openapi_schema
+        && let Err(e) = aspen_config::load_config()
+    {
         eprintln!("failed to load config from aspen.toml or environment. {e}");
         std::process::exit(2);
     }
     // `init` also routes `log` records into tracing, which is how dependencies that log through
     // the `log` crate (the Valkey client among them) show up under `ASPEN_LOG=...,fred=debug`.
+    // An operator command's answer is its standard output, so its logs go to standard error.
+    let operator_command = opt.command.is_some();
     tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
@@ -97,9 +130,15 @@ fn main() {
                 .from_env()
                 .expect("invalid logging filter set in env var ASPEN_LOG"),
         )
+        .with_writer(move || -> Box<dyn io::Write> {
+            if operator_command {
+                Box::new(io::stderr())
+            } else {
+                Box::new(io::stdout())
+            }
+        })
         .init();
     panic::set_hook(Box::new(tracing_panic::panic_hook));
-    let opt = Opt::parse();
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -117,6 +156,13 @@ fn main() {
 }
 
 async fn run(options: Opt) -> Result<()> {
+    if let Some(command) = options.command {
+        let config = aspen_config::load_config()?;
+        return match command {
+            Command::Limits { action } => operator::limits(&config, action).await,
+            Command::Bench { action } => operator::bench(&config, action).await,
+        };
+    }
     let app = api::make_router(options.gen_openapi_schema).await?;
     let (exit_tx, mut exit_rx) = oneshot::channel();
     let mut exit_tx = Some(exit_tx);

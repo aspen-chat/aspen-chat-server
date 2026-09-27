@@ -220,12 +220,11 @@ pub fn extract_preview_urls(content: &str) -> Vec<Url> {
                 // try to preview.
             }
             _ if code_block_depth > 0 => {}
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::Start(Tag::Link { dest_url, .. })
                 if push_url(&mut urls, &mut seen, dest_url.as_ref())
-                    && urls.len() >= MAX_LINK_PREVIEWS_PER_MESSAGE
-                {
-                    return urls;
-                }
+                    && urls.len() >= MAX_LINK_PREVIEWS_PER_MESSAGE =>
+            {
+                return urls;
             }
             Event::Text(text) => {
                 for candidate in scan_bare_urls(text.as_ref()) {
@@ -630,10 +629,8 @@ impl TokenSink for MetaSink {
                     _ => {}
                 }
             }
-            Token::CharacterTokens(data) => {
-                if state.in_title {
-                    state.title_chunks.push(data.as_ref().to_owned());
-                }
+            Token::CharacterTokens(data) if state.in_title => {
+                state.title_chunks.push(data.as_ref().to_owned());
             }
             _ => {}
         }

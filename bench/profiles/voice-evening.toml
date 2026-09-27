@@ -1,0 +1,39 @@
+name = "voice-evening"
+description = """
+Voice-heavy evening: 2,000 people online, half of them in calls of a handful each, some
+sharing screens. Measures voice servers: loss, jitter, and worker CPU."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 4000
+communities = 100
+largest_community = 400
+smallest_community = 20
+text_channels = 3
+voice_channels = 4
+
+[load]
+online = 0.5
+ramp_up_seconds = 120
+duration_seconds = 600
+
+[behaviours.caller]
+share = 0.5
+messages_per_hour = 6
+voice = { calls_per_hour = 3, call_minutes = 20, screen_share = 0.15, channels_used = 4 }
+
+[behaviours.chatter]
+share = 0.5
+messages_per_hour = 20
+reactions_per_hour = 10
+history_reads_per_hour = 10
+
+[slo]
+delivery_p99_ms = 300
+request_p99_ms = 500
+error_rate = 0.001
+voice_loss = 0.01
+voice_jitter_ms = 30

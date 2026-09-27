@@ -31,6 +31,9 @@ enabled = true
 # Reverse proxies whose X-Forwarded-For is believed, as addresses or CIDR networks.
 trusted_proxies = []
 ipv6_prefix = 64
+# The longest this server honours a suspension of its limits (`limits suspend`), counted from
+# when it started, whatever the suspension says: a day.
+max_suspension_seconds = 86400
 
 # Applies to every endpoint, beneath any group or endpoint setting.
 [rate_limits.default]

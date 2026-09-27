@@ -9,6 +9,8 @@
 //! `emission` is the spacing of requests at the sustained rate and `tolerance` the credit that
 //! lets `burst` of them come back to back.
 
+pub mod suspension;
+
 use ipnet::IpNet;
 use serde::Deserialize;
 use std::collections::HashMap;

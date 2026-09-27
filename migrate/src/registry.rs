@@ -36,4 +36,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260926_151436_user_preferences::M,
     &migrations::m20260927_014901_threads_and_dms::M,
     &migrations::m20260927_032431_two_factor_and_passkeys::M,
+    &migrations::m20260927_055541_benchmark_runs::M,
 ];

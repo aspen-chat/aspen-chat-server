@@ -1,0 +1,29 @@
+name = "bootstrap-storm"
+description = """
+Cold start: 5,000 people sign in and start up in the same moment, as after a deployment-wide
+restart or a push notification. Measures sign-in (password hashing) and start-up reads."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 5000
+communities = 20
+largest_community = 3000
+smallest_community = 50
+
+[load]
+online = 1.0
+ramp_up_seconds = 0
+duration_seconds = 120
+
+[behaviours.member]
+share = 1.0
+messages_per_hour = 4
+history_reads_per_hour = 10
+
+[slo]
+connect_p99_ms = 30000
+request_p99_ms = 2000
+error_rate = 0.01

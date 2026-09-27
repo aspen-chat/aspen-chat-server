@@ -1,8 +1,10 @@
 //! An Aspen voice server. See `voice_protocol` for what it agrees with the API server and the
 //! clients, `rooms` for the calls it carries, and `voice_server.toml` for its settings.
 
+mod capacity;
 mod config;
 mod limits;
+mod metrics;
 mod reporter;
 mod rooms;
 mod signalling;
@@ -20,23 +22,59 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use voice_protocol::signal::VoiceSignalProtocol;
 
+/// jemalloc for the whole process (it also replaces `malloc`), which keeps memory from
+/// fragmenting across threads and reports what it holds (`aspen_metrics::memory`).
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// jemalloc's options, read when it starts. Freed memory goes back to the system on its own
+/// schedule through a background thread; without it, pages are returned only while the program
+/// allocates, and a server gone idle after a busy hour keeps its peak resident size.
+#[unsafe(export_name = "malloc_conf")]
+pub static MALLOC_CONF: &[u8; 23] = b"background_thread:true\0";
+
 #[derive(Parser, Debug)]
 #[command(about = "An Aspen voice server")]
 struct Opt {
     /// Write `voice_signal_schema.json` to the working directory and exit.
     #[arg(long)]
     gen_signal_schema: bool,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Estimate, conservatively, how many people this machine can hold in calls: reads the
+    /// hardware and the media settings, measures what a forwarded stream costs here with a
+    /// short self-test, and prints the `capacity` for its `[[voice.servers]]` entry. The
+    /// self-test runs its own mediasoup worker on loopback, beside a running server if there is
+    /// one, whose load then skews the measurement.
+    EstimateCapacity(capacity::EstimateArgs),
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let opt = Opt::parse();
+    if let Some(Command::EstimateCapacity(args)) = opt.command {
+        // Its output is the estimate, on stdout; anything logged goes to stderr.
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_env("ASPEN_LOG")
+                    .unwrap_or_else(|_| "warn,mediasoup=error".into()),
+            )
+            .init();
+        let media = config::load_media_config()
+            .context("failed to read the media settings of voice_server.toml or the environment")?;
+        return capacity::run(args, media).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("ASPEN_LOG")
                 .unwrap_or_else(|_| "info,mediasoup=warn".into()),
         )
         .init();
-    let opt = Opt::parse();
     if opt.gen_signal_schema {
         let schema = schema_for!(VoiceSignalProtocol);
         std::fs::write(
@@ -66,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let reporter = reporter::Reporter::connect(&config.nats_url, &config.nats_auth_token)
         .await
         .context("failed to connect to NATS")?;
+    aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
     let announced_address = config.rtc.resolved_announced_address()?;
     if let Some(address) = &announced_address {
         if address
@@ -110,6 +149,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
     }
 
+    if config.metrics.enabled {
+        aspen_metrics::install(config.metrics.listen_addr).map_err(|e| anyhow::anyhow!(e))?;
+        metrics::spawn_samplers(Arc::clone(&rooms), Arc::clone(&limits));
+    }
     let state = signalling::AppState {
         server: config.id,
         token_secret: config.token_secret.clone().into(),

@@ -1,6 +1,7 @@
 //! Where each server event goes. Every event is published on a NATS subject that names whose
-//! it is, and an event stream connection reads only the subjects its user is entitled to:
-//! their own private subject and every community they belong to.
+//! it is, and an event stream connection receives only the subjects its user is entitled to:
+//! their own private subject and every community they belong to. Each API server reads every
+//! subject once and routes by owner (`subject_owner`, `app::event_feed`).
 //!
 //! Subjects:
 //! - `aspen.events.c.{community}.ch.{channel}` for what happens in a channel: messages,
@@ -10,9 +11,8 @@
 //! - `aspen.events.u.{user}` for what is the user's alone: their preferences, and their own
 //!   membership changes, which are how their connection learns to change what it reads.
 //!
-//! A connection's filter is `aspen.events.c.{community}.>` per community plus its user
-//! subject. The channel level is in the subject now so that private channels, once
-//! permissions exist, become a narrower filter rather than a change to every publisher.
+//! The channel level is in the subject so that private channels, once permissions exist, can
+//! be routed by channel rather than by changing every publisher.
 //!
 //! A DM or group DM belongs to no community: what happens in it, and the channel itself, is
 //! published to each recipient's user subject, so it reaches exactly its recipients with no
@@ -143,9 +143,30 @@ pub fn user_subject(user: UserId) -> String {
     format!("{SUBJECT_ROOT}.u.{}", user.0)
 }
 
-/// The filter that reads everything of a community: its own subject and every channel's.
-pub fn community_filter(community: CommunityId) -> String {
-    format!("{SUBJECT_ROOT}.c.{}.>", community.0)
+/// Whose a subject is: every event subject belongs to one user or one community.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SubjectOwner {
+    User(UserId),
+    Community(CommunityId),
+}
+
+/// The owner named by an event subject, the inverse of `user_subject`, `community_subject`,
+/// and `channel_subject`; `None` for anything else.
+pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
+    let rest = subject.strip_prefix(SUBJECT_ROOT)?.strip_prefix('.')?;
+    let mut tokens = rest.split('.');
+    let owner = match (tokens.next()?, tokens.next()?) {
+        ("u", id) if tokens.next().is_none() => SubjectOwner::User(UserId(id.parse().ok()?)),
+        ("c", id) => {
+            let community = CommunityId(id.parse().ok()?);
+            match (tokens.next()?, tokens.next(), tokens.next()) {
+                ("all", None, None) | ("ch", Some(_), None) => SubjectOwner::Community(community),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(owner)
 }
 
 /// The communities a user belongs to, which is what their event stream reads.
@@ -345,11 +366,15 @@ pub async fn publish_event(
         headers.insert(EVENT_ID_HEADER, event_id.as_str());
         let payload = payload.clone();
         async move {
+            let started = std::time::Instant::now();
             state
                 .nats_context
                 .publish_with_headers(subject, headers, payload)
                 .await?
                 .await?;
+            metrics::histogram!(aspen_metrics::api::EVENT_PUBLISH_DURATION)
+                .record(started.elapsed().as_secs_f64());
+            metrics::counter!(aspen_metrics::api::EVENTS_PUBLISHED).increment(1);
             Ok::<(), app::Error>(())
         }
     });
@@ -365,15 +390,27 @@ mod tests {
     };
 
     #[test]
-    fn subjects_nest_under_the_community_so_one_filter_reads_it_all() {
+    fn subjects_name_their_owner() {
         let community = CommunityId::new();
-        let channel = ChannelId::new();
-        let filter = community_filter(community);
-        let prefix = filter.trim_end_matches('>');
-        assert!(channel_subject(community, channel).starts_with(prefix));
-        assert!(community_subject(community).starts_with(prefix));
-        assert!(!user_subject(UserId::new()).starts_with(prefix));
-        assert!(filter.starts_with(SUBJECT_ROOT));
+        let user = UserId::new();
+        assert_eq!(
+            subject_owner(&channel_subject(community, ChannelId::new())),
+            Some(SubjectOwner::Community(community))
+        );
+        assert_eq!(
+            subject_owner(&community_subject(community)),
+            Some(SubjectOwner::Community(community))
+        );
+        assert_eq!(
+            subject_owner(&user_subject(user)),
+            Some(SubjectOwner::User(user))
+        );
+        assert_eq!(subject_owner("aspen.events.u.nope"), None);
+        assert_eq!(
+            subject_owner(&format!("aspen.events.c.{}.other", community.0)),
+            None
+        );
+        assert_eq!(subject_owner(&format!("aspen.voice.u.{}", user.0)), None);
     }
 
     #[test]

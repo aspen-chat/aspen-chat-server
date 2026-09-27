@@ -6,6 +6,7 @@
 use crate::reporter::Reporter;
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::TransportTuple;
+use mediasoup::types::srtp_parameters::SrtpParameters;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -50,7 +51,7 @@ struct Participant {
     outbox: Outbox,
     rtp_capabilities: Option<RtpCapabilities>,
     send_transport: Option<WebRtcTransport>,
-    recv_transport: Option<WebRtcTransport>,
+    recv_transport: Option<ReceiveTransport>,
     /// The transports an external sender (the desktop shell's game capture) delivers SRTP to,
     /// by the producer each feeds.
     rtp_transports: HashMap<ProducerId, PlainTransport>,
@@ -135,6 +136,49 @@ impl Room {
 }
 
 /// Every call on this server.
+/// Where a plain transport listens.
+pub(crate) fn local_tuple(transport: &PlainTransport) -> (String, u16) {
+    match transport.tuple() {
+        TransportTuple::WithRemote {
+            local_address,
+            local_port,
+            ..
+        }
+        | TransportTuple::LocalOnly {
+            local_address,
+            local_port,
+            ..
+        } => (local_address, local_port),
+    }
+}
+
+/// Where a participant's consumers are: a WebRTC transport for a browser, or a plain SRTP one
+/// for a client that asked with `consumeRtp`.
+#[derive(Clone)]
+enum ReceiveTransport {
+    WebRtc(WebRtcTransport),
+    Plain(PlainTransport),
+}
+
+impl ReceiveTransport {
+    async fn consume(&self, options: ConsumerOptions) -> Result<Consumer, ConsumeError> {
+        match self {
+            ReceiveTransport::WebRtc(transport) => transport.consume(options).await,
+            ReceiveTransport::Plain(transport) => transport.consume(options).await,
+        }
+    }
+}
+
+/// What a voice server carries at one moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Census {
+    pub rooms: usize,
+    pub participants: usize,
+    pub producers: usize,
+    pub consumers: usize,
+    pub transports: usize,
+}
+
 pub struct Rooms {
     server: Uuid,
     workers: Vec<Worker>,
@@ -159,9 +203,9 @@ fn media_kind(kind: WireKind) -> MediaKind {
     }
 }
 
-/// The codecs every router offers: Opus for voice and VP8 for shared screens and games, the
-/// pair every browser and mediasoup client support.
-fn h264_parameters() -> RtpCodecParametersParameters {
+/// The parameters of the H.264 the router offers and game capture sends: constrained baseline,
+/// non-interleaved packetization.
+pub(crate) fn h264_parameters() -> RtpCodecParametersParameters {
     let mut parameters = RtpCodecParametersParameters::default();
     parameters.insert("packetization-mode", 1u32);
     parameters.insert("profile-level-id", "42e01f");
@@ -169,7 +213,9 @@ fn h264_parameters() -> RtpCodecParametersParameters {
     parameters
 }
 
-fn media_codecs() -> Vec<RtpCodecCapability> {
+/// The codecs every router offers: Opus for voice, VP8 for what browsers share, and H.264 for
+/// game capture.
+pub(crate) fn media_codecs() -> Vec<RtpCodecCapability> {
     vec![
         RtpCodecCapability::Audio {
             mime_type: MimeTypeAudio::Opus,
@@ -237,6 +283,27 @@ impl Rooms {
     }
 
     /// Everyone in every call, for the load report.
+    /// How much this server is carrying, for its metrics.
+    pub fn census(&self) -> Census {
+        let rooms = self.rooms.lock().expect("rooms lock");
+        let mut census = Census {
+            rooms: rooms.len(),
+            ..Census::default()
+        };
+        for room in rooms.values() {
+            let participants = room.participants.lock().expect("room lock");
+            census.participants += participants.len();
+            for participant in participants.values() {
+                census.producers += participant.producers.len();
+                census.consumers += participant.consumers.len();
+                census.transports += usize::from(participant.send_transport.is_some())
+                    + usize::from(participant.recv_transport.is_some())
+                    + participant.rtp_transports.len();
+            }
+        }
+        census
+    }
+
     pub fn participant_count(&self) -> u32 {
         self.rooms
             .lock()
@@ -510,7 +577,9 @@ impl Rooms {
             let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
             match direction {
                 TransportDirection::Send => participant.send_transport = Some(transport),
-                TransportDirection::Recv => participant.recv_transport = Some(transport),
+                TransportDirection::Recv => {
+                    participant.recv_transport = Some(ReceiveTransport::WebRtc(transport));
+                }
             }
             participant.send(message);
         }
@@ -524,7 +593,11 @@ impl Rooms {
         participant: &Participant,
         transport_id: &str,
     ) -> Result<WebRtcTransport, RoomError> {
-        [&participant.send_transport, &participant.recv_transport]
+        let receive = match &participant.recv_transport {
+            Some(ReceiveTransport::WebRtc(transport)) => Some(transport),
+            _ => None,
+        };
+        [participant.send_transport.as_ref(), receive]
             .into_iter()
             .flatten()
             .find(|t| t.id().to_string() == transport_id)
@@ -587,22 +660,7 @@ impl Rooms {
             .produce(options)
             .await
             .map_err(|e| RoomError::Media(e.to_string()))?;
-        if producer.kind() == MediaKind::Audio {
-            room.producer_owner
-                .lock()
-                .expect("owner lock")
-                .insert(producer.id(), user);
-            if let Err(e) = room
-                ._audio_observer
-                .add_producer(RtpObserverAddProducerOptions::new(producer.id()))
-                .await
-            {
-                warn!(
-                    error = e.to_string(),
-                    "audio producer not observed for speaking"
-                );
-            }
-        }
+        Self::observe_audio(&room, &producer, user).await;
         let producer_id = producer.id();
         let state = {
             let mut participants = room.participants.lock().expect("room lock");
@@ -729,20 +787,34 @@ impl Rooms {
     /// Makes a producer fed by SRTP the client sends itself, on a plain transport that learns
     /// the sender's address from its first packet, and tells the client where to send. The
     /// client consumes the producer too, as its own preview.
-    pub async fn produce_rtp(
-        &self,
-        channel: Uuid,
-        user: Uuid,
-        source: MediaSource,
-    ) -> Result<(), RoomError> {
-        let room = self.room(channel)?;
-        {
-            let participants = room.participants.lock().expect("room lock");
-            participants
-                .get(&user)
-                .ok_or(RoomError::NotInCall)?
-                .ensure_source_free(source)?;
+    /// Lets the room's audio level observer hear an audio producer, so its owner is reported
+    /// speaking.
+    async fn observe_audio(room: &Room, producer: &Producer, user: Uuid) {
+        if producer.kind() != MediaKind::Audio {
+            return;
         }
+        room.producer_owner
+            .lock()
+            .expect("owner lock")
+            .insert(producer.id(), user);
+        if let Err(e) = room
+            ._audio_observer
+            .add_producer(RtpObserverAddProducerOptions::new(producer.id()))
+            .await
+        {
+            warn!(
+                error = e.to_string(),
+                "audio producer not observed for speaking"
+            );
+        }
+    }
+
+    /// A plain transport for a client that sends or receives SRTP itself: RTP and RTCP on one
+    /// port, the client's address learned from its first packet, and one key both ways.
+    async fn plain_transport(
+        &self,
+        room: &Room,
+    ) -> Result<(PlainTransport, SrtpParameters), RoomError> {
         let listen = ListenInfo {
             protocol: Protocol::Udp,
             ip: self.rtc_ip,
@@ -767,7 +839,6 @@ impl Rooms {
         let srtp = transport
             .srtp_parameters()
             .ok_or_else(|| RoomError::Media("no SRTP parameters".into()))?;
-        // One key both ways: the sender encrypts with it, and decrypts the RTCP it gets back.
         transport
             .connect(PlainTransportRemoteParameters {
                 ip: None,
@@ -777,11 +848,61 @@ impl Rooms {
             })
             .await
             .map_err(|e| RoomError::Media(e.to_string()))?;
+        Ok((transport, srtp))
+    }
+
+    /// Moves the participant's consumers onto a plain SRTP transport (`consumeRtp`). Consumers
+    /// already made on a WebRTC transport are left where they are; the participant, not being a
+    /// browser, has none.
+    pub async fn consume_rtp(&self, channel: Uuid, user: Uuid) -> Result<(), RoomError> {
+        let room = self.room(channel)?;
+        {
+            let participants = room.participants.lock().expect("room lock");
+            let participant = participants.get(&user).ok_or(RoomError::NotInCall)?;
+            if participant.recv_transport.is_some() {
+                return Err(RoomError::BadParameters(
+                    "the participant already has a receive transport".to_string(),
+                ));
+            }
+        }
+        let (transport, srtp) = self.plain_transport(&room).await?;
+        let (local_address, local_port) = local_tuple(&transport);
+        {
+            let mut participants = room.participants.lock().expect("room lock");
+            let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
+            participant.recv_transport = Some(ReceiveTransport::Plain(transport));
+            participant.send(ServerMessage::RtpConsuming {
+                ip: local_address.to_string(),
+                port: local_port,
+                srtp_crypto_suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
+                srtp_key_base64: srtp.key_base64.clone(),
+            });
+        }
+        self.ensure_consumers(&room, user).await;
+        Ok(())
+    }
+
+    pub async fn produce_rtp(
+        &self,
+        channel: Uuid,
+        user: Uuid,
+        source: MediaSource,
+    ) -> Result<(), RoomError> {
+        let room = self.room(channel)?;
+        {
+            let participants = room.participants.lock().expect("room lock");
+            participants
+                .get(&user)
+                .ok_or(RoomError::NotInCall)?
+                .ensure_source_free(source)?;
+        }
+        let (transport, srtp) = self.plain_transport(&room).await?;
         let ssrc = (Uuid::now_v7().as_u128() as u32) | 1;
-        // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder); the
-        // payload types are the producer's own and need only be distinct from each other.
+        // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
+        // simulated participant's); the payload types are the producer's own and need only be
+        // distinct from each other.
         let (kind, payload_type, codec) = match source {
-            MediaSource::ScreenAudio => (
+            MediaSource::ScreenAudio | MediaSource::Microphone => (
                 MediaKind::Audio,
                 100,
                 RtpCodecParameters::Audio {
@@ -841,18 +962,8 @@ impl Rooms {
             .produce(ProducerOptions::new(kind, rtp_parameters))
             .await
             .map_err(|e| RoomError::Media(e.to_string()))?;
-        let (local_address, local_port) = match transport.tuple() {
-            TransportTuple::WithRemote {
-                local_address,
-                local_port,
-                ..
-            }
-            | TransportTuple::LocalOnly {
-                local_address,
-                local_port,
-                ..
-            } => (local_address, local_port),
-        };
+        Self::observe_audio(&room, &producer, user).await;
+        let (local_address, local_port) = local_tuple(&transport);
         let producer_id = producer.id();
         let state = {
             let mut participants = room.participants.lock().expect("room lock");

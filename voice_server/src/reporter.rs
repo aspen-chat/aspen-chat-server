@@ -23,6 +23,11 @@ impl Reporter {
         Ok(Self { client })
     }
 
+    /// The NATS connection, for anything else this server follows there.
+    pub fn client(&self) -> async_nats::Client {
+        self.client.clone()
+    }
+
     /// Sends one report. A failure is logged rather than returned: the API server's reaper
     /// covers a report that never arrives, and the call itself must go on.
     pub async fn report(&self, report: VoiceReport) {

@@ -101,6 +101,7 @@ pub fn user_to_api(user: app::user::User) -> User {
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (username rules)", body = Problem),
         (status = CONFLICT, description = "`usernameTaken`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -273,6 +274,7 @@ pub struct ChangePasswordRequest {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`, `oldPasswordIncorrect`, or `reauthenticationRequired`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

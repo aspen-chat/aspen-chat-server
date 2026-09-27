@@ -22,6 +22,28 @@ diesel::table! {
 }
 
 diesel::table! {
+    benchmark_community (run, community) {
+        run -> Text,
+        community -> Uuid,
+    }
+}
+
+diesel::table! {
+    benchmark_run (run) {
+        run -> Text,
+        created_at -> Timestamptz,
+        plan -> Jsonb,
+    }
+}
+
+diesel::table! {
+    benchmark_user (run, user) {
+        run -> Text,
+        user -> Uuid,
+    }
+}
+
+diesel::table! {
     category (id) {
         id -> Uuid,
         community -> Uuid,
@@ -313,6 +335,10 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(benchmark_community -> benchmark_run (run));
+diesel::joinable!(benchmark_community -> community (community));
+diesel::joinable!(benchmark_user -> benchmark_run (run));
+diesel::joinable!(benchmark_user -> user (user));
 diesel::joinable!(category -> community (community));
 diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
@@ -351,6 +377,9 @@ diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
+    benchmark_community,
+    benchmark_run,
+    benchmark_user,
     category,
     channel,
     community,

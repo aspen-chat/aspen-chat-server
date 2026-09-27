@@ -72,6 +72,9 @@ pub enum ProblemCode {
     OldPasswordIncorrect,
     /// Password change: the new password fails a requirement named in `requirement`.
     PasswordRequirementsNotMet,
+    /// The server has too much of this kind of work queued, as when many people sign in at
+    /// once. `Retry-After` says how many seconds to wait.
+    ServerBusy,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -100,6 +103,7 @@ impl ProblemCode {
             | ProblemCode::InviteCodeTaken
             | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
+            ProblemCode::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -127,6 +131,7 @@ impl ProblemCode {
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
+            ProblemCode::ServerBusy => t!("problemServerBusy"),
             ProblemCode::Internal => t!("tryAgainLater"),
         }
     }
@@ -199,6 +204,9 @@ impl ApiError {
     }
 }
 
+/// How long a client told `serverBusy` waits before trying again.
+const BUSY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl From<app::Error> for ApiError {
     fn from(e: app::Error) -> Self {
         match e {
@@ -231,6 +239,9 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::PasskeyRejected)
             }
             app::Error::PollClosed => Self::new(ProblemCode::PollClosed),
+            app::Error::Busy => {
+                Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
+            }
             other => {
                 error!(error = other.to_string(), "request failed");
                 Self::new(ProblemCode::Internal)

@@ -1,0 +1,55 @@
+name = "gaming-community"
+description = """
+A 5,000-member gaming community with a few dozen satellite groups: a third online at peak,
+most reading, some chatting hard, a steady share in voice. Ten minutes at peak."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 5000
+communities = 30
+largest_community = 5000
+smallest_community = 20
+size_exponent = 1.2
+text_channels = 6
+voice_channels = 3
+history_per_channel = 300
+
+[load]
+online = 0.3
+ramp_up_seconds = 120
+duration_seconds = 600
+
+[behaviours.lurker]
+share = 0.7
+history_reads_per_hour = 12
+reactions_per_hour = 6
+messages_per_hour = 1
+reconnects_per_hour = 0.5
+
+[behaviours.chatter]
+share = 0.25
+messages_per_hour = 40
+dm_messages_per_hour = 8
+reactions_per_hour = 20
+edits_per_hour = 3
+deletes_per_hour = 0.5
+history_reads_per_hour = 20
+attachments_per_hour = 1
+hot_channel_share = 0.4
+reconnects_per_hour = 1
+
+[behaviours.voice]
+share = 0.05
+messages_per_hour = 10
+voice = { calls_per_hour = 2, call_minutes = 20, screen_share = 0.1, channels_used = 3 }
+
+[slo]
+delivery_p99_ms = 300
+request_p99_ms = 500
+connect_p99_ms = 5000
+error_rate = 0.001
+voice_loss = 0.02
+voice_jitter_ms = 40

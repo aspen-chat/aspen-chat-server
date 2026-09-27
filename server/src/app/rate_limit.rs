@@ -23,6 +23,10 @@
 //! reached the limiter lets requests through and logs, since most of the API does not otherwise
 //! need Valkey.
 //!
+//! An operator may suspend the limits for a while (`aspen_limits::suspension`): for requests
+//! from given networks, the limits that count by address are skipped, or with `scope = all`
+//! every limit is. The suspension ends by itself.
+//!
 //! Rules are checked at three points of a request, depending on what they need to know:
 //! `Stage::Request` (global, address, and path parameter rules) before the handler runs,
 //! `Stage::Session` (user rules) once the session token has been resolved, and
@@ -31,6 +35,7 @@
 use crate::app::UserId;
 use crate::aspen_config::{Limit, LimitSetting, RateLimitConfig};
 use aspen_limits::ClientAddresses;
+use aspen_limits::suspension::{Exemption, SuspensionState};
 use fred::clients::Client;
 use fred::interfaces::LuaInterface;
 use sha2::{Digest, Sha256};
@@ -208,6 +213,7 @@ pub enum Decision {
 pub struct RateLimiter {
     enabled: bool,
     addresses: ClientAddresses,
+    suspension: SuspensionState,
     rules: HashMap<String, Vec<Rule>>,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
     /// minute rather than on every request.
@@ -312,9 +318,16 @@ impl RateLimiter {
         Ok(Self {
             enabled: config.enabled,
             addresses,
+            suspension: SuspensionState::new(Duration::from_secs(config.max_suspension_seconds)),
             rules,
             last_failure_log: AtomicU64::new(0),
         })
+    }
+
+    /// The suspension of these limits in force, which `aspen_limits::suspension::watch` keeps
+    /// current.
+    pub fn suspension(&self) -> &SuspensionState {
+        &self.suspension
     }
 
     /// Where requests come from, behind the configured proxies.
@@ -336,14 +349,23 @@ impl RateLimiter {
         let Some(rules) = self.rules.get(route) else {
             return Decision::Allowed;
         };
+        let exemption = self.suspension.exemption(identity.ip);
+        if exemption == Exemption::All {
+            return Decision::Allowed;
+        }
         let keyed: Vec<(&Rule, String)> = rules
             .iter()
             .filter(|rule| rule.dimension.stage() == stage)
+            .filter(|rule| {
+                exemption != Exemption::AddressLimits
+                    || !matches!(rule.dimension, Dimension::Ip | Dimension::IpPer(_))
+            })
             .filter_map(|rule| Some((rule, self.key(rule, identity)?)))
             .collect();
         if keyed.is_empty() {
             return Decision::Allowed;
         }
+        let started = std::time::Instant::now();
         // Sent concurrently, which the client pipelines on its connection: one round trip.
         let waits = futures_util::future::join_all(keyed.iter().map(|(rule, key)| {
             valkey.eval::<i64, _, _, _>(
@@ -363,7 +385,11 @@ impl RateLimiter {
                 }
             }
         }
+        metrics::histogram!(aspen_metrics::api::RATE_LIMIT_CHECK_DURATION)
+            .record(started.elapsed().as_secs_f64());
         if longest > 0 {
+            metrics::counter!(aspen_metrics::api::RATE_LIMIT_REFUSALS, "route" => route.to_string())
+                .increment(1);
             Decision::Limited {
                 retry_after: Duration::from_millis(longest.unsigned_abs()),
             }
@@ -528,6 +554,7 @@ mod tests {
             enabled: true,
             trusted_proxies: vec!["10.0.0.0/8".into(), "::1".into()],
             ipv6_prefix: 64,
+            max_suspension_seconds: 3600,
             default: RuleTable::from([
                 ("user".into(), limit(100, 60.0)),
                 ("ip".into(), limit(200, 60.0)),

@@ -1,0 +1,41 @@
+name = "soak"
+description = """
+A day at moderate load, to find slow leaks and degradation: memory growth per hour is in the
+report. Shorten duration_seconds for a first try."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 2000
+communities = 20
+largest_community = 1500
+smallest_community = 30
+
+[load]
+online = 0.4
+ramp_up_seconds = 120
+duration_seconds = 86400
+report_interval_seconds = 60
+
+[behaviours.member]
+share = 0.8
+messages_per_hour = 4
+reactions_per_hour = 4
+history_reads_per_hour = 8
+reconnects_per_hour = 0.5
+
+[behaviours.chatter]
+share = 0.2
+messages_per_hour = 30
+dm_messages_per_hour = 5
+edits_per_hour = 2
+deletes_per_hour = 1
+attachments_per_hour = 0.5
+reconnects_per_hour = 0.5
+
+[slo]
+delivery_p99_ms = 300
+request_p99_ms = 500
+error_rate = 0.001

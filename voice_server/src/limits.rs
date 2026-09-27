@@ -9,6 +9,10 @@
 //! over the whole server (`global`). A refused frame is dropped and answered with a non-fatal
 //! error saying how long to wait.
 //!
+//! An operator may suspend the limits for a while (`aspen_limits::suspension`): addresses in the
+//! suspension's networks skip the limits that count by address, including the cap on
+//! unidentified sockets, or with `scope = all` every limit is lifted. It ends by itself.
+//!
 //! The counters live in this process: every client of a call talks to this one server, so no
 //! other server needs them. A request passes only if all of its limits allow it, and a refused
 //! one spends none of them. `limits.toml` holds the built-in values, laid under the
@@ -16,6 +20,7 @@
 //! dimension stops the server at startup.
 
 use crate::config::LimitSettings;
+use aspen_limits::suspension::{Exemption, SuspensionState};
 use aspen_limits::{ClientAddresses, LocalLimiter, Rate, RuleTable};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -67,6 +72,7 @@ pub struct Caller {
 pub struct Limits {
     enabled: bool,
     addresses: ClientAddresses,
+    suspension: SuspensionState,
     pub max_message_bytes: usize,
     max_pending_sockets_per_ip: u32,
     http: HashMap<&'static str, Vec<Rule>>,
@@ -102,6 +108,7 @@ impl Limits {
         Ok(Self {
             enabled: settings.enabled,
             addresses,
+            suspension: SuspensionState::new(Duration::from_secs(settings.max_suspension_seconds)),
             max_message_bytes: settings.max_message_bytes,
             max_pending_sockets_per_ip: settings.max_pending_sockets_per_ip,
             http,
@@ -109,6 +116,12 @@ impl Limits {
             limiter: LocalLimiter::default(),
             pending: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The suspension of these limits in force, kept current by
+    /// `aspen_limits::suspension::watch`.
+    pub fn suspension(&self) -> &SuspensionState {
+        &self.suspension
     }
 
     /// The client address of a request from `peer` carrying these `X-Forwarded-For` values.
@@ -145,7 +158,12 @@ impl Limits {
         if !self.enabled {
             return Ok(());
         }
+        let exemption = self.suspension.exemption(caller.ip);
+        if exemption == Exemption::All {
+            return Ok(());
+        }
         let buckets: Vec<(String, Rate)> = rules
+            .filter(|rule| exemption != Exemption::AddressLimits || rule.dimension != Dimension::Ip)
             .filter_map(|rule| {
                 let who = match rule.dimension {
                     Dimension::Global => "all".to_string(),
@@ -168,7 +186,7 @@ impl Limits {
     /// Holds one of the address's unidentified socket places, or `None` when it has none left.
     /// The place is given back when the guard drops, at identification or disconnection.
     pub fn pending_socket(self: &Arc<Self>, ip: IpAddr) -> Option<PendingSocket> {
-        if !self.enabled {
+        if !self.enabled || self.suspension.exemption(Some(ip)) != Exemption::None {
             return Some(PendingSocket {
                 limits: None,
                 key: String::new(),

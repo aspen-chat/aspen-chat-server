@@ -88,6 +88,10 @@ pub enum Error {
     Webauthn(#[from] webauthn_rs::prelude::WebauthnError),
     #[error("authenticator app secret error {0}")]
     Totp(String),
+    #[error("the server is too busy to do this now")]
+    Busy,
+    #[error("the server's event feed has stopped")]
+    EventFeedStopped,
     #[error("tokio join error {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
 }

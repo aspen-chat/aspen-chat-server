@@ -258,6 +258,7 @@ mod tests {
             enabled: true,
             trusted_proxies: vec!["10.0.0.0/8".into()],
             ipv6_prefix: 64,
+            max_suspension_seconds: 3600,
             ..Default::default()
         };
         let limiter = RateLimiter::compile(&config, &[]).unwrap();

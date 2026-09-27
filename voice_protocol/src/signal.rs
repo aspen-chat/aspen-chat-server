@@ -100,10 +100,18 @@ pub enum ClientMessage {
     },
     /// A producer fed by RTP the client sends itself rather than through a WebRTC transport:
     /// the desktop shell's game capture, whose helper encodes H.264 and sends SRTP straight to
-    /// the voice server. The server answers `rtpProduced` with where and how to send.
+    /// the voice server, and the benchmark's simulated participants. `screen` is H.264;
+    /// `microphone` and `screenAudio` are Opus. The server answers `rtpProduced` with where and
+    /// how to send.
     ProduceRtp {
         source: MediaSource,
     },
+    /// Receive everyone else's media over plain RTP instead of WebRTC, for a client that is not
+    /// a browser (the benchmark's simulated participants). The server creates a plain transport
+    /// (SRTP, RTP and RTCP multiplexed, the client's address learned from the first packet it
+    /// sends), answers `rtpConsuming`, and from then on the participant's consumers, announced
+    /// with `newConsumer` as usual, are on it.
+    ConsumeRtp,
     /// The client has set the consumer up and wants media on it.
     ResumeConsumer {
         consumer_id: String,
@@ -118,7 +126,7 @@ pub enum ClientMessage {
 
 impl ClientMessage {
     /// Every frame type's name, its `type` on the wire.
-    pub const KINDS: [&'static str; 10] = [
+    pub const KINDS: [&'static str; 11] = [
         "identify",
         "setCapabilities",
         "createTransport",
@@ -126,6 +134,7 @@ impl ClientMessage {
         "produce",
         "closeProducer",
         "produceRtp",
+        "consumeRtp",
         "resumeConsumer",
         "setState",
         "leave",
@@ -141,6 +150,7 @@ impl ClientMessage {
             ClientMessage::Produce { .. } => "produce",
             ClientMessage::CloseProducer { .. } => "closeProducer",
             ClientMessage::ProduceRtp { .. } => "produceRtp",
+            ClientMessage::ConsumeRtp => "consumeRtp",
             ClientMessage::ResumeConsumer { .. } => "resumeConsumer",
             ClientMessage::SetState { .. } => "setState",
             ClientMessage::Leave => "leave",
@@ -189,6 +199,14 @@ pub enum ServerMessage {
         port: u16,
         ssrc: u32,
         payload_type: u8,
+        srtp_crypto_suite: String,
+        srtp_key_base64: String,
+    },
+    /// Where media for a `consumeRtp` client comes from: the plain transport to send a first
+    /// packet (any SRTCP) to, and the key that decrypts what arrives and encrypts what is sent.
+    RtpConsuming {
+        ip: String,
+        port: u16,
         srtp_crypto_suite: String,
         srtp_key_base64: String,
     },
