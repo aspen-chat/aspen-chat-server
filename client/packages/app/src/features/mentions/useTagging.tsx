@@ -1,0 +1,279 @@
+import type { User } from "@aspen/protocol";
+import { UsersIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react";
+import { useChannel, useChannelAccess, useMe, useMembers, useRoles, useUsers } from "@/api/hooks";
+import { Avatar } from "@/features/communities/Avatar";
+import { encodeTags, tagQueryAt, type PickedTag } from "@/features/mentions/tags";
+import { displayNameOf } from "@/features/users/profile";
+import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
+
+/** The most suggestions shown at once. */
+const MAX_SUGGESTIONS = 8;
+
+interface Suggestion {
+  readonly key: string;
+  /** What the message box shows once picked. */
+  readonly text: string;
+  /** What it is sent as. */
+  readonly token: string;
+  readonly label: string;
+  readonly detail: string | null;
+  readonly icon: ReactNode;
+}
+
+/**
+ * Tagging in a message box. Typing `@` offers the people of the channel's community (the
+ * members the client holds) or DM, its roles, and `@everyone`, each only with the permission
+ * to tag it in this channel; the arrow keys choose, Enter or Tab picks, and Escape dismisses.
+ * A picked tag shows as `@username` or `@Role`, and `encode` turns the text into what is sent.
+ *
+ * React Aria's ComboBox needs an `Input` of its own and completes the whole field, so it
+ * cannot offer completions at the caret of a multi-line `TextArea`; this follows its pattern
+ * instead, with what a text box may carry: `aria-autocomplete`, the list named by
+ * `aria-controls`, and the chosen option by `aria-activedescendant`, focus staying in the box.
+ * A polite status says when suggestions appear and how to pick one, since a text box has no
+ * `aria-expanded` to announce it.
+ */
+export function useTagging({
+  channelId,
+  draft,
+  setDraft,
+  initialPicks = [],
+}: {
+  channelId: string;
+  draft: string;
+  setDraft: (next: string) => void;
+  /** The tags a message being edited already holds (`decodeTags`). */
+  initialPicks?: readonly PickedTag[];
+}) {
+  const m = useMessages();
+  const listId = useId();
+  const me = useMe();
+  const channel = useChannel(channelId);
+  const parent = useChannel(channel?.parentChannel ?? "");
+  const home = channel?.parentChannel != null ? parent : channel;
+  const access = useChannelAccess(channelId);
+  const members = useMembers(home?.community ?? "");
+  const recipients = useUsers(home?.community == null ? (home?.recipients ?? []) : []);
+  const roles = useRoles(home?.community ?? "");
+  const [caret, setCaret] = useState(0);
+  const [picks, setPicks] = useState<readonly PickedTag[]>(initialPicks);
+  const [active, setActive] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  /** Where to put the caret once a pick's text is committed. */
+  const placing = useRef<{ box: HTMLTextAreaElement | null; at: number } | null>(null);
+
+  const typing = tagQueryAt(draft, caret);
+  const query = typing?.query.toLowerCase() ?? "";
+  const people: readonly User[] =
+    home?.community == null ? recipients.filter((u): u is User => u !== undefined) : members;
+  const suggestions: Suggestion[] = [];
+  if (typing !== null && typing.start !== dismissedAt) {
+    if (access.has("mentionMembers")) {
+      for (const user of people) {
+        if (
+          user.id !== me?.id &&
+          (user.name.toLowerCase().includes(query) ||
+            displayNameOf(user).toLowerCase().includes(query))
+        ) {
+          suggestions.push({
+            key: `user:${user.id}`,
+            text: `@${user.name}`,
+            token: `<@${user.id}>`,
+            label: displayNameOf(user),
+            detail: `@${user.name}`,
+            icon: <Avatar name={displayNameOf(user)} iconId={user.icon} size="sm" />,
+          });
+        }
+      }
+    }
+    if (access.has("mentionRoles")) {
+      for (const role of roles) {
+        if (!role.everyone && role.name.toLowerCase().includes(query)) {
+          suggestions.push({
+            key: `role:${role.id}`,
+            text: `@${role.name}`,
+            token: `<@&${role.id}>`,
+            label: `@${role.name}`,
+            detail: m.tagging.role,
+            icon: <UsersIcon size={18} aria-hidden="true" className="text-ink-muted" />,
+          });
+        }
+      }
+    }
+    if (access.has("mentionEveryone") && "everyone".startsWith(query)) {
+      suggestions.push({
+        key: "everyone",
+        text: "@everyone",
+        token: "@everyone",
+        label: "@everyone",
+        detail: m.tagging.everyone,
+        icon: <UsersThreeIcon size={18} aria-hidden="true" className="text-ink-muted" />,
+      });
+    }
+  }
+  const shown = suggestions.slice(0, MAX_SUGGESTIONS);
+  const open = shown.length > 0;
+  const current = Math.min(active, shown.length - 1);
+
+  const pick = useCallback(
+    (suggestion: Suggestion, box: HTMLTextAreaElement | null) => {
+      if (typing === null) {
+        return;
+      }
+      const before = draft.slice(0, typing.start) + suggestion.text + " ";
+      setDraft(before + draft.slice(caret));
+      setPicks((held) =>
+        held.some((p) => p.token === suggestion.token)
+          ? held
+          : [...held, { text: suggestion.text, token: suggestion.token }],
+      );
+      setActive(0);
+      setCaret(before.length);
+      placing.current = { box, at: before.length };
+    },
+    [typing, draft, caret, setDraft],
+  );
+
+  // The caret goes after the picked tag as the new text is committed, before anything else
+  // typed can land, which a later frame would not promise.
+  useLayoutEffect(() => {
+    const pending = placing.current;
+    if (pending !== null) {
+      placing.current = null;
+      pending.box?.setSelectionRange(pending.at, pending.at);
+    }
+  });
+
+  /** Keys the list takes while it is open; returns whether it took this one. */
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!open) {
+      return false;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActive((current + step + shown.length) % shown.length);
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      const chosen = shown[current];
+      if (chosen !== undefined) {
+        event.preventDefault();
+        pick(chosen, event.currentTarget);
+        return true;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setDismissedAt(typing?.start ?? null);
+      return true;
+    }
+    return false;
+  };
+
+  const followCaret = (event: SyntheticEvent<HTMLTextAreaElement>) => {
+    setCaret(event.currentTarget.selectionStart);
+  };
+
+  const boxProps = {
+    onSelect: followCaret,
+    onKeyUp: followCaret,
+    onClick: followCaret,
+    "aria-autocomplete": "list" as const,
+    "aria-controls": open ? listId : undefined,
+    "aria-activedescendant": open ? `${listId}-${String(current)}` : undefined,
+  };
+
+  const status = (
+    <p role="status" className="sr-only">
+      {open
+        ? format(shown.length === 1 ? m.tagging.oneSuggestion : m.tagging.someSuggestions, {
+            count: String(shown.length),
+          })
+        : ""}
+    </p>
+  );
+
+  const suggestionList = open ? (
+    <ul
+      id={listId}
+      role="listbox"
+      aria-label={m.tagging.suggestions}
+      className="absolute bottom-full left-0 z-20 mb-1 flex max-h-72 w-72 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg"
+    >
+      {shown.map((suggestion, index) => (
+        <li
+          key={suggestion.key}
+          id={`${listId}-${String(index)}`}
+          role="option"
+          aria-selected={index === current}
+          // Read as a name and what it is, without the picture's initials between them.
+          aria-label={
+            suggestion.detail === null
+              ? suggestion.label
+              : `${suggestion.label}, ${suggestion.detail}`
+          }
+          // Picking keeps focus in the message box.
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            pick(
+              suggestion,
+              document.querySelector<HTMLTextAreaElement>(`[aria-controls="${listId}"]`),
+            );
+          }}
+          className={
+            "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm " +
+            (index === current ? "bg-accent-soft text-accent-strong" : "hover:bg-surface-hover")
+          }
+        >
+          <span aria-hidden="true" className="flex shrink-0">
+            {suggestion.icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{suggestion.label}</span>
+          {suggestion.detail !== null && (
+            <span
+              className={
+                "truncate text-xs " + (index === current ? "text-accent-strong" : "text-ink-muted")
+              }
+            >
+              {suggestion.detail}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  ) : null;
+
+  const list = (
+    <>
+      {status}
+      {suggestionList}
+    </>
+  );
+
+  return {
+    boxProps,
+    onKeyDown,
+    list,
+    /** The text as it is sent, picked tags and all. */
+    encode: (text: string) => encodeTags(text, picks),
+    /** Forgets the picks, once what they were for is sent. */
+    reset: () => {
+      setPicks([]);
+      setDismissedAt(null);
+    },
+  };
+}

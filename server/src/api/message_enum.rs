@@ -120,6 +120,10 @@ enum MessageEnumSource {
         // content of its own.
         #[message_gen(server_authoritative)]
         echo_of: Option<MessageId>,
+        // Who it tags, as far as its author was allowed to (see `app::mention`); an edit that
+        // changes the text tags afresh, announced by an `Update` event carrying the new set.
+        #[message_gen(server_authoritative = "mutable")]
+        mentions: crate::app::mention::Mentions,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -408,6 +412,7 @@ mod tests {
             edited_at: Some(Some(edited_at)),
             link_previews: None,
             thread: None,
+            mentions: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -426,6 +431,7 @@ mod tests {
             edited_at: None,
             link_previews: None,
             thread: None,
+            mentions: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),

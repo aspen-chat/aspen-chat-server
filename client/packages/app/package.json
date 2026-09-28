@@ -34,6 +34,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/mdast": "^4.0.4",

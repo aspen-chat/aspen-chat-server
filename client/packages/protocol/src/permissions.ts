@@ -44,6 +44,9 @@ export const CHANNEL_PERMISSIONS: readonly Permission[] = [
   "joinVoice",
   "speak",
   "shareScreen",
+  "mentionMembers",
+  "mentionRoles",
+  "mentionEveryone",
 ];
 
 export const ALL_PERMISSIONS: readonly Permission[] = [
@@ -67,9 +70,12 @@ export const MODERATION: readonly Permission[] = ["viewChannel", "manageMessages
 /** A set of permissions. */
 export type PermissionSet = ReadonlySet<Permission>;
 
+/** Tagging roles and everyone at once, which a new community leaves to its moderators. */
+const BROAD_TAGS: ReadonlySet<Permission> = new Set(["mentionRoles", "mentionEveryone"]);
+
 /** The templates a new community's roles start from, as the server writes them. */
 export const TEMPLATES = {
-  member: [...CHANNEL_PERMISSIONS, "createInvites"],
+  member: [...CHANNEL_PERMISSIONS.filter((p) => !BROAD_TAGS.has(p)), "createInvites"],
   moderator: [
     ...CHANNEL_PERMISSIONS,
     "createInvites",

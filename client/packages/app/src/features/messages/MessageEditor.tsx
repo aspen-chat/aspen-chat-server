@@ -2,26 +2,45 @@ import { ApiProblemError } from "@aspen/protocol";
 import { useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { decodeTags } from "@/features/mentions/tags";
+import { useTagging } from "@/features/mentions/useTagging";
 import { useMessages } from "@/i18n/context";
 
-/** Replaces a message's text in place. Enter saves, Escape cancels, Shift+Enter breaks a line. */
+/**
+ * Replaces a message's text in place. Enter saves, Escape cancels, Shift+Enter breaks a line.
+ * Its tags read as they were written (`@username`, `@Role`), and more can be picked as in the
+ * message box.
+ */
 export function MessageEditor({
   messageId,
+  channelId,
   initial,
   onDone,
 }: {
   messageId: string;
+  channelId: string;
   initial: string;
   onDone: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
-  const [draft, setDraft] = useState(initial);
+  const [decoded] = useState(() => {
+    const store = sync.store;
+    const community = store.channel(channelId)?.community;
+    const roles = community == null ? [] : store.roles(community);
+    return decodeTags(
+      initial,
+      (id) => store.user(id)?.name,
+      (id) => roles.find((role) => role.id === id)?.name,
+    );
+  });
+  const [draft, setDraft] = useState(decoded.text);
+  const tagging = useTagging({ channelId, draft, setDraft, initialPicks: decoded.picks });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
-    const content = draft.trim();
+    const content = tagging.encode(draft.trim());
     if (content.length === 0 || saving) {
       return;
     }
@@ -41,6 +60,9 @@ export function MessageEditor({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (tagging.onKeyDown(event)) {
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       onDone();
@@ -52,8 +74,16 @@ export function MessageEditor({
 
   return (
     <div className="mt-1 flex flex-col gap-1">
-      <TextField aria-label={m.editMessageLabel} value={draft} onChange={setDraft} autoFocus>
+      <TextField
+        aria-label={m.editMessageLabel}
+        value={draft}
+        onChange={setDraft}
+        autoFocus
+        className="relative"
+      >
+        {tagging.list}
         <TextArea
+          {...tagging.boxProps}
           rows={1}
           onKeyDown={onKeyDown}
           className="max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"

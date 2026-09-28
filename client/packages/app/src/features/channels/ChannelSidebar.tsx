@@ -30,6 +30,7 @@ import {
   useMute,
   useShownWhenCollapsed,
   useSync,
+  useMentions,
   useUnread,
 } from "@/api/hooks";
 import { DeleteChannelDialog, RenameChannelDialog } from "@/features/channels/ChannelDialogs";
@@ -44,6 +45,8 @@ import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
+import { MentionBadge } from "@/features/mentions/MentionBadge";
+import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -347,12 +350,14 @@ export const unreadMarkClass = "rounded-md border border-accent bg-accent/20 tex
  * are marked together, and the label takes all the width up to the drag handle, so every unread
  * channel's mark is as wide as the next. The mark fills the row's padding: 3px and the border
  * make its 4px top and bottom, 6px and the border its 8px sides, less the 1px the row keeps at
- * its edges. A muted channel is dimmed, carries a muted bell, and is never marked unread. A text
+ * its edges. A muted channel is dimmed, carries a muted bell, and is never marked unread, though
+ * the count of unread messages that tag the reader shows on it as on any other. A text
  * channel's menu opens on a right click or from its options button.
  */
 function ChannelLabel({ channel, current }: { channel: Channel; current: boolean }) {
   const m = useMessages();
   const unread = useUnread(channel.id);
+  const tags = useMentions(channel.id);
   const muted = useMute(channel.id) !== undefined;
   const manage = useCan(channel.community, "manageChannels");
   // A moderator of the server may rename and delete any channel, and nothing else here.
@@ -367,11 +372,18 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
       setDialog(null);
     }
   };
-  const accessibleName = muted
+  const stateName = muted
     ? format(m.mutedLabel, { name: channel.name })
     : unread
       ? format(m.unreadLabel, { name: channel.name })
       : null;
+  const accessibleName =
+    tags > 0
+      ? format(m.withMentions, {
+          name: stateName ?? channel.name,
+          mentions: mentionsText(m, tags),
+        })
+      : stateName;
   return (
     <span
       ref={label}
@@ -402,7 +414,14 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
           <span className="sr-only">{accessibleName}</span>
         </>
       )}
-      {muted && <BellSlashIcon size={14} aria-hidden="true" className="ml-auto shrink-0" />}
+      <MentionBadge count={tags} className="ml-auto" />
+      {muted && (
+        <BellSlashIcon
+          size={14}
+          aria-hidden="true"
+          className={(tags > 0 ? "" : "ml-auto ") + "shrink-0"}
+        />
+      )}
       {hasMenu && (
         <>
           <ChannelMenuButton
@@ -411,7 +430,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             onPress={() => {
               setMenuOpen((open) => !open);
             }}
-            className={muted ? "" : "ml-auto"}
+            className={muted || tags > 0 ? "" : "ml-auto"}
           />
           <ChannelMenu
             channelId={channel.id}

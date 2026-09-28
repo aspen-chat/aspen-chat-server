@@ -69,6 +69,7 @@ export {
   type Attachment,
   type ChannelMute,
   type UserBlock,
+  type Mentions,
   type Pin,
   type ChannelVoice,
   type Icon,

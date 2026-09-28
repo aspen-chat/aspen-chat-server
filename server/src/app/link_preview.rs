@@ -1553,6 +1553,7 @@ async fn run_preview_fetch(
                     edited_at: None,
                     link_previews: Some(wire_previews),
                     thread: None,
+                    mentions: None,
                 });
                 app::publish_event(
                     state,

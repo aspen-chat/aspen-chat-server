@@ -1268,7 +1268,18 @@ export class AspenSync {
           params: { path: { channel: channelId } },
           body: { lastRead: messageId },
         })
+        .then(() => {
+          // Read partway, which tags remain is the server's to count.
+          this.#recountTags(channelId);
+        })
         .catch(() => undefined);
+    }
+  }
+
+  /** Reads a channel's state again while tags remain in it, since only the server knows which. */
+  #recountTags(channelId: string): void {
+    if (this.store.mentions(channelId) > 0) {
+      void this.#reloadReadState(channelId);
     }
   }
 
@@ -2160,6 +2171,7 @@ export class AspenSync {
         ? this.store.channelsLastMessaged(event.id)
         : [];
     const widens = this.#mayWidenAccess(event);
+    const retagged = this.#unreadTagsChangedBy(event);
     const blockChanged =
       event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
     this.store.applyEvent(event);
@@ -2168,6 +2180,12 @@ export class AspenSync {
     }
     for (const channelId of orphaned) {
       void this.#reloadReadState(channelId);
+    }
+    if (retagged !== null) {
+      void this.#reloadReadState(retagged);
+    }
+    if (event.serverEvent === "channelRead") {
+      this.#recountTags(event.channel);
     }
     if (widens !== null) {
       this.#scheduleAccessReload(widens);
@@ -2199,6 +2217,25 @@ export class AspenSync {
         void this.#reloadReactions(event.messageId);
       }
     }
+  }
+
+  /**
+   * The channel whose unread tags of the caller `event` may change without saying how: an
+   * unread message's tags edited, or an unread message that tagged them deleted. `null` for
+   * anything else; a new message's tags the store counts itself.
+   */
+  #unreadTagsChangedBy(event: ServerEvent): string | null {
+    if (event.serverEvent !== "message" || event.type === "create") {
+      return null;
+    }
+    const message = this.store.message(event.id);
+    if (message === undefined) {
+      return null;
+    }
+    const unread = message.id > (this.store.readState(message.channelId)?.lastRead ?? "");
+    const changes =
+      event.type === "update" ? event.mentions != null : this.store.mentionsMe(message);
+    return unread && changes ? message.channelId : null;
   }
 
   /**

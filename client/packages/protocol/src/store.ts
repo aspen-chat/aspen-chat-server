@@ -52,6 +52,8 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+/** Who a message tags, as far as its author was allowed to; the tags that count. */
+export type Mentions = components["schemas"]["Mentions"];
 /** Someone the caller has blocked, and since when. */
 export type UserBlock = components["schemas"]["UserBlock"];
 /** A pinned message: which, when it was pinned, and its place among the channel's pins. */
@@ -523,6 +525,31 @@ export class RecordStore {
   unread(channelId: string): boolean {
     const state = this.#readStates.get(channelId);
     return state?.lastMessage != null && state.lastMessage > state.lastRead;
+  }
+
+  /**
+   * Topic `read:<channelId>`: how many unread messages in the channel tag the caller. They
+   * count in muted channels too, which is how a tag reaches someone through a mute.
+   */
+  mentions(channelId: string): number {
+    return this.#readStates.get(channelId)?.mentions ?? 0;
+  }
+
+  /**
+   * Topic `unread`: the unread tags of the caller across a community's channels, or across
+   * their DMs with `UNREAD_DMS`.
+   */
+  placeMentions(place: string): number {
+    let total = 0;
+    for (const state of this.#readStates.values()) {
+      const channel = this.#channels.get(state.channel);
+      const home =
+        channel === undefined ? undefined : isDm(channel) ? UNREAD_DMS : channel.community;
+      if (home === place) {
+        total += state.mentions;
+      }
+    }
+    return total;
   }
 
   /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
@@ -2049,7 +2076,10 @@ export class RecordStore {
     return true;
   }
 
-  #putReadState(state: ReadState): void {
+  #putReadState(given: ReadState): void {
+    // Tags are among the unread, so a channel read to its newest message holds none.
+    const read = given.lastMessage == null || given.lastMessage <= given.lastRead;
+    const state = given.mentions > 0 && read ? { ...given, mentions: 0 } : given;
     this.#readStates.set(state.channel, state);
     this.#touch(`read:${state.channel}`);
     this.#touch("unread");
@@ -2071,6 +2101,7 @@ export class RecordStore {
       channel: message.channelId,
       lastRead: "",
       lastMessage: null,
+      mentions: 0,
     };
     if (message.author === this.#myUserId) {
       if (message.id > state.lastRead) {
@@ -2078,9 +2109,38 @@ export class RecordStore {
       }
     } else if (this.#blocked.has(message.author)) {
       // Someone the caller blocked never makes a channel unread for them.
-    } else if (state.lastMessage == null || message.id > state.lastMessage) {
-      this.#putReadState({ ...state, lastMessage: message.id });
+    } else {
+      const newest =
+        state.lastMessage == null || message.id > state.lastMessage
+          ? message.id
+          : state.lastMessage;
+      const tagged = message.id > state.lastRead && this.mentionsMe(message);
+      if (newest !== state.lastMessage || tagged) {
+        this.#putReadState({
+          ...state,
+          lastMessage: newest,
+          mentions: state.mentions + (tagged ? 1 : 0),
+        });
+      }
     }
+  }
+
+  /**
+   * Whether a message tags the caller, as the server decided its tags: by name, through a
+   * role they hold in its community, or as everyone.
+   */
+  mentionsMe(message: Message): boolean {
+    const me = this.#myUserId;
+    const tags = message.mentions;
+    if (me === null) {
+      return false;
+    }
+    if (tags.everyone || tags.users.includes(me)) {
+      return true;
+    }
+    const community = this.#channels.get(message.channelId)?.community;
+    const held = community == null ? undefined : this.#memberRoles.get(`${community}/${me}`);
+    return held !== undefined && tags.roles.some((role) => held.includes(role));
   }
 
   #removeChannel(id: string): void {

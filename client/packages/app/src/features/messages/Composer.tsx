@@ -2,6 +2,7 @@ import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
+import { useTagging } from "@/features/mentions/useTagging";
 import { useBlockedDmPeer, useChannel, useChannelAccess, useSync, useUser } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
@@ -58,6 +59,7 @@ export function Composer({
   const permissions = useChannelAccess(channelId);
   const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
   const blockedPeer = useBlockedDmPeer(channelId);
+  const tagging = useTagging({ channelId, draft, setDraft });
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>
@@ -121,10 +123,11 @@ export function Composer({
     setSending(true);
     setError(null);
     try {
-      await sync.sendMessage(channelId, draft.trim(), readyIds, {
+      await sync.sendMessage(channelId, tagging.encode(draft.trim()), readyIds, {
         echoToParent: echoTarget !== undefined && echo,
       });
       setDraft("");
+      tagging.reset();
       setPending([]);
       setEcho(false);
     } catch (e) {
@@ -135,6 +138,9 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (tagging.onKeyDown(event)) {
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void send();
@@ -229,8 +235,15 @@ export function Composer({
         {permissions.has("createPolls") && (
           <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
         )}
-        <TextField aria-label={m.messageLabel} value={draft} onChange={setDraft} className="flex-1">
+        <TextField
+          aria-label={m.messageLabel}
+          value={draft}
+          onChange={setDraft}
+          className="relative flex-1"
+        >
+          {tagging.list}
           <TextArea
+            {...tagging.boxProps}
             placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}

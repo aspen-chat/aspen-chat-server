@@ -68,6 +68,9 @@ bitflags::bitflags! {
         const JOIN_VOICE = 1 << 23;
         const SPEAK = 1 << 24;
         const SHARE_SCREEN = 1 << 25;
+        const MENTION_MEMBERS = 1 << 26;
+        const MENTION_ROLES = 1 << 27;
+        const MENTION_EVERYONE = 1 << 28;
     }
 }
 
@@ -77,12 +80,18 @@ impl Permissions {
     /// Every permission that holds across the community.
     pub const COMMUNITY: Self = Self::from_bits_retain((1 << 12) - 1);
     /// Every permission an override may adjust.
-    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 26) - 1) & !((1 << 16) - 1));
+    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 29) - 1) & !((1 << 16) - 1));
 
-    /// The everyone role of a new community: taking part, and inviting others.
-    pub const MEMBER_TEMPLATE: Self = Self::CHANNEL.union(Self::CREATE_INVITES);
+    /// The everyone role of a new community: taking part, tagging one another, and inviting
+    /// others. Tagging roles and everyone at once is left to moderators.
+    pub const MEMBER_TEMPLATE: Self = Self::CHANNEL
+        .difference(Self::MENTION_ROLES)
+        .difference(Self::MENTION_EVERYONE)
+        .union(Self::CREATE_INVITES);
     /// A new community's Moderator role.
     pub const MODERATOR_TEMPLATE: Self = Self::MEMBER_TEMPLATE
+        .union(Self::MENTION_ROLES)
+        .union(Self::MENTION_EVERYONE)
         .union(Self::MANAGE_INVITES)
         .union(Self::REMOVE_MEMBERS)
         .union(Self::MANAGE_MESSAGES)
@@ -137,6 +146,9 @@ pub enum Permission {
     JoinVoice,
     Speak,
     ShareScreen,
+    MentionMembers,
+    MentionRoles,
+    MentionEveryone,
 }
 
 impl Permission {
@@ -166,6 +178,9 @@ impl Permission {
             Permission::JoinVoice => Permissions::JOIN_VOICE,
             Permission::Speak => Permissions::SPEAK,
             Permission::ShareScreen => Permissions::SHARE_SCREEN,
+            Permission::MentionMembers => Permissions::MENTION_MEMBERS,
+            Permission::MentionRoles => Permissions::MENTION_ROLES,
+            Permission::MentionEveryone => Permissions::MENTION_EVERYONE,
         }
     }
 }
@@ -393,6 +408,9 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
         Permissions::JOIN_VOICE => "permissionJoinVoice",
         Permissions::SPEAK => "permissionSpeak",
         Permissions::SHARE_SCREEN => "permissionShareScreen",
+        Permissions::MENTION_MEMBERS => "permissionMentionMembers",
+        Permissions::MENTION_ROLES => "permissionMentionRoles",
+        Permissions::MENTION_EVERYONE => "permissionMentionEveryone",
         _ => "permissionOwner",
     };
     t!(key)
@@ -896,9 +914,9 @@ mod tests {
 
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
-        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 67_043_336);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 67_047_320);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 67_047_423);
+        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 134_152_200);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 536_809_368);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 536_809_471);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

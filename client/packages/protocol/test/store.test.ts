@@ -70,6 +70,7 @@ function message(n: number, channelId = general.id, author = me.id): Message {
     linkPreviews: [],
     kind: "standard",
     poll: null,
+    mentions: { users: [], roles: [], everyone: false },
   };
 }
 
@@ -569,8 +570,8 @@ describe("RecordStore read states", () => {
     const store = bootstrapped();
     store.ingest({
       readStates: [
-        { channel: general.id, lastRead: at(100), lastMessage: at(101) },
-        { channel: dev.id, lastRead: at(100), lastMessage: at(90) },
+        { channel: general.id, lastRead: at(100), lastMessage: at(101), mentions: 0 },
+        { channel: dev.id, lastRead: at(100), lastMessage: at(90), mentions: 0 },
       ],
     });
     expect(store.unread(general.id)).toBe(true);
@@ -583,13 +584,20 @@ describe("RecordStore read states", () => {
 
   it("follows messages as they arrive: someone else's is new, the caller's own is read", () => {
     const store = bootstrapped();
-    store.ingest({ readStates: [{ channel: general.id, lastRead: at(100), lastMessage: null }] });
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: null, mentions: 0 }],
+    });
     store.applyEvent({
       serverEvent: "message",
       type: "create",
       ...message(110, general.id, bob.id),
     });
-    expect(readOf(store)).toEqual({ channel: general.id, lastRead: at(100), lastMessage: at(110) });
+    expect(readOf(store)).toEqual({
+      channel: general.id,
+      lastRead: at(100),
+      lastMessage: at(110),
+      mentions: 0,
+    });
     expect(store.unread(general.id)).toBe(true);
     store.applyEvent({
       serverEvent: "message",
@@ -604,6 +612,7 @@ describe("RecordStore read states", () => {
       channel: dev.id,
       lastRead: "",
       lastMessage: at(112),
+      mentions: 0,
     });
     expect(store.unread(dev.id)).toBe(true);
   });
@@ -611,7 +620,7 @@ describe("RecordStore read states", () => {
   it("moves forward when another device reads, never back", () => {
     const store = bootstrapped();
     store.ingest({
-      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(105) }],
+      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(105), mentions: 0 }],
     });
     store.applyEvent({ serverEvent: "channelRead", channel: general.id, lastRead: at(99) });
     expect(readOf(store)?.lastRead).toBe(at(100));
@@ -631,7 +640,7 @@ describe("RecordStore read states", () => {
     };
     store.ingest({
       channels: [thread],
-      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(101) }],
+      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(101), mentions: 0 }],
     });
     store.applyEvent({
       serverEvent: "message",
@@ -646,7 +655,12 @@ describe("RecordStore read states", () => {
 });
 
 describe("RecordStore mutes", () => {
-  const unreadGeneral = { channel: general.id, lastRead: id(1100), lastMessage: id(1101) };
+  const unreadGeneral = {
+    channel: general.id,
+    lastRead: id(1100),
+    lastMessage: id(1101),
+    mentions: 0,
+  };
 
   it("keeps a muted channel's unread out of its community's mark", () => {
     const store = bootstrapped();
@@ -708,7 +722,9 @@ describe("RecordStore collapsed categories", () => {
 
   it("keeps an unread channel in view under a collapsed category, unless it is muted", () => {
     const store = bootstrapped();
-    store.ingest({ readStates: [{ channel: dev.id, lastRead: id(1100), lastMessage: id(1101) }] });
+    store.ingest({
+      readStates: [{ channel: dev.id, lastRead: id(1100), lastMessage: id(1101), mentions: 0 }],
+    });
     expect(store.shownWhenCollapsed(dev.id)).toBe(true);
     expect(store.shownWhenCollapsed(general.id)).toBe(false);
     store.applyEvent({ serverEvent: "channelMuteChanged", channel: dev.id, muted: true });
@@ -1215,7 +1231,9 @@ describe("RecordStore blocks", () => {
 
   it("never lets a blocked user's message make a channel unread", () => {
     const store = bootstrapped();
-    store.ingest({ readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null }] });
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null, mentions: 0 }],
+    });
     store.setBlocked(bob.id, true);
     store.applyEvent({ serverEvent: "message", type: "create", ...message(2, general.id, bob.id) });
     expect(store.unread(general.id)).toBe(false);
@@ -1240,12 +1258,77 @@ describe("RecordStore blocks", () => {
 
   it("keeps a read position further on than the one the server sent", () => {
     const store = bootstrapped();
-    store.ingest({ readStates: [{ channel: general.id, lastRead: id(1005), lastMessage: null }] });
-    store.putReadState({ channel: general.id, lastRead: id(1003), lastMessage: id(1006) });
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1005), lastMessage: null, mentions: 0 }],
+    });
+    store.putReadState({
+      channel: general.id,
+      lastRead: id(1003),
+      lastMessage: id(1006),
+      mentions: 0,
+    });
     expect(store.readState(general.id)).toEqual({
       channel: general.id,
       lastRead: id(1005),
       lastMessage: id(1006),
+      mentions: 0,
     });
+  });
+});
+
+describe("RecordStore unread tags", () => {
+  const tagged = (n: number, mentions: Message["mentions"]): Message => ({
+    ...message(n, general.id, bob.id),
+    mentions,
+  });
+  const none = { users: [], roles: [], everyone: false };
+
+  it("counts the unread messages that tag the caller, by name, role, or as everyone", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null, mentions: 0 }],
+    });
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: me.id,
+      roles: [id(40)],
+    });
+    const post = (m: Message) => {
+      store.applyEvent({ serverEvent: "message", type: "create", ...m });
+    };
+    post(tagged(2, { ...none, users: [me.id] }));
+    post(tagged(3, { ...none, roles: [id(40)] }));
+    post(tagged(4, { ...none, everyone: true }));
+    post(tagged(5, { ...none, users: [bob.id] }));
+    post(tagged(6, none));
+    expect(store.mentions(general.id)).toBe(3);
+    expect(store.placeMentions(aspen.id)).toBe(3);
+    // Read to the newest, nothing tags them any more.
+    store.setLastRead(general.id, id(1006));
+    expect(store.mentions(general.id)).toBe(0);
+  });
+
+  it("clears the tags when the caller posts, and never counts someone blocked", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null, mentions: 0 }],
+    });
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...tagged(2, { ...none, users: [me.id] }),
+    });
+    expect(store.mentions(general.id)).toBe(1);
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(3) });
+    expect(store.mentions(general.id)).toBe(0);
+    store.setBlocked(bob.id, true);
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...tagged(4, { ...none, everyone: true }),
+    });
+    expect(store.mentions(general.id)).toBe(0);
   });
 });

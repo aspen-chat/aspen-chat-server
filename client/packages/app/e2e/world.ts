@@ -31,6 +31,7 @@ const channelPermissions = [
   "joinVoice",
   "speak",
   "shareScreen",
+  "mentionMembers",
 ];
 const roles = [
   {
@@ -145,6 +146,7 @@ const message = (
   echoOf: null,
   content,
   attachments: [],
+  mentions: { users: [], roles: [], everyone: false },
   ...extra,
 });
 
@@ -187,11 +189,12 @@ const generalMessages = [
 export const lastReadText =
   "Sounds good. See everyone at ten, and bring a jumper in case it rains.";
 
+/** #roadmap holds unread messages, two of which tag the caller. */
 const communityReadStates = [
-  { channel: general, lastRead: messageId(204), lastMessage: messageId(207) },
-  { channel: lounge, lastRead: messageId(1), lastMessage: null },
-  { channel: roadmap, lastRead: messageId(1), lastMessage: messageId(230) },
-  { channel: ideas, lastRead: messageId(1), lastMessage: null },
+  { channel: general, lastRead: messageId(204), lastMessage: messageId(207), mentions: 0 },
+  { channel: lounge, lastRead: messageId(1), lastMessage: null, mentions: 0 },
+  { channel: roadmap, lastRead: messageId(1), lastMessage: messageId(230), mentions: 2 },
+  { channel: ideas, lastRead: messageId(1), lastMessage: null, mentions: 0 },
 ];
 
 /** Bob's "Sounds good" message, which has a crowd of reactions. */
@@ -265,7 +268,13 @@ const dmRecord = {
   recipients: [me, bob],
 };
 
-const dmMessages = [message(220, bob, "Did you get the photos?", 30, { channelId: dm })];
+/** Bob's message in the DM, which tags the caller. */
+const dmMessages = [
+  message(220, bob, `<@${me}> Did you get the photos?`, 30, {
+    channelId: dm,
+    mentions: { users: [me], roles: [], everyone: false },
+  }),
+];
 /** The one message in the DM, which the caller has not read. */
 export const dmMessageId = messageId(220);
 
@@ -619,7 +628,9 @@ async function answer(
         data: [dmRecord],
         included: {
           users,
-          readStates: [{ channel: dm, lastRead: messageId(1), lastMessage: messageId(220) }],
+          readStates: [
+            { channel: dm, lastRead: messageId(1), lastMessage: messageId(220), mentions: 0 },
+          ],
         },
       }),
     ],
@@ -670,6 +681,23 @@ async function answer(
         const category = path.split("/")[2] ?? "";
         publish({ serverEvent: "categoryCollapseChanged", category, collapsed: false });
         return reply(null, 204);
+      },
+    ],
+    // Posting answers with the message as the server would record it, tagging the people of
+    // the world it names.
+    [
+      "POST",
+      /^\/channels\/[^/]+\/messages$/,
+      () => {
+        const { content } = request.postDataJSON() as { content: string };
+        const tagged = users.filter((u) => content.includes(`<@${u.id}>`)).map((u) => u.id);
+        return reply(
+          message(990, me, content, 0, {
+            channelId: path.split("/")[2],
+            mentions: { users: tagged, roles: [], everyone: false },
+          }),
+          201,
+        );
       },
     ],
     // Kate's bots: Helper, and whatever she makes, each answered as the server does. Nothing is

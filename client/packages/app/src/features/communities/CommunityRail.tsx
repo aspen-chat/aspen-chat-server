@@ -1,6 +1,15 @@
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { UNREAD_DMS } from "@aspen/protocol";
-import { useCommunities, useIsAdmin, useSync, useUnreadPlaces } from "@/api/hooks";
+import {
+  useCommunities,
+  useIsAdmin,
+  usePlaceMentions,
+  useStore,
+  useSync,
+  useUnreadPlaces,
+} from "@/api/hooks";
+import { MentionBadge } from "@/features/mentions/MentionBadge";
+import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import { ChatsTeardropIcon, DotsSixVerticalIcon, GaugeIcon, PlusIcon } from "@phosphor-icons/react";
 import {
@@ -10,7 +19,7 @@ import {
   GridListItem,
   useDragAndDrop,
 } from "react-aria-components";
-import { format } from "@/i18n/messages";
+import { format, type Messages } from "@/i18n/messages";
 import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { Avatar } from "@/features/communities/Avatar";
 import { reorderIds } from "@/features/layout/reorder";
@@ -31,7 +40,10 @@ export function CommunityRail() {
   const sync = useSync();
   const navigate = useNavigate();
   const communities = useCommunities();
+  const store = useStore();
+  // Every read state change makes a new set, so the entries' names, tags included, follow.
   const unread = useUnreadPlaces();
+  const dmTags = usePlaceMentions(UNREAD_DMS);
   const { communityId: current } = useParams({ strict: false });
   const matchRoute = useMatchRoute();
   const inDms = matchRoute({ to: "/dms", fuzzy: true }) !== false;
@@ -65,12 +77,15 @@ export function CommunityRail() {
           covers it; see `UnreadDot`. */}
       <div className="relative isolate">
         {unread.has(UNREAD_DMS) && <UnreadDot />}
+        <RailBadge count={dmTags} />
         <Tooltip text={m.dms.label}>
           <Link
             to="/dms"
-            aria-label={
-              unread.has(UNREAD_DMS) ? format(m.unreadLabel, { name: m.dms.label }) : m.dms.label
-            }
+            aria-label={placeLabel(
+              m,
+              unread.has(UNREAD_DMS) ? format(m.unreadLabel, { name: m.dms.label }) : m.dms.label,
+              dmTags,
+            )}
             aria-current={inDms ? "page" : undefined}
             className={
               "flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
@@ -99,11 +114,13 @@ export function CommunityRail() {
           <GridListItem
             id={community.id}
             textValue={community.name}
-            aria-label={
+            aria-label={placeLabel(
+              m,
               unread.has(community.id)
                 ? format(m.unreadLabel, { name: community.name })
-                : community.name
-            }
+                : community.name,
+              store.placeMentions(community.id),
+            )}
             className={
               "group relative isolate cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/60 dragging:opacity-50 " +
               (community.id === current
@@ -112,6 +129,7 @@ export function CommunityRail() {
             }
           >
             {unread.has(community.id) && <UnreadDot />}
+            <CommunityBadge communityId={community.id} />
             <Avatar name={community.name} iconId={community.icon} size="lg" />
             {/* The handle keyboard and screen reader users drag with; it shows only on focus. */}
             <Button
@@ -163,6 +181,25 @@ export function CommunityRail() {
  * under the entry's icon. It goes in an element that `isolate`s a stacking context, so its
  * negative z-index puts it beneath the icon without sending it behind the rail itself.
  */
+/** A place's name for the rail, with its unread tags when it has any. */
+function placeLabel(m: Messages, name: string, tags: number): string {
+  return tags > 0 ? format(m.withMentions, { name, mentions: mentionsText(m, tags) }) : name;
+}
+
+function CommunityBadge({ communityId }: { communityId: string }) {
+  return <RailBadge count={usePlaceMentions(communityId)} />;
+}
+
+/** The count of unread tags over the corner of a rail entry. */
+function RailBadge({ count }: { count: number }) {
+  return (
+    <MentionBadge
+      count={count}
+      className="pointer-events-none absolute -right-1 -bottom-1 z-10 ring-2 ring-surface-rail"
+    />
+  );
+}
+
 function UnreadDot() {
   return (
     <span

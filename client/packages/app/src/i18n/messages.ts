@@ -205,6 +205,14 @@ export const en = {
     show: "Show profile of {name}",
     message: "Message",
   },
+  tagging: {
+    suggestions: "People and roles to tag",
+    oneSuggestion: "1 suggestion to tag. Enter or Tab tags it; Escape closes.",
+    someSuggestions:
+      "{count} suggestions to tag. Up and down arrows choose, Enter or Tab tags; Escape closes.",
+    role: "Role",
+    everyone: "Everyone here",
+  },
   bots: {
     badge: "Bot",
     madeBy: "Made by {name}",
@@ -317,6 +325,10 @@ export const en = {
   backHome: "Back to your communities",
   communitiesLabel: "Communities",
   unreadLabel: "{name}, unread",
+  oneMention: "1 mention",
+  unknownRole: "unknown role",
+  mentions: "{count} mentions",
+  withMentions: "{name}, {mentions}",
   mutedLabel: "{name}, muted",
   admin: {
     open: "Administration",
@@ -788,6 +800,18 @@ export const en = {
     joinVoice: { name: "Join voice", hint: "Join calls in voice channels." },
     speak: { name: "Speak", hint: "Talk in calls. Without it, people join to listen." },
     shareScreen: { name: "Share screen", hint: "Share a screen, window, or game in calls." },
+    mentionMembers: {
+      name: "Mention members",
+      hint: "Tag people in messages, which they're told of.",
+    },
+    mentionRoles: {
+      name: "Mention roles",
+      hint: "Tag a role, telling everyone who holds it.",
+    },
+    mentionEveryone: {
+      name: "Mention everyone",
+      hint: "Tag @everyone, telling everyone who can see the channel.",
+    },
   },
   communitySettings: {
     open: "Community settings",

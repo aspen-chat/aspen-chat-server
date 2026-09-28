@@ -31,6 +31,7 @@ pub mod invite;
 pub mod link_preview;
 pub mod login;
 pub mod media_store;
+pub mod mention;
 pub mod message;
 pub mod passkey;
 pub mod permissions;

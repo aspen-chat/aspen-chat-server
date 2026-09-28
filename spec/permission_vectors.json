@@ -1,986 +1,1103 @@
 {
-  "description": "Permission resolution cases that the server (app::permissions) and the client (packages/protocol/src/permissions.ts) both test against, so the two resolvers cannot drift apart. `holds` lists the roles the member holds besides everyone's, or is `null` for someone who is not a member; `moderator` says they hold Moderate any community; `community` is what they may do across the community, `channel` what they may do in a channel with the given overrides, and `rank` their highest role's position (2147483647 for the owner).",
-  "cases": [
-    {
-      "name": "everyone's role alone",
-      "roles": [
+    "description": "Permission resolution cases that the server (app::permissions) and the client (packages/protocol/src/permissions.ts) both test against, so the two resolvers cannot drift apart. `holds` lists the roles the member holds besides everyone's, or is `null` for someone who is not a member; `moderator` says they hold Moderate any community; `community` is what they may do across the community, `channel` what they may do in a channel with the given overrides, and `rank` their highest role's position (2147483647 for the owner).",
+    "cases": [
         {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        }
-      ],
-      "owner": false,
-      "holds": [],
-      "categoryOverrides": [],
-      "channelOverrides": [],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 0,
-      "moderator": false
-    },
-    {
-      "name": "roles are united and rank is the highest",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "everyone's role alone",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [],
+            "channelOverrides": [],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 2,
-          "permissions": [
-            "manageMessages",
-            "pinMessages"
-          ],
-          "everyone": false
+            "name": "roles are united and rank is the highest",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 2,
+                    "permissions": [
+                        "manageMessages",
+                        "pinMessages"
+                    ],
+                    "everyone": false
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000003",
+                    "position": 1,
+                    "permissions": [
+                        "manageCalls",
+                        "addBots"
+                    ],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002",
+                "00000000-0000-0000-0000-000000000003"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [],
+            "community": [
+                "createInvites",
+                "manageMessages",
+                "pinMessages",
+                "manageCalls",
+                "addBots",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "manageMessages",
+                "pinMessages",
+                "manageCalls",
+                "addBots",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 2,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000003",
-          "position": 1,
-          "permissions": [
-            "manageCalls",
-            "addBots"
-          ],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [
-        "00000000-0000-0000-0000-000000000002",
-        "00000000-0000-0000-0000-000000000003"
-      ],
-      "categoryOverrides": [],
-      "channelOverrides": [],
-      "community": [
-        "createInvites",
-        "manageMessages",
-        "pinMessages",
-        "manageCalls",
-        "addBots",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "manageMessages",
-        "pinMessages",
-        "manageCalls",
-        "addBots",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 2,
-      "moderator": false
-    },
-    {
-      "name": "a role not held grants nothing",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "a role not held grants nothing",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [
+                        "manageCommunity",
+                        "manageChannels",
+                        "manageCategories",
+                        "createInvites",
+                        "manageInvites",
+                        "manageRoles",
+                        "assignRoles",
+                        "removeMembers",
+                        "manageMessages",
+                        "pinMessages",
+                        "manageCalls",
+                        "addBots",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [
+                        "viewChannel"
+                    ],
+                    "deny": []
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [
-            "manageCommunity",
-            "manageChannels",
-            "manageCategories",
-            "createInvites",
-            "manageInvites",
-            "manageRoles",
-            "assignRoles",
-            "removeMembers",
-            "manageMessages",
-            "pinMessages",
-            "manageCalls",
-            "addBots",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [],
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [
-            "viewChannel"
-          ],
-          "deny": []
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 0,
-      "moderator": false
-    },
-    {
-      "name": "the owner holds everything whatever the overrides",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [],
-          "everyone": true
-        }
-      ],
-      "owner": true,
-      "holds": [],
-      "categoryOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ]
-        }
-      ],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ]
-        }
-      ],
-      "community": [
-        "manageCommunity",
-        "manageChannels",
-        "manageCategories",
-        "createInvites",
-        "manageInvites",
-        "manageRoles",
-        "assignRoles",
-        "removeMembers",
-        "manageMessages",
-        "pinMessages",
-        "manageCalls",
-        "addBots",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "manageCommunity",
-        "manageChannels",
-        "manageCategories",
-        "createInvites",
-        "manageInvites",
-        "manageRoles",
-        "assignRoles",
-        "removeMembers",
-        "manageMessages",
-        "pinMessages",
-        "manageCalls",
-        "addBots",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 2147483647,
-      "moderator": false
-    },
-    {
-      "name": "a role's allowance beats a denial for everyone",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "the owner holds everything whatever the overrides",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [],
+                    "everyone": true
+                }
+            ],
+            "owner": true,
+            "holds": [],
+            "categoryOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ]
+                }
+            ],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ]
+                }
+            ],
+            "community": [
+                "manageCommunity",
+                "manageChannels",
+                "manageCategories",
+                "createInvites",
+                "manageInvites",
+                "manageRoles",
+                "assignRoles",
+                "removeMembers",
+                "manageMessages",
+                "pinMessages",
+                "manageCalls",
+                "addBots",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "manageCommunity",
+                "manageChannels",
+                "manageCategories",
+                "createInvites",
+                "manageInvites",
+                "manageRoles",
+                "assignRoles",
+                "removeMembers",
+                "manageMessages",
+                "pinMessages",
+                "manageCalls",
+                "addBots",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 2147483647,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [
-        "00000000-0000-0000-0000-000000000002"
-      ],
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel"
-          ]
+            "name": "a role's allowance beats a denial for everyone",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel"
+                    ]
+                },
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [
+                        "viewChannel"
+                    ],
+                    "deny": []
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 1,
+            "moderator": false
         },
         {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [
-            "viewChannel"
-          ],
-          "deny": []
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 1,
-      "moderator": false
-    },
-    {
-      "name": "without the role the denial stands",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "without the role the denial stands",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel"
+                    ]
+                },
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [
+                        "viewChannel"
+                    ],
+                    "deny": []
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [],
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel"
-          ]
+            "name": "a role's denial beats an allowance for everyone",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [
+                        "sendMessages"
+                    ],
+                    "deny": []
+                },
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [],
+                    "deny": [
+                        "sendMessages"
+                    ]
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 1,
+            "moderator": false
         },
         {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [
-            "viewChannel"
-          ],
-          "deny": []
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 0,
-      "moderator": false
-    },
-    {
-      "name": "a role's denial beats an allowance for everyone",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "between the member's roles, allowance beats denial",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [],
+                    "everyone": false
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000003",
+                    "position": 2,
+                    "permissions": [],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002",
+                "00000000-0000-0000-0000-000000000003"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [],
+                    "deny": [
+                        "attachFiles"
+                    ]
+                },
+                {
+                    "role": "00000000-0000-0000-0000-000000000003",
+                    "allow": [
+                        "attachFiles"
+                    ],
+                    "deny": []
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 2,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [
-        "00000000-0000-0000-0000-000000000002"
-      ],
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [
-            "sendMessages"
-          ],
-          "deny": []
+            "name": "the channel's overrides come after its category's",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "sendMessages",
+                        "addReactions"
+                    ]
+                }
+            ],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [
+                        "sendMessages"
+                    ],
+                    "deny": []
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         },
         {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [],
-          "deny": [
-            "sendMessages"
-          ]
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 1,
-      "moderator": false
-    },
-    {
-      "name": "between the member's roles, allowance beats denial",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
+            "name": "a category's role allowance does not lift the channel's denial for everyone",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002"
+            ],
+            "categoryOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [
+                        "viewChannel"
+                    ],
+                    "deny": []
+                }
+            ],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel"
+                    ]
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 1,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [],
-          "everyone": false
+            "name": "overrides never touch community permissions",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [
+                        "manageRoles"
+                    ],
+                    "deny": [
+                        "createInvites"
+                    ]
+                }
+            ],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [
+                        "manageCommunity"
+                    ],
+                    "deny": [
+                        "createInvites"
+                    ]
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         },
         {
-          "id": "00000000-0000-0000-0000-000000000003",
-          "position": 2,
-          "permissions": [],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [
-        "00000000-0000-0000-0000-000000000002",
-        "00000000-0000-0000-0000-000000000003"
-      ],
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [],
-          "deny": [
-            "attachFiles"
-          ]
+            "name": "a moderator who is not a member sees everything and may take things away",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "moderator": true,
+            "holds": null,
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel"
+                    ]
+                }
+            ],
+            "community": [
+                "removeMembers",
+                "manageMessages",
+                "viewChannel"
+            ],
+            "channel": [
+                "removeMembers",
+                "manageMessages",
+                "viewChannel"
+            ],
+            "rank": 2147483646
         },
         {
-          "role": "00000000-0000-0000-0000-000000000003",
-          "allow": [
-            "attachFiles"
-          ],
-          "deny": []
+            "name": "a moderator who is a member keeps their roles and sees hidden channels",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "moderator": true,
+            "holds": [],
+            "categoryOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "viewChannel",
+                        "sendMessages"
+                    ]
+                }
+            ],
+            "channelOverrides": [],
+            "community": [
+                "createInvites",
+                "removeMembers",
+                "manageMessages",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "channel": [
+                "createInvites",
+                "removeMembers",
+                "manageMessages",
+                "viewChannel",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 2147483646
         }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 2,
-      "moderator": false
-    },
-    {
-      "name": "the channel's overrides come after its category's",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        }
-      ],
-      "owner": false,
-      "holds": [],
-      "categoryOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "sendMessages",
-            "addReactions"
-          ]
-        }
-      ],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [
-            "sendMessages"
-          ],
-          "deny": []
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 0,
-      "moderator": false
-    },
-    {
-      "name": "a category's role allowance does not lift the channel's denial for everyone",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        },
-        {
-          "id": "00000000-0000-0000-0000-000000000002",
-          "position": 1,
-          "permissions": [],
-          "everyone": false
-        }
-      ],
-      "owner": false,
-      "holds": [
-        "00000000-0000-0000-0000-000000000002"
-      ],
-      "categoryOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000002",
-          "allow": [
-            "viewChannel"
-          ],
-          "deny": []
-        }
-      ],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel"
-          ]
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 1,
-      "moderator": false
-    },
-    {
-      "name": "overrides never touch community permissions",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        }
-      ],
-      "owner": false,
-      "holds": [],
-      "categoryOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [
-            "manageRoles"
-          ],
-          "deny": [
-            "createInvites"
-          ]
-        }
-      ],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [
-            "manageCommunity"
-          ],
-          "deny": [
-            "createInvites"
-          ]
-        }
-      ],
-      "community": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 0,
-      "moderator": false
-    },
-    {
-      "name": "a moderator who is not a member sees everything and may take things away",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        }
-      ],
-      "owner": false,
-      "moderator": true,
-      "holds": null,
-      "categoryOverrides": [],
-      "channelOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel"
-          ]
-        }
-      ],
-      "community": [
-        "removeMembers",
-        "manageMessages",
-        "viewChannel"
-      ],
-      "channel": [
-        "removeMembers",
-        "manageMessages",
-        "viewChannel"
-      ],
-      "rank": 2147483646
-    },
-    {
-      "name": "a moderator who is a member keeps their roles and sees hidden channels",
-      "roles": [
-        {
-          "id": "00000000-0000-0000-0000-000000000001",
-          "position": 0,
-          "permissions": [
-            "createInvites",
-            "viewChannel",
-            "sendMessages",
-            "attachFiles",
-            "addReactions",
-            "startThreads",
-            "sendInThreads",
-            "createPolls",
-            "joinVoice",
-            "speak",
-            "shareScreen"
-          ],
-          "everyone": true
-        }
-      ],
-      "owner": false,
-      "moderator": true,
-      "holds": [],
-      "categoryOverrides": [
-        {
-          "role": "00000000-0000-0000-0000-000000000001",
-          "allow": [],
-          "deny": [
-            "viewChannel",
-            "sendMessages"
-          ]
-        }
-      ],
-      "channelOverrides": [],
-      "community": [
-        "createInvites",
-        "removeMembers",
-        "manageMessages",
-        "viewChannel",
-        "sendMessages",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "channel": [
-        "createInvites",
-        "removeMembers",
-        "manageMessages",
-        "viewChannel",
-        "attachFiles",
-        "addReactions",
-        "startThreads",
-        "sendInThreads",
-        "createPolls",
-        "joinVoice",
-        "speak",
-        "shareScreen"
-      ],
-      "rank": 2147483646
-    }
-  ]
+    ]
 }

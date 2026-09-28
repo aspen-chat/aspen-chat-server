@@ -192,6 +192,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    mention (id) {
+        id -> Int8,
+        message -> Uuid,
+        channel -> Uuid,
+        target_user -> Nullable<Uuid>,
+        target_role -> Nullable<Uuid>,
+        everyone -> Bool,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::MessageKind;
 
@@ -207,6 +218,7 @@ diesel::table! {
         poll -> Nullable<Uuid>,
         thread -> Nullable<Uuid>,
         echo_of -> Nullable<Uuid>,
+        mentions -> Jsonb,
     }
 }
 
@@ -490,6 +502,10 @@ diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
+diesel::joinable!(mention -> channel (channel));
+diesel::joinable!(mention -> community_role (target_role));
+diesel::joinable!(mention -> message (message));
+diesel::joinable!(mention -> user (target_user));
 diesel::joinable!(message -> poll (poll));
 diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
@@ -545,6 +561,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     dm_recipient,
     icon,
     invite,
+    mention,
     message,
     message_attachment,
     message_link_preview,

@@ -3,7 +3,9 @@ import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/r
 import { useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
-import { useDms, useMe, useMute, useSync, useUnread, useUser } from "@/api/hooks";
+import { useDms, useMe, useMentions, useMute, useSync, useUnread, useUser } from "@/api/hooks";
+import { MentionBadge } from "@/features/mentions/MentionBadge";
+import { mentionsText } from "@/features/mentions/mentions";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { Avatar } from "@/features/communities/Avatar";
 import { MAX_DM_PEOPLE } from "@/features/dms/DmHeader";
@@ -94,14 +96,19 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
   const title = useDmTitle(dm);
   const first = useUser(otherRecipients(dm, me?.id ?? null)[0]);
   const unread = useUnread(dm.id);
+  const tags = useMentions(dm.id);
   const muted = useMute(dm.id) !== undefined;
   const row = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const accessibleName = muted
+  const stateName = muted
     ? format(m.mutedLabel, { name: title })
     : unread
       ? format(m.unreadLabel, { name: title })
       : null;
+  const accessibleName =
+    tags > 0
+      ? format(m.withMentions, { name: stateName ?? title, mentions: mentionsText(m, tags) })
+      : stateName;
   const rowClass =
     "flex w-full items-center gap-2 rounded-md text-left text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
     (current
@@ -129,6 +136,7 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
           <span className="sr-only">{accessibleName}</span>
         </>
       )}
+      <MentionBadge count={tags} />
       {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
     </>
   );

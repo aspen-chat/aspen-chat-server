@@ -21,8 +21,11 @@ pub struct ReadState {
     /// after it is unread. It may name a message since deleted, or no message at all when it is
     /// the moment the caller joined, before which nothing is unread to them.
     pub last_read: MessageId,
-    /// The channel's newest message by anyone but the caller, if any.
+    /// The channel's newest message by neither the caller nor anyone they blocked, if any.
     pub last_message: Option<MessageId>,
+    /// How many of the unread messages tag the caller: directly, through a role they hold, or
+    /// as everyone. Tags count in muted channels too.
+    pub mentions: u32,
 }
 
 impl From<app::read_state::ReadState> for ReadState {
@@ -31,6 +34,7 @@ impl From<app::read_state::ReadState> for ReadState {
             channel: state.channel,
             last_read: state.last_read,
             last_message: state.last_message,
+            mentions: state.mentions,
         }
     }
 }

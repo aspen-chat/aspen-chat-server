@@ -280,6 +280,16 @@ export function useMute(channelId: string): ChannelMute | undefined {
   return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));
 }
 
+/** How many unread messages in a channel tag the caller. */
+export function useMentions(channelId: string): number {
+  return useTopic(`read:${channelId}`, (s) => s.mentions(channelId));
+}
+
+/** How many unread messages tag the caller across a community, or their DMs (`UNREAD_DMS`). */
+export function usePlaceMentions(place: string): number {
+  return useTopic("unread", (s) => s.placeMentions(place));
+}
+
 /** Whether a channel holds a message by someone else that the caller has not read. */
 export function useUnread(channelId: string): boolean {
   return useTopic(`read:${channelId}`, (s) => s.unread(channelId));

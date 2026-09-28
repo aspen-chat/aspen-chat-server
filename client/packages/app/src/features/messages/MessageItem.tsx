@@ -143,15 +143,21 @@ export function MessageItem({
       </article>
     );
   }
+  // A message that tags the reader stands out, with a bar at its edge in place of padding.
+  const tagsMe = sync.store.mentionsMe(message);
   return (
     <article
       data-message-id={id}
+      data-mentions-me={tagsMe ? "true" : undefined}
       tabIndex={-1}
       className={
-        "group relative flex gap-3 rounded-md px-2 py-1.5 outline-none " +
+        "group relative flex gap-3 rounded-md py-1.5 outline-none " +
+        (tagsMe ? "border-l-2 border-accent pr-2 pl-1.5 " : "px-2 ") +
         (highlighted
           ? "bg-accent-soft"
-          : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
+          : tagsMe
+            ? "bg-accent-soft/50"
+            : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
       }
     >
       {author === undefined ? (
@@ -248,6 +254,7 @@ export function MessageItem({
         {editing ? (
           <MessageEditor
             messageId={id}
+            channelId={message.channelId}
             initial={message.content}
             onDone={() => {
               setEditing(false);
@@ -257,7 +264,9 @@ export function MessageItem({
           <EchoedReply replyId={message.echoOf} home={home} channelId={channelId} />
         ) : (
           <div className="flex flex-wrap items-baseline gap-x-1">
-            {!pictureOnly && <Markdown content={message.content} />}
+            {!pictureOnly && (
+              <Markdown content={message.content} mentions={message.mentions} communityId={home} />
+            )}
             {message.editedAt != null && (
               <span
                 className="text-xs text-ink-faint"
@@ -325,7 +334,7 @@ function EchoedReply({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline gap-x-1">
-        <Markdown content={reply.content} />
+        <Markdown content={reply.content} mentions={reply.mentions} communityId={home} />
         {reply.editedAt != null && <span className="text-xs text-ink-faint">{m.edited}</span>}
       </div>
       <MessageMedia attachmentIds={reply.attachments} linkedImages={[]} previewImages={[]} />

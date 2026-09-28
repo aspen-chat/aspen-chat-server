@@ -1,8 +1,11 @@
+import type { Mentions } from "@aspen/protocol";
 import { isValidElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "@/features/messages/CodeBlock";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
+import { Mention, MentionContext } from "@/features/messages/Mention";
+import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
 
@@ -22,9 +25,25 @@ const components: Components = {
       {children}
     </a>
   ),
-  // `remarkSpoilers` marks its spans with `data-spoiler`; every other span is left as it is.
-  span: ({ children, ...props }) =>
-    "data-spoiler" in props ? <Spoiler>{children}</Spoiler> : <span {...props}>{children}</span>,
+  // `remarkSpoilers` marks its spans with `data-spoiler` and `remarkMentions` with
+  // `data-mention`; every other span is left as it is.
+  span: ({ children, ...props }) => {
+    if ("data-spoiler" in props) {
+      return <Spoiler>{children}</Spoiler>;
+    }
+    const attributes = props as Record<string, unknown>;
+    const kind = attributes["data-mention"];
+    if (kind === "user" || kind === "role" || kind === "everyone") {
+      return (
+        <Mention
+          kind={kind}
+          id={String(attributes["data-id"] ?? "")}
+          text={typeof children === "string" ? children : ""}
+        />
+      );
+    }
+    return <span {...props}>{children}</span>;
+  },
   pre: ({ children }) => {
     const code = fencedCode(children);
     if (code === null) {
@@ -53,19 +72,34 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
 /**
  * A message body as GitHub-flavoured Markdown: emphasis, code, lists, quotes, tables, and
  * links, with bare domains linked too, and `||spoilers||` (or Reddit's `>!spoilers!<`) hidden
- * until clicked. Raw HTML in the source is ignored rather than rendered.
- * Element styling comes from the `message-body` rules in `styles.css`.
+ * until clicked, and tags (`<@user>`, `<@&role>`, `@everyone`) shown by name, as chips where
+ * `mentions`, the message's tags as the server decided them, says they count. Raw HTML in the
+ * source is ignored rather than rendered. Element styling comes from the `message-body` rules
+ * in `styles.css`.
  */
-export function Markdown({ content }: { content: string }) {
+export function Markdown({
+  content,
+  mentions = NO_MENTIONS,
+  communityId = null,
+}: {
+  content: string;
+  mentions?: Mentions;
+  /** The community the message is in, where its tagged roles are found; `null` in a DM. */
+  communityId?: string | null;
+}) {
   return (
     <div className="message-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkSpoilers, remarkBareLinks]}
-        components={components}
-        skipHtml
-      >
-        {content}
-      </ReactMarkdown>
+      <MentionContext.Provider value={{ mentions, communityId }}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkSpoilers, remarkMentions, remarkBareLinks]}
+          components={components}
+          skipHtml
+        >
+          {content}
+        </ReactMarkdown>
+      </MentionContext.Provider>
     </div>
   );
 }
+
+const NO_MENTIONS: Mentions = { users: [], roles: [], everyone: false };

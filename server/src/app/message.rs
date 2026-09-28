@@ -6,6 +6,7 @@ use crate::app;
 use crate::app::channel::Channel;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
+use crate::app::mention::{self, Mentions};
 use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::user::User;
 use crate::app::{
@@ -40,6 +41,8 @@ pub struct Message {
     pub poll: Option<PollId>,
     pub thread: Option<ChannelId>,
     pub echo_of: Option<MessageId>,
+    /// Who it tags, as far as its author was allowed to (`app::mention`).
+    pub mentions: Mentions,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -61,6 +64,7 @@ pub fn record(
         poll: row.poll,
         thread: row.thread,
         echo_of: row.echo_of,
+        mentions: row.mentions.clone(),
     }
 }
 
@@ -146,6 +150,14 @@ pub async fn create_message(
                         .require(Permissions::SEND_MESSAGES)?;
                 }
                 ensure_attachments_ready(conn.as_mut(), &attachments).await?;
+                let mentions = mention::resolve(
+                    state,
+                    conn.as_mut(),
+                    channel_id,
+                    &access,
+                    mention::parse(&content),
+                )
+                .await?;
                 let message = Message {
                     id: MessageId::new(),
                     channel: MaybeLoaded::from_id(channel_id),
@@ -158,11 +170,13 @@ pub async fn create_message(
                     poll: None,
                     thread: None,
                     echo_of: None,
+                    mentions,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
                     .execute(conn.as_mut())
                     .await?;
+                mention::record(conn.as_mut(), message.id, channel_id, &message.mentions).await?;
                 for attachment in &attachments {
                     diesel::insert_into(message_attachment::table)
                         .values(&MessageAttachment {
@@ -318,6 +332,7 @@ pub async fn read_messages(
 pub struct MessageChangeset {
     pub content: Option<String>,
     pub edited_at: Option<chrono::DateTime<Utc>>,
+    pub mentions: Option<Mentions>,
 }
 
 pub async fn update_message(
@@ -350,10 +365,25 @@ pub async fn update_message(
     let (message, attachments, previews_cleared) = conn
         .transaction(|conn| {
             async move {
+                // New text tags afresh, with the author's permissions as they are now.
+                let mentions = match &command.content {
+                    Some(content) => Some(
+                        mention::resolve(
+                            state,
+                            conn.as_mut(),
+                            channel_id,
+                            &access,
+                            mention::parse(content),
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
                 let Some(message) = diesel::update(message::table)
                     .set(MessageChangeset {
                         content: command.content.clone(),
                         edited_at: content_changed.then(Utc::now),
+                        mentions: mentions.clone(),
                     })
                     .filter(message::id.eq(id).and(message::deleted_at.is_null()))
                     .returning(Message::as_select())
@@ -392,6 +422,9 @@ pub async fn update_message(
                 // them (and schedule the S3 objects for deletion) inside the
                 // same transaction as the content change so nobody reads
                 // "new content + stale previews" in between.
+                if let Some(mentions) = &mentions {
+                    mention::record(conn.as_mut(), id, channel_id, mentions).await?;
+                }
                 let mut previews_cleared = false;
                 if content_changed {
                     delete_images_for_message(state, conn.as_mut(), id).await?;
@@ -411,6 +444,7 @@ pub async fn update_message(
                         // fetcher's own update brings the new set.
                         link_previews: previews_cleared.then(Vec::new),
                         thread: None,
+                        mentions,
                     }),
                 )
                 .await?;
@@ -696,6 +730,7 @@ pub async fn remove_attachment(
                     edited_at: None,
                     link_previews: None,
                     thread: None,
+                    mentions: None,
                 }),
             )
             .await?;

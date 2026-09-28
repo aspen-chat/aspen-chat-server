@@ -117,6 +117,7 @@ pub async fn open_thread(
                     edited_at: None,
                     link_previews: None,
                     thread: Some(Some(thread.id)),
+                    mentions: None,
                 }),
             )
             .await?;
@@ -262,6 +263,8 @@ pub async fn echo(
         poll: None,
         thread: None,
         echo_of: Some(reply.id),
+        // An echo shows its reply, whose tags count in the thread.
+        mentions: crate::app::mention::Mentions::default(),
     };
     diesel::insert_into(message::table)
         .values(&echo)

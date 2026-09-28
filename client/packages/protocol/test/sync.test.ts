@@ -62,6 +62,7 @@ function message(n: number, author = me.id): Message {
     linkPreviews: [],
     kind: "standard",
     poll: null,
+    mentions: { users: [], roles: [], everyone: false },
   };
 }
 
@@ -96,7 +97,9 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
           categories: [],
           users: [me],
           userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
-          readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: id(1002) }],
+          readStates: [
+            { channel: general.id, lastRead: id(1000), lastMessage: id(1002), mentions: 0 },
+          ],
         },
       });
     },
@@ -746,7 +749,9 @@ describe("AspenSync", () => {
           ? json({
               data: [aspen],
               included: {
-                readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null }],
+                readStates: [
+                  { channel: general.id, lastRead: id(1000), lastMessage: null, mentions: 0 },
+                ],
               },
             })
           : bootstrapCommunities(url),
@@ -964,7 +969,7 @@ describe("AspenSync", () => {
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/read-states/@me`]: () => {
         reads += 1;
-        return json({ channel: general.id, lastRead: id(1000), lastMessage: id(999) });
+        return json({ channel: general.id, lastRead: id(1000), lastMessage: id(999), mentions: 0 });
       },
     });
     const socket = await goLive(sync);
