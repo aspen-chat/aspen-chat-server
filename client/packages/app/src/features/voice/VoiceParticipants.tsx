@@ -4,11 +4,12 @@ import {
   HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
+  ProhibitIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "react-aria-components";
-import { useChannelVoice, useMe, usePreference, useUser } from "@/api/hooks";
+import { useBlocked, useChannelVoice, useMe, usePreference, useUser } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
@@ -73,6 +74,7 @@ function ParticipantRow({
   const user = useUser(userId);
   const self = useMe()?.id === userId;
   const mutedForMe = usePreference(userMuted(userId));
+  const blocked = useBlocked(userId);
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
   const row = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -119,12 +121,21 @@ function ParticipantRow({
       {sharingScreen && (
         <MonitorIcon size={14} aria-label={m.voice.sharingMark} className="shrink-0 text-accent" />
       )}
-      {!self && mutedForMe && (
-        <SpeakerSlashIcon
+      {blocked ? (
+        <ProhibitIcon
           size={14}
-          aria-label={m.voice.mutedForYouMark}
-          className="shrink-0 text-danger"
+          aria-label={m.blocking.blocked}
+          className="shrink-0 text-ink-faint"
         />
+      ) : (
+        !self &&
+        mutedForMe && (
+          <SpeakerSlashIcon
+            size={14}
+            aria-label={m.voice.mutedForYouMark}
+            className="shrink-0 text-danger"
+          />
+        )
       )}
       {!self && (
         <>

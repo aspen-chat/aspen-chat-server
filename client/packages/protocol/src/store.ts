@@ -52,6 +52,8 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+/** Someone the caller has blocked, and since when. */
+export type UserBlock = components["schemas"]["UserBlock"];
 /** A pinned message: which, when it was pinned, and its place among the channel's pins. */
 export type Pin = components["schemas"]["Pin"];
 
@@ -152,6 +154,8 @@ export const REACTION_SUMMARY_USERS = 4;
 const EMPTY_IDS: readonly string[] = [];
 const NO_PERMISSIONS: PermissionSet = new Set();
 const DM_MODERATION: PermissionSet = new Set<Permission>(["viewChannel", "manageMessages"]);
+/** A one-to-one DM with someone the caller blocked: it can be read, and nothing more. */
+const DM_BLOCKED: PermissionSet = new Set<Permission>(["viewChannel"]);
 const EMPTY_OVERRIDES: readonly never[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
@@ -225,6 +229,8 @@ export class RecordStore {
   readonly #readStates = new Map<string, ReadState>();
   readonly #mutes = new Map<string, ChannelMute>();
   readonly #collapsed = new Set<string>();
+  /** The users the caller has blocked. */
+  readonly #blocked = new Set<string>();
   readonly #roles = new Map<string, Role>();
   /** Overrides by `channel/role` and `category/role`. */
   readonly #channelOverrides = new Map<string, ChannelOverride>();
@@ -440,6 +446,9 @@ export class RecordStore {
           channel.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
         const recipient =
           this.#myUserId !== null && (parent?.recipients ?? []).includes(this.#myUserId);
+        if (recipient && this.blockedDmPeer(channelId) !== null) {
+          return DM_BLOCKED;
+        }
         return recipient || !this.moderator ? DM_PERMISSIONS : DM_MODERATION;
       }
       const access = this.access(channel.community);
@@ -519,6 +528,40 @@ export class RecordStore {
   /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
   mute(channelId: string): ChannelMute | undefined {
     return this.#mutes.get(channelId);
+  }
+
+  /**
+   * Topic `block:<userId>`: whether the caller has blocked the user. Their messages are
+   * collapsed, their reactions left out, and they are silenced and hidden in calls.
+   */
+  blocked(userId: string): boolean {
+    return this.#blocked.has(userId);
+  }
+
+  /**
+   * Topic `channelAccess:<channelId>`: the other person of a one-to-one DM (or of the DM a
+   * thread is in) when the caller has blocked them, so neither may write there; otherwise
+   * `null`. A block the other person made is theirs alone, and the server's refusal is the only
+   * sign of it.
+   */
+  blockedDmPeer(channelId: string): string | null {
+    const channel = this.#channels.get(channelId);
+    const dm = channel?.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+    if (dm?.ty !== "dm") {
+      return null;
+    }
+    const other = dm.recipients.find((user) => user !== this.#myUserId);
+    return other !== undefined && this.#blocked.has(other) ? other : null;
+  }
+
+  /** Topic `blocks`: everyone the caller has blocked. */
+  blockedUsers(): readonly string[] {
+    return this.#memoized("blocks", () => Array.from(this.#blocked));
+  }
+
+  /** The channels whose message windows are held. */
+  heldWindows(): readonly string[] {
+    return Array.from(this.#windows.keys());
   }
 
   /** Topic `admin`: what the caller may do across the deployment. */
@@ -1151,6 +1194,33 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Replaces everyone blocked with `userIds`, the complete list a bootstrap read, so a block
+   * lifted while the stream was away does not linger.
+   */
+  replaceBlocks(userIds: readonly string[]): void {
+    this.#batch(() => {
+      const listed = new Set(userIds);
+      for (const userId of Array.from(this.#blocked)) {
+        if (!listed.has(userId)) {
+          this.#setBlocked(userId, false);
+        }
+      }
+      for (const userId of userIds) {
+        this.#setBlocked(userId, true);
+      }
+    });
+  }
+
+  /** Records that the caller blocked or unblocked someone. Returns whether that changed. */
+  setBlocked(userId: string, blocked: boolean): boolean {
+    let changed = false;
+    this.#batch(() => {
+      changed = this.#setBlocked(userId, blocked);
+    });
+    return changed;
+  }
+
   /** Ends the mutes whose time is up at `now` (milliseconds since the epoch). */
   expireMutes(now: number): void {
     this.#batch(() => {
@@ -1162,10 +1232,19 @@ export class RecordStore {
     });
   }
 
-  /** Stores a read state the server sent for one channel, replacing what was held. */
+  /**
+   * Stores a read state the server sent for one channel, replacing what was held but for a
+   * position already further on, since a position only moves forward and this device may have
+   * read on before telling the server.
+   */
   putReadState(state: ReadState): void {
     this.#batch(() => {
-      this.#putReadState(state);
+      const held = this.#readStates.get(state.channel);
+      this.#putReadState(
+        held !== undefined && held.lastRead > state.lastRead
+          ? { ...state, lastRead: held.lastRead }
+          : state,
+      );
     });
   }
 
@@ -1273,6 +1352,7 @@ export class RecordStore {
       this.#readStates.clear();
       this.#mutes.clear();
       this.#collapsed.clear();
+      this.#blocked.clear();
       this.#roles.clear();
       this.#pins.clear();
       this.#channelOverrides.clear();
@@ -1501,6 +1581,9 @@ export class RecordStore {
           break;
         case "deploymentAccessChanged":
           this.setDeploymentPermissions(event.permissions);
+          break;
+        case "userBlockChanged":
+          this.#setBlocked(event.user, event.blocked);
           break;
         case "categoryCollapseChanged":
           this.#setCollapsed(event.category, event.collapsed);
@@ -1917,6 +2000,28 @@ export class RecordStore {
     }
   }
 
+  #setBlocked(userId: string, blocked: boolean): boolean {
+    if (this.#blocked.has(userId) === blocked) {
+      return false;
+    }
+    if (blocked) {
+      this.#blocked.add(userId);
+    } else {
+      this.#blocked.delete(userId);
+    }
+    this.#touch(`block:${userId}`);
+    this.#touch("blocks");
+    // What the caller may do in a one-to-one DM with them, and in its threads, changes too.
+    for (const channel of this.#channels.values()) {
+      const dm =
+        channel.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+      if (dm?.ty === "dm" && dm.recipients.includes(userId)) {
+        this.#touch(`channelAccess:${channel.id}`);
+      }
+    }
+    return true;
+  }
+
   #putReadState(state: ReadState): void {
     this.#readStates.set(state.channel, state);
     this.#touch(`read:${state.channel}`);
@@ -1925,7 +2030,8 @@ export class RecordStore {
 
   /**
    * Keeps read states current as messages arrive: someone else's message is the channel's
-   * newest, and the caller's own is read, as the server records it. A channel with no read
+   * newest, unless the caller blocked them, and the caller's own is read, as the server
+   * records it. A channel with no read
    * state yet, one made since the caller's channels were last read, is unread from its start.
    * Threads keep no read state.
    */
@@ -1943,6 +2049,8 @@ export class RecordStore {
       if (message.id > state.lastRead) {
         this.#putReadState({ ...state, lastRead: message.id });
       }
+    } else if (this.#blocked.has(message.author)) {
+      // Someone the caller blocked never makes a channel unread for them.
     } else if (state.lastMessage == null || message.id > state.lastMessage) {
       this.#putReadState({ ...state, lastMessage: message.id });
     }
@@ -2145,6 +2253,10 @@ export class RecordStore {
    * anyone else's arrives once, as an event.
    */
   #applyReaction(messageId: string, emoji: string, userId: string, added: boolean): void {
+    // The server leaves out the reactions of those the caller blocked, and so does the stream.
+    if (this.#blocked.has(userId)) {
+      return;
+    }
     const current = this.#reactions.get(messageId) ?? EMPTY_REACTIONS;
     const summary = current.get(emoji);
     const mine = userId === this.#myUserId;

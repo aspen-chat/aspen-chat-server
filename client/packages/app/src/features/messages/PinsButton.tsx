@@ -2,7 +2,7 @@ import { PushPinIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useMessage, usePins, useSync, useUser } from "@/api/hooks";
+import { useBlocked, useMessage, usePins, useSync, useUser } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { messageLink, type ChannelHome } from "@/features/messages/links";
 import { displayNameOf } from "@/features/users/profile";
@@ -84,7 +84,10 @@ function PinList({
   );
 }
 
-/** One pinned message in brief: who wrote it and how it begins, linking to it in place. */
+/**
+ * One pinned message in brief: who wrote it and how it begins, linking to it in place. A
+ * message by someone the reader blocked is not quoted; following the link opens it.
+ */
 function PinnedMessage({
   messageId,
   channelId,
@@ -100,6 +103,7 @@ function PinnedMessage({
   const sync = useSync();
   const message = useMessage(messageId);
   const author = useUser(message?.author);
+  const blocked = useBlocked(message?.author);
   useEffect(() => {
     if (message === undefined) {
       void sync.loadMessage(messageId).catch(() => undefined);
@@ -116,7 +120,11 @@ function PinnedMessage({
         <span className="font-medium">
           {author === undefined ? m.unknownUser : displayNameOf(author)}
         </span>
-        <span className="line-clamp-2 text-ink-muted">{message?.content ?? m.loading}</span>
+        {blocked ? (
+          <span className="text-ink-faint italic">{m.blocking.oneBlockedMessage}</span>
+        ) : (
+          <span className="line-clamp-2 text-ink-muted">{message?.content ?? m.loading}</span>
+        )}
       </Link>
     </li>
   );

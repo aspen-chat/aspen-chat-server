@@ -74,6 +74,9 @@ pub enum ProblemCode {
     RegistrationInviteInvalid,
     /// Only the deployment's administrators may use the Administration Dashboard.
     AdminRequired,
+    /// A block stands between the caller and someone they would message, whichever of them
+    /// made it; the problem does not say which.
+    Blocked,
     /// Password change: the current password did not match.
     OldPasswordIncorrect,
     /// Password change: the new password fails a requirement named in `requirement`.
@@ -99,7 +102,8 @@ impl ProblemCode {
             | ProblemCode::TwoFactorEnrollmentRequired
             | ProblemCode::RegistrationInviteRequired
             | ProblemCode::RegistrationInviteInvalid
-            | ProblemCode::AdminRequired => StatusCode::FORBIDDEN,
+            | ProblemCode::AdminRequired
+            | ProblemCode::Blocked => StatusCode::FORBIDDEN,
             ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
                 StatusCode::TOO_MANY_REQUESTS
             }
@@ -141,6 +145,7 @@ impl ProblemCode {
             ProblemCode::RegistrationInviteRequired => t!("problemRegistrationInviteRequired"),
             ProblemCode::RegistrationInviteInvalid => t!("problemRegistrationInviteInvalid"),
             ProblemCode::AdminRequired => t!("problemAdminRequired"),
+            ProblemCode::Blocked => t!("problemBlocked"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
@@ -259,6 +264,7 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::RegistrationInviteInvalid)
             }
             app::Error::AdminRequired => Self::new(ProblemCode::AdminRequired),
+            app::Error::Blocked => Self::new(ProblemCode::Blocked),
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }

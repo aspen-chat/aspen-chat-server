@@ -8,8 +8,9 @@
 //!
 //! Nothing a member's channels held before they joined (the community, or the DM) is unread to
 //! them: until they have read past it, their position is that moment. A channel is unread while
-//! it holds a message by someone else after the position; the caller's own messages never make
-//! a channel unread. Threads keep no position of their own.
+//! it holds a message by someone else after the position; the caller's own messages, and those
+//! of anyone they have blocked (`app::block`), never make a channel unread. Threads keep no
+//! position of their own.
 
 use crate::api::ChannelType;
 use crate::api::message_enum::server_event::ServerEvent;
@@ -32,7 +33,8 @@ pub struct ReadState {
     /// name a message that has since been deleted, or none at all when it is the moment the
     /// user joined.
     pub last_read: MessageId,
-    /// The newest message in the channel not written by the user, if there is one.
+    /// The newest message in the channel written by neither the user nor anyone they have
+    /// blocked, if there is one.
     pub last_message: Option<MessageId>,
 }
 
@@ -91,6 +93,10 @@ async fn read(
             WHERE message.channel = c.id
               AND message.deleted_at IS NULL
               AND message.author <> $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_block
+                  WHERE user_block.blocker = $1 AND user_block.blocked = message.author
+              )
             ORDER BY message.id DESC
             LIMIT 1
         ) m ON true

@@ -68,6 +68,7 @@ export {
   isDm,
   type Attachment,
   type ChannelMute,
+  type UserBlock,
   type Pin,
   type ChannelVoice,
   type Icon,

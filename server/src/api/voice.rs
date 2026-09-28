@@ -167,7 +167,7 @@ pub struct VoiceServerFailureOutcome {
         (status = OK, body = VoiceJoinOffer),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a voice channel, or no voice server is available)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

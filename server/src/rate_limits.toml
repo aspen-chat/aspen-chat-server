@@ -217,6 +217,13 @@ user = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."DELETE /categories/{category}/collapses/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Blocking is the caller's own setting, but each change is published.
+[rate_limits.endpoints."PUT /users/@me/blocks/{user}"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."DELETE /users/@me/blocks/{user}"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
 [rate_limits.endpoints."POST /communities"]
 user = { requests = 10, per_seconds = 3600, burst = 3 }
 

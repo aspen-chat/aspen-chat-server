@@ -254,7 +254,7 @@ export class AspenSync {
     if (options.random !== undefined) {
       voiceOptions.random = options.random;
     }
-    voiceOptions.userVolume = (userId) => effectiveUserVolume(this.preferences, userId);
+    voiceOptions.userVolume = (userId) => this.#userGain(userId);
     this.voice = new VoiceCall(voiceOptions);
     this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
     if (typeof document !== "undefined") {
@@ -1336,20 +1336,113 @@ export class AspenSync {
   }
 
   /**
-   * Changes the caller's own profile: any of the display name, pronouns, bio, and status, with
-   * `null` clearing one. The cache is left to the update event, which the server publishes
-   * before it answers.
+   * How loud `userId` is to this user on this install: a gain, 1 as sent. Silent while muted
+   * for them or blocked.
    */
-  /** How loud `userId` is to this user on this install: a gain, 1 as sent. Silent while muted for them. */
   async setUserVolume(userId: string, gain: number): Promise<void> {
     await this.preferences.set(userVolume(userId), gain);
-    this.voice.setUserVolume(userId, effectiveUserVolume(this.preferences, userId));
+    this.voice.setUserVolume(userId, this.#userGain(userId));
   }
 
   /** Silences `userId` for this user alone, or hears them again at their volume. */
   async setUserMuted(userId: string, muted: boolean): Promise<void> {
     await this.preferences.set(userMuted(userId), muted);
-    this.voice.setUserVolume(userId, effectiveUserVolume(this.preferences, userId));
+    this.voice.setUserVolume(userId, this.#userGain(userId));
+  }
+
+  /** How loud `userId` plays here: silent while blocked or muted for this user. */
+  #userGain(userId: string): number {
+    return this.store.blocked(userId) ? 0 : effectiveUserVolume(this.preferences, userId);
+  }
+
+  /**
+   * Blocks someone for the caller: their messages collapse, their reactions go, and they are
+   * silenced and hidden in calls. They are not told.
+   */
+  async blockUser(userId: string): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/users/@me/blocks/{user}", {
+      params: { path: { user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (this.store.setBlocked(userId, true)) {
+      this.#blockChanged(userId);
+    }
+  }
+
+  /** Lifts the caller's block of someone. */
+  async unblockUser(userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/users/@me/blocks/{user}", {
+      params: { path: { user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (this.store.setBlocked(userId, false)) {
+      this.#blockChanged(userId);
+    }
+  }
+
+  /**
+   * Follows a block made or lifted, here or on another device. The call's gain changes at once;
+   * what the server counts for the caller alone (unread, reaction summaries) is read again.
+   */
+  #blockChanged(userId: string): void {
+    this.voice.setUserVolume(userId, this.#userGain(userId));
+    void this.#refreshBlockedCounts();
+  }
+
+  /**
+   * Reads again what the server leaves blocked users out of: every read state, and the
+   * reactions of each held message window, one read per window (a window never holds more than
+   * a read returns on each side of its middle).
+   */
+  async #refreshBlockedCounts(): Promise<void> {
+    const generation = this.#generation;
+    const [communities, dms] = await Promise.all([
+      this.#client.api
+        .GET("/api/v1/users/{user}/communities", {
+          params: { path: { user: "@me" }, query: { include: ["readStates"] } },
+        })
+        .catch(() => undefined),
+      this.#client.api
+        .GET("/api/v1/users/@me/dms", { params: { query: { include: ["readStates"] } } })
+        .catch(() => undefined),
+    ]);
+    if (generation !== this.#generation) {
+      return;
+    }
+    for (const state of [
+      ...(communities?.data?.included.readStates ?? []),
+      ...(dms?.data?.included.readStates ?? []),
+    ]) {
+      this.store.putReadState(state);
+    }
+    await Promise.all(
+      this.store.heldWindows().map(async (channelId) => {
+        const ids = this.store.messages(channelId)?.ids ?? [];
+        const middle = ids[Math.floor(ids.length / 2)];
+        if (middle === undefined) {
+          return;
+        }
+        const result = await this.#client.api
+          .GET("/api/v1/channels/{channel}/messages", {
+            params: {
+              path: { channel: channelId },
+              query: {
+                around: middle,
+                limit: Math.ceil(ids.length / 2),
+                include: ["reactions"],
+              },
+            },
+          })
+          .catch(() => undefined);
+        if (result?.data !== undefined && generation === this.#generation) {
+          this.store.setReactions(ids, result.data.included.reactions ?? []);
+        }
+      }),
+    );
   }
 
   /** Server-mutes or unmutes someone in a channel's call; their `update` event confirms it. */
@@ -1600,6 +1693,11 @@ export class AspenSync {
     return load;
   }
 
+  /**
+   * Changes the caller's own profile: any of the display name, pronouns, bio, and status, with
+   * `null` clearing one. The cache is left to the update event, which the server publishes
+   * before it answers.
+   */
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
@@ -1782,7 +1880,7 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms, admin] = await Promise.all([
+      const [me, communities, dms, admin, blocks] = await Promise.all([
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
@@ -1805,6 +1903,9 @@ export class AspenSync {
           params: { query: { include: ["users", "readStates", "mutes"] } },
         }),
         this.#client.api.GET("/api/v1/users/@me/admin"),
+        this.#client.api.GET("/api/v1/users/@me/blocks", {
+          params: { query: { include: ["users"] } },
+        }),
       ]);
       if (generation !== this.#generation) {
         return false;
@@ -1818,6 +1919,10 @@ export class AspenSync {
       if (dms.data === undefined) {
         throw new ApiProblemError(problemOf(dms.error, dms.response));
       }
+      if (blocks.data === undefined) {
+        throw new ApiProblemError(problemOf(blocks.error, blocks.response));
+      }
+      const wasBlocked = this.store.blockedUsers();
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data);
@@ -1826,6 +1931,11 @@ export class AspenSync {
         ...(dms.data.included.channelMutes ?? []),
       ]);
       this.#scheduleMuteEnd();
+      this.store.ingest(blocks.data.included);
+      this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
+      for (const userId of new Set([...wasBlocked, ...this.store.blockedUsers()])) {
+        this.voice.setUserVolume(userId, this.#userGain(userId));
+      }
       this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
@@ -1961,7 +2071,12 @@ export class AspenSync {
         ? this.store.channelsLastMessaged(event.id)
         : [];
     const widens = this.#mayWidenAccess(event);
+    const blockChanged =
+      event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
     this.store.applyEvent(event);
+    if (blockChanged) {
+      this.#blockChanged(event.user);
+    }
     for (const channelId of orphaned) {
       void this.#reloadReadState(channelId);
     }

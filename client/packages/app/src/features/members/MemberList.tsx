@@ -1,6 +1,7 @@
 import type { User, UserOnlineStatus } from "@aspen/protocol";
+import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
-import { useMembers } from "@/api/hooks";
+import { useBlocked, useMembers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf, statusLine } from "@/features/users/profile";
@@ -10,6 +11,7 @@ import { format } from "@/i18n/messages";
 /**
  * Who is in the community, online members first. The server samples the most recently seen
  * members, so in a large community this is the active part of the roster rather than all of it.
+ * People the user blocked are marked.
  */
 export function MemberList({ communityId }: { communityId: string }) {
   const m = useMessages();
@@ -58,6 +60,7 @@ function MemberGroup({ heading, users }: { heading: string; users: readonly User
 function MemberRow({ user }: { user: User }) {
   const m = useMessages();
   const offline = user.onlineStatus === "offline";
+  const blocked = useBlocked(user.id);
   const name = displayNameOf(user);
   return (
     <li className={offline ? "opacity-60" : ""}>
@@ -70,12 +73,19 @@ function MemberRow({ user }: { user: User }) {
             <Avatar name={name} iconId={user.icon} size="sm" />
             <StatusDot status={user.onlineStatus} label={m.status[user.onlineStatus]} />
           </span>
-          <span className="flex min-w-0 flex-col">
+          <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-sm">{name}</span>
             {user.status != null && (
               <span className="truncate text-xs text-ink-muted">{statusLine(user.status)}</span>
             )}
           </span>
+          {blocked && (
+            <ProhibitIcon
+              size={14}
+              aria-label={m.blocking.blocked}
+              className="shrink-0 text-ink-faint"
+            />
+          )}
         </Button>
       </ProfilePopover>
     </li>

@@ -63,6 +63,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me": () => json(me),
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
     "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [] }),
+    "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -225,6 +226,7 @@ describe("AspenSync", () => {
       "/api/v1/users/%40me/communities",
       "/api/v1/users/@me/dms",
       "/api/v1/users/@me/admin",
+      "/api/v1/users/@me/blocks",
       "/api/v1/users/%40me/preferences",
       "/api/v1/users/statuses",
     ]);
@@ -712,6 +714,60 @@ describe("AspenSync", () => {
     });
     await sync.removeReaction(target.id, "👍");
     expect(sync.store.reactions(target.id).size).toBe(0);
+  });
+
+  it("blocks someone and reads again what the server counts without them", async () => {
+    const bob = id(2);
+    const target = message(3);
+    const blocks: string[] = [];
+    const routes = bootstrapResponses();
+    const bootstrapCommunities = routes["/api/v1/users/@me/communities"];
+    if (bootstrapCommunities === undefined) {
+      throw new Error("the bootstrap reads the community list");
+    }
+    const { sync } = makeSync({
+      ...routes,
+      "/api/v1/users/@me/communities": (url) =>
+        url.searchParams.get("include") === "readStates"
+          ? json({
+              data: [aspen],
+              included: {
+                readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null }],
+              },
+            })
+          : bootstrapCommunities(url),
+      [`/api/v1/channels/${general.id}/messages`]: (url) =>
+        url.searchParams.get("around") === null
+          ? json({
+              data: [target],
+              included: {
+                users: [],
+                attachments: [],
+                reactions: [
+                  { messageId: target.id, emoji: "👍", count: 1, me: false, users: [bob] },
+                ],
+              },
+            })
+          : json({ data: [target], included: { reactions: [] } }),
+      [`/api/v1/users/@me/blocks/${bob}`]: (_url, request) => {
+        blocks.push(request.method);
+        return request.method === "PUT"
+          ? json({ user: bob, createdAt: "2026-09-28T12:00:00Z" }, 201)
+          : new Response(null, { status: 204 });
+      },
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    expect(sync.store.unread(general.id)).toBe(true);
+    expect(sync.store.reactions(target.id).size).toBe(1);
+    await sync.blockUser(bob);
+    await settle();
+    expect(sync.store.blocked(bob)).toBe(true);
+    expect(sync.store.unread(general.id)).toBe(false);
+    expect(sync.store.reactions(target.id).size).toBe(0);
+    await sync.unblockUser(bob);
+    expect(sync.store.blocked(bob)).toBe(false);
+    expect(blocks).toEqual(["PUT", "DELETE"]);
   });
 
   it("opens polls, votes, and fetches a poll on demand with the caller's votes", async () => {

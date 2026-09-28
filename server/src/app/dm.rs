@@ -2,7 +2,8 @@
 //! channels that belong to no community; their people are rows of `dm_recipient`, and what
 //! happens in them is published to each recipient alone (`app::events`). Only recipients may
 //! read or write a DM, or a thread in one; to anyone else it does not exist. A DM may only be
-//! started with, or joined by, people who share a community with the one starting or adding.
+//! started with, or joined by, people who share a community with the one starting or adding,
+//! and never with two people who have a block between them (`app::block`).
 
 use crate::api::ChannelType;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
@@ -77,7 +78,9 @@ fn new_dm(ty: ChannelType, dm_key: Option<String>) -> Channel {
 }
 
 /// A DM, and whether this call made it. With one other person it is their one-to-one DM, made
-/// on first use and returned as it is afterwards; with more it is a new group DM.
+/// on first use and returned as it is afterwards; with more it is a new group DM. A block
+/// between any two of the people refuses a DM that does not exist yet, while a one-to-one DM
+/// made before the block is still returned, to be read.
 pub async fn open_dm(
     state: &GlobalServerContext,
     caller: UserId,
@@ -100,8 +103,25 @@ pub async fn open_dm(
     }
     let mut conn = state.connection_pool.get().await?;
     ensure_shared_community(conn.as_mut(), caller, &others).await?;
+    let mut everyone = others.clone();
+    everyone.push(caller);
+    let blocked = app::block::any_between(conn.as_mut(), &everyone).await?;
     conn.transaction(|conn| {
         async move {
+            if blocked {
+                if others.len() > 1 {
+                    return Err(app::Error::Blocked);
+                }
+                let existing: Channel = channel::table
+                    .select(Channel::as_select())
+                    .filter(channel::dm_key.eq(pair_key(caller, others[0])))
+                    .first(conn.as_mut())
+                    .await
+                    .optional()?
+                    .ok_or(app::Error::Blocked)?;
+                let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
+                return Ok((existing, recipients, false));
+            }
             let (ty, key) = if others.len() == 1 {
                 (ChannelType::Dm, Some(pair_key(caller, others[0])))
             } else {
@@ -243,6 +263,11 @@ pub async fn add_recipient(
             let recipients = dm_recipients(conn.as_mut(), dm_id).await?;
             if recipients.contains(&user) {
                 return Ok(false);
+            }
+            let mut joined = recipients.clone();
+            joined.push(user);
+            if app::block::any_between(conn.as_mut(), &joined).await? {
+                return Err(app::Error::Blocked);
             }
             if recipients.len() >= MAX_RECIPIENTS {
                 return Err(app::Error::Validation(t!(

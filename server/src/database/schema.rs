@@ -388,6 +388,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    user_block (blocker, blocked) {
+        blocker -> Uuid,
+        blocked -> Uuid,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user_deployment_role (user, role) {
         user -> Uuid,
         role -> Uuid,
@@ -540,6 +548,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     session,
     totp_secret,
     user,
+    user_block,
     user_deployment_role,
     user_preferences,
     voice_participant,

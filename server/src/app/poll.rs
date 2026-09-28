@@ -535,7 +535,9 @@ pub async fn add_vote(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            channel_access(state, conn.as_mut(), user, row.channel).await?;
+            channel_access(state, conn.as_mut(), user, row.channel)
+                .await?
+                .ensure_unblocked()?;
             ensure_open(&row, now)?;
             let Ok(option_index) = i32::try_from(option) else {
                 return Err(app::Error::Validation(t!("pollOptionOutOfRange")));
@@ -636,7 +638,9 @@ pub async fn write_in(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            channel_access(state, conn.as_mut(), user, row.channel).await?;
+            channel_access(state, conn.as_mut(), user, row.channel)
+                .await?
+                .ensure_unblocked()?;
             ensure_open(&row, now)?;
             if !row.allow_write_ins {
                 return Err(app::Error::Validation(t!("pollWriteInsOff")));

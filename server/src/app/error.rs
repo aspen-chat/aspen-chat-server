@@ -78,6 +78,9 @@ pub enum Error {
     Unauthorized,
     #[error("forbidden: {0}")]
     Forbidden(Cow<'static, str>),
+    /// A block stands between the caller and the person they would message (`app::block`).
+    #[error("a block stands between these people")]
+    Blocked,
     #[error("the session must verify its user again before changing security settings")]
     ReauthenticationRequired,
     #[error("the password or code presented was wrong")]

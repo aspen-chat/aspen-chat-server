@@ -3,8 +3,9 @@ import { ChatsCircleIcon, XIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
-import { useChannel, useSync, useSyncStatus } from "@/api/hooks";
+import { useBlocked, useChannel, useMessage, useSync, useSyncStatus } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { BlockedRun } from "@/features/messages/BlockedRun";
 import { Composer } from "@/features/messages/Composer";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { MessageList } from "@/features/messages/MessageList";
@@ -103,16 +104,7 @@ export function ThreadPanel({
             {starterGone ? (
               <p className="px-2 text-sm text-ink-faint italic">{m.threads.starterDeleted}</p>
             ) : (
-              starter != null && (
-                <MessageItem
-                  id={starter}
-                  home={home}
-                  channelId={parentId}
-                  parentId={null}
-                  highlighted={false}
-                  threadable={false}
-                />
-              )
+              starter != null && <Starter id={starter} home={home} channelId={parentId} />
             )}
           </div>
           <MessageList channelId={threadId} home={home} highlightId={undefined} />
@@ -124,5 +116,25 @@ export function ThreadPanel({
         </>
       )}
     </aside>
+  );
+}
+
+/** The message that started the thread, collapsed like any other when its author is blocked. */
+function Starter({ id, home, channelId }: { id: string; home: ChannelHome; channelId: string }) {
+  const blocked = useBlocked(useMessage(id)?.author);
+  const item = (messageId: string) => (
+    <MessageItem
+      id={messageId}
+      home={home}
+      channelId={channelId}
+      parentId={null}
+      highlighted={false}
+      threadable={false}
+    />
+  );
+  return blocked ? (
+    <BlockedRun ids={[id]} lineOffset={null} highlightId={undefined} item={item} />
+  ) : (
+    item(id)
   );
 }

@@ -36,6 +36,7 @@ import {
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
+import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -44,8 +45,9 @@ import { ThemePicker } from "@/theme/ThemePicker";
 
 /**
  * The user's preferences: the microphone and speaker voice chat uses and the speaker for
- * notification sounds, then the colour palette, all kept with this install; the account's
- * sign-in and security settings; and the way out of the account. Sections for account-wide
+ * notification sounds, then the colour palette, all kept with this install; the people the
+ * user has blocked; the account's sign-in and security settings; and the way out of the
+ * account. Sections for account-wide
  * preferences slot in beside them.
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
@@ -71,6 +73,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   </h3>
                   <ThemePicker />
                 </section>
+                <BlockedUsersSection />
                 <section aria-labelledby="settings-account" className="flex flex-col gap-3">
                   <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
                     {m.settings.account}

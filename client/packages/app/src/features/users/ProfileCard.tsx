@@ -1,22 +1,24 @@
 import type { User } from "@aspen/protocol";
-import { ChatCircleIcon } from "@phosphor-icons/react";
+import { ChatCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState, type ReactNode, type RefObject } from "react";
 import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useMe, useSync } from "@/api/hooks";
+import { useBlocked, useMe, useSync } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
+import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
  * A user's profile as a card: who they are, their pronouns, what they are up to, and their
- * bio, with a way to message them when they are someone else. Opens from any control that
- * names the user, such as a message author or a member row.
+ * bio, with ways to message and to block them when they are someone else. Opens from any
+ * control that names the user, such as a message author or a member row.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
   const me = useMe();
+  const blocked = useBlocked(user.id);
   const name = displayNameOf(user);
   return (
     <div className="flex w-72 flex-col gap-3 p-4">
@@ -28,6 +30,12 @@ export function ProfileCard({ user }: { user: User }) {
             @{user.name}
             {user.pronouns != null && <span> · {user.pronouns}</span>}
           </div>
+          {blocked && (
+            <div className="mt-0.5 flex items-center gap-1 text-xs font-medium text-ink-faint">
+              <ProhibitIcon size={12} aria-hidden="true" />
+              {m.blocking.blocked}
+            </div>
+          )}
         </div>
       </div>
       {user.status != null && (
@@ -43,7 +51,85 @@ export function ProfileCard({ user }: { user: User }) {
           <p className="mt-1 text-sm break-words whitespace-pre-wrap">{user.bio}</p>
         </section>
       )}
-      {me !== null && me.id !== user.id && <MessageButton userId={user.id} />}
+      {me !== null && me.id !== user.id && (
+        <>
+          {!blocked && <MessageButton userId={user.id} />}
+          <BlockControl userId={user.id} name={name} blocked={blocked} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Blocks the user, once the caller has read what that does and confirmed, or lifts a block at
+ * once.
+ */
+function BlockControl({
+  userId,
+  name,
+  blocked,
+}: {
+  userId: string;
+  name: string;
+  blocked: boolean;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = (action: Promise<void>) => {
+    setPending(true);
+    setError(null);
+    action.then(
+      () => {
+        setPending(false);
+        setConfirming(false);
+      },
+      (failure: unknown) => {
+        setError(failure instanceof Error ? failure.message : String(failure));
+        setPending(false);
+      },
+    );
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      {confirming && !blocked && (
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-semibold">{format(m.blocking.blockTitle, { name })}</p>
+          <p className="text-xs text-ink-muted">{m.blocking.blockExplained}</p>
+        </div>
+      )}
+      {/* Not disabled while pending: a disabled button drops focus out of the card, which
+          then no longer closes on Escape. */}
+      <Button
+        aria-disabled={pending}
+        onPress={() => {
+          if (pending) {
+            return;
+          }
+          if (blocked) {
+            run(sync.unblockUser(userId));
+          } else if (confirming) {
+            run(sync.blockUser(userId));
+          } else {
+            setConfirming(true);
+          }
+        }}
+        className={
+          (confirming && !blocked ? dangerButtonClass : secondaryButtonClass) +
+          " flex items-center justify-center gap-1.5"
+        }
+      >
+        <ProhibitIcon size={16} aria-hidden="true" />
+        {blocked ? m.blocking.unblock : m.blocking.block}
+      </Button>
+      {error !== null && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

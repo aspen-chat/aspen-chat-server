@@ -191,7 +191,8 @@ struct SummaryRow {
 }
 
 /// The reactions to each of `messages`, one summary per emoji. A message's emoji come in the
-/// order each was first used on it, so a client can break ties in count the same way.
+/// order each was first used on it, so a client can break ties in count the same way. The
+/// reactions of anyone `caller` has blocked are left out (`app::block`).
 pub async fn read_summaries(
     state: &GlobalServerContext,
     caller: UserId,
@@ -207,6 +208,9 @@ pub async fn read_summaries(
                (array_agg(author ORDER BY "timestamp", author))[1:$3] AS first
         FROM react
         WHERE message = ANY($2)
+          AND NOT EXISTS (
+              SELECT 1 FROM user_block WHERE blocker = $1 AND blocked = react.author
+          )
         GROUP BY message, emoji
         ORDER BY message, min("timestamp"), emoji
         "#,
@@ -237,7 +241,8 @@ struct ReactorRow {
 }
 
 /// Who reacted to `message_id` with `emoji`, earliest first: at most `limit` of them, starting
-/// after `after` when given. Not found for a message `caller` may not see.
+/// after `after` when given, leaving out anyone `caller` has blocked. Not found for a message
+/// `caller` may not see.
 pub async fn read_reactors(
     state: &GlobalServerContext,
     caller: UserId,
@@ -261,6 +266,9 @@ pub async fn read_reactors(
         r#"
         SELECT author FROM react
         WHERE message = $1 AND emoji = $2
+          AND NOT EXISTS (
+              SELECT 1 FROM user_block WHERE blocker = $5 AND blocked = react.author
+          )
           AND ($3::uuid IS NULL OR ("timestamp", author) > (
               SELECT "timestamp", author FROM react
               WHERE message = $1 AND emoji = $2 AND author = $3))
@@ -272,6 +280,7 @@ pub async fn read_reactors(
     .bind::<diesel::sql_types::Text, _>(emoji)
     .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(after.map(|a| a.0))
     .bind::<diesel::sql_types::BigInt, _>(i64::from(limit.min(MAX_REACTORS_PAGE)))
+    .bind::<diesel::sql_types::Uuid, _>(caller.0)
     .load(conn.as_mut())
     .await?;
     Ok(rows.into_iter().map(|row| row.author).collect())

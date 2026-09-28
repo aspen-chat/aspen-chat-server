@@ -59,6 +59,7 @@ pub struct DmListQuery {
         (status = OK, description = "The existing one-to-one DM", body = Channel, headers(("Location" = String, description = "URL of the DM"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (no recipient, too many, or one who shares no community with the caller)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -174,6 +175,7 @@ pub async fn list_dms(
         (status = OK, description = "Already a recipient", body = Channel),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a group DM, full, or someone who shares no community with the caller)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

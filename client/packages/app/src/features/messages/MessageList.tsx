@@ -4,13 +4,23 @@ import {
   Fragment,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Button } from "react-aria-components";
-import { useChannel, useMessageWindow, useReadState, useStore, useSync } from "@/api/hooks";
+import {
+  useBlockedUsers,
+  useChannel,
+  useMessageWindow,
+  useReadState,
+  useStore,
+  useSync,
+} from "@/api/hooks";
+import { windowParts } from "@/features/messages/blocked";
+import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useMessages } from "@/i18n/context";
@@ -34,6 +44,10 @@ import { useMessages } from "@/i18n/context";
  * unread shows the "New Messages" line under the message it had been read up to, and keeps it
  * there while it stays open, though reading moves the position at once; the line goes when the
  * reader leaves or posts.
+ *
+ * Consecutive messages by people the reader blocked are collapsed into one row, which they may
+ * open; a linked message among them opens its row. The row stands for its last message, both
+ * as an anchor for the view and as what the reader has seen.
  */
 const PROGRAMMATIC_SCROLL_MS = 200;
 /** How long after a wheel, touch, scrollbar press, or key a scroll event still counts as the reader's. */
@@ -125,6 +139,14 @@ export function MessageList({
     setLine({ channelId, after: null });
   }
   const seenFrame = useRef<number | null>(null);
+  const blockedUsers = useBlockedUsers();
+  const parts = useMemo(() => {
+    const blocked = new Set(blockedUsers);
+    return windowParts(window?.ids ?? [], (id) => {
+      const author = store.message(id)?.author;
+      return author !== undefined && blocked.has(author);
+    });
+  }, [window, blockedUsers, store]);
 
   const loaded = window !== undefined;
   const ids = window?.ids;
@@ -450,8 +472,8 @@ export function MessageList({
           <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
         )}
         {lineIndex === -1 && <NewMessagesLine />}
-        {window.ids.map((id, index) => (
-          <Fragment key={id}>
+        {parts.map((part) => {
+          const item = (id: string) => (
             <MessageItem
               id={id}
               home={home}
@@ -459,9 +481,31 @@ export function MessageList({
               parentId={parentId}
               highlighted={id === highlightId}
             />
-            {index === lineIndex && <NewMessagesLine />}
-          </Fragment>
-        ))}
+          );
+          if (part.kind === "message") {
+            return (
+              <Fragment key={part.id}>
+                {item(part.id)}
+                {part.index === lineIndex && <NewMessagesLine />}
+              </Fragment>
+            );
+          }
+          const lineOffset =
+            lineIndex !== null &&
+            lineIndex >= part.index &&
+            lineIndex < part.index + part.ids.length
+              ? lineIndex - part.index
+              : null;
+          return (
+            <BlockedRun
+              key={part.ids[0]}
+              ids={part.ids}
+              lineOffset={lineOffset}
+              highlightId={highlightId}
+              item={item}
+            />
+          );
+        })}
         {!window.atLatest && (
           <p aria-live="polite" className="min-h-9 py-2 text-center text-sm text-ink-faint">
             {loadingNewer ? m.loading : ""}
@@ -500,20 +544,4 @@ function lineAt(window: MessageWindow, after: string | null): number | null {
     return null;
   }
   return index;
-}
-
-/** The accent line under the last message read, with "New Messages" at its centre. */
-function NewMessagesLine() {
-  const m = useMessages();
-  return (
-    <div
-      role="separator"
-      aria-label={m.newMessages}
-      className="flex items-center gap-2 py-1 text-xs font-semibold text-accent"
-    >
-      <span aria-hidden="true" className="h-px flex-1 bg-accent" />
-      <span aria-hidden="true">{m.newMessages}</span>
-      <span aria-hidden="true" className="h-px flex-1 bg-accent" />
-    </div>
-  );
 }

@@ -14,6 +14,7 @@ use std::result::Result as StdResult;
 pub mod admin;
 pub mod attachment;
 pub mod benchmark;
+pub mod block;
 pub mod category;
 pub mod category_collapse;
 pub mod channel;

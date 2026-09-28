@@ -5,12 +5,15 @@ import {
   MicrophoneSlashIcon,
   MonitorIcon,
   PhoneIcon,
+  ProhibitIcon,
   SpeakerHighIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { Button } from "react-aria-components";
 import {
+  useBlocked,
+  useBlockedUsers,
   useChannelCan,
   useChannelVoice,
   useMe,
@@ -33,7 +36,8 @@ import { format } from "@/i18n/messages";
 
 /**
  * A voice channel's screen: the shared screens, one of them large and the rest as thumbnails
- * to pick from, then everyone in the call as tiles, and the way in or the share control.
+ * to pick from, then everyone in the call as tiles, and the way in or the share control. The
+ * screens of people the user blocked are not shown.
  */
 export function VoiceScreen({ channel, communityId }: { channel: Channel; communityId: string }) {
   const m = useMessages();
@@ -44,17 +48,20 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
+  const blocked = useBlockedUsers();
 
   const screens: { id: string; user: string | null; track: MediaStreamTrack }[] = inThisCall
     ? [
         ...(call.localScreen === null
           ? []
           : [{ id: "local", user: null, track: call.localScreen }]),
-        ...call.screens.map((screen) => ({
-          id: screen.consumerId,
-          user: screen.user,
-          track: screen.track,
-        })),
+        ...call.screens
+          .filter((screen) => !blocked.includes(screen.user))
+          .map((screen) => ({
+            id: screen.consumerId,
+            user: screen.user,
+            track: screen.track,
+          })),
       ]
     : [];
   const focused = screens.find((screen) => screen.id === focusedId) ?? screens[0];
@@ -205,6 +212,7 @@ function ParticipantTile({
   const user = useUser(userId);
   const self = useMe()?.id === userId;
   const mutedForMe = usePreference(userMuted(userId));
+  const blocked = useBlocked(userId);
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
   const tile = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -247,12 +255,17 @@ function ParticipantTile({
         {muted && <MicrophoneSlashIcon size={14} aria-label={m.voice.mutedMark} />}
         {deafened && <HeadphonesIcon size={14} aria-label={m.voice.deafenedMark} />}
         {sharingScreen && <MonitorIcon size={14} aria-label={m.voice.sharingMark} />}
-        {!self && mutedForMe && (
-          <SpeakerSlashIcon
-            size={14}
-            aria-label={m.voice.mutedForYouMark}
-            className="text-danger"
-          />
+        {blocked ? (
+          <ProhibitIcon size={14} aria-label={m.blocking.blocked} />
+        ) : (
+          !self &&
+          mutedForMe && (
+            <SpeakerSlashIcon
+              size={14}
+              aria-label={m.voice.mutedForYouMark}
+              className="text-danger"
+            />
+          )
         )}
       </span>
     </li>

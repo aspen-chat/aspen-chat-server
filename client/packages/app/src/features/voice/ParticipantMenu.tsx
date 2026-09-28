@@ -13,7 +13,7 @@ import {
   SliderThumb,
   SliderTrack,
 } from "react-aria-components";
-import { useChannelCan, usePreference, useSync } from "@/api/hooks";
+import { useBlocked, useChannelCan, usePreference, useSync } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -49,6 +49,7 @@ export function ParticipantMenu({
   const sync = useSync();
   const gain = usePreference(userVolume(userId));
   const mutedForMe = usePreference(userMuted(userId));
+  const blocked = useBlocked(userId);
   const moderate = useChannelCan(channelId, "manageCalls");
   const label = format(m.voice.participantActions, { name });
   return (
@@ -65,7 +66,7 @@ export function ParticipantMenu({
           minValue={0}
           maxValue={MAX_USER_VOLUME * 100}
           step={STEP}
-          isDisabled={mutedForMe}
+          isDisabled={mutedForMe || blocked}
           onChange={(value) => {
             if (typeof value === "number") {
               void sync.setUserVolume(userId, value / 100).catch(() => undefined);
@@ -84,35 +85,40 @@ export function ParticipantMenu({
             <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
           </SliderTrack>
         </Slider>
-        <Menu
-          aria-label={label}
-          className="border-t border-line pt-1 outline-none"
-          onAction={(key) => {
-            if (key === "muteForMe") {
-              void sync.setUserMuted(userId, !mutedForMe).catch(() => undefined);
-            } else if (key === "serverMute") {
-              onOpenChange(false);
-              void sync.muteVoiceParticipant(channelId, userId, !muted).catch(() => undefined);
-            } else if (key === "kick") {
-              onOpenChange(false);
-              void sync.kickVoiceParticipant(channelId, userId).catch(() => undefined);
-            }
-          }}
-        >
-          <MenuItem id="muteForMe" className={itemClass}>
-            {mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
-          </MenuItem>
-          {moderate && (
-            <>
-              <MenuItem id="serverMute" className={itemClass}>
-                {muted ? m.voice.serverUnmute : m.voice.serverMute}
+        {blocked && <p className="px-1 text-xs text-ink-muted">{m.blocking.blockedInCall}</p>}
+        {(!blocked || moderate) && (
+          <Menu
+            aria-label={label}
+            className="border-t border-line pt-1 outline-none"
+            onAction={(key) => {
+              if (key === "muteForMe") {
+                void sync.setUserMuted(userId, !mutedForMe).catch(() => undefined);
+              } else if (key === "serverMute") {
+                onOpenChange(false);
+                void sync.muteVoiceParticipant(channelId, userId, !muted).catch(() => undefined);
+              } else if (key === "kick") {
+                onOpenChange(false);
+                void sync.kickVoiceParticipant(channelId, userId).catch(() => undefined);
+              }
+            }}
+          >
+            {!blocked && (
+              <MenuItem id="muteForMe" className={itemClass}>
+                {mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
               </MenuItem>
-              <MenuItem id="kick" className={itemClass} data-danger="true">
-                {m.voice.removeFromCall}
-              </MenuItem>
-            </>
-          )}
-        </Menu>
+            )}
+            {moderate && (
+              <>
+                <MenuItem id="serverMute" className={itemClass}>
+                  {muted ? m.voice.serverUnmute : m.voice.serverMute}
+                </MenuItem>
+                <MenuItem id="kick" className={itemClass} data-danger="true">
+                  {m.voice.removeFromCall}
+                </MenuItem>
+              </>
+            )}
+          </Menu>
+        )}
       </Dialog>
     </Popover>
   );

@@ -2,12 +2,14 @@ import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
-import { useChannel, useChannelAccess, useSync } from "@/api/hooks";
+import { useBlockedDmPeer, useChannel, useChannelAccess, useSync, useUser } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { secondaryButtonClass } from "@/features/invites/dialog";
+import { displayNameOf } from "@/features/users/profile";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -32,7 +34,8 @@ const toolButtonClass =
  * upload at once and are sent with the next message; a message may be files alone. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
  * clears after each message. Only what the caller may do here is offered: without sending (or,
- * in a thread, sending in threads) the box gives way to a note saying so.
+ * in a thread, sending in threads) the box gives way to a note saying so, and in a DM with
+ * someone the caller blocked, to a note offering to unblock them.
  */
 export function Composer({
   channelId,
@@ -54,6 +57,7 @@ export function Composer({
   const channel = useChannel(channelId);
   const permissions = useChannelAccess(channelId);
   const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
+  const blockedPeer = useBlockedDmPeer(channelId);
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>
@@ -138,8 +142,10 @@ export function Composer({
   }
 
   if (!mayPost) {
-    return (
+    return blockedPeer === null ? (
       <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">{m.cannotSendHere}</p>
+    ) : (
+      <BlockedNote userId={blockedPeer} />
     );
   }
 
@@ -253,5 +259,39 @@ export function Composer({
         </label>
       )}
     </form>
+  );
+}
+
+/** In place of the box in a DM with someone the reader blocked: why, and a way to unblock. */
+function BlockedNote({ userId }: { userId: string }) {
+  const m = useMessages();
+  const sync = useSync();
+  const user = useUser(userId);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-3 text-sm text-ink-muted">
+      <span className="min-w-0 flex-1">{format(m.blocking.dmBlocked, { name })}</span>
+      <Button
+        isDisabled={pending}
+        onPress={() => {
+          setPending(true);
+          setError(null);
+          sync.unblockUser(userId).catch((failure: unknown) => {
+            setError(failure instanceof Error ? failure.message : String(failure));
+            setPending(false);
+          });
+        }}
+        className={secondaryButtonClass}
+      >
+        {m.blocking.unblock}
+      </Button>
+      {error !== null && (
+        <p role="alert" className="w-full text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

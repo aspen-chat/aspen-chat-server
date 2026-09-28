@@ -15,6 +15,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 pub(crate) mod admin;
 pub(crate) mod attachment;
 pub(crate) mod auth;
+pub(crate) mod block;
 pub(crate) mod category;
 pub(crate) mod category_collapse;
 pub(crate) mod channel;
@@ -101,6 +102,7 @@ pub const TAG_ROLES: &str = "roles";
         community::CommunityInclude,
         message::MessageInclude,
         dm::DmInclude,
+        block::BlockInclude,
         poll::PollInclude,
         poll::PollOption,
         poll::PollVote,
@@ -329,6 +331,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             channel_mute::mute_channel,
             channel_mute::unmute_channel
         ))
+        .routes(routes!(block::list_blocks))
+        .routes(routes!(block::block_user, block::unblock_user))
         .routes(routes!(
             category_collapse::collapse_category,
             category_collapse::expand_category

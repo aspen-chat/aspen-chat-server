@@ -199,7 +199,7 @@ async fn sideload_messages(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -344,7 +344,7 @@ pub async fn get_message(
         (status = OK, body = Message),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -396,7 +396,7 @@ pub async fn delete_message(
         (status = OK, description = "The thread the message already started", body = crate::api::message_enum::Channel),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (the message is in a thread, is an echo, or is in a voice channel)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -428,7 +428,7 @@ pub async fn open_thread(
         (status = OK, description = "Already pinned", body = crate::api::message_enum::Pin),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -467,7 +467,7 @@ pub async fn pin_message(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

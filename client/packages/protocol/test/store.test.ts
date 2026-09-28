@@ -934,6 +934,22 @@ describe("RecordStore threads and DMs", () => {
     recipients,
   });
 
+  it("leaves only reading in a one-to-one DM with someone the caller blocked", () => {
+    const store = bootstrapped();
+    const withBob = dm(700, [me.id, bob.id]);
+    const group = dm(701, [me.id, bob.id, id(3)], "groupDm");
+    store.ingest({ channels: [withBob, group] });
+    expect(store.channelAccess(withBob.id).has("sendMessages")).toBe(true);
+    store.setBlocked(bob.id, true);
+    expect(store.blockedDmPeer(withBob.id)).toBe(bob.id);
+    expect(Array.from(store.channelAccess(withBob.id))).toEqual(["viewChannel"]);
+    // A group stays open to both.
+    expect(store.blockedDmPeer(group.id)).toBeNull();
+    expect(store.channelAccess(group.id).has("sendMessages")).toBe(true);
+    store.setBlocked(bob.id, false);
+    expect(store.channelAccess(withBob.id).has("sendMessages")).toBe(true);
+  });
+
   it("keeps threads out of their community's channel list while holding them as channels", () => {
     const store = bootstrapped();
     store.ingest({ channels: [thread] });
@@ -1165,5 +1181,55 @@ describe("RecordStore invites and Manage invites", () => {
     });
     expect(store.invite("BOBS")).toBeUndefined();
     expect(store.invite("MINE")).toBeDefined();
+  });
+});
+
+describe("RecordStore blocks", () => {
+  it("follows blocks from events and from a bootstrap's list", () => {
+    const store = bootstrapped();
+    expect(store.blocked(bob.id)).toBe(false);
+    store.applyEvent({ serverEvent: "userBlockChanged", user: bob.id, blocked: true });
+    expect(store.blocked(bob.id)).toBe(true);
+    expect(store.blockedUsers()).toEqual([bob.id]);
+    expect(store.setBlocked(bob.id, true)).toBe(false);
+    store.replaceBlocks([]);
+    expect(store.blocked(bob.id)).toBe(false);
+    expect(store.blockedUsers()).toEqual([]);
+  });
+
+  it("never lets a blocked user's message make a channel unread", () => {
+    const store = bootstrapped();
+    store.ingest({ readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null }] });
+    store.setBlocked(bob.id, true);
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(2, general.id, bob.id) });
+    expect(store.unread(general.id)).toBe(false);
+    store.setBlocked(bob.id, false);
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(3, general.id, bob.id) });
+    expect(store.unread(general.id)).toBe(true);
+  });
+
+  it("leaves a blocked user's reactions out", () => {
+    const store = bootstrapped();
+    const target = message(1).id;
+    store.setBlocked(bob.id, true);
+    store.applyEvent({
+      serverEvent: "react",
+      type: "create",
+      messageId: target,
+      emoji: "😁",
+      userId: bob.id,
+    });
+    expect(store.reactions(target).size).toBe(0);
+  });
+
+  it("keeps a read position further on than the one the server sent", () => {
+    const store = bootstrapped();
+    store.ingest({ readStates: [{ channel: general.id, lastRead: id(1005), lastMessage: null }] });
+    store.putReadState({ channel: general.id, lastRead: id(1003), lastMessage: id(1006) });
+    expect(store.readState(general.id)).toEqual({
+      channel: general.id,
+      lastRead: id(1005),
+      lastMessage: id(1006),
+    });
   });
 });

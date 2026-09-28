@@ -337,6 +337,7 @@ pub async fn update_message(
     if author != caller {
         return Err(app::Error::Forbidden(t!("editOthersMessage")));
     }
+    access.ensure_unblocked()?;
     if command.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
         access.require(Permissions::ATTACH_FILES)?;
     }
@@ -542,6 +543,7 @@ pub async fn set_pinned(
         .first(conn.as_mut())
         .await?;
     let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    access.ensure_unblocked()?;
     if access.community.is_some() && !access.community_has(Permissions::PIN_MESSAGES) {
         return Err(missing(Permissions::PIN_MESSAGES));
     }

@@ -21,6 +21,7 @@
 //! `MODERATION` everywhere, and rank above every role but below the owner. `moderating` says
 //! when an action was allowed by that alone, which the caller then logs.
 
+use crate::api::ChannelType;
 use crate::api::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
@@ -403,6 +404,10 @@ pub struct ChannelAccess {
     pub thread: bool,
     /// Whether the caller reads a DM they are not in, by Moderate any community.
     pub dm_moderator: bool,
+    /// Whether this is a one-to-one DM with a block between its two people, either way
+    /// (`app::block`): they may read it and take their own messages out of it, and nothing
+    /// else.
+    pub blocked: bool,
 }
 
 impl ChannelAccess {
@@ -413,8 +418,20 @@ impl ChannelAccess {
     pub fn require(&self, permission: Permissions) -> app::Result<()> {
         if self.has(permission) {
             Ok(())
+        } else if self.blocked {
+            Err(app::Error::Blocked)
         } else {
             Err(missing(permission))
+        }
+    }
+
+    /// Refuses anything that would reach the other person of a blocked DM: editing a message,
+    /// pinning, voting. What takes a permission is refused by `require` instead.
+    pub fn ensure_unblocked(&self) -> app::Result<()> {
+        if self.blocked {
+            Err(app::Error::Blocked)
+        } else {
+            Ok(())
         }
     }
 
@@ -591,6 +608,31 @@ async fn overrides_of_category(
 
 /// What `user` may do in `channel_id`. A channel they may not view, in a community they are
 /// not in, or a DM they are not a recipient of is answered as not found.
+/// Whether `dm` is a one-to-one DM whose other person and `user` have a block between them,
+/// either way.
+async fn dm_blocked(
+    conn: &mut AsyncPgConnection,
+    dm: ChannelId,
+    user: UserId,
+) -> app::Result<bool> {
+    let other: Option<UserId> = dm_recipient::table
+        .inner_join(channel::table.on(channel::id.eq(dm_recipient::channel)))
+        .select(dm_recipient::user)
+        .filter(
+            dm_recipient::channel
+                .eq(dm)
+                .and(dm_recipient::user.ne(user))
+                .and(channel::ty.eq(ChannelType::Dm)),
+        )
+        .first(conn)
+        .await
+        .optional()?;
+    match other {
+        Some(other) => app::block::any_between(conn, &[user, other]).await,
+        None => Ok(false),
+    }
+}
+
 pub async fn channel_access(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -645,16 +687,23 @@ pub async fn channel_access(
                         permissions: Permissions::VIEW_CHANNEL,
                         thread,
                         dm_moderator: true,
+                        blocked: false,
                     });
                 }
                 return Err(not_found());
             }
+            let blocked = dm_blocked(conn, dm, user).await?;
             Ok(ChannelAccess {
                 channel: channel_id,
                 community: None,
-                permissions: Permissions::CHANNEL,
+                permissions: if blocked {
+                    Permissions::VIEW_CHANNEL
+                } else {
+                    Permissions::CHANNEL
+                },
                 thread,
                 dm_moderator: false,
+                blocked,
             })
         }
         ChannelHome::Community {
@@ -679,6 +728,7 @@ pub async fn channel_access(
                 permissions,
                 thread,
                 dm_moderator: false,
+                blocked: false,
             })
         }
     }

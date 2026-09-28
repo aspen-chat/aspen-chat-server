@@ -64,6 +64,10 @@ enum MessageEnumSource {
         category: CategoryId,
         collapsed: bool,
     },
+    // The user blocked or unblocked someone, on one of their devices; the others follow. The
+    // blocked user is never told. See `app::block`.
+    #[message_gen(custom_event)]
+    UserBlockChanged { user: UserId, blocked: bool },
     // The user muted or unmuted a channel, on one of their devices; the others follow. A mute
     // with no `until` lasts until it is lifted. See `app::channel_mute`.
     #[message_gen(custom_event)]

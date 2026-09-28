@@ -252,6 +252,24 @@ export function useShownWhenCollapsed(channelIds: readonly string[]): ReadonlySe
   return useMemo(() => new Set(shown === "" ? [] : shown.split("\n")), [shown]);
 }
 
+/** Whether the caller has blocked `userId`. */
+export function useBlocked(userId: string | undefined): boolean {
+  return useTopic(`block:${userId ?? ""}`, (s) => userId !== undefined && s.blocked(userId));
+}
+
+/**
+ * The other person of a one-to-one DM (or of the DM a thread is in) whom the caller blocked,
+ * so that nothing may be written there; `null` otherwise.
+ */
+export function useBlockedDmPeer(channelId: string): string | null {
+  return useTopic(`channelAccess:${channelId}`, (s) => s.blockedDmPeer(channelId));
+}
+
+/** Everyone the caller has blocked. */
+export function useBlockedUsers(): readonly string[] {
+  return useTopic("blocks", (s) => s.blockedUsers());
+}
+
 /** The caller's mute of a channel while it lasts, if any. */
 export function useMute(channelId: string): ChannelMute | undefined {
   return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));

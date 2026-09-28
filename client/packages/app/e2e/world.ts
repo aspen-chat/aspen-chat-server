@@ -559,6 +559,7 @@ async function answer(
   poll: ReturnType<typeof lunch>,
   publish: Publish,
   admin: ReturnType<typeof administration>,
+  blocks: Set<string>,
 ) {
   const request = route.request();
   const url = new URL(request.url());
@@ -657,6 +658,35 @@ async function answer(
       () => {
         const category = path.split("/")[2] ?? "";
         publish({ serverEvent: "categoryCollapseChanged", category, collapsed: false });
+        return reply(null, 204);
+      },
+    ],
+    // Blocking answers as the server does, and tells the caller's devices by event.
+    [
+      "GET",
+      /^\/users\/@me\/blocks$/,
+      () => ({
+        data: Array.from(blocks, (user) => ({ user, createdAt: minutesAgo(1) })),
+        included: { users: users.filter((u) => blocks.has(u.id)) },
+      }),
+    ],
+    [
+      "PUT",
+      /^\/users\/@me\/blocks\/[^/]+$/,
+      () => {
+        const user = path.split("/").pop() ?? "";
+        blocks.add(user);
+        publish({ serverEvent: "userBlockChanged", user, blocked: true });
+        return reply({ user, createdAt: minutesAgo(0) }, 201);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/users\/@me\/blocks\/[^/]+$/,
+      () => {
+        const user = path.split("/").pop() ?? "";
+        blocks.delete(user);
+        publish({ serverEvent: "userBlockChanged", user, blocked: false });
         return reply(null, 204);
       },
     ],
@@ -852,7 +882,8 @@ export async function signInToWorld(page: Page): Promise<void> {
   const publish = await events(page);
   const poll = lunch(publish);
   const admin = administration();
-  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin));
+  const blocks = new Set<string>();
+  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks));
   await page.goto("/");
   await page.getByLabel("Username").fill("kate");
   await page.getByLabel("Password").fill("hunter22");
