@@ -187,6 +187,12 @@ export interface AspenSyncOptions {
   preferenceStorage?: PreferenceStorage | null;
   /** Uniform in [0, 1); seeds the voice rejoin delay. */
   random?: () => number;
+  /**
+   * The preferences to use instead of the server's own: the home deployment's, for a sync of
+   * another deployment, since preferences are the user's and kept at home. This sync then
+   * neither loads nor clears the account's preferences.
+   */
+  preferences?: PreferenceStore;
 }
 
 export type SyncListener = () => void;
@@ -238,6 +244,8 @@ export class AspenSync {
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
+  /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
+  readonly #ownsPreferences: boolean;
 
   constructor(options: AspenSyncOptions) {
     this.#client = options.client;
@@ -270,10 +278,14 @@ export class AspenSync {
         }
       });
     }
-    this.preferences = new PreferenceStore({
-      storage: options.preferenceStorage === undefined ? pageStorage() : options.preferenceStorage,
-      client: this.#client,
-    });
+    this.#ownsPreferences = options.preferences === undefined;
+    this.preferences =
+      options.preferences ??
+      new PreferenceStore({
+        storage:
+          options.preferenceStorage === undefined ? pageStorage() : options.preferenceStorage,
+        client: this.#client,
+      });
     // The devices voice chat uses follow the preferences, now and whenever they change.
     const applyDevices = () => {
       void this.voice
@@ -363,7 +375,9 @@ export class AspenSync {
       this.#presenceTimer = null;
     }
     this.voice.leave();
-    this.preferences.clearAccount();
+    if (this.#ownsPreferences) {
+      this.preferences.clearAccount();
+    }
     this.#held = null;
     this.#windowLoads.clear();
     this.#userLoads.clear();
@@ -2135,7 +2149,9 @@ export class AspenSync {
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );
-      await this.preferences.loadAccount();
+      if (this.#ownsPreferences) {
+        await this.preferences.loadAccount();
+      }
       this.#bootstrappedAt = startedAt;
       const held = this.#held;
       this.#held = null;
@@ -2291,7 +2307,7 @@ export class AspenSync {
     if (event.serverEvent === "userPreferencesChanged") {
       // Another of the user's devices changed something; the values are fetched rather than
       // carried by the event, so they never reach anyone else's stream.
-      if (event.user === this.store.me()?.id) {
+      if (this.#ownsPreferences && event.user === this.store.me()?.id) {
         void this.preferences.loadAccount().catch(() => undefined);
       }
       return;

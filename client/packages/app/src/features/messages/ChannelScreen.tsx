@@ -22,8 +22,8 @@ import { format } from "@/i18n/messages";
  */
 export function ChannelScreen() {
   const m = useMessages();
-  const { communityId, channelId, messageId, threadId } = useParams({ strict: false });
-  const home: ChannelHome = communityId ?? null;
+  const { domain, communityId, channelId, messageId, threadId } = useParams({ strict: false });
+  const home: ChannelHome = { domain: domain ?? null, community: communityId ?? null };
   const sync = useSync();
   const status = useSyncStatus();
   const channel = useChannel(channelId ?? "");
@@ -72,9 +72,9 @@ export function ChannelScreen() {
   if (channel === undefined || channelId === undefined) {
     return (
       <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">
-        {home === null && !missing && !removed
+        {home.community === null && !missing && !removed
           ? m.loading
-          : home === null
+          : home.community === null
             ? m.dms.notFound
             : m.channelNotFound}
       </main>

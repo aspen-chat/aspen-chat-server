@@ -1,6 +1,6 @@
 import type { User } from "@aspen/protocol";
 import { describe, expect, it } from "vitest";
-import { displayNameOf, profileForm, profilePatch, statusLine } from "./profile";
+import { displayNameOf, handleOf, profileForm, profilePatch, statusLine } from "./profile";
 
 const kate: User = {
   id: "u1",
@@ -48,5 +48,10 @@ describe("profiles", () => {
       botPublic: false,
     };
     expect(profilePatch(plain, { ...profileForm(plain), statusEmoji: "🍕" })).toEqual({});
+  });
+
+  it("gives a user of another deployment a handle naming their home", () => {
+    expect(handleOf({ name: "kate", homeDomain: null })).toBe("@kate");
+    expect(handleOf({ name: "kate", homeDomain: "b.example:8443" })).toBe("@kate@b.example:8443");
   });
 });

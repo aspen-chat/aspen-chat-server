@@ -49,6 +49,7 @@ import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDomain, channelLink } from "@/features/messages/links";
 
 /**
  * The drag type channel rows carry, so a channel can be dropped into any channel group but
@@ -233,6 +234,7 @@ function ChannelGroup({
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const { channelId: current } = useParams({ strict: false });
   const arrange = useCan(communityId, "manageChannels");
   const ids = allIds ?? channels.map((c) => c.id);
@@ -295,15 +297,9 @@ function ChannelGroup({
       onAction={(key) => {
         const channel = channels.find((c) => c.id === key);
         if (channel?.ty === "text") {
-          void navigate({
-            to: "/communities/$communityId/channels/$channelId",
-            params: { communityId: channel.community ?? "", channelId: channel.id },
-          });
+          void navigate(channelLink({ domain, community: channel.community ?? "" }, channel.id));
         } else if (channel?.ty === "voice") {
-          void navigate({
-            to: "/communities/$communityId/channels/$channelId",
-            params: { communityId: channel.community ?? "", channelId: channel.id },
-          });
+          void navigate(channelLink({ domain, community: channel.community ?? "" }, channel.id));
           if (sync.store.channelAccess(channel.id).has("joinVoice")) {
             void sync.voice.join(channel.id).catch(() => undefined);
           }

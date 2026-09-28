@@ -29,6 +29,7 @@ import {
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDomain, communityLink } from "@/features/messages/links";
 
 function problemText(e: unknown): string {
   return e instanceof ApiProblemError ? e.message : String(e);
@@ -115,6 +116,7 @@ export function DeleteChannelDialog({
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -144,10 +146,7 @@ export function DeleteChannelDialog({
                 () => {
                   onOpenChange(false);
                   if (channel.community != null) {
-                    void navigate({
-                      to: "/communities/$communityId",
-                      params: { communityId: channel.community },
-                    });
+                    void navigate(communityLink(domain, channel.community));
                   }
                 },
                 (e: unknown) => {

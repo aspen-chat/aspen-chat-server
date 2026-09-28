@@ -1,13 +1,15 @@
 import { AspenSync, type AspenClient } from "@aspen/protocol";
 import { useEffect, useMemo, type ReactNode } from "react";
 import { reportActivity } from "./activity";
-import { AspenSyncContext } from "./syncContext";
+import { DeploymentsProvider } from "./deployments";
+import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 
 /**
- * Owns the `AspenSync` for the signed-in session: it bootstraps on mount and stops, forgetting
- * the cache, on unmount, and meanwhile reports the user's activity so they show as away when
- * they stop using the app. Mount it only while a session exists, so signing out unmounts it and
- * signing in mounts a fresh one.
+ * Owns the `AspenSync` for the signed-in session at home: it bootstraps on mount and stops,
+ * forgetting the cache, on unmount, and meanwhile reports the user's activity so they show as
+ * away when they stop using the app. The other deployments the user signs in to from home are
+ * owned beneath it (`DeploymentsProvider`). Mount it only while a session exists, so signing out
+ * unmounts it and signing in mounts a fresh one.
  */
 export function SyncProvider({ client, children }: { client: AspenClient; children: ReactNode }) {
   const sync = useMemo(
@@ -29,5 +31,11 @@ export function SyncProvider({ client, children }: { client: AspenClient; childr
       sync.stop();
     };
   }, [sync]);
-  return <AspenSyncContext.Provider value={sync}>{children}</AspenSyncContext.Provider>;
+  return (
+    <HomeSyncContext.Provider value={sync}>
+      <AspenSyncContext.Provider value={sync}>
+        <DeploymentsProvider homeSync={sync}>{children}</DeploymentsProvider>
+      </AspenSyncContext.Provider>
+    </HomeSyncContext.Provider>
+  );
 }

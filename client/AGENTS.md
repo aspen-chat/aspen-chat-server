@@ -55,6 +55,29 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   been dismissed (`markEnrolled`). Security changes the server says need a fresh verification
   go through `useReauth()` (`src/features/security/reauthContext.ts`), which asks the user to
   confirm it's them and tries once more.
+- The user's home is the server they chose and signed in to; the other deployments they use
+  are signed in to from there (`Deployments`, `packages/protocol/src/deployments.ts`). The home
+  lists them (`GET /users/@me/foreign-deployments`), so every device signs in to the same ones,
+  and a session abroad comes from an assertion the home signs (`AspenClient.issueAssertion`)
+  handed to the other deployment (`signInWithAssertion`); one that ends is replaced the same
+  way, at most once per `REACQUIRE_INTERVAL_MS`. Each has its own `AspenClient`, at
+  `https://{domain}`, whose session is stored per home account and domain, and its own
+  `AspenSync`, which shares the home's `PreferenceStore`, since preferences are the user's and
+  kept at home. `DeploymentsProvider` (`src/api/deployments.tsx`) owns them under the home's
+  `SyncProvider`. `AspenClientContext` and `AspenSyncContext` are the deployment being shown:
+  the home's, or, under `/at/{domain}`, that deployment's through `ForeignScope`, so every
+  component that calls `useSync()` acts where it is shown; `HomeScope` puts the home back for
+  what is the account's (the user footer, settings, security, bots, sign-out), and
+  `SourceScope` puts one deployment in place for each entry of a list that mixes them.
+  `useSources` and `useEverywhere` (`src/api/everywhere.ts`) read across every deployment: the
+  rail, ordered by the account preference `RAIL_ORDER` with a globe on another deployment's
+  communities, and the one DM list, ordered by `RecordStore.dmActivity`. Links carry the
+  deployment (`ChannelHome.domain`, `src/features/messages/links.ts`; `useDomain`). Adding a
+  server is the add dialog's last option (`OtherServerForm`), leaving one is in Settings
+  (`OtherServersSection`), and signing out at home signs out everywhere (`useSignOut`). A user
+  is in one call at a time across deployments (`useOneCallAtATime`, `src/api/calls.ts`), and
+  the call bar shows whichever deployment's it is. Another deployment's users are shown by
+  their handle `@name@domain` (`handleOf`).
 - Every endpoint is rate limited and may answer `429` `rateLimited` with `Retry-After`.
   `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
   refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized

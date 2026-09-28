@@ -6,8 +6,8 @@ import { MemberList } from "@/features/members/MemberList";
 import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { MembersPanelContext } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
-import { communityRoute } from "@/router";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { useDomain, channelLink } from "@/features/messages/links";
 
 /**
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
@@ -19,7 +19,8 @@ import { useOnePane } from "@/features/layout/useMediaQuery";
 export function ChannelSidebarLayout() {
   const onePane = useOnePane();
   const m = useMessages();
-  const { communityId } = useParams({ from: communityRoute.id });
+  // Rendered only under a community route, at home or on another deployment.
+  const communityId = useParams({ strict: false }).communityId ?? "";
   const { channelId } = useParams({ strict: false });
   const community = useCommunity(communityId);
   const sync = useSync();
@@ -78,21 +79,17 @@ export function ChannelSidebarLayout() {
  */
 export function CommunityIndex() {
   const m = useMessages();
-  const { communityId } = useParams({ from: communityRoute.id });
+  // Rendered only under a community route, at home or on another deployment.
+  const communityId = useParams({ strict: false }).communityId ?? "";
   const channels = useChannels(communityId);
   const wide = useMediaQuery(MEDIUM_SCREEN);
+  const domain = useDomain();
   if (!wide) {
     return null;
   }
   const first = channels.find((c) => c.ty === "text");
   if (first !== undefined) {
-    return (
-      <Navigate
-        to="/communities/$communityId/channels/$channelId"
-        params={{ communityId, channelId: first.id }}
-        replace
-      />
-    );
+    return <Navigate {...channelLink({ domain, community: communityId }, first.id)} replace />;
   }
   return (
     <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">

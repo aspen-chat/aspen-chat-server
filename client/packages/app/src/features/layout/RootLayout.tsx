@@ -1,6 +1,7 @@
 import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
+import { useOneCallAtATime } from "@/api/calls";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { LoginForm } from "@/features/auth/LoginForm";
@@ -71,6 +72,7 @@ function SignedIn() {
   const { channelId } = useParams({ strict: false });
   return (
     <SyncProvider client={client}>
+      <OneCall />
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />
@@ -83,4 +85,10 @@ function SignedIn() {
       </div>
     </SyncProvider>
   );
+}
+
+/** Keeps the user in one call across every deployment they use. */
+function OneCall() {
+  useOneCallAtATime();
+  return null;
 }

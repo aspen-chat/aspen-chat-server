@@ -1,5 +1,6 @@
 import {
   Navigate,
+  Outlet,
   createBrowserHistory,
   createHashHistory,
   createRootRoute,
@@ -10,11 +11,12 @@ import { detectShell } from "@/config";
 import { AdminDashboard } from "@/features/admin/AdminDashboard";
 import { ChannelSidebarLayout, CommunityIndex } from "@/features/channels/CommunityScreen";
 import { DmIndex, DmLayout } from "@/features/dms/DmLayout";
-import { Home } from "@/features/home/Home";
+import { ForeignIndex, Home } from "@/features/home/Home";
 import { InviteScreen } from "@/features/invites/InviteScreen";
 import { RootLayout } from "@/features/layout/RootLayout";
 import { ChannelScreen } from "@/features/messages/ChannelScreen";
 import { NotFound } from "@/features/layout/NotFound";
+import { ForeignScope } from "@/api/deployments";
 import { BotAddScreen } from "@/features/bots/BotAddScreen";
 
 /**
@@ -36,6 +38,10 @@ import { BotAddScreen } from "@/features/bots/BotAddScreen";
  *   /admin                                              the Administration Dashboard
  *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
  *                                                       community, with the permissions named
+ *   /at/{domain}/communities/…, /at/{domain}/dms/…, /at/{domain}/invite/{code}
+ *                                                       the same on another deployment the user
+ *                                                       signs in to from home, named by its
+ *                                                       domain (with `:port` when not 443)
  *
  * The web build uses real paths. Electron loads the bundle from `file://` and Capacitor from
  * an app-local origin, where the server cannot rewrite deep links to `index.html`, so those
@@ -50,12 +56,6 @@ export const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Home,
-});
-
-export const inviteRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/invite/$code",
-  component: InviteScreen,
 });
 
 export const registerRoute = createRoute({
@@ -86,31 +86,43 @@ export const botAddRoute = createRoute({
   },
 });
 
+// A deployment's routes: its invites, communities, and DMs. The user's home has them at the
+// root and every other deployment under `/at/$domain`; the components read their parameters
+// without naming a route, so the same ones serve both. The two sets are written out rather
+// than made by one function over the parent route, because the router types each path from its
+// parent's literal type, and a parent passed as a type parameter leaves every path untyped.
+
+export const inviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invite/$code",
+  component: InviteScreen,
+});
+
 export const communityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/communities/$communityId",
   component: ChannelSidebarLayout,
 });
 
-export const communityIndexRoute = createRoute({
+const communityIndexRoute = createRoute({
   getParentRoute: () => communityRoute,
   path: "/",
   component: CommunityIndex,
 });
 
-export const channelRoute = createRoute({
+const channelRoute = createRoute({
   getParentRoute: () => communityRoute,
   path: "/channels/$channelId",
   component: ChannelScreen,
 });
 
-export const messageRoute = createRoute({
+const messageRoute = createRoute({
   getParentRoute: () => communityRoute,
   path: "/channels/$channelId/messages/$messageId",
   component: ChannelScreen,
 });
 
-export const threadRoute = createRoute({
+const threadRoute = createRoute({
   getParentRoute: () => communityRoute,
   path: "/channels/$channelId/threads/$threadId",
   component: ChannelScreen,
@@ -122,38 +134,140 @@ export const dmsRoute = createRoute({
   component: DmLayout,
 });
 
-export const dmsIndexRoute = createRoute({
+const dmsIndexRoute = createRoute({
   getParentRoute: () => dmsRoute,
   path: "/",
   component: DmIndex,
 });
 
-export const dmRoute = createRoute({
+const dmRoute = createRoute({
   getParentRoute: () => dmsRoute,
   path: "/$channelId",
   component: ChannelScreen,
 });
 
-export const dmMessageRoute = createRoute({
+const dmMessageRoute = createRoute({
   getParentRoute: () => dmsRoute,
   path: "/$channelId/messages/$messageId",
   component: ChannelScreen,
 });
 
-export const dmThreadRoute = createRoute({
+const dmThreadRoute = createRoute({
   getParentRoute: () => dmsRoute,
+  path: "/$channelId/threads/$threadId",
+  component: ChannelScreen,
+});
+
+/** Another deployment the user signs in to from home: its routes run with its client and sync. */
+export const foreignRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/at/$domain",
+  component: function Foreign() {
+    const { domain } = foreignRoute.useParams();
+    return (
+      <ForeignScope domain={domain}>
+        <Outlet />
+      </ForeignScope>
+    );
+  },
+});
+
+const foreignIndexRoute = createRoute({
+  getParentRoute: () => foreignRoute,
+  path: "/",
+  component: ForeignIndex,
+});
+
+const foreignInviteRoute = createRoute({
+  getParentRoute: () => foreignRoute,
+  path: "/invite/$code",
+  component: InviteScreen,
+});
+
+const foreignCommunityRoute = createRoute({
+  getParentRoute: () => foreignRoute,
+  path: "/communities/$communityId",
+  component: ChannelSidebarLayout,
+});
+
+const foreignCommunityIndexRoute = createRoute({
+  getParentRoute: () => foreignCommunityRoute,
+  path: "/",
+  component: CommunityIndex,
+});
+
+const foreignChannelRoute = createRoute({
+  getParentRoute: () => foreignCommunityRoute,
+  path: "/channels/$channelId",
+  component: ChannelScreen,
+});
+
+const foreignMessageRoute = createRoute({
+  getParentRoute: () => foreignCommunityRoute,
+  path: "/channels/$channelId/messages/$messageId",
+  component: ChannelScreen,
+});
+
+const foreignThreadRoute = createRoute({
+  getParentRoute: () => foreignCommunityRoute,
+  path: "/channels/$channelId/threads/$threadId",
+  component: ChannelScreen,
+});
+
+const foreignDmsRoute = createRoute({
+  getParentRoute: () => foreignRoute,
+  path: "/dms",
+  component: DmLayout,
+});
+
+const foreignDmsIndexRoute = createRoute({
+  getParentRoute: () => foreignDmsRoute,
+  path: "/",
+  component: DmIndex,
+});
+
+const foreignDmRoute = createRoute({
+  getParentRoute: () => foreignDmsRoute,
+  path: "/$channelId",
+  component: ChannelScreen,
+});
+
+const foreignDmMessageRoute = createRoute({
+  getParentRoute: () => foreignDmsRoute,
+  path: "/$channelId/messages/$messageId",
+  component: ChannelScreen,
+});
+
+const foreignDmThreadRoute = createRoute({
+  getParentRoute: () => foreignDmsRoute,
   path: "/$channelId/threads/$threadId",
   component: ChannelScreen,
 });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  inviteRoute,
   registerRoute,
   adminRoute,
   botAddRoute,
+  inviteRoute,
   communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),
   dmsRoute.addChildren([dmsIndexRoute, dmRoute, dmMessageRoute, dmThreadRoute]),
+  foreignRoute.addChildren([
+    foreignIndexRoute,
+    foreignInviteRoute,
+    foreignCommunityRoute.addChildren([
+      foreignCommunityIndexRoute,
+      foreignChannelRoute,
+      foreignMessageRoute,
+      foreignThreadRoute,
+    ]),
+    foreignDmsRoute.addChildren([
+      foreignDmsIndexRoute,
+      foreignDmRoute,
+      foreignDmMessageRoute,
+      foreignDmThreadRoute,
+    ]),
+  ]),
 ]);
 
 export const router = createRouter({

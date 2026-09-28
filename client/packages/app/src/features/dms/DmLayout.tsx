@@ -3,7 +3,11 @@ import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/r
 import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
+import { SourceScope } from "@/api/deployments";
+import { useEverywhere, type Source } from "@/api/everywhere";
 import { useDms, useMe, useMentions, useMute, useSync, useUnread, useUser } from "@/api/hooks";
+import { mergeDms } from "@/features/dms/mergeDms";
+import { channelLink, useDomain } from "@/features/messages/links";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
@@ -22,8 +26,9 @@ import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
- * `/dms`: the caller's DMs and group DMs beside the route's content, the most recently active
- * first. On narrow screens only one of the two is shown, as in a community.
+ * `/dms`: the caller's DMs and group DMs beside the route's content, on their home and every
+ * other deployment they use together, the most recently active first. On narrow screens only
+ * one of the two is shown, as in a community.
  */
 export function DmLayout() {
   const onePane = useOnePane();
@@ -44,12 +49,26 @@ export function DmLayout() {
   );
 }
 
+/** A DM in the list, with the deployment it is on. */
+interface DmEntry {
+  readonly dm: Channel;
+  readonly source: Source;
+}
+
 function DmSidebar({ current }: { current: string | undefined }) {
   const m = useMessages();
   const headingId = useId();
   const sync = useSync();
+  const domain = useDomain();
   const navigate = useNavigate();
-  const dms = useDms();
+  const dms = useEverywhere(["dms"], (sources) =>
+    mergeDms<DmEntry>(
+      sources.map((source) => ({
+        dms: source.sync.store.dms().map((dm) => ({ dm, source })),
+        activity: (entry) => source.sync.store.dmActivity(entry.dm.id),
+      })),
+    ),
+  );
   return (
     // A landmark named by its heading, holding the DMs and the user's own controls.
     <section
@@ -78,7 +97,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
           max={MAX_DM_PEOPLE - 1}
           onConfirm={async (ids) => {
             const dm = await sync.openDm(ids);
-            void navigate({ to: "/dms/$channelId", params: { channelId: dm.id } });
+            void navigate(channelLink({ domain, community: null }, dm.id));
           }}
         />
       </div>
@@ -86,8 +105,14 @@ function DmSidebar({ current }: { current: string | undefined }) {
         aria-label={m.dms.label}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
       >
-        {dms.map((dm) => (
-          <DmRow key={dm.id} dm={dm} current={dm.id === current} />
+        {dms.map(({ dm, source }) => (
+          <SourceScope key={`${source.domain ?? ""}/${dm.id}`} source={source}>
+            <DmRow
+              dm={dm}
+              domain={source.domain}
+              current={dm.id === current && source.domain === domain}
+            />
+          </SourceScope>
         ))}
       </nav>
       <SidebarFooter />
@@ -102,7 +127,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
  * one-to-one DM already open opens the other person's card instead, beside the row, so an
  * unwanted conversation is a press away from a block.
  */
-function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
+function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; current: boolean }) {
   const m = useMessages();
   const me = useMe();
   const title = useDmTitle(dm);
@@ -139,13 +164,21 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
         <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
       )}
       {accessibleName === null ? (
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate">{title}</span>
+          {domain !== null && <span className="truncate text-xs text-ink-faint">{domain}</span>}
+        </span>
       ) : (
         <>
-          <span aria-hidden="true" className="min-w-0 flex-1 truncate">
-            {title}
+          <span aria-hidden="true" className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate">{title}</span>
+            {domain !== null && <span className="truncate text-xs text-ink-faint">{domain}</span>}
           </span>
-          <span className="sr-only">{accessibleName}</span>
+          <span className="sr-only">
+            {domain === null
+              ? accessibleName
+              : format(m.deployments.onDomain, { name: accessibleName, domain })}
+          </span>
         </>
       )}
       <MentionBadge count={tags} />
@@ -173,8 +206,7 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
         </ProfilePopover>
       ) : (
         <Link
-          to="/dms/$channelId"
-          params={{ channelId: dm.id }}
+          {...channelLink({ domain, community: null }, dm.id)}
           aria-current={current ? "page" : undefined}
           className={rowClass}
         >

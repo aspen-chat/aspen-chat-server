@@ -125,6 +125,19 @@ export const DEVELOPER_MODE: PreferenceDefinition<boolean> = {
   parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
 };
 
+/**
+ * How the user arranged the community rail, across every deployment they use: each entry's
+ * `railKey`. Communities it does not name follow the ones it does. It follows the account, so
+ * the rail looks the same on every device.
+ */
+export const RAIL_ORDER: PreferenceDefinition<readonly string[]> = {
+  key: "rail.order",
+  scope: "account",
+  fallback: [],
+  parse: (raw) =>
+    Array.isArray(raw) && raw.every((entry) => typeof entry === "string") ? raw : undefined,
+};
+
 /** Whether this user has silenced one other person for themself, keeping their volume for later. */
 export function userMuted(userId: string): PreferenceDefinition<boolean> {
   return {

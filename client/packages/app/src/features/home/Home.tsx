@@ -4,6 +4,7 @@ import { useCommunities, useSyncStatus } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { JoinForm } from "@/features/invites/JoinForm";
+import { communityLink, dmsLink, useDomain } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 
 /** `/`: opens the first community, or explains that there is none to open. */
@@ -34,4 +35,25 @@ export function Home() {
       </div>
     </main>
   );
+}
+
+/**
+ * `/at/{domain}`: another deployment's first community, or its DMs when the user belongs to
+ * none of its communities yet.
+ */
+export function ForeignIndex() {
+  const m = useMessages();
+  const domain = useDomain();
+  const communities = useCommunities();
+  const status = useSyncStatus();
+  const first = communities[0];
+  if (first !== undefined) {
+    return <Navigate {...communityLink(domain, first.id)} replace />;
+  }
+  if (status === "bootstrapping") {
+    return (
+      <main className="flex flex-1 items-center justify-center text-ink-muted">{m.loading}</main>
+    );
+  }
+  return <Navigate {...dmsLink(domain)} replace />;
 }

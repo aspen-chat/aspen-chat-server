@@ -265,7 +265,11 @@ export function MessageItem({
         ) : (
           <div className="flex flex-wrap items-baseline gap-x-1">
             {!pictureOnly && (
-              <Markdown content={message.content} mentions={message.mentions} communityId={home} />
+              <Markdown
+                content={message.content}
+                mentions={message.mentions}
+                communityId={home.community}
+              />
             )}
             {message.editedAt != null && (
               <span
@@ -334,7 +338,7 @@ function EchoedReply({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-baseline gap-x-1">
-        <Markdown content={reply.content} mentions={reply.mentions} communityId={home} />
+        <Markdown content={reply.content} mentions={reply.mentions} communityId={home.community} />
         {reply.editedAt != null && <span className="text-xs text-ink-faint">{m.edited}</span>}
       </div>
       <MessageMedia attachmentIds={reply.attachments} linkedImages={[]} previewImages={[]} />

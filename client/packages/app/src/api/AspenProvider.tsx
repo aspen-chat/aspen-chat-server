@@ -1,8 +1,11 @@
 import { AspenClient, WebStorageSessionStore } from "@aspen/protocol";
 import { useMemo, type ReactNode } from "react";
-import { AspenClientContext } from "./context";
+import { AspenClientContext, HomeClientContext } from "./context";
 
-/** Owns the one `AspenClient` for the chosen server. A new server address means a new client. */
+/**
+ * Owns the `AspenClient` for the chosen server, the user's home. A new server address means a
+ * new client.
+ */
 export function AspenProvider({ serverUrl, children }: { serverUrl: string; children: ReactNode }) {
   const client = useMemo(
     () =>
@@ -12,5 +15,9 @@ export function AspenProvider({ serverUrl, children }: { serverUrl: string; chil
       }),
     [serverUrl],
   );
-  return <AspenClientContext.Provider value={client}>{children}</AspenClientContext.Provider>;
+  return (
+    <HomeClientContext.Provider value={client}>
+      <AspenClientContext.Provider value={client}>{children}</AspenClientContext.Provider>
+    </HomeClientContext.Provider>
+  );
 }

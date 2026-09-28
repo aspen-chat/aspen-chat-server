@@ -755,6 +755,26 @@ export class RecordStore {
    * Topic `dms`: the caller's DMs and group DMs, those with activity seen since they were
    * listed first (newest first), then the rest in the server's order.
    */
+  /**
+   * How recently a DM was active, as the id of a message in it: the newest seen arrive, or, for
+   * one only listed so far, the newer of its newest message by someone else and where the
+   * caller read up to, which their own posts move. Message ids are UUIDv7s, ordered by time, so
+   * these compare across deployments too, which is what the one DM list of every deployment
+   * sorts by. `undefined` for a DM with nothing in it.
+   */
+  dmActivity(channelId: string): string | undefined {
+    const state = this.#readStates.get(channelId);
+    const candidates = [
+      this.#dmActivity.get(channelId),
+      state?.lastMessage ?? undefined,
+      state?.lastRead ?? undefined,
+    ].filter((id): id is string => id !== undefined && id !== "");
+    return candidates.reduce<string | undefined>(
+      (newest, id) => (newest === undefined || id > newest ? id : newest),
+      undefined,
+    );
+  }
+
   dms(): readonly Channel[] {
     return this.#memoized("dms", () => {
       const list: Channel[] = [];

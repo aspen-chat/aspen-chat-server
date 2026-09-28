@@ -192,6 +192,23 @@ pub async fn foreign_deployments(
         .await?)
 }
 
+/// Forgets that `user_id` uses `domain`, so their other devices stop signing in there. Their
+/// account there is untouched. Forgetting one they never used is not an error.
+pub async fn forget_foreign_deployment(
+    state: &GlobalServerContext,
+    user_id: UserId,
+    domain: &Domain,
+) -> app::Result<()> {
+    diesel::delete(
+        user_foreign_deployment::table
+            .filter(user_foreign_deployment::user.eq(user_id))
+            .filter(user_foreign_deployment::domain.eq(domain.as_str())),
+    )
+    .execute(&mut state.connection_pool.get().await?)
+    .await?;
+    Ok(())
+}
+
 /// Why an assertion is refused, for the server's log; the caller is told only that it was.
 fn invalid(domain: Option<&Domain>, why: &str) -> app::Error {
     tracing::info!(

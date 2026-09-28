@@ -1005,6 +1005,17 @@ describe("RecordStore threads and DMs", () => {
     expect(store.messages(general.id)).toBeUndefined();
   });
 
+  it("dates a listed DM by its read state until messages arrive in it", () => {
+    const store = bootstrapped();
+    const talked = dm(61, [me.id, id(3)]);
+    store.ingest({
+      channels: [talked],
+      readStates: [{ channel: talked.id, lastRead: id(900), lastMessage: id(800), mentions: 0 }],
+    });
+    // The caller's own post moved where they read to, past the newest message by anyone else.
+    expect(store.dmActivity(talked.id)).toBe(id(900));
+  });
+
   it("lists DMs in the server's order until activity moves one up", () => {
     const store = bootstrapped();
     const older = dm(50, [me.id, bob.id]);

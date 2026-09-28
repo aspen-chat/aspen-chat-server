@@ -195,6 +195,9 @@ pub struct AuthMethods {
     /// Creating an account takes an invite from the server's administrators
     /// (`UserCreateRequest.inviteCode`).
     pub registration_invite_required: bool,
+    /// This deployment's name among deployments, with `:port` when not 443; `null` when it takes
+    /// no part in federation. Its users sign in at others from here (`POST /auth/assertions`).
+    pub federation_domain: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -225,6 +228,7 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
             }),
         two_factor_required: auth.require_two_factor,
         registration_invite_required: state.config.registration.invite_required,
+        federation_domain: app::federation::own_domain(&state.config.federation).map(String::from),
     })
 }
 

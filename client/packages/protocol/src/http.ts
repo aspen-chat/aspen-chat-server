@@ -269,6 +269,50 @@ export class AspenClient {
   }
 
   /**
+   * Signs an assertion that the signed-in user is who they are, for them to sign in at
+   * `audience`, another deployment, with `signInWithAssertion` there. Throws `ApiProblemError`
+   * (`federationRefused`) when this deployment does not let its users go there.
+   */
+  async issueAssertion(audience: string): Promise<Schemas["Issued"]> {
+    return unwrap(await this.api.POST(`${API_PREFIX}/auth/assertions`, { body: { audience } }));
+  }
+
+  /**
+   * Signs in a user of another deployment with an assertion their home signed for this one,
+   * and stores the session. `inviteCode` is a registration invite, which a first arrival needs
+   * where this deployment asks one of accounts from elsewhere.
+   */
+  async signInWithAssertion(assertion: string, inviteCode?: string): Promise<Session> {
+    const response = await this.api.POST(`${API_PREFIX}/auth/federated-sign-in`, {
+      body: { assertion, ...(inviteCode === undefined ? {} : { inviteCode }) },
+    });
+    return this.#adopt(unwrap(response));
+  }
+
+  /** The other deployments the signed-in user has signed in to from here, most recent first. */
+  async foreignDeployments(): Promise<Schemas["ForeignDeployment"][]> {
+    return unwrap(await this.api.GET(`${API_PREFIX}/users/@me/foreign-deployments`));
+  }
+
+  /** Stops the signed-in user's devices signing in at `domain`. */
+  async forgetForeignDeployment(domain: string): Promise<void> {
+    const result = await this.api.DELETE(`${API_PREFIX}/users/@me/foreign-deployments/{domain}`, {
+      params: { path: { domain } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Forgets the session locally without telling the server, as when another deployment's
+   * session is abandoned and its server may be unreachable.
+   */
+  forgetSession(): void {
+    this.#setSession(null);
+  }
+
+  /**
    * Creates an account. Registration does not sign the user in; callers typically follow it
    * with `login`. Throws `ApiProblemError` (`usernameTaken`, `validation`,
    * `passwordRequirementsNotMet`) on failure.

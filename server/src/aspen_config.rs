@@ -318,6 +318,11 @@ impl FederationConfig {
             .any(|rules| rules.emigration != Gate::Closed || rules.immigration != Gate::Closed)
     }
 
+    /// Whether an immigration gate lets accounts of other deployments in.
+    pub fn admits_anyone(&self) -> bool {
+        self.users.immigration != Gate::Closed || self.bots.immigration != Gate::Closed
+    }
+
     fn validate(&self) -> Result<(), config::ConfigError> {
         if self.enabled() && self.domain.is_none() {
             return Err(config::ConfigError::Message(

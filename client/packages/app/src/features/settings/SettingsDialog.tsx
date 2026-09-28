@@ -24,7 +24,8 @@ import {
   Select,
   SelectValue,
 } from "react-aria-components";
-import { useAspenClient } from "@/api/context";
+import { useSignOut } from "@/api/deploymentsContext";
+import { OtherServersSection } from "@/features/deployments/OtherServersSection";
 import { usePreference, useSync } from "@/api/hooks";
 import {
   dialogClass,
@@ -53,7 +54,7 @@ import { ThemePicker } from "@/theme/ThemePicker";
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
   const m = useMessages();
-  const client = useAspenClient();
+  const signOut = useSignOut();
   return (
     <DialogTrigger>
       <Tooltip text={m.settings.title}>
@@ -75,6 +76,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   <ThemePicker />
                 </section>
                 <BlockedUsersSection />
+                <OtherServersSection />
                 <DeveloperSection />
                 <section aria-labelledby="settings-account" className="flex flex-col gap-3">
                   <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
@@ -86,7 +88,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   <Button
                     onPress={() => {
                       close();
-                      void client.logout();
+                      void signOut();
                     }}
                     className={secondaryButtonClass + " flex items-center gap-1.5 text-danger"}
                   >

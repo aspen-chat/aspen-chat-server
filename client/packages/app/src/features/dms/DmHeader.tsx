@@ -22,6 +22,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { useDomain, dmsLink } from "@/features/messages/links";
 
 /** The most people a group DM holds, the caller included; the server's `MAX_RECIPIENTS`. */
 export const MAX_DM_PEOPLE = 10;
@@ -38,13 +39,14 @@ export function DmHeader({ channel }: { channel: Channel }) {
   const onePane = useOnePane();
   const Heading = onePane ? "h1" : "h2";
   const m = useMessages();
+  const domain = useDomain();
   const sync = useSync();
   const title = useDmTitle(channel);
   const group = channel.ty === "groupDm";
   return (
     <header className="flex items-center gap-2 border-b border-line px-4 py-3">
       <Link
-        to="/dms"
+        {...dmsLink(domain)}
         aria-label={m.dms.back}
         className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >
@@ -56,7 +58,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
         </span>
         <PeopleNames channel={channel} fallback={title} />
       </Heading>
-      <PinsButton channelId={channel.id} channelName={title} home={null} />
+      <PinsButton channelId={channel.id} channelName={title} home={{ domain, community: null }} />
       {group && (
         <>
           <PeoplePicker
@@ -121,6 +123,7 @@ function LeaveGroup({ channelId }: { channelId: string }) {
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const [error, setError] = useState<string | null>(null);
   return (
     <DialogTrigger>
@@ -147,7 +150,7 @@ function LeaveGroup({ channelId }: { channelId: string }) {
                       sync.leaveDm(channelId).then(
                         () => {
                           close();
-                          void navigate({ to: "/dms" });
+                          void navigate(dmsLink(domain));
                         },
                         (failure: unknown) => {
                           setError(failure instanceof Error ? failure.message : String(failure));

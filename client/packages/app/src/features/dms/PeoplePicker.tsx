@@ -17,7 +17,7 @@ import { usePeople, useUsers } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
-import { displayNameOf } from "@/features/users/profile";
+import { displayNameOf, handleOf } from "@/features/users/profile";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -158,7 +158,7 @@ function PickerBody({
             >
               <Avatar name={displayNameOf(user)} iconId={user.icon} />
               <span className="min-w-0 flex-1 truncate">{displayNameOf(user)}</span>
-              <span className="truncate text-xs text-ink-faint">@{user.name}</span>
+              <span className="truncate text-xs text-ink-faint">{handleOf(user)}</span>
             </ListBoxItem>
           )}
         </ListBox>

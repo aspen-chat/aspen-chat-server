@@ -678,6 +678,30 @@ pub async fn list_foreign_deployments(
     Ok(Json(abroad::foreign_deployments(&state, user.id).await?))
 }
 
+/// Stops using another deployment: it leaves the caller's list, so their devices stop signing
+/// in there. Their account and memberships there are untouched.
+#[utoipa::path(
+    delete,
+    path = "/users/@me/foreign-deployments/{domain}",
+    tag = TAG_USERS,
+    params(("domain" = String, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT, description = "Forgotten"),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn forget_foreign_deployment(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(domain): Path<Domain>,
+) -> ApiResult<NoContent> {
+    abroad::forget_foreign_deployment(&state, user.id, &domain).await?;
+    Ok(NoContent)
+}
+
 /// The avatar of one of this deployment's users, for the other deployments they sign in to,
 /// which keep a copy of it. Nothing but those avatars is served here.
 #[utoipa::path(

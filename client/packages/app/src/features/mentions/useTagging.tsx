@@ -14,7 +14,7 @@ import { useChannel, useChannelAccess, useMe, useMembers, useRoles, useUsers } f
 import { Avatar } from "@/features/communities/Avatar";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { encodeTags, tagQueryAt, type PickedTag } from "@/features/mentions/tags";
-import { displayNameOf } from "@/features/users/profile";
+import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -98,7 +98,7 @@ export function useTagging({
             text: `@${user.name}`,
             token: `<@${user.id}>`,
             label: displayNameOf(user),
-            detail: `@${user.name}`,
+            detail: handleOf(user),
             icon: <Avatar name={displayNameOf(user)} iconId={user.icon} size="sm" />,
           });
         }

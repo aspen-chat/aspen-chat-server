@@ -180,6 +180,7 @@ export {
   DEFAULT_DEVICE,
   NOTIFICATION_OUTPUT,
   DEVELOPER_MODE,
+  RAIL_ORDER,
   MAX_USER_VOLUME,
   PreferenceStore,
   SAME_AS_VOICE,
@@ -213,3 +214,11 @@ export {
   type Permission,
   type PermissionSet,
 } from "./permissions";
+export {
+  Deployments,
+  REACQUIRE_INTERVAL_MS,
+  deploymentUrl,
+  type DeploymentStatus,
+  type DeploymentsOptions,
+  type ForeignDeployment,
+} from "./deployments";

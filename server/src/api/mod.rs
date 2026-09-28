@@ -45,7 +45,7 @@ pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
 
-use crate::aspen_config::{AspenConfig, CorsConfig, load_config};
+use crate::aspen_config::{AspenConfig, CorsConfig, FederationConfig, load_config};
 use async_nats::ConnectOptions;
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
 use diesel::FromSqlRow;
@@ -164,11 +164,16 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
-fn cors_layer(config: &CorsConfig) -> Option<CorsLayer> {
-    if config.allowed_origins.is_empty() {
+/// The CORS layer for `config`. A deployment that admits accounts from elsewhere allows every
+/// origin, whatever the list says: those accounts use it from their own deployment's web client,
+/// wherever that is served, and every request is authenticated by a bearer token rather than a
+/// cookie, so no origin gains anything a page could not already do with the token it holds.
+fn cors_layer(config: &CorsConfig, federation: &FederationConfig) -> Option<CorsLayer> {
+    let any = federation.admits_anyone() || config.allowed_origins.iter().any(|o| o == "*");
+    if config.allowed_origins.is_empty() && !any {
         return None;
     }
-    let origin = if config.allowed_origins.iter().any(|o| o == "*") {
+    let origin = if any {
         AllowOrigin::any()
     } else {
         AllowOrigin::list(
@@ -307,6 +312,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(federation::issue_assertion))
         .routes(routes!(federation::federated_sign_in))
         .routes(routes!(federation::list_foreign_deployments))
+        .routes(routes!(federation::forget_foreign_deployment))
         .routes(routes!(federation::home_avatar))
         .routes(routes!(federation::get_federation))
         .routes(routes!(
@@ -485,7 +491,7 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     if context.config.federation.domain.is_some() {
         app::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     }
-    let cors = cors_layer(&context.config.cors);
+    let cors = cors_layer(&context.config.cors, &context.config.federation);
     let router: axum::Router = router.with_state(context).into();
     Ok(match cors {
         Some(cors) => router.layer(cors),

@@ -12,12 +12,14 @@ import {
 } from "@/features/auth/styles";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { useDomain, communityLink } from "@/features/messages/links";
 
 /** Names a new community, creates it, and opens it. */
 export function CreateCommunityForm({ onDone }: { onDone?: () => void }) {
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,7 @@ export function CreateCommunityForm({ onDone }: { onDone?: () => void }) {
     try {
       const community = await sync.createCommunity(name);
       onDone?.();
-      await navigate({ to: "/communities/$communityId", params: { communityId: community.id } });
+      await navigate(communityLink(domain, community.id));
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
       setPending(false);

@@ -25,6 +25,7 @@ import {
 } from "@/features/auth/styles";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { useDomain, channelLink } from "@/features/messages/links";
 
 const NO_CATEGORY = "none";
 
@@ -55,6 +56,7 @@ export function CreateChannelForm({
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const categories = useCategories(communityId);
   const [category, setCategory] = useState<string>(parentCategory ?? NO_CATEGORY);
   const [pending, setPending] = useState(false);
@@ -76,10 +78,7 @@ export function CreateChannelForm({
       });
       onDone();
       if (channel.ty === "text") {
-        await navigate({
-          to: "/communities/$communityId/channels/$channelId",
-          params: { communityId, channelId: channel.id },
-        });
+        await navigate(channelLink({ domain, community: communityId }, channel.id));
       }
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));

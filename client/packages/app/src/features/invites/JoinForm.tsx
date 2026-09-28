@@ -3,11 +3,13 @@ import { useState, type SyntheticEvent } from "react";
 import { Button, FieldError, Form, Input, Label, TextField } from "react-aria-components";
 import { fieldClass, inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { inviteLinkExample, parseInviteCode } from "@/features/invites/inviteCode";
+import { inviteLink, useDomain } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 
-/** Takes a pasted invite link or code and opens its invite screen. */
+/** Takes a pasted invite link or code and opens its invite screen, on the deployment shown. */
 export function JoinForm({ onDone }: { onDone?: () => void }) {
   const m = useMessages();
+  const domain = useDomain();
   const navigate = useNavigate();
   const [invalid, setInvalid] = useState(false);
 
@@ -20,7 +22,7 @@ export function JoinForm({ onDone }: { onDone?: () => void }) {
       return;
     }
     onDone?.();
-    void navigate({ to: "/invite/$code", params: { code } });
+    void navigate(inviteLink(domain, code));
   }
 
   return (

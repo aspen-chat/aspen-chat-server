@@ -6,6 +6,14 @@ export function displayNameOf(user: Pick<User, "name" | "displayName">): string 
   return display.length > 0 ? display : user.name;
 }
 
+/**
+ * A user's handle: `@name` for this deployment's own users, and `@name@domain` for a user of
+ * another deployment, whose name is their home's.
+ */
+export function handleOf(user: Pick<User, "name" | "homeDomain">): string {
+  return user.homeDomain == null ? `@${user.name}` : `@${user.name}@${user.homeDomain}`;
+}
+
 /** A status as one line: the emoji, when there is one, then the text. */
 export function statusLine(status: CustomStatus): string {
   return status.emoji == null ? status.text : `${status.emoji} ${status.text}`;

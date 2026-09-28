@@ -6,6 +6,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { useMembersPanel } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { useDomain, communityLink } from "@/features/messages/links";
 
 /**
  * The bar above a channel: a way back to the channel list on small screens, the channel's
@@ -25,12 +26,12 @@ export function ChannelHeader({
   const onePane = useOnePane();
   const Heading = onePane ? "h1" : "h2";
   const m = useMessages();
+  const domain = useDomain();
   const membersPanel = useMembersPanel();
   return (
     <header className="flex items-center gap-2 border-b border-line px-4 py-3">
       <Link
-        to="/communities/$communityId"
-        params={{ communityId }}
+        {...communityLink(domain, communityId)}
         aria-label={m.backToChannels}
         className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >

@@ -7,9 +7,10 @@ import { useBlocked, useChannel, useMe, useSync, useUser } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { BotBadge } from "@/features/users/BotBadge";
-import { displayNameOf, statusLine } from "@/features/users/profile";
+import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDomain, channelLink } from "@/features/messages/links";
 
 /**
  * A user's profile as a card: who they are, their pronouns, what they are up to, and their
@@ -35,7 +36,7 @@ export function ProfileCard({ user }: { user: User }) {
             {user.bot && <BotBadge />}
           </div>
           <div className="truncate text-sm text-ink-muted">
-            @{user.name}
+            {handleOf(user)}
             {user.pronouns != null && <span> · {user.pronouns}</span>}
           </div>
           {blocked && (
@@ -163,6 +164,7 @@ function MessageButton({ userId }: { userId: string }) {
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
+  const domain = useDomain();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -174,7 +176,7 @@ function MessageButton({ userId }: { userId: string }) {
           setError(null);
           sync.openDm([userId]).then(
             (dm) => {
-              void navigate({ to: "/dms/$channelId", params: { channelId: dm.id } });
+              void navigate(channelLink({ domain, community: null }, dm.id));
             },
             (failure: unknown) => {
               setError(failure instanceof Error ? failure.message : String(failure));

@@ -1,17 +1,21 @@
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { UNREAD_DMS } from "@aspen/protocol";
-import {
-  useCommunities,
-  useIsAdmin,
-  usePlaceMentions,
-  useStore,
-  useSync,
-  useUnreadPlaces,
-} from "@/api/hooks";
+import { RAIL_ORDER, UNREAD_DMS, type AspenSync, type Community } from "@aspen/protocol";
+import { useState } from "react";
+import { SourceScope } from "@/api/deployments";
+import { useEverywhere, type Source } from "@/api/everywhere";
+import { useIsAdmin, usePreference, useSync } from "@/api/hooks";
+import { communityLink } from "@/features/messages/links";
+import { arrangeRail, railKey } from "@/features/communities/railOrder";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
-import { ChatsTeardropIcon, DotsSixVerticalIcon, GaugeIcon, PlusIcon } from "@phosphor-icons/react";
+import {
+  ChatsTeardropIcon,
+  DotsSixVerticalIcon,
+  GaugeIcon,
+  GlobeSimpleIcon,
+  PlusIcon,
+} from "@phosphor-icons/react";
 import {
   Button,
   DropIndicator,
@@ -28,38 +32,96 @@ import { Tooltip } from "@/features/layout/Tooltip";
 /** The drag type rail rows carry, so nothing else accepts them and they accept nothing else. */
 const COMMUNITY_DRAG_TYPE = "application/x-aspen-community";
 
+/** A community on the rail, from whichever deployment it belongs to. */
+interface RailEntry {
+  readonly key: string;
+  readonly domain: string | null;
+  readonly communityId: string;
+  readonly community: Community;
+  readonly source: Source;
+  readonly unread: boolean;
+  readonly tags: number;
+}
+
 /**
- * The narrow column of communities the user belongs to, in the order they arranged them.
- * Dragging a community moves it and the new order is saved to the user's memberships: with
- * the pointer by dragging the avatar, with the keyboard through the handle that appears on
- * focus. It is a grid list rather than a list box for that handle, which list boxes cannot
+ * The narrow column of communities the user belongs to, on their home and every other
+ * deployment they use, in the order they arranged them; another deployment's are marked with
+ * its domain. Dragging a community moves it and the new order is saved to the user's home
+ * preferences (`RAIL_ORDER`), and each deployment's own share of it to their memberships there:
+ * with the pointer by dragging the avatar, with the keyboard through the handle that appears
+ * on focus. It is a grid list rather than a list box for that handle, which list boxes cannot
  * carry.
  */
 export function CommunityRail() {
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
-  const communities = useCommunities();
-  const store = useStore();
-  // Every read state change makes a new set, so the entries' names, tags included, follow.
-  const unread = useUnreadPlaces();
-  const dmTags = usePlaceMentions(UNREAD_DMS);
-  const { communityId: current } = useParams({ strict: false });
+  const order = usePreference(RAIL_ORDER);
+  // Shown at once while the new order is on its way to the server.
+  const [moved, setMoved] = useState<readonly string[] | null>(null);
+  const { entries, dmsUnread, dmTags } = useEverywhere(["communities", "unread"], (sources) => {
+    const found: RailEntry[] = [];
+    let unread = false;
+    let tags = 0;
+    for (const source of sources) {
+      const store = source.sync.store;
+      const places = store.unreadPlaces();
+      unread ||= places.has(UNREAD_DMS);
+      tags += store.placeMentions(UNREAD_DMS);
+      for (const community of store.communities()) {
+        const place = { domain: source.domain, communityId: community.id };
+        found.push({
+          ...place,
+          key: railKey(place),
+          community,
+          source,
+          unread: places.has(community.id),
+          tags: store.placeMentions(community.id),
+        });
+      }
+    }
+    return { entries: found, dmsUnread: unread, dmTags: tags };
+  });
+  const communities = arrangeRail(entries, moved ?? order);
+  const { communityId: current, domain: currentDomain } = useParams({ strict: false });
+  const currentKey =
+    current === undefined ? null : railKey({ domain: currentDomain ?? null, communityId: current });
   const matchRoute = useMatchRoute();
-  const inDms = matchRoute({ to: "/dms", fuzzy: true }) !== false;
+  const inDms =
+    matchRoute({ to: "/dms", fuzzy: true }) !== false ||
+    matchRoute({ to: "/at/$domain/dms", fuzzy: true }) !== false;
   const inAdmin = matchRoute({ to: "/admin" }) !== false;
   const admin = useIsAdmin();
   const { dragAndDropHooks } = useDragAndDrop({
     getItems: (keys) => Array.from(keys, (key) => ({ [COMMUNITY_DRAG_TYPE]: String(key) })),
     acceptedDragTypes: [COMMUNITY_DRAG_TYPE],
     onReorder: (event) => {
-      const moved = new Set(Array.from(event.keys, String));
       const ordered = reorderIds(
-        communities.map((c) => c.id),
-        moved,
+        communities.map((c) => c.key),
+        new Set(Array.from(event.keys, String)),
         { key: String(event.target.key), dropPosition: event.target.dropPosition },
       );
-      void sync.reorderCommunities(ordered).catch(() => undefined);
+      setMoved(ordered);
+      void sync.preferences
+        .set(RAIL_ORDER, ordered)
+        .catch(() => undefined)
+        .finally(() => {
+          setMoved(null);
+        });
+      // Each deployment keeps its own share of the order, for clients that show one at a time.
+      const bySync = new Map<AspenSync, string[]>();
+      for (const key of ordered) {
+        const entry = communities.find((c) => c.key === key);
+        if (entry !== undefined) {
+          bySync.set(entry.source.sync, [
+            ...(bySync.get(entry.source.sync) ?? []),
+            entry.communityId,
+          ]);
+        }
+      }
+      for (const [owner, ids] of bySync) {
+        void owner.reorderCommunities(ids).catch(() => undefined);
+      }
     },
     renderDropIndicator: (target) => (
       <DropIndicator
@@ -76,14 +138,14 @@ export function CommunityRail() {
       {/* The dot sits beside the link rather than in it, so the link's own round background
           covers it; see `UnreadDot`. */}
       <div className="relative isolate">
-        {unread.has(UNREAD_DMS) && <UnreadDot />}
+        {dmsUnread && <UnreadDot />}
         <RailBadge count={dmTags} />
         <Tooltip text={m.dms.label}>
           <Link
             to="/dms"
             aria-label={placeLabel(
               m,
-              unread.has(UNREAD_DMS) ? format(m.unreadLabel, { name: m.dms.label }) : m.dms.label,
+              dmsUnread ? format(m.unreadLabel, { name: m.dms.label }) : m.dms.label,
               dmTags,
             )}
             aria-current={inDms ? "page" : undefined}
@@ -102,45 +164,59 @@ export function CommunityRail() {
         items={communities}
         // The list caches each item's rendering by its data; the ring around the current
         // community comes from the route, so the route is declared as a dependency.
-        dependencies={[current, unread]}
+        dependencies={[currentKey]}
         selectionMode="none"
         onAction={(key) => {
-          void navigate({ to: "/communities/$communityId", params: { communityId: String(key) } });
+          const entry = communities.find((c) => c.key === String(key));
+          if (entry !== undefined) {
+            void navigate(communityLink(entry.domain, entry.communityId));
+          }
         }}
         dragAndDropHooks={dragAndDropHooks}
         className="flex flex-col items-center gap-2 outline-none"
       >
-        {(community) => (
-          <GridListItem
-            id={community.id}
-            textValue={community.name}
-            aria-label={placeLabel(
-              m,
-              unread.has(community.id)
-                ? format(m.unreadLabel, { name: community.name })
-                : community.name,
-              store.placeMentions(community.id),
-            )}
-            className={
-              "group relative isolate cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/60 dragging:opacity-50 " +
-              (community.id === current
-                ? "ring-2 ring-accent ring-offset-2 ring-offset-surface-rail"
-                : "")
-            }
-          >
-            {unread.has(community.id) && <UnreadDot />}
-            <CommunityBadge communityId={community.id} />
-            <Avatar name={community.name} iconId={community.icon} size="lg" />
-            {/* The handle keyboard and screen reader users drag with; it shows only on focus. */}
-            <Button
-              slot="drag"
-              aria-label={format(m.dragCommunity, { community: community.name })}
-              className="absolute -right-1 -bottom-1 rounded-full border border-line bg-surface-raised p-0.5 text-ink-faint opacity-0 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+        {(entry) => {
+          const { community } = entry;
+          const name =
+            entry.domain === null
+              ? community.name
+              : format(m.deployments.communityAt, {
+                  community: community.name,
+                  domain: entry.domain,
+                });
+          return (
+            <GridListItem
+              id={entry.key}
+              textValue={community.name}
+              aria-label={placeLabel(
+                m,
+                entry.unread ? format(m.unreadLabel, { name }) : name,
+                entry.tags,
+              )}
+              className={
+                "group relative isolate cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/60 dragging:opacity-50 " +
+                (entry.key === currentKey
+                  ? "ring-2 ring-accent ring-offset-2 ring-offset-surface-rail"
+                  : "")
+              }
             >
-              <DotsSixVerticalIcon size={12} aria-hidden="true" />
-            </Button>
-          </GridListItem>
-        )}
+              {entry.unread && <UnreadDot />}
+              <RailBadge count={entry.tags} />
+              {entry.domain !== null && <ForeignMark />}
+              <SourceScope source={entry.source}>
+                <Avatar name={community.name} iconId={community.icon} size="lg" />
+              </SourceScope>
+              {/* The handle keyboard and screen reader users drag with; it shows only on focus. */}
+              <Button
+                slot="drag"
+                aria-label={format(m.dragCommunity, { community: community.name })}
+                className="absolute -right-1 -bottom-1 rounded-full border border-line bg-surface-raised p-0.5 text-ink-faint opacity-0 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                <DotsSixVerticalIcon size={12} aria-hidden="true" />
+              </Button>
+            </GridListItem>
+          );
+        }}
       </GridList>
       <AddCommunityDialog
         trigger={
@@ -186,8 +262,16 @@ function placeLabel(m: Messages, name: string, tags: number): string {
   return tags > 0 ? format(m.withMentions, { name, mentions: mentionsText(m, tags) }) : name;
 }
 
-function CommunityBadge({ communityId }: { communityId: string }) {
-  return <RailBadge count={usePlaceMentions(communityId)} />;
+/** The mark on another deployment's community: a globe over the top corner. */
+function ForeignMark() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute -top-1 -right-1 z-10 rounded-full bg-surface-raised p-0.5 text-ink-muted ring-2 ring-surface-rail"
+    >
+      <GlobeSimpleIcon size={12} weight="bold" />
+    </span>
+  );
 }
 
 /** The count of unread tags over the corner of a rail entry. */

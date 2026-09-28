@@ -5,9 +5,9 @@ import { Button } from "react-aria-components";
 import { useSync, useSyncStatus } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
-import { inviteRoute } from "@/router";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDomain, communityLink } from "@/features/messages/links";
 
 type Lookup =
   | { state: "loading" }
@@ -20,10 +20,12 @@ type Lookup =
  */
 export function InviteScreen() {
   const m = useMessages();
-  const { code } = useParams({ from: inviteRoute.id });
+  // Rendered only under an invite route, at home or on another deployment.
+  const code = useParams({ strict: false }).code ?? "";
   const sync = useSync();
   const status = useSyncStatus();
   const navigate = useNavigate();
+  const domain = useDomain();
   const [lookup, setLookup] = useState<Lookup>({ state: "loading" });
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
@@ -62,7 +64,7 @@ export function InviteScreen() {
     setJoinError(null);
     try {
       await sync.joinCommunity(communityId, code);
-      await navigate({ to: "/communities/$communityId", params: { communityId }, replace: true });
+      await navigate({ ...communityLink(domain, communityId), replace: true });
     } catch (e) {
       setJoinError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
@@ -101,10 +103,7 @@ export function InviteScreen() {
             {lookup.member ? (
               <Button
                 onPress={() => {
-                  void navigate({
-                    to: "/communities/$communityId",
-                    params: { communityId: lookup.community.id },
-                  });
+                  void navigate(communityLink(domain, lookup.community.id));
                 }}
                 className={primaryButtonClass}
               >

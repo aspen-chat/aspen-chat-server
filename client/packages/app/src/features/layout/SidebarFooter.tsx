@@ -1,3 +1,5 @@
+import { useCallSource } from "@/api/calls";
+import { HomeScope, SourceScope } from "@/api/deployments";
 import { useMe } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
@@ -12,15 +14,25 @@ const footerButtonClass =
 
 /**
  * The foot of every list sidebar, the channel list's and the DM list's alike: the user's call,
- * when they are in one, and the signed-in user with their profile and settings controls. The
- * dialog that says why a call ended lives here too, so it shows wherever the user is.
+ * when they are in one on any deployment, and the signed-in user with their profile and
+ * settings controls. The dialog that says why a call ended lives here too, so it shows wherever
+ * the user is. The user,
+ * their profile, and their settings are their home's, even beside another deployment's lists.
  */
 export function SidebarFooter() {
+  const callSource = useCallSource();
   return (
     <>
-      <CallBar />
-      <UserFooter />
-      <VoiceEndedDialog />
+      {callSource !== null && (
+        // The call is wherever the user joined it, which may not be the deployment shown.
+        <SourceScope source={callSource}>
+          <CallBar />
+          <VoiceEndedDialog />
+        </SourceScope>
+      )}
+      <HomeScope>
+        <UserFooter />
+      </HomeScope>
     </>
   );
 }

@@ -1155,12 +1155,17 @@ async function events(page: Page): Promise<Publish> {
 }
 
 /** Stubs the world and signs in through the form, as a user would. */
-export async function signInToWorld(page: Page): Promise<void> {
+export async function signInToWorld(
+  page: Page,
+  /** Routes that answer before the world's own, registered after it so they win. */
+  before?: (page: Page) => Promise<void>,
+): Promise<void> {
   const publish = await events(page);
   const poll = lunch(publish);
   const admin = administration();
   const blocks = new Set<string>();
   await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks));
+  await before?.(page);
   await page.goto("/");
   await page.getByLabel("Username").fill("kate");
   await page.getByLabel("Password").fill("hunter22");
