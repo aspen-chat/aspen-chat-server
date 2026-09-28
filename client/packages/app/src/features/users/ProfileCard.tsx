@@ -1,9 +1,9 @@
 import type { User } from "@aspen/protocol";
 import { ChatCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useState, type ReactNode, type RefObject } from "react";
 import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useBlocked, useMe, useSync } from "@/api/hooks";
+import { useBlocked, useChannel, useMe, useSync } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf, statusLine } from "@/features/users/profile";
@@ -13,12 +13,16 @@ import { format } from "@/i18n/messages";
 /**
  * A user's profile as a card: who they are, their pronouns, what they are up to, and their
  * bio, with ways to message and to block them when they are someone else. Opens from any
- * control that names the user, such as a message author or a member row.
+ * control that names the user, such as a message author or a member row. Inside the reader's
+ * one-to-one DM with them it offers no way to message them, which is where the reader already is.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
   const me = useMe();
   const blocked = useBlocked(user.id);
+  const { channelId } = useParams({ strict: false });
+  const open = useChannel(channelId ?? "");
+  const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
   const name = displayNameOf(user);
   return (
     <div className="flex w-72 flex-col gap-3 p-4">
@@ -53,7 +57,7 @@ export function ProfileCard({ user }: { user: User }) {
       )}
       {me !== null && me.id !== user.id && (
         <>
-          {!blocked && <MessageButton userId={user.id} />}
+          {!blocked && !inTheirDm && <MessageButton userId={user.id} />}
           <BlockControl userId={user.id} name={name} blocked={blocked} />
         </>
       )}

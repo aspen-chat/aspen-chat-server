@@ -117,6 +117,10 @@ test("the name in a DM's header opens that person's card", async ({ page }) => {
     .getByRole("heading", { name: new RegExp(bob) })
     .getByRole("button", { name: `Show profile of ${bob}` })
     .click();
+  // Messaging him would lead where the reader already is.
+  const card = page.getByRole("dialog", { name: new RegExp(bob) });
+  await expect(card.getByRole("button", { name: "Block" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Message" })).toHaveCount(0);
   await blockFromOpenCard(page);
 });
 
