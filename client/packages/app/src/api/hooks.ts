@@ -7,6 +7,13 @@ import type {
   AspenSync,
   Attachment,
   Category,
+  CategoryOverride,
+  ChannelOverride,
+  CommunityPermissions,
+  Permission,
+  PermissionSet,
+  Pin,
+  Role,
   ChannelMute,
   ChannelVoice,
   PreferenceDefinition,
@@ -335,4 +342,57 @@ export function useInvites(communityId: string): readonly Invite[] {
 
 export function useReactions(messageId: string): Reactions {
   return useTopic(`reactions:${messageId}`, (s) => s.reactions(messageId));
+}
+
+/** A community's roles, lowest first. */
+export function useRoles(communityId: string): readonly Role[] {
+  return useTopic(`roles:${communityId}`, (s) => s.roles(communityId));
+}
+
+/** The roles a member holds besides everyone's, or `undefined` while unknown. */
+export function useMemberRoles(communityId: string, userId: string): readonly string[] | undefined {
+  return useTopic(`roles:${communityId}`, (s) => s.memberRoles(communityId, userId));
+}
+
+/** What the caller may do across a community; `null` while that is unknown. */
+export function useAccess(communityId: string): CommunityPermissions | null {
+  return useTopic(`access:${communityId}`, (s) => s.access(communityId));
+}
+
+/** Whether the caller holds a community permission. */
+export function useCan(communityId: string | null | undefined, permission: Permission): boolean {
+  const access = useTopic(`access:${communityId ?? ""}`, (s) =>
+    communityId == null ? null : s.access(communityId),
+  );
+  return access?.has(permission) ?? false;
+}
+
+/** What the caller may do in a channel (a thread's are its parent's; a DM's are every one). */
+export function useChannelAccess(channelId: string): PermissionSet {
+  return useTopic(`channelAccess:${channelId}`, (s) => s.channelAccess(channelId));
+}
+
+/** Whether the caller may do something in a channel. */
+export function useChannelCan(channelId: string, permission: Permission): boolean {
+  return useChannelAccess(channelId).has(permission);
+}
+
+export function useChannelOverrides(channelId: string): readonly ChannelOverride[] {
+  return useTopic(`overrides:${channelId}`, (s) => s.channelOverrides(channelId));
+}
+
+export function useCategoryOverrides(categoryId: string): readonly CategoryOverride[] {
+  return useTopic(`overrides:${categoryId}`, (s) => s.categoryOverrides(categoryId));
+}
+
+/** A channel's pins in their order, `undefined` until read; the first use reads them. */
+export function usePins(channelId: string): readonly Pin[] | undefined {
+  const sync = useSync();
+  const pins = useTopic(`pins:${channelId}`, (s) => s.pins(channelId));
+  useEffect(() => {
+    if (pins === undefined) {
+      void sync.loadPins(channelId).catch(() => undefined);
+    }
+  }, [sync, channelId, pins]);
+  return pins;
 }

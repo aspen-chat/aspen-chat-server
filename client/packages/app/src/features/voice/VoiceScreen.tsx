@@ -10,7 +10,15 @@ import {
 } from "@phosphor-icons/react";
 import { useRef, useState } from "react";
 import { Button } from "react-aria-components";
-import { useChannelVoice, useMe, usePreference, useSync, useUser, useVoiceCall } from "@/api/hooks";
+import {
+  useChannelCan,
+  useChannelVoice,
+  useMe,
+  usePreference,
+  useSync,
+  useUser,
+  useVoiceCall,
+} from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { Avatar } from "@/features/communities/Avatar";
@@ -33,6 +41,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const call = useVoiceCall();
   const voice = useChannelVoice(channel.id);
   const inThisCall = call.status === "connected" && call.channelId === channel.id;
+  const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
 
@@ -111,7 +120,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
             </ul>
           )}
         </section>
-        {!inThisCall && (
+        {!inThisCall && mayJoin && (
           <div className="flex justify-center">
             <Button
               onPress={() => {

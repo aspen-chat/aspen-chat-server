@@ -13,6 +13,7 @@ import { useSync } from "@/api/hooks";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
+import { PinsButton } from "@/features/messages/PinsButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
@@ -47,6 +48,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
         </span>
         {title}
       </h2>
+      <PinsButton channelId={channel.id} channelName={title} home={null} />
       {group && (
         <>
           <PeoplePicker

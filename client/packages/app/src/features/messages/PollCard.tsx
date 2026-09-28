@@ -12,7 +12,15 @@ import {
   TextField,
   ToggleButton,
 } from "react-aria-components";
-import { useMe, useMyVotes, useMyWriteIns, usePoll, useStore, useSync } from "@/api/hooks";
+import {
+  useMe,
+  useMyVotes,
+  useMyWriteIns,
+  usePoll,
+  useStore,
+  useSync,
+  useChannelCan,
+} from "@/api/hooks";
 import { inputClass } from "@/features/auth/styles";
 import {
   dangerButtonClass,
@@ -101,6 +109,7 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
   const me = useMe();
   const myVotes = useMyVotes(poll.id);
   const myWriteIns = useMyWriteIns(poll.id);
+  const moderate = useChannelCan(poll.channelId, "manageMessages");
   const { index, option } = choice;
   const mine = myVotes.has(index);
   const voters = poll.results[index]?.voters ?? null;
@@ -114,12 +123,13 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
     : choice.writtenBy === null
       ? m.poll.writtenIn
       : format(m.poll.writtenInBy, { name: nameOf(choice.writtenBy) });
-  // A write-in can be removed by its writer and the poll's creator (and by moderators, whom
-  // this card does not yet recognise).
+  // A write-in can be removed by its writer, the poll's creator, and anyone who may manage
+  // messages here.
   const canRemove =
     open &&
     choice.writeIn &&
-    (myWriteIns.has(index) ||
+    (moderate ||
+      myWriteIns.has(index) ||
       (me !== null && (choice.writtenBy === me.id || poll.createdBy === me.id)));
 
   function toggle(selected: boolean) {

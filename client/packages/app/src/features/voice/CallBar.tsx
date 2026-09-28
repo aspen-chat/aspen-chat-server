@@ -52,22 +52,31 @@ export function CallBar() {
           {call.status === "failed" ? (call.error ?? channel?.name ?? "") : (channel?.name ?? "")}
         </span>
       </span>
-      <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
-        <Button
-          aria-label={call.muted ? m.voice.unmute : m.voice.mute}
-          aria-pressed={call.muted}
-          onPress={() => {
-            sync.voice.setMuted(!call.muted);
-          }}
-          className={buttonClass + (call.muted ? " text-danger" : "")}
-        >
-          {call.muted ? (
+      {/* Someone who may not speak here listens only, and has no microphone to mute. */}
+      {call.canSpeak || call.status !== "connected" ? (
+        <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
+          <Button
+            aria-label={call.muted ? m.voice.unmute : m.voice.mute}
+            aria-pressed={call.muted}
+            onPress={() => {
+              sync.voice.setMuted(!call.muted);
+            }}
+            className={buttonClass + (call.muted ? " text-danger" : "")}
+          >
+            {call.muted ? (
+              <MicrophoneSlashIcon size={18} aria-hidden="true" />
+            ) : (
+              <MicrophoneIcon size={18} aria-hidden="true" />
+            )}
+          </Button>
+        </Tooltip>
+      ) : (
+        <Tooltip text={m.voice.listeningOnly}>
+          <span aria-label={m.voice.listeningOnly} className={buttonClass + " text-ink-faint"}>
             <MicrophoneSlashIcon size={18} aria-hidden="true" />
-          ) : (
-            <MicrophoneIcon size={18} aria-hidden="true" />
-          )}
-        </Button>
-      </Tooltip>
+          </span>
+        </Tooltip>
+      )}
       <Tooltip text={call.deafened ? m.voice.undeafen : m.voice.deafen}>
         <Button
           aria-label={call.deafened ? m.voice.undeafen : m.voice.deafen}

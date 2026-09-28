@@ -68,6 +68,7 @@ export {
   isDm,
   type Attachment,
   type ChannelMute,
+  type Pin,
   type ChannelVoice,
   type Icon,
   type Included,
@@ -107,7 +108,9 @@ export {
 } from "./sync";
 export type {
   Category,
+  CategoryOverride,
   Channel,
+  ChannelOverride,
   ChannelType,
   Community,
   CustomStatus,
@@ -119,6 +122,7 @@ export type {
   PollOption,
   PollOptionResult,
   PollWriteIn,
+  Role,
   User,
   UserCommunity,
   UserOnlineStatus,
@@ -174,3 +178,19 @@ export {
   type PreferenceStorage,
   type PreferenceStoreOptions,
 } from "./preferences";
+export {
+  ALL_PERMISSIONS,
+  CHANNEL_PERMISSIONS,
+  COMMUNITY_PERMISSIONS,
+  CommunityPermissions,
+  DM_PERMISSIONS,
+  OWNER_RANK,
+  TEMPLATES,
+  explain,
+  resolveCommunity,
+  type AccessDecision,
+  type AccessReason,
+  type OverrideGrant,
+  type Permission,
+  type PermissionSet,
+} from "./permissions";

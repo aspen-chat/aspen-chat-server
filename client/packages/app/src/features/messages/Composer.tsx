@@ -2,7 +2,7 @@ import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
-import { useSync } from "@/api/hooks";
+import { useChannel, useChannelAccess, useSync } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -31,7 +31,8 @@ const toolButtonClass =
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
  * upload at once and are sent with the next message; a message may be files alone. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
- * clears after each message.
+ * clears after each message. Only what the caller may do here is offered: without sending (or,
+ * in a thread, sending in threads) the box gives way to a note saying so.
  */
 export function Composer({
   channelId,
@@ -50,6 +51,9 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const channel = useChannel(channelId);
+  const permissions = useChannelAccess(channelId);
+  const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>
@@ -133,6 +137,12 @@ export function Composer({
     }
   }
 
+  if (!mayPost) {
+    return (
+      <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">{m.cannotSendHere}</p>
+    );
+  }
+
   return (
     <form
       onSubmit={(event) => {
@@ -199,16 +209,20 @@ export function Composer({
           aria-hidden="true"
           tabIndex={-1}
         />
-        <Tooltip text={m.attachFile}>
-          <Button
-            aria-label={m.attachFile}
-            onPress={() => fileInput.current?.click()}
-            className={toolButtonClass}
-          >
-            <PaperclipIcon size={20} aria-hidden="true" />
-          </Button>
-        </Tooltip>
-        <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
+        {permissions.has("attachFiles") && (
+          <Tooltip text={m.attachFile}>
+            <Button
+              aria-label={m.attachFile}
+              onPress={() => fileInput.current?.click()}
+              className={toolButtonClass}
+            >
+              <PaperclipIcon size={20} aria-hidden="true" />
+            </Button>
+          </Tooltip>
+        )}
+        {permissions.has("createPolls") && (
+          <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
+        )}
         <TextField aria-label={m.messageLabel} value={draft} onChange={setDraft} className="flex-1">
           <TextArea
             placeholder={placeholder}
@@ -225,7 +239,7 @@ export function Composer({
           {m.send}
         </Button>
       </div>
-      {echoTarget !== undefined && (
+      {echoTarget !== undefined && permissions.has("sendMessages") && (
         <label className="mt-2 flex w-fit items-center gap-2 text-sm text-ink-muted">
           <input
             type="checkbox"

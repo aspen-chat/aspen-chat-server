@@ -115,6 +115,11 @@ export function ShareControl({
     />
   );
 
+  // A call that does not allow sharing offers none.
+  if (call.channelId !== null && !call.canShare && call.status === "connected") {
+    return null;
+  }
+
   if (gameBridge === null) {
     // Mobile browsers cannot capture the screen; there is nothing to offer.
     if (!canShareScreen()) {

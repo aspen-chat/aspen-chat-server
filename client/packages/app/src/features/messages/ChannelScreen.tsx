@@ -6,6 +6,7 @@ import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { DmHeader } from "@/features/dms/DmHeader";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Composer } from "@/features/messages/Composer";
+import { PinsButton } from "@/features/messages/PinsButton";
 import { MessageList } from "@/features/messages/MessageList";
 import { threadLink, type ChannelHome } from "@/features/messages/links";
 import { ThreadPanel } from "@/features/threads/ThreadPanel";
@@ -97,7 +98,9 @@ export function ChannelScreen() {
         {isDm(channel) ? (
           <DmHeader channel={channel} />
         ) : (
-          <ChannelHeader communityId={communityId ?? ""} glyph="#" name={channel.name} />
+          <ChannelHeader communityId={communityId ?? ""} glyph="#" name={channel.name}>
+            <PinsButton channelId={channelId} channelName={channel.name} home={home} />
+          </ChannelHeader>
         )}
         {loadError !== null && (
           <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">

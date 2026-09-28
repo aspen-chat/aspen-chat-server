@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   RecordStore,
+  TEMPLATES,
   WINDOW_MAX_MESSAGES,
   groupChannels,
   type Category,
@@ -1006,5 +1007,94 @@ describe("RecordStore threads and DMs", () => {
     store.setDms([kept]);
     expect(store.dms().map((c) => c.id)).toEqual([kept.id]);
     expect(store.channel(gone.id)).toBeUndefined();
+  });
+});
+
+describe("RecordStore roles and access", () => {
+  const everyone = {
+    id: id(40),
+    community: aspen.id,
+    name: "everyone",
+    position: 0,
+    permissions: [...TEMPLATES.member],
+    everyone: true,
+  };
+  const moderator = {
+    id: id(41),
+    community: aspen.id,
+    name: "Moderator",
+    position: 1,
+    permissions: ["manageMessages" as const],
+    everyone: false,
+  };
+
+  function withRoles(): RecordStore {
+    const store = bootstrapped();
+    store.ingest({ roles: [everyone, moderator], channelOverrides: [], categoryOverrides: [] });
+    return store;
+  }
+
+  it("resolves the caller's permissions from the roles they hold", () => {
+    const store = withRoles();
+    expect(store.access(aspen.id)?.has("sendMessages")).toBe(true);
+    expect(store.access(aspen.id)?.has("manageMessages")).toBe(false);
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: me.id,
+      roles: [moderator.id],
+    });
+    expect(store.access(aspen.id)?.has("manageMessages")).toBe(true);
+    expect(store.memberRoles(aspen.id, me.id)).toEqual([moderator.id]);
+    // Someone else's roles are resolved on request, not for the caller.
+    expect(store.access(aspen.id, bob.id)?.has("manageMessages")).toBe(false);
+  });
+
+  it("lets go of a channel the caller may no longer view, and keeps it for its role", () => {
+    const store = withRoles();
+    const listener = vi.fn();
+    store.subscribe(`channelAccess:${dev.id}`, listener);
+    store.applyEvent({
+      serverEvent: "categoryOverride",
+      type: "create",
+      category: work.id,
+      role: everyone.id,
+      allow: [],
+      deny: ["sendMessages"],
+    });
+    expect(listener).toHaveBeenCalled();
+    expect(store.channelAccess(dev.id).has("sendMessages")).toBe(false);
+    expect(store.channelAccess(general.id).has("sendMessages")).toBe(true);
+    store.applyEvent({
+      serverEvent: "channelOverride",
+      type: "create",
+      channel: general.id,
+      role: everyone.id,
+      allow: [],
+      deny: ["viewChannel"],
+    });
+    expect(store.channel(general.id)).toBeUndefined();
+    expect(store.channelRemoved(general.id)).toBe(true);
+    expect(store.channel(dev.id)).toBeDefined();
+  });
+
+  it("gives the owner everything and forgets a deleted role's overrides", () => {
+    const store = withRoles();
+    store.applyEvent({
+      serverEvent: "channelOverride",
+      type: "create",
+      channel: dev.id,
+      role: moderator.id,
+      allow: ["viewChannel"],
+      deny: [],
+    });
+    expect(store.channelOverrides(dev.id)).toHaveLength(1);
+    store.applyEvent({ serverEvent: "role", type: "delete", id: moderator.id });
+    expect(store.channelOverrides(dev.id)).toHaveLength(0);
+    expect(store.roles(aspen.id).map((r) => r.id)).toEqual([everyone.id]);
+    store.applyEvent({ serverEvent: "community", type: "update", id: aspen.id, owner: me.id });
+    expect(store.access(aspen.id)?.owner).toBe(true);
+    expect(store.access(aspen.id)?.has("manageRoles")).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ import {
   SliderThumb,
   SliderTrack,
 } from "react-aria-components";
-import { usePreference, useSync } from "@/api/hooks";
+import { useChannelCan, usePreference, useSync } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -25,7 +25,7 @@ const itemClass =
  * Everything one can do to another person in a call, opened by right-clicking them or by the
  * dots button beside them: how loud they are to this user alone, silencing them for this user
  * alone (their volume is kept for when they are unmuted), and moderation (server mute or
- * unmute, removal), which the server allows only with Manage calls.
+ * unmute, removal), offered only with Manage calls.
  */
 export function ParticipantMenu({
   channelId,
@@ -49,6 +49,7 @@ export function ParticipantMenu({
   const sync = useSync();
   const gain = usePreference(userVolume(userId));
   const mutedForMe = usePreference(userMuted(userId));
+  const moderate = useChannelCan(channelId, "manageCalls");
   const label = format(m.voice.participantActions, { name });
   return (
     <Popover
@@ -101,12 +102,16 @@ export function ParticipantMenu({
           <MenuItem id="muteForMe" className={itemClass}>
             {mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
           </MenuItem>
-          <MenuItem id="serverMute" className={itemClass}>
-            {muted ? m.voice.serverUnmute : m.voice.serverMute}
-          </MenuItem>
-          <MenuItem id="kick" className={itemClass} data-danger="true">
-            {m.voice.removeFromCall}
-          </MenuItem>
+          {moderate && (
+            <>
+              <MenuItem id="serverMute" className={itemClass}>
+                {muted ? m.voice.serverUnmute : m.voice.serverMute}
+              </MenuItem>
+              <MenuItem id="kick" className={itemClass} data-danger="true">
+                {m.voice.removeFromCall}
+              </MenuItem>
+            </>
+          )}
         </Menu>
       </Dialog>
     </Popover>

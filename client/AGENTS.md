@@ -370,6 +370,34 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `/register?invite=CODE` where the app has a web address, or as its code in the shells. That
   link opens the create-account screen with the code filled in, and `RegisterForm` asks for a
   code whenever `GET /auth/methods` says the server requires one (`useAuthMethods`).
+- Roles and permissions resolve on the client with `packages/protocol/src/permissions.ts`, the
+  same rules as the server's `app::permissions`; both run the cases in
+  `spec/permission_vectors.json` at the repository root, so a change to either resolver must
+  change the vectors and the other resolver with it. The store holds each community's roles,
+  channel and category overrides, and every known member's roles (from the `roles` sideload,
+  which the bootstrap and `loadCommunity` ask for, and from `role`, `channelOverride`,
+  `categoryOverride`, and `userCommunity` events), and answers `access(communityId)` (topic
+  `access:<id>`, hook `useAccess` / `useCan`) and `channelAccess(channelId)` (topic
+  `channelAccess:<id>`, `useChannelAccess` / `useChannelCan`; a thread's are its parent's, a
+  DM's every channel permission and pinning). Controls the caller may not use are not shown:
+  adding and arranging channels, the invite manager's create and revoke, the composer's
+  attach, poll, and send (a note replaces the box without sending), message delete, pin,
+  reaction, and thread actions, voice moderation, joining, and sharing. The server refuses
+  anyway; hiding only keeps the UI honest. When the caller loses sight of a channel the store
+  lets it go at once (as `channelRemoved`); when they may gain some, `AspenSync` reads the
+  community again after a random pause of at most `ACCESS_RELOAD_SPREAD_MS`, since the server
+  sends nothing about channels a member could not see. A join offer says whether the caller
+  may speak and share (`VoiceCallState.canSpeak`, `canShare`); without Speak the call joins to
+  listen, opening no microphone. `src/features/community-settings` is the management UI: the
+  sidebar gear's `CommunitySettingsDialog` (name and icon, ownership, delete or leave; roles,
+  with templates and a grouped `PermissionChecklist` whose unheld permissions are disabled; and
+  members, with their roles and Remove), and `AccessDialog`, opened from a channel's menu or a
+  category's lock, which leads with three presets (everyone, only some roles, read-only) and
+  keeps per-role allow, default, and deny under Advanced and a per-member explanation
+  (`explain`) under Check access. A preset lets its roles in before shutting everyone else out,
+  so their members never lose the channel in between. Pins are store state per channel (topic
+  `pins:<channelId>`, `usePins`, read once on first use and kept by `pin` events), shown by
+  `PinsButton` in the channel and DM headers.
 - Presence is pulled. The server pushes no status events; `AspenSync` asks
   `GET /users/statuses` for `RecordStore.presenceCandidates()` (the members shown for every
   community and everyone in a call), in batches of `PRESENCE_BATCH`, when the sync goes live,
@@ -380,10 +408,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   gains focus or comes into view (`src/api/activity.ts`); it sends an `activity` frame at most
   every `ACTIVITY_INTERVAL_MS`, and on reconnecting only if the user was active within that
   interval. Nothing else may call it: background work is not the user using the app.
-- Events are routed by the server to the communities the user belongs to and to the user
-  alone, so the client filters nothing itself. An event about a user reaches the client once
-  per community shared with them; every copy carries the same `eventId` on its frame and
-  `EventStream` drops all but the first of the last few thousand ids it has seen.
+- Events are routed by the server to the communities the user belongs to and to the user alone,
+  leaving out channels they may not view, so the client filters nothing itself. An event about a
+  user reaches the client once per community shared with them; every copy carries the same
+  `eventId` on its frame and `EventStream` drops all but the first of the last few thousand ids it
+  has seen.
 - Update events and update requests are JSON Merge Patches: an absent field is unchanged, `null`
   clears a nullable field. Apply them field by field; never replace a cached record wholesale
   with an update payload.

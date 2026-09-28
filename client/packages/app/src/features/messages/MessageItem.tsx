@@ -1,9 +1,23 @@
 import type { LinkPreview } from "@aspen/protocol";
-import { ArrowBendDownRightIcon, ChatsCircleIcon, PencilSimpleIcon } from "@phosphor-icons/react";
+import {
+  ArrowBendDownRightIcon,
+  ChatsCircleIcon,
+  PencilSimpleIcon,
+  PushPinIcon,
+  PushPinSlashIcon,
+} from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
-import { useChannel, useMe, useMessage, useSync, useUser } from "@/api/hooks";
+import {
+  useChannel,
+  useChannelAccess,
+  useMe,
+  useMessage,
+  usePins,
+  useSync,
+  useUser,
+} from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ProfilePopover } from "@/features/users/ProfileCard";
@@ -64,13 +78,19 @@ export function MessageItem({
   const message = useMessage(id);
   const author = useUser(message?.author);
   const me = useMe();
+  const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
   if (message === undefined) {
     return null;
   }
   const inThread = parentId !== null;
+  // Opening a thread that exists is reading it; starting one takes Start threads.
   const canThread =
-    threadable && !inThread && message.kind !== "threadEcho" && message.kind !== "pollClosed";
+    threadable &&
+    !inThread &&
+    message.kind !== "threadEcho" &&
+    message.kind !== "pollClosed" &&
+    (message.thread != null || permissions.has("startThreads"));
   const permalink = inThread
     ? threadLink(home, parentId, channelId)
     : messageLink(home, channelId, id);
@@ -86,9 +106,10 @@ export function MessageItem({
       () => undefined,
     );
   };
-  // Editing and deleting are offered only on the caller's own messages. The server accepts
-  // either from anyone for now, but the controls should not invite it.
+  // A message is edited only by its author, and deleted by its author or by someone who may
+  // manage messages here.
   const own = me !== null && me.id === message.author;
+  const deletable = own || permissions.has("manageMessages");
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   const editable = own && message.kind === "standard";
   const linkedImages = imageUrls(message.content);
@@ -182,7 +203,12 @@ export function MessageItem({
               aria-label={m.messageActionsLabel}
               className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:invisible pointer-coarse:absolute pointer-coarse:-top-4 pointer-coarse:right-2 pointer-coarse:z-10 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-line pointer-coarse:bg-surface-raised pointer-coarse:shadow-md pointer-coarse:group-focus-within:visible"
             >
-              <ReactionPicker messageId={id} triggerClassName={actionClass} />
+              {permissions.has("addReactions") && (
+                <ReactionPicker messageId={id} triggerClassName={actionClass} />
+              )}
+              {permissions.has("pinMessages") && (
+                <PinButton messageId={id} channelId={channelId} className={actionClass} />
+              )}
               <ViewReactionsButton messageId={id} triggerClassName={actionClass} />
               {canThread && (
                 <Tooltip text={m.threads.replyInThread}>
@@ -208,7 +234,7 @@ export function MessageItem({
                   </Button>
                 </Tooltip>
               )}
-              {own && (
+              {deletable && (
                 <DeleteMessageDialog
                   messageId={id}
                   triggerClassName={actionClass + " text-danger"}
@@ -249,7 +275,7 @@ export function MessageItem({
         {cards.map((preview) => (
           <LinkPreviewCard key={preview.url} preview={preview} />
         ))}
-        <ReactionChips messageId={id} />
+        <ReactionChips messageId={id} canReact={permissions.has("addReactions")} />
         {canThread && message.thread != null && (
           <ThreadSummary threadId={message.thread} home={home} channelId={channelId} />
         )}
@@ -373,5 +399,40 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
         )}
       </span>
     </a>
+  );
+}
+
+/** Pins the message in its channel, or unpins it. */
+function PinButton({
+  messageId,
+  channelId,
+  className,
+}: {
+  messageId: string;
+  channelId: string;
+  className: string;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const pins = usePins(channelId);
+  const pinned = pins?.some((p) => p.messageId === messageId) ?? false;
+  const label = pinned ? m.pins.unpin : m.pins.pin;
+  return (
+    <Tooltip text={label}>
+      <Button
+        aria-label={label}
+        isDisabled={pins === undefined}
+        onPress={() => {
+          void sync.setPinned(messageId, !pinned).catch(() => undefined);
+        }}
+        className={className}
+      >
+        {pinned ? (
+          <PushPinSlashIcon size={16} aria-hidden="true" />
+        ) : (
+          <PushPinIcon size={16} aria-hidden="true" />
+        )}
+      </Button>
+    </Tooltip>
   );
 }

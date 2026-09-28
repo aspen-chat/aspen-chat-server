@@ -285,6 +285,9 @@ function makeCall(options: {
   unreachableSendTransports?: number;
   microphone?: "ok" | "denied";
   userVolume?: (userId: string) => number;
+  /** What the join offer grants; both by default. */
+  speak?: boolean;
+  shareScreen?: boolean;
 }) {
   FakeSocket.instances = [];
   const calls: string[] = [];
@@ -310,6 +313,8 @@ function makeCall(options: {
           candidates: options.candidates.map((k) => servers[k]),
           token: "tok",
           expiresAt: "2030-01-01T00:00:00Z",
+          speak: options.speak ?? true,
+          shareScreen: options.shareScreen ?? true,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -377,6 +382,27 @@ describe("VoiceCall", () => {
     expect(transports[0]?.produced).toEqual(["p-microphone"]);
     expect(states).toContain("joining");
     expect(calls.some((c) => c.includes("/failures"))).toBe(false);
+  });
+
+  it("joins to listen without opening the microphone when the channel does not allow speaking", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      speak: false,
+      shareScreen: false,
+      microphone: "denied",
+    });
+    await call.join(channel);
+    expect(call.state).toMatchObject({ status: "connected", canSpeak: false, canShare: false });
+    expect(transports[0]?.produced).toEqual([]);
+    expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "produce")).toBe(false);
+    const prepared = { video: new FakeTrack("video"), audio: null };
+    await call.startScreenShare({
+      prepared: prepared as unknown as { video: MediaStreamTrack; audio: null },
+    });
+    expect(prepared.video.stopped).toBe(true);
+    expect(call.state.sharingScreen).toBe(false);
   });
 
   it("reports a server that refuses and falls through to the next", async () => {

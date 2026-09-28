@@ -14,7 +14,7 @@ import {
   Select,
   SelectValue,
 } from "react-aria-components";
-import { useInvites, useSync } from "@/api/hooks";
+import { useCan, useInvites, useMe, useSync } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
@@ -68,11 +68,17 @@ export function InviteDialog({ community }: { community: Community }) {
   );
 }
 
-/** Lists a community's invites with copy and revoke, and creates new ones. */
+/**
+ * Lists a community's invites with copy and revoke, and creates new ones. Without Manage invites
+ * the server lists only the caller's own, and without Create invites nothing new is offered.
+ */
 export function InviteManager({ communityId }: { communityId: string }) {
   const m = useMessages();
   const sync = useSync();
+  const me = useMe();
   const invites = useInvites(communityId);
+  const mayCreate = useCan(communityId, "createInvites");
+  const manageAll = useCan(communityId, "manageInvites");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expiry, setExpiry] = useState<ExpiryOption>("week");
   const [creating, setCreating] = useState(false);
@@ -103,46 +109,48 @@ export function InviteManager({ communityId }: { communityId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void create();
-        }}
-        className="flex items-end gap-2"
-      >
-        <Select
-          value={expiry}
-          onChange={(key) => {
-            if (typeof key === "string" && key in EXPIRY_OPTIONS) {
-              setExpiry(key as ExpiryOption);
-            }
+      {mayCreate && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void create();
           }}
-          className="flex flex-1 flex-col gap-1"
+          className="flex items-end gap-2"
         >
-          <Label className="text-sm font-medium text-ink-muted">{m.expiryLabel}</Label>
-          <Button className="flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-left outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
-            <SelectValue />
-            <CaretDownIcon size={14} aria-hidden="true" />
+          <Select
+            value={expiry}
+            onChange={(key) => {
+              if (typeof key === "string" && key in EXPIRY_OPTIONS) {
+                setExpiry(key as ExpiryOption);
+              }
+            }}
+            className="flex flex-1 flex-col gap-1"
+          >
+            <Label className="text-sm font-medium text-ink-muted">{m.expiryLabel}</Label>
+            <Button className="flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-left outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
+              <SelectValue />
+              <CaretDownIcon size={14} aria-hidden="true" />
+            </Button>
+            <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+              <ListBox className="outline-none">
+                {(Object.keys(EXPIRY_OPTIONS) as ExpiryOption[]).map((option) => (
+                  <ListBoxItem
+                    key={option}
+                    id={option}
+                    textValue={m.expiry[option]}
+                    className="cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent"
+                  >
+                    {m.expiry[option]}
+                  </ListBoxItem>
+                ))}
+              </ListBox>
+            </Popover>
+          </Select>
+          <Button type="submit" isDisabled={creating} className={primaryButtonClass}>
+            {creating ? m.creatingInvite : m.createInvite}
           </Button>
-          <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
-            <ListBox className="outline-none">
-              {(Object.keys(EXPIRY_OPTIONS) as ExpiryOption[]).map((option) => (
-                <ListBoxItem
-                  key={option}
-                  id={option}
-                  textValue={m.expiry[option]}
-                  className="cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent"
-                >
-                  {m.expiry[option]}
-                </ListBoxItem>
-              ))}
-            </ListBox>
-          </Popover>
-        </Select>
-        <Button type="submit" isDisabled={creating} className={primaryButtonClass}>
-          {creating ? m.creatingInvite : m.createInvite}
-        </Button>
-      </form>
+        </form>
+      )}
       {error !== null && (
         <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
           {error}
@@ -157,7 +165,12 @@ export function InviteManager({ communityId }: { communityId: string }) {
       ) : (
         <ul className="flex max-h-72 flex-col gap-2 overflow-y-auto">
           {invites.map((invite) => (
-            <InviteRow key={invite.code} invite={invite} now={openedAt} />
+            <InviteRow
+              key={invite.code}
+              invite={invite}
+              now={openedAt}
+              revocable={manageAll || invite.createdBy === me?.id}
+            />
           ))}
         </ul>
       )}
@@ -165,7 +178,15 @@ export function InviteManager({ communityId }: { communityId: string }) {
   );
 }
 
-function InviteRow({ invite, now }: { invite: Invite; now: number }) {
+function InviteRow({
+  invite,
+  now,
+  revocable,
+}: {
+  invite: Invite;
+  now: number;
+  revocable: boolean;
+}) {
   const m = useMessages();
   const sync = useSync();
   const [copied, setCopied] = useState(false);
@@ -229,18 +250,20 @@ function InviteRow({ invite, now }: { invite: Invite; now: number }) {
         >
           {copied ? m.copied : m.copyLink}
         </Button>
-        <Button
-          isDisabled={revoking}
-          onPress={() => {
-            setRevoking(true);
-            sync.revokeInvite(invite.code).catch(() => {
-              setRevoking(false);
-            });
-          }}
-          className={secondaryButtonClass + " text-danger"}
-        >
-          {m.revoke}
-        </Button>
+        {revocable && (
+          <Button
+            isDisabled={revoking}
+            onPress={() => {
+              setRevoking(true);
+              sync.revokeInvite(invite.code).catch(() => {
+                setRevoking(false);
+              });
+            }}
+            className={secondaryButtonClass + " text-danger"}
+          >
+            {m.revoke}
+          </Button>
+        )}
       </div>
     </li>
   );

@@ -86,6 +86,8 @@ function listQuery<S extends string>(
 type Icon = components["schemas"]["Icon"];
 type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"];
+type Role = components["schemas"]["Role"];
+type Permission = components["schemas"]["Permission"];
 
 export interface InviteLookup {
   invite: Invite;
@@ -181,6 +183,9 @@ export interface AspenSyncOptions {
 
 export type SyncListener = () => void;
 
+/** How long a read after a change to the caller's access may wait, at most. */
+export const ACCESS_RELOAD_SPREAD_MS = 2000;
+
 export class AspenSync {
   readonly store: RecordStore;
   /** The voice call, if any; a `VoiceCall` even when idle so the UI can subscribe once. */
@@ -218,12 +223,17 @@ export class AspenSync {
   readonly #missingPolls = new Set<string>();
   readonly #iconLoads = new Map<string, Promise<void>>();
   readonly #missingIcons = new Set<string>();
+  readonly #random: () => number;
+  /** Communities waiting to be read again because the caller's access in them may have grown. */
+  readonly #accessReloads = new Set<string>();
+  readonly #pinLoads = new Map<string, Promise<void>>();
 
   constructor(options: AspenSyncOptions) {
     this.#client = options.client;
     this.store = options.store ?? new RecordStore({ now: options.now ?? (() => Date.now()) });
     this.#now = options.now ?? (() => Date.now());
     this.#uploadFetch = options.uploadFetch ?? ((input, init) => globalThis.fetch(input, init));
+    this.#random = options.random ?? Math.random;
     const voiceOptions: ConstructorParameters<typeof VoiceCall>[0] = {
       client: options.client,
       media: options.voiceMedia ?? lazyBrowserMedia(),
@@ -1192,6 +1202,209 @@ export class AspenSync {
     }
   }
 
+  /**
+   * Makes a role, just above everyone's. It is cached from the response at once, so it can be
+   * edited before its event arrives; the event then changes nothing.
+   */
+  async createRole(
+    communityId: string,
+    name: string,
+    permissions: readonly Permission[],
+  ): Promise<Role> {
+    const result = await this.#client.api.POST("/api/v1/communities/{community}/roles", {
+      params: { path: { community: communityId } },
+      body: { name, permissions: [...permissions] },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (this.store.roles(communityId).every((r) => r.id !== result.data.id)) {
+      this.store.applyEvent({ serverEvent: "role", type: "create", ...result.data });
+    }
+    return result.data;
+  }
+
+  /** Renames a role or sets its permissions; its update event changes the cache. */
+  async updateRole(
+    roleId: string,
+    patch: { name?: string; permissions?: readonly Permission[] },
+  ): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/roles/{role}", {
+      params: { path: { role: roleId } },
+      body: {
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.permissions !== undefined ? { permissions: [...patch.permissions] } : {}),
+      },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  async deleteRole(roleId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/roles/{role}", {
+      params: { path: { role: roleId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Orders the roles below the caller's highest, lowest first, everyone's left out. */
+  async reorderRoles(communityId: string, roleIds: readonly string[]): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/communities/{community}/role-order", {
+      params: { path: { community: communityId } },
+      body: { roles: [...roleIds] },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Gives a member a role, or takes it away; their membership's event changes the cache. */
+  async setMemberRole(
+    communityId: string,
+    userId: string,
+    roleId: string,
+    held: boolean,
+  ): Promise<void> {
+    const params = { path: { community: communityId, user: userId, role: roleId } };
+    const result = held
+      ? await this.#client.api.PUT("/api/v1/communities/{community}/members/{user}/roles/{role}", {
+          params,
+        })
+      : await this.#client.api.DELETE(
+          "/api/v1/communities/{community}/members/{user}/roles/{role}",
+          { params },
+        );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Leaves a community, which drops it from the caller's list at once. */
+  async leaveCommunity(communityId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/communities/{community}/members/@me", {
+      params: { path: { community: communityId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const me = this.store.myUserId;
+    if (me !== null) {
+      this.store.applyEvent({
+        serverEvent: "userCommunity",
+        type: "delete",
+        community: communityId,
+        user: me,
+      });
+    }
+  }
+
+  /** Removes someone from a community; they may come back with an invite. */
+  async removeMember(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/communities/{community}/members/{user}", {
+      params: { path: { community: communityId, user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Hands the community to another member; only its owner may. */
+  async transferOwnership(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/communities/{community}/owner", {
+      params: { path: { community: communityId } },
+      body: { user: userId },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Deletes a community; only its owner may. */
+  async deleteCommunity(communityId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/communities/{community}", {
+      params: { path: { community: communityId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Sets a role's override of a channel or category (`kind`), or with `null` clears it. What a
+   * permission is neither allowed nor denied in is inherited.
+   */
+  async setOverride(
+    kind: "channel" | "category",
+    targetId: string,
+    roleId: string,
+    set: { allow: readonly Permission[]; deny: readonly Permission[] } | null,
+  ): Promise<void> {
+    const body = set === null ? null : { allow: [...set.allow], deny: [...set.deny] };
+    let result;
+    if (kind === "channel") {
+      const params = { path: { channel: targetId, role: roleId } };
+      result =
+        body === null
+          ? await this.#client.api.DELETE("/api/v1/channels/{channel}/overrides/{role}", { params })
+          : await this.#client.api.PUT("/api/v1/channels/{channel}/overrides/{role}", {
+              params,
+              body,
+            });
+    } else {
+      const params = { path: { category: targetId, role: roleId } };
+      result =
+        body === null
+          ? await this.#client.api.DELETE("/api/v1/categories/{category}/overrides/{role}", {
+              params,
+            })
+          : await this.#client.api.PUT("/api/v1/categories/{category}/overrides/{role}", {
+              params,
+              body,
+            });
+    }
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Pins a message in its channel, or unpins it. */
+  async setPinned(messageId: string, pinned: boolean): Promise<void> {
+    const params = { path: { message: messageId } };
+    const result = pinned
+      ? await this.#client.api.PUT("/api/v1/messages/{message}/pin", { params })
+      : await this.#client.api.DELETE("/api/v1/messages/{message}/pin", { params });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Reads a channel's pins into the store, once however many ask at the same time; pin events
+   * keep them current after.
+   */
+  loadPins(channelId: string): Promise<void> {
+    const pending = this.#pinLoads.get(channelId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const load = (async () => {
+      const result = await this.#client.api.GET("/api/v1/channels/{channel}/pins", {
+        params: { path: { channel: channelId } },
+      });
+      if (result.data === undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.setPins(channelId, result.data);
+    })().finally(() => {
+      this.#pinLoads.delete(channelId);
+    });
+    this.#pinLoads.set(channelId, load);
+    return load;
+  }
+
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
@@ -1313,6 +1526,7 @@ export class AspenSync {
             "readStates",
             "mutes",
             "collapses",
+            "roles",
           ],
         },
       },
@@ -1387,6 +1601,7 @@ export class AspenSync {
                 "readStates",
                 "mutes",
                 "collapses",
+                "roles",
               ],
             },
           },
@@ -1550,9 +1765,13 @@ export class AspenSync {
       event.serverEvent === "message" && event.type === "delete"
         ? this.store.channelsLastMessaged(event.id)
         : [];
+    const widens = this.#mayWidenAccess(event);
     this.store.applyEvent(event);
     for (const channelId of orphaned) {
       void this.#reloadReadState(channelId);
+    }
+    if (widens !== null) {
+      this.#scheduleAccessReload(widens);
     }
     if (event.serverEvent === "message" && event.type === "create") {
       this.ensureUser(event.author);
@@ -1581,6 +1800,73 @@ export class AspenSync {
         void this.#reloadReactions(event.messageId);
       }
     }
+  }
+
+  /**
+   * The community in which `event` may let the caller view channels they could not, which the
+   * server then sends nothing about until they are read: a change to a role they hold (or
+   * everyone's), to an override for one, to the roles they hold, or to who owns it. `null` for
+   * anything else. Losing access needs no read; the store lets such channels go itself.
+   */
+  #mayWidenAccess(event: ServerEvent): string | null {
+    const me = this.store.myUserId;
+    const holds = (community: string, role: string): boolean =>
+      this.store.roles(community).some((r) => r.id === role && r.everyone) ||
+      (me !== null && (this.store.memberRoles(community, me) ?? []).includes(role));
+    switch (event.serverEvent) {
+      case "role": {
+        if (event.type !== "update" || event.permissions == null) {
+          return null;
+        }
+        const community = this.#communityOfRole(event.id);
+        return community !== undefined && holds(community, event.id) ? community : null;
+      }
+      case "channelOverride": {
+        const community = this.store.channel(event.channel)?.community;
+        return community != null && holds(community, event.role) ? community : null;
+      }
+      case "categoryOverride": {
+        const community = this.store.category(event.category)?.community;
+        return community !== undefined && holds(community, event.role) ? community : null;
+      }
+      case "userCommunity":
+        return event.type === "update" && event.user === me && event.roles != null
+          ? event.community
+          : null;
+      case "community":
+        return event.type === "update" && event.owner !== undefined && event.owner === me
+          ? event.id
+          : null;
+      default:
+        return null;
+    }
+  }
+
+  #communityOfRole(roleId: string): string | undefined {
+    for (const community of this.store.communities()) {
+      if (this.store.roles(community.id).some((r) => r.id === roleId)) {
+        return community.id;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Reads a community again soon, at a random moment within `ACCESS_RELOAD_SPREAD_MS` so that a
+   * change reaching every member does not bring every member's read at once.
+   */
+  #scheduleAccessReload(communityId: string): void {
+    if (this.#accessReloads.has(communityId)) {
+      return;
+    }
+    this.#accessReloads.add(communityId);
+    const generation = this.#generation;
+    this.#setTimeout(() => {
+      this.#accessReloads.delete(communityId);
+      if (generation === this.#generation) {
+        void this.loadCommunity(communityId).catch(() => undefined);
+      }
+    }, this.#random() * ACCESS_RELOAD_SPREAD_MS);
   }
 
   async #reloadReactions(messageId: string): Promise<void> {

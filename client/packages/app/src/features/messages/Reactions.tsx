@@ -62,7 +62,14 @@ function byPopularity(reactions: Reactions): Entry[] {
  * chip counting the rest that opens the full list, then a chip that adds one. Clicking an emoji
  * chip adds or removes the caller's own.
  */
-export function ReactionChips({ messageId }: { messageId: string }) {
+export function ReactionChips({
+  messageId,
+  canReact,
+}: {
+  messageId: string;
+  /** Whether the caller may add reactions here; without it they may only take theirs back. */
+  canReact: boolean;
+}) {
   const m = useMessages();
   const reactions = useReactions(messageId);
   const [listOpen, setListOpen] = useState(false);
@@ -76,7 +83,7 @@ export function ReactionChips({ messageId }: { messageId: string }) {
     <ul aria-label={m.reactionsLabel} className="mt-1 flex flex-wrap gap-1">
       {shown.map(({ emoji, reactions: r }) => (
         <li key={emoji}>
-          <ReactionChip messageId={messageId} emoji={emoji} reactions={r} />
+          <ReactionChip messageId={messageId} emoji={emoji} reactions={r} canReact={canReact} />
         </li>
       ))}
       {hidden > 0 && (
@@ -95,12 +102,14 @@ export function ReactionChips({ messageId }: { messageId: string }) {
           <ReactionsDialog messageId={messageId} isOpen={listOpen} onOpenChange={setListOpen} />
         </li>
       )}
-      <li>
-        <ReactionPicker
-          messageId={messageId}
-          triggerClassName={plainChipClass + " text-ink-muted"}
-        />
-      </li>
+      {canReact && (
+        <li>
+          <ReactionPicker
+            messageId={messageId}
+            triggerClassName={plainChipClass + " text-ink-muted"}
+          />
+        </li>
+      )}
     </ul>
   );
 }
@@ -113,10 +122,12 @@ function ReactionChip({
   messageId,
   emoji,
   reactions,
+  canReact,
 }: {
   messageId: string;
   emoji: string;
   reactions: EmojiReactions;
+  canReact: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -131,6 +142,7 @@ function ReactionChip({
     <Tooltip text={who}>
       <ToggleButton
         isSelected={reactions.me}
+        isDisabled={!reactions.me && !canReact}
         aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji })}
         onChange={(selected) => {
           void (

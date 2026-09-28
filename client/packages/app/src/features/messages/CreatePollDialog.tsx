@@ -1,17 +1,8 @@
 import { ApiProblemError, type PollOption } from "@aspen/protocol";
-import {
-  CaretDownIcon,
-  ChartBarIcon,
-  CheckIcon,
-  PlusIcon,
-  SmileyIcon,
-  XIcon,
-} from "@phosphor-icons/react";
+import { CaretDownIcon, ChartBarIcon, PlusIcon, SmileyIcon, XIcon } from "@phosphor-icons/react";
 import { lazy, Suspense, useState } from "react";
 import {
   Button,
-  CheckboxButton,
-  CheckboxField,
   Dialog,
   DialogTrigger,
   Form,
@@ -30,6 +21,7 @@ import {
   TextField,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { ChoiceCheckbox, RadioMark, choiceClass } from "@/features/layout/choices";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   alertClass,
@@ -73,12 +65,6 @@ const popoverClass =
   "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";
 const listOptionClass =
   "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent";
-const radioClass =
-  "group flex items-start gap-2 rounded-md border border-line px-3 py-2 text-sm outline-none " +
-  "hover:bg-surface-hover selected:border-accent focus-visible:ring-2 focus-visible:ring-accent/50";
-const boxClass =
-  "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-line bg-surface " +
-  "text-accent-contrast group-selected:border-accent group-selected:bg-accent";
 const iconButtonClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent/50";
@@ -240,7 +226,7 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
         <Label className={labelClass}>{m.poll.choices}</Label>
         <div className="grid grid-cols-2 gap-2">
           <RadioField value="single">
-            <RadioButton className={radioClass}>
+            <RadioButton className={choiceClass}>
               <RadioMark />
               <span className="flex flex-col">
                 <span className="font-medium">{m.poll.singleChoice}</span>
@@ -249,7 +235,7 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
             </RadioButton>
           </RadioField>
           <RadioField value="multiple">
-            <RadioButton className={radioClass}>
+            <RadioButton className={choiceClass}>
               <RadioMark />
               <span className="flex flex-col">
                 <span className="font-medium">{m.poll.multipleChoice}</span>
@@ -281,13 +267,13 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
           </ListBox>
         </Popover>
       </Select>
-      <PollCheckbox
+      <ChoiceCheckbox
         isSelected={allowWriteIns}
         onChange={setAllowWriteIns}
         label={m.poll.allowWriteIns}
         hint={m.poll.allowWriteInsHint}
       />
-      <PollCheckbox
+      <ChoiceCheckbox
         isSelected={anonymous}
         onChange={setAnonymous}
         label={m.poll.anonymous}
@@ -361,44 +347,5 @@ function OptionEmojiPicker({
         </Dialog>
       </Popover>
     </DialogTrigger>
-  );
-}
-
-function PollCheckbox({
-  isSelected,
-  onChange,
-  label,
-  hint,
-}: {
-  isSelected: boolean;
-  onChange: (selected: boolean) => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <CheckboxField isSelected={isSelected} onChange={onChange}>
-      <CheckboxButton className={radioClass}>
-        <span className={boxClass}>
-          <CheckIcon
-            size={12}
-            weight="bold"
-            aria-hidden="true"
-            className="hidden group-selected:block"
-          />
-        </span>
-        <span className="flex flex-col">
-          <span className="font-medium">{label}</span>
-          <span className="text-xs text-ink-muted">{hint}</span>
-        </span>
-      </CheckboxButton>
-    </CheckboxField>
-  );
-}
-
-function RadioMark() {
-  return (
-    <span className={boxClass + " rounded-full"}>
-      <span className="h-1.5 w-1.5 rounded-full bg-accent-contrast opacity-0 group-selected:opacity-100" />
-    </span>
   );
 }

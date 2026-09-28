@@ -40,9 +40,9 @@ const itemClass = "cursor-default rounded px-2 py-1 text-sm outline-none focus:b
 const headerClass = "px-2 pt-1 pb-0.5 text-xs font-semibold text-ink-faint";
 
 /**
- * What the user can do to a text channel or DM for themself, opened by right-clicking its row
- * or by its options button: mute it for a while or until they unmute it, or, while it is muted,
- * see until when and unmute it.
+ * What the user can do to a channel or DM, opened by right-clicking its row or by its options
+ * button: for a text channel or DM, mute it for a while or until they unmute it, or, while it
+ * is muted, see until when and unmute it; and, with `onAccess`, set who can use it.
  */
 export function ChannelMenu({
   channelId,
@@ -50,12 +50,18 @@ export function ChannelMenu({
   anchorRef,
   isOpen,
   onOpenChange,
+  mutable = true,
+  onAccess,
 }: {
   channelId: string;
   name: string;
   anchorRef: RefObject<HTMLElement | null>;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Whether muting is offered; a voice channel has nothing to mute. */
+  mutable?: boolean;
+  /** Opens the channel's access settings, for those who may manage channels. */
+  onAccess?: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -75,6 +81,10 @@ export function ChannelMenu({
           className="outline-none"
           onAction={(key) => {
             onOpenChange(false);
+            if (key === "access") {
+              onAccess?.();
+              return;
+            }
             if (key === "unmute") {
               void sync.unmuteChannel(channelId).catch(() => undefined);
               return;
@@ -85,7 +95,7 @@ export function ChannelMenu({
             }
           }}
         >
-          {mute === undefined ? (
+          {!mutable ? null : mute === undefined ? (
             <MenuSection>
               <Header className={headerClass}>{m.mute.heading}</Header>
               {MUTE_DURATIONS.map((d) => (
@@ -105,6 +115,13 @@ export function ChannelMenu({
               </Header>
               <MenuItem id="unmute" className={itemClass}>
                 {m.mute.unmute}
+              </MenuItem>
+            </MenuSection>
+          )}
+          {onAccess !== undefined && (
+            <MenuSection>
+              <MenuItem id="access" className={itemClass}>
+                {m.access.open}
               </MenuItem>
             </MenuSection>
           )}

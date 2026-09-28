@@ -53,6 +53,12 @@ export interface VoiceCallState {
   readonly session: string | null;
   readonly muted: boolean;
   readonly deafened: boolean;
+  /**
+   * Whether the channel lets the user send their microphone (Speak) and share a screen
+   * (Share screen), as the join offer said; without Speak they join to listen.
+   */
+  readonly canSpeak: boolean;
+  readonly canShare: boolean;
   /** Whether this client is sending a screen, window, or game into the call. */
   sharingScreen: boolean;
   /** The video this client is sending, for a local preview; `null` when not sharing. */
@@ -234,6 +240,8 @@ const IDLE: VoiceCallState = {
   session: null,
   muted: false,
   deafened: false,
+  canSpeak: false,
+  canShare: false,
   sharingScreen: false,
   localScreen: null,
   screens: [],
@@ -474,8 +482,10 @@ export class VoiceCall {
     const { prepared, audio, contentHint } = options;
     const transport = this.#sendTransport;
     const signal = this.#signal;
+    // Nothing is shared outside a call, into a call that does not allow it, or twice.
     if (
       this.#state.status !== "connected" ||
+      !this.#state.canShare ||
       transport === null ||
       signal === null ||
       this.#screen !== null ||
@@ -571,6 +581,7 @@ export class VoiceCall {
     const signal = this.#signal;
     if (
       this.#state.status !== "connected" ||
+      !this.#state.canShare ||
       signal === null ||
       this.#screen !== null ||
       this.#external !== null
@@ -751,12 +762,19 @@ export class VoiceCall {
 
   async #connect(channelId: string, generation: number): Promise<void> {
     const offer = await this.#offer(channelId);
+    if (generation !== this.#generation) {
+      return;
+    }
+    this.#set({ canSpeak: offer.speak, canShare: offer.shareScreen });
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.
-    try {
-      this.#microphone = await this.#media.getMicrophone(this.#devices.input);
-    } catch (error) {
-      throw new MicrophoneError(error);
+    // Someone who may not speak joins to listen and never opens it.
+    if (offer.speak) {
+      try {
+        this.#microphone = await this.#media.getMicrophone(this.#devices.input);
+      } catch (error) {
+        throw new MicrophoneError(error);
+      }
     }
     if (generation !== this.#generation) {
       return;
@@ -901,16 +919,20 @@ export class VoiceCall {
     }
     this.#sendTransport = this.#wire(device.createSendTransport(sendParams), signal, sendParams.id);
     this.#recvTransport = this.#wire(device.createRecvTransport(recvParams), signal, recvParams.id);
-    if (this.#microphone === null) {
-      throw new Error("microphone missing");
+    if (this.#state.canSpeak) {
+      if (this.#microphone === null) {
+        throw new Error("microphone missing");
+      }
+      this.#microphoneProducer = await this.#sendTransport.produce({
+        track: this.#microphone,
+        appData: { source: "microphone" },
+      });
+      // The server accepting the producer says nothing about media: ICE runs after the
+      // signalling, and fails when the server announces an address this browser cannot reach.
+      // A listener sends nothing, so its transports connect with the first consumer, and a
+      // server it cannot reach shows only then.
+      await this.#awaitConnected(this.#sendTransport);
     }
-    this.#microphoneProducer = await this.#sendTransport.produce({
-      track: this.#microphone,
-      appData: { source: "microphone" },
-    });
-    // The server accepting the producer says nothing about media: ICE runs after the
-    // signalling, and fails when the server announces an address this browser cannot reach.
-    await this.#awaitConnected(this.#sendTransport);
     if (generation !== this.#generation) {
       throw new Error("superseded");
     }

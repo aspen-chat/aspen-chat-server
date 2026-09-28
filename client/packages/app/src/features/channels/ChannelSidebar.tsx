@@ -4,7 +4,7 @@ import {
   CaretDownIcon,
   DotsSixVerticalIcon,
   HashIcon,
-  ImageIcon,
+  LockSimpleIcon,
   SpeakerHighIcon,
 } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -19,6 +19,7 @@ import {
   type DropItem,
 } from "react-aria-components";
 import {
+  useCan,
   useCategories,
   useChannels,
   useCollapsed,
@@ -30,11 +31,12 @@ import {
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { AddDialog } from "@/features/channels/AddDialog";
 import { AddToCategoryDialog } from "@/features/channels/AddToCategoryDialog";
+import { AccessDialog } from "@/features/community-settings/AccessDialog";
+import { CommunitySettingsDialog } from "@/features/community-settings/CommunitySettingsDialog";
 import { InviteDialog } from "@/features/invites/InviteDialog";
 import { insertIds, reorderIds } from "@/features/layout/reorder";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
-import { IconPicker } from "@/features/media/IconPicker";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -48,36 +50,25 @@ const CHANNEL_DRAG_TYPE = "application/x-aspen-channel";
 /** The community's channels, grouped by category, with the signed-in user's controls below. */
 export function ChannelSidebar({ community }: { community: Community }) {
   const m = useMessages();
-  const sync = useSync();
   const channels = useChannels(community.id);
   const categories = useCategories(community.id);
+  const createInvites = useCan(community.id, "createInvites");
+  const manageInvites = useCan(community.id, "manageInvites");
   const { topLevel, byCategory } = groupChannels(channels, categories);
   return (
     <div className="flex h-full flex-col border-r border-line bg-surface-raised">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 className="min-w-0 flex-1 truncate font-semibold">{community.name}</h1>
-        <IconPicker
-          onIcon={async (iconId) => {
-            await sync.updateCommunity(community.id, { icon: iconId });
-          }}
-        >
-          {(open, uploading) => (
-            <Tooltip text={m.changeCommunityIcon}>
-              <Button
-                aria-label={m.changeCommunityIcon}
-                onPress={open}
-                isDisabled={uploading}
-                className={headerButtonClass}
-              >
-                <ImageIcon size={18} aria-hidden="true" />
-              </Button>
-            </Tooltip>
-          )}
-        </IconPicker>
-        <InviteDialog community={community} />
+        <CommunitySettingsDialog community={community} triggerClassName={headerButtonClass} />
+        {(createInvites || manageInvites) && <InviteDialog community={community} />}
       </div>
       <nav aria-label={m.channelsLabel} className="flex-1 overflow-y-auto px-2 py-2">
-        <ChannelGroup label={m.channelsLabel} parentCategory={null} channels={topLevel} />
+        <ChannelGroup
+          communityId={community.id}
+          label={m.channelsLabel}
+          parentCategory={null}
+          channels={topLevel}
+        />
         {categories.map((category) => (
           <CategorySection
             key={category.id}
@@ -134,9 +125,11 @@ function CategorySection({
             <span className="truncate">{category.name}</span>
           </Button>
         </h2>
+        <CategoryAccessButton category={category} />
         <AddToCategoryDialog category={category} />
       </div>
       <ChannelGroup
+        communityId={category.community}
         label={format(m.categoryChannelsLabel, { category: category.name })}
         parentCategory={category.id}
         channels={visible}
@@ -144,6 +137,42 @@ function CategorySection({
         collapsed={collapsed}
       />
     </section>
+  );
+}
+
+/** The control on a category's heading that opens who can use its channels. */
+function CategoryAccessButton({ category }: { category: Category }) {
+  const m = useMessages();
+  const manage = useCan(category.community, "manageCategories");
+  const [open, setOpen] = useState(false);
+  if (!manage) {
+    return null;
+  }
+  const label = format(m.access.categoryHeading, { category: category.name });
+  return (
+    <>
+      <Tooltip text={label}>
+        <Button
+          aria-label={label}
+          onPress={() => {
+            setOpen(true);
+          }}
+          className="tap-target rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 pointer-coarse:opacity-100 hover:bg-surface-hover hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          <LockSimpleIcon size={14} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      <AccessDialog
+        target={{
+          kind: "category",
+          id: category.id,
+          name: category.name,
+          communityId: category.community,
+        }}
+        isOpen={open}
+        onOpenChange={setOpen}
+      />
+    </>
   );
 }
 
@@ -157,12 +186,14 @@ function CategorySection({
  * worked out among all of them.
  */
 function ChannelGroup({
+  communityId,
   label,
   parentCategory,
   channels,
   allIds,
   collapsed = false,
 }: {
+  communityId: string;
   label: string;
   /** The category the group belongs to, or `null` for the top level. */
   parentCategory: string | null;
@@ -177,6 +208,7 @@ function ChannelGroup({
   const sync = useSync();
   const navigate = useNavigate();
   const { channelId: current } = useParams({ strict: false });
+  const arrange = useCan(communityId, "manageChannels");
   const ids = allIds ?? channels.map((c) => c.id);
   /** The channel ids a drop from another group carries. */
   const droppedIds = (items: readonly DropItem[]) =>
@@ -246,10 +278,13 @@ function ChannelGroup({
             to: "/communities/$communityId/channels/$channelId",
             params: { communityId: channel.community ?? "", channelId: channel.id },
           });
-          void sync.voice.join(channel.id).catch(() => undefined);
+          if (sync.store.channelAccess(channel.id).has("joinVoice")) {
+            void sync.voice.join(channel.id).catch(() => undefined);
+          }
         }
       }}
-      dragAndDropHooks={dragAndDropHooks}
+      // Only someone who may manage channels can move them.
+      {...(arrange ? { dragAndDropHooks } : {})}
       className="flex flex-col gap-0.5 outline-none"
     >
       {(channel) => (
@@ -264,13 +299,15 @@ function ChannelGroup({
         >
           <ChannelLabel channel={channel} current={channel.id === current} />
           {/* The handle keyboard and screen reader users drag with; pointer users drag the row. */}
-          <Button
-            slot="drag"
-            aria-label={format(m.dragChannel, { channel: channel.name })}
-            className="ml-auto rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
-          >
-            <DotsSixVerticalIcon size={14} aria-hidden="true" />
-          </Button>
+          {arrange && (
+            <Button
+              slot="drag"
+              aria-label={format(m.dragChannel, { channel: channel.name })}
+              className="ml-auto rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <DotsSixVerticalIcon size={14} aria-hidden="true" />
+            </Button>
+          )}
           {channel.ty === "voice" && (
             <div className="basis-full">
               <VoiceParticipants channelId={channel.id} />
@@ -305,10 +342,12 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   const m = useMessages();
   const unread = useUnread(channel.id);
   const muted = useMute(channel.id) !== undefined;
+  const manage = useCan(channel.community, "manageChannels");
   const label = useRef<HTMLSpanElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
   const marked = unread && !muted && !current;
-  const hasMenu = channel.ty === "text";
+  const hasMenu = channel.ty === "text" || manage;
   const accessibleName = muted
     ? format(m.mutedLabel, { name: channel.name })
     : unread
@@ -361,8 +400,28 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             anchorRef={label}
             isOpen={menuOpen}
             onOpenChange={setMenuOpen}
+            mutable={channel.ty === "text"}
+            {...(manage
+              ? {
+                  onAccess: () => {
+                    setAccessOpen(true);
+                  },
+                }
+              : {})}
           />
         </>
+      )}
+      {manage && channel.community != null && (
+        <AccessDialog
+          target={{
+            kind: "channel",
+            id: channel.id,
+            name: channel.name,
+            communityId: channel.community,
+          }}
+          isOpen={accessOpen}
+          onOpenChange={setAccessOpen}
+        />
       )}
     </span>
   );

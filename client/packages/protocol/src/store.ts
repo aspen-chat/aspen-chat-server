@@ -12,13 +12,22 @@
  * several topics, and every listener is notified once, after the whole write has been applied.
  */
 
+import {
+  DM_PERMISSIONS,
+  resolveCommunity,
+  type CommunityPermissions,
+  type PermissionSet,
+} from "./permissions";
 import type {
   Category,
+  CategoryOverride,
   Channel,
+  ChannelOverride,
   Community,
   Invite,
   Message,
   Poll,
+  Role,
   ServerEvent,
   VoiceParticipant,
   VoiceSession,
@@ -41,6 +50,8 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+/** A pinned message: which, when it was pinned, and its place among the channel's pins. */
+export type Pin = components["schemas"]["Pin"];
 
 export type Listener = () => void;
 
@@ -62,6 +73,12 @@ export type Listener = () => void;
  * - `icon:<id>`: one uploaded icon, which users and communities name by id
  * - `voice:<channelId>`: the call on a voice channel and who is in it
  * - `invites:<communityId>`, `invite:<code>`: a community's invites, once loaded
+ * - `roles:<communityId>`: a community's roles, lowest first, and which of them each member
+ *   holds
+ * - `overrides:<channelId|categoryId>`: one channel's or category's overrides
+ * - `access:<communityId>`: what the caller may do across a community
+ * - `channelAccess:<channelId>`: what the caller may do in one channel
+ * - `pins:<channelId>`: a channel's pinned messages, once loaded
  */
 export type Topic = string;
 
@@ -131,6 +148,8 @@ export type ReactionSummary = components["schemas"]["ReactionSummary"];
 export const REACTION_SUMMARY_USERS = 4;
 
 const EMPTY_IDS: readonly string[] = [];
+const NO_PERMISSIONS: PermissionSet = new Set();
+const EMPTY_OVERRIDES: readonly never[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
 
@@ -203,6 +222,14 @@ export class RecordStore {
   readonly #readStates = new Map<string, ReadState>();
   readonly #mutes = new Map<string, ChannelMute>();
   readonly #collapsed = new Set<string>();
+  readonly #roles = new Map<string, Role>();
+  /** Overrides by `channel/role` and `category/role`. */
+  readonly #channelOverrides = new Map<string, ChannelOverride>();
+  readonly #categoryOverrides = new Map<string, CategoryOverride>();
+  /** `channel -> message -> pin`, for the channels whose pins have been loaded. */
+  readonly #pins = new Map<string, Map<string, Pin>>();
+  /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
+  readonly #memberRoles = new Map<string, readonly string[]>();
   #admin = false;
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
@@ -310,6 +337,115 @@ export class RecordStore {
         (a, b) => a.joinedAt.localeCompare(b.joinedAt),
       );
       return { session, participants };
+    });
+  }
+
+  /** Topic `roles:<communityId>`: the community's roles, lowest first. */
+  roles(communityId: string): readonly Role[] {
+    return this.#memoized(`roles:${communityId}`, () =>
+      Array.from(this.#roles.values())
+        .filter((r) => r.community === communityId)
+        .sort((a, b) => a.position - b.position),
+    );
+  }
+
+  /**
+   * Topic `roles:<communityId>`: the roles a member holds besides everyone's, or `undefined`
+   * when no read has said.
+   */
+  memberRoles(communityId: string, userId: string): readonly string[] | undefined {
+    return this.#memberRoles.get(`${communityId}/${userId}`);
+  }
+
+  /** Topic `overrides:<channelId>`. */
+  channelOverrides(channelId: string): readonly ChannelOverride[] {
+    return this.#memoized(`overrides:${channelId}`, () =>
+      Array.from(this.#channelOverrides.values()).filter((o) => o.channel === channelId),
+    );
+  }
+
+  /** Topic `overrides:<categoryId>`. */
+  categoryOverrides(categoryId: string): readonly CategoryOverride[] {
+    return this.#memoized(`overrides:${categoryId}`, () =>
+      Array.from(this.#categoryOverrides.values()).filter((o) => o.category === categoryId),
+    );
+  }
+
+  /**
+   * Topic `access:<communityId>`: what `userId` (the caller by default) may do across a
+   * community, or `null` when they are not known to be a member.
+   */
+  access(communityId: string, userId?: string): CommunityPermissions | null {
+    const compute = (user: string | null): CommunityPermissions | null => {
+      const community = this.#communities.get(communityId);
+      if (community === undefined || user === null) {
+        return null;
+      }
+      const holds = this.#memberRoles.get(`${communityId}/${user}`);
+      const owner = community.owner === user;
+      if (holds === undefined && !owner) {
+        return null;
+      }
+      return resolveCommunity(this.roles(communityId), holds ?? [], owner);
+    };
+    if (userId !== undefined && userId !== this.#myUserId) {
+      return compute(userId);
+    }
+    return this.#memoized(`access:${communityId}`, () => compute(this.#myUserId));
+  }
+
+  /**
+   * What `userId` may do in a channel, given what they may do across its community: its
+   * category's overrides and then its own, or its parent's for a thread.
+   */
+  permissionsIn(channelId: string, access: CommunityPermissions): PermissionSet {
+    const channel = this.#channels.get(channelId);
+    const governing =
+      channel?.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+    if (governing === undefined) {
+      return NO_PERMISSIONS;
+    }
+    const category = governing.parentCategory;
+    return access.inChannel(
+      category == null ? EMPTY_OVERRIDES : this.categoryOverrides(category),
+      this.channelOverrides(governing.id),
+    );
+  }
+
+  /**
+   * Topic `channelAccess:<channelId>`: what the caller may do in a channel. In a DM (or a
+   * thread in one) that is every channel permission; in a channel of a community they are not
+   * known to be in, nothing.
+   */
+  channelAccess(channelId: string): PermissionSet {
+    return this.#memoized(`channelAccess:${channelId}`, () => {
+      const channel = this.#channels.get(channelId);
+      if (channel === undefined) {
+        return NO_PERMISSIONS;
+      }
+      if (channel.community == null) {
+        return DM_PERMISSIONS;
+      }
+      const access = this.access(channel.community);
+      return access === null ? NO_PERMISSIONS : this.permissionsIn(channelId, access);
+    });
+  }
+
+  /** Topic `pins:<channelId>`: the channel's pins in their order, or `undefined` until loaded. */
+  pins(channelId: string): readonly Pin[] | undefined {
+    return this.#memoized(`pins:${channelId}`, () => {
+      const pins = this.#pins.get(channelId);
+      return pins === undefined
+        ? undefined
+        : Array.from(pins.values()).sort((a, b) => a.sortIndex - b.sortIndex);
+    });
+  }
+
+  /** Installs a channel's pins as read, replacing what was held. */
+  setPins(channelId: string, pins: readonly Pin[]): void {
+    this.#batch(() => {
+      this.#pins.set(channelId, new Map(pins.map((p) => [p.messageId, p])));
+      this.#touch(`pins:${channelId}`);
     });
   }
 
@@ -720,6 +856,13 @@ export class RecordStore {
       for (const { category } of included.categoryCollapses ?? []) {
         this.#setCollapsed(category, true);
       }
+      if (included.roles !== undefined) {
+        this.#replaceRoles(
+          included.roles,
+          included.channelOverrides ?? [],
+          included.categoryOverrides ?? [],
+        );
+      }
       for (const session of included.voiceSessions ?? []) {
         this.#putVoiceSession(session);
       }
@@ -781,6 +924,7 @@ export class RecordStore {
             byCommunity.set(membership.community, ids);
           }
           ids.push(membership.user);
+          this.#setMemberRoles(membership.community, membership.user, membership.roles);
           if (membership.user === this.#myUserId) {
             this.#setMyOrder(membership.community, membership.sortIndex);
           }
@@ -1085,6 +1229,11 @@ export class RecordStore {
       this.#readStates.clear();
       this.#mutes.clear();
       this.#collapsed.clear();
+      this.#roles.clear();
+      this.#pins.clear();
+      this.#channelOverrides.clear();
+      this.#categoryOverrides.clear();
+      this.#memberRoles.clear();
       this.#admin = false;
       this.#windows.clear();
       this.#invites.clear();
@@ -1134,9 +1283,50 @@ export class RecordStore {
             this.#removeCommunity(event.id);
           }
           break;
+        case "role":
+          if (event.type === "create") {
+            this.#putRole(created(event));
+          } else if (event.type === "update") {
+            const role = this.#roles.get(event.id);
+            if (role !== undefined) {
+              this.#putRole(mergePatch(role, event));
+            }
+          } else {
+            this.#removeRole(event.id);
+          }
+          break;
+        case "channelOverride":
+          if (event.type === "delete") {
+            this.#removeChannelOverride(event.channel, event.role);
+          } else {
+            const key = `${event.channel}/${event.role}`;
+            const current = this.#channelOverrides.get(key) ?? {
+              channel: event.channel,
+              role: event.role,
+              allow: [],
+              deny: [],
+            };
+            this.#putChannelOverride(mergePatch(current, event));
+          }
+          break;
+        case "categoryOverride":
+          if (event.type === "delete") {
+            this.#removeCategoryOverride(event.category, event.role);
+          } else {
+            const key = `${event.category}/${event.role}`;
+            const current = this.#categoryOverrides.get(key) ?? {
+              category: event.category,
+              role: event.role,
+              allow: [],
+              deny: [],
+            };
+            this.#putCategoryOverride(mergePatch(current, event));
+          }
+          break;
         case "userCommunity":
           if (event.type === "create") {
             this.#addMember(event.community, event.user);
+            this.#setMemberRoles(event.community, event.user, event.roles);
             if (event.user === this.#myUserId) {
               this.#myCommunities.add(event.community);
               this.#setMyOrder(event.community, event.sortIndex);
@@ -1146,8 +1336,12 @@ export class RecordStore {
             if (event.user === this.#myUserId && event.sortIndex != null) {
               this.#setMyOrder(event.community, event.sortIndex);
             }
+            if (event.roles != null) {
+              this.#setMemberRoles(event.community, event.user, event.roles);
+            }
           } else {
             this.#removeMember(event.community, event.user);
+            this.#setMemberRoles(event.community, event.user, undefined);
             if (event.user === this.#myUserId) {
               this.#myCommunities.delete(event.community);
               this.#touch("communities");
@@ -1294,7 +1488,22 @@ export class RecordStore {
           // The reason is for whoever was in the call; the session's own delete follows.
           break;
         case "pin":
-          // Not cached yet.
+          if (event.type === "create") {
+            // A pin names only its message; it is placed in that message's channel, when the
+            // message and the channel's pins are both held.
+            const channelId = this.#messages.get(event.messageId)?.channelId;
+            const pins = channelId === undefined ? undefined : this.#pins.get(channelId);
+            if (channelId !== undefined && pins !== undefined) {
+              pins.set(event.messageId, created(event));
+              this.#touch(`pins:${channelId}`);
+            }
+          } else if (event.type === "delete") {
+            for (const [channelId, pins] of this.#pins) {
+              if (pins.delete(event.messageId)) {
+                this.#touch(`pins:${channelId}`);
+              }
+            }
+          }
           break;
       }
     });
@@ -1405,10 +1614,14 @@ export class RecordStore {
   }
 
   #putCommunity(community: Community): void {
+    const previous = this.#communities.get(community.id);
     this.#communities.set(community.id, community);
     this.#touch(`community:${community.id}`);
     if (this.#myCommunities.has(community.id)) {
       this.#touch("communities");
+    }
+    if ((previous?.owner ?? null) !== (community.owner ?? null)) {
+      this.#accessChanged(community.id);
     }
   }
 
@@ -1425,6 +1638,18 @@ export class RecordStore {
     }
     this.#replaceMembers(id, []);
     this.#members.delete(id);
+    for (const role of Array.from(this.#roles.values())) {
+      if (role.community === id) {
+        this.#roles.delete(role.id);
+      }
+    }
+    for (const key of Array.from(this.#memberRoles.keys())) {
+      if (key.startsWith(`${id}/`)) {
+        this.#memberRoles.delete(key);
+      }
+    }
+    this.#touch(`roles:${id}`);
+    this.#touch(`access:${id}`);
     for (const invite of Array.from(this.#invites.values())) {
       if (invite.community === id) {
         this.#removeInvite(invite.code);
@@ -1438,11 +1663,158 @@ export class RecordStore {
     }
   }
 
+  #putRole(role: Role): void {
+    this.#roles.set(role.id, role);
+    this.#accessChanged(role.community);
+  }
+
+  #removeRole(id: string): void {
+    const role = this.#roles.get(id);
+    if (role === undefined) {
+      return;
+    }
+    this.#roles.delete(id);
+    for (const [key, o] of Array.from(this.#channelOverrides)) {
+      if (o.role === id) {
+        this.#channelOverrides.delete(key);
+        this.#touch(`overrides:${o.channel}`);
+      }
+    }
+    for (const [key, o] of Array.from(this.#categoryOverrides)) {
+      if (o.role === id) {
+        this.#categoryOverrides.delete(key);
+        this.#touch(`overrides:${o.category}`);
+      }
+    }
+    for (const [key, held] of Array.from(this.#memberRoles)) {
+      if (held.includes(id)) {
+        this.#memberRoles.set(
+          key,
+          held.filter((r) => r !== id),
+        );
+      }
+    }
+    this.#accessChanged(role.community);
+  }
+
+  #putChannelOverride(o: ChannelOverride): void {
+    this.#channelOverrides.set(`${o.channel}/${o.role}`, o);
+    this.#overrideChanged(o.channel, this.#channels.get(o.channel)?.community);
+  }
+
+  #removeChannelOverride(channel: string, role: string): void {
+    if (this.#channelOverrides.delete(`${channel}/${role}`)) {
+      this.#overrideChanged(channel, this.#channels.get(channel)?.community);
+    }
+  }
+
+  #putCategoryOverride(o: CategoryOverride): void {
+    this.#categoryOverrides.set(`${o.category}/${o.role}`, o);
+    this.#overrideChanged(o.category, this.#categories.get(o.category)?.community);
+  }
+
+  #removeCategoryOverride(category: string, role: string): void {
+    if (this.#categoryOverrides.delete(`${category}/${role}`)) {
+      this.#overrideChanged(category, this.#categories.get(category)?.community);
+    }
+  }
+
+  #overrideChanged(target: string, community: string | null | undefined): void {
+    this.#touch(`overrides:${target}`);
+    if (community != null) {
+      this.#accessChanged(community);
+    }
+  }
+
+  /**
+   * Installs a complete listing of some communities' roles and overrides, dropping what those
+   * communities held that the listing lacks.
+   */
+  #replaceRoles(
+    roles: readonly Role[],
+    channelOverrides: readonly ChannelOverride[],
+    categoryOverrides: readonly CategoryOverride[],
+  ): void {
+    const communities = new Set(roles.map((r) => r.community));
+    for (const role of Array.from(this.#roles.values())) {
+      if (communities.has(role.community)) {
+        this.#roles.delete(role.id);
+      }
+    }
+    for (const [key, o] of Array.from(this.#channelOverrides)) {
+      const community = this.#channels.get(o.channel)?.community;
+      if (community != null && communities.has(community)) {
+        this.#channelOverrides.delete(key);
+        this.#touch(`overrides:${o.channel}`);
+      }
+    }
+    for (const [key, o] of Array.from(this.#categoryOverrides)) {
+      const community = this.#categories.get(o.category)?.community;
+      if (community !== undefined && communities.has(community)) {
+        this.#categoryOverrides.delete(key);
+        this.#touch(`overrides:${o.category}`);
+      }
+    }
+    for (const role of roles) {
+      this.#roles.set(role.id, role);
+    }
+    for (const o of channelOverrides) {
+      this.#channelOverrides.set(`${o.channel}/${o.role}`, o);
+      this.#touch(`overrides:${o.channel}`);
+    }
+    for (const o of categoryOverrides) {
+      this.#categoryOverrides.set(`${o.category}/${o.role}`, o);
+      this.#touch(`overrides:${o.category}`);
+    }
+    for (const community of communities) {
+      this.#accessChanged(community);
+    }
+  }
+
+  #setMemberRoles(communityId: string, userId: string, roles: readonly string[] | undefined): void {
+    const key = `${communityId}/${userId}`;
+    if (roles === undefined) {
+      this.#memberRoles.delete(key);
+    } else {
+      this.#memberRoles.set(key, roles);
+    }
+    this.#touch(`roles:${communityId}`);
+    if (userId === this.#myUserId) {
+      this.#accessChanged(communityId);
+    }
+  }
+
+  /**
+   * Something that decides what the caller may do in a community changed: every answer that
+   * depends on it is recomputed, and the channels they may no longer view are let go of, as
+   * the server stops sending anything about them.
+   */
+  #accessChanged(communityId: string): void {
+    this.#touch(`roles:${communityId}`);
+    this.#touch(`access:${communityId}`);
+    const channels = Array.from(this.#channels.values()).filter((c) => c.community === communityId);
+    for (const channel of channels) {
+      this.#touch(`channelAccess:${channel.id}`);
+    }
+    // Until both the community's roles and the caller's own are known, nothing is decided.
+    const known =
+      this.#memberRoles.has(`${communityId}/${this.#myUserId ?? ""}`) &&
+      this.roles(communityId).some((r) => r.everyone);
+    if (known) {
+      for (const channel of channels) {
+        if (!this.channelAccess(channel.id).has("viewChannel")) {
+          this.#removeChannel(channel.id);
+        }
+      }
+    }
+  }
+
   #putChannel(channel: Channel): void {
     const previous = this.#channels.get(channel.id);
     this.#channels.set(channel.id, channel);
     this.#removedChannels.delete(channel.id);
     this.#touch(`channel:${channel.id}`);
+    this.#touch(`channelAccess:${channel.id}`);
     // Where an unread channel counts depends on the channel, which may arrive after its state.
     if (this.#readStates.has(channel.id)) {
       this.#touch("unread");
@@ -1531,6 +1903,7 @@ export class RecordStore {
     this.#channels.delete(id);
     this.#removedChannels.add(id);
     this.#touch(`channel:${id}`);
+    this.#touch(`channelAccess:${id}`);
     if (isDm(channel)) {
       this.#dmOrder = this.#dmOrder.filter((other) => other !== id);
       this.#dmActivity.delete(id);

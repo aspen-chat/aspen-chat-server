@@ -1,6 +1,7 @@
 import type { Category } from "@aspen/protocol";
 import { PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { useCan } from "@/api/hooks";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
@@ -15,10 +16,15 @@ type Step = "choose" | "text" | "voice";
 /**
  * The control at the end of a category's heading and the dialog it opens: pick a text or
  * voice channel, then name it. The new channel is filed under the category without asking.
+ * Offered only to those who may manage channels.
  */
 export function AddToCategoryDialog({ category }: { category: Category }) {
   const m = useMessages();
+  const allowed = useCan(category.community, "manageChannels");
   const label = format(m.addToCategory, { category: category.name });
+  if (!allowed) {
+    return null;
+  }
   return (
     <DialogTrigger>
       <Tooltip text={label}>

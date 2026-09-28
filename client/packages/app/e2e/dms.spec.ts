@@ -14,6 +14,6 @@ test("the DM list keeps the signed-in user's controls at its foot", async ({ pag
     .click();
   await expect(page.getByRole("heading", { name: "Direct messages" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit profile" })).toBeVisible();
-  await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
 });

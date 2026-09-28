@@ -118,7 +118,7 @@ test.describe("on a phone", () => {
     await expectNoSidewaysScroll(page);
     await page.getByRole("button", { name: "Close thread" }).click();
     await page.getByRole("link", { name: "Back to channels" }).click();
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expectNoSidewaysScroll(page);
   });
@@ -230,7 +230,7 @@ test.describe("on a phone", () => {
   });
 
   test("icon controls answer a fingertip", async ({ page }) => {
-    await expectTouchable(page.getByRole("button", { name: "Settings" }));
+    await expectTouchable(page.getByRole("button", { name: "Settings", exact: true }));
     await expectTouchable(page.getByRole("button", { name: "Edit profile" }));
     await expectTouchable(page.getByRole("button", { name: "Add a channel to Planning" }));
     // Always shown on a touch screen, where there is no right click or hover.

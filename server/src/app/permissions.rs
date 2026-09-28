@@ -782,4 +782,96 @@ mod tests {
         assert_eq!(Permissions::MODERATOR_TEMPLATE.0, 67_045_272);
         assert_eq!(Permissions::ADMIN_TEMPLATE.0, 67_045_375);
     }
+
+    /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.
+    #[test]
+    fn the_shared_vectors_resolve_as_written() {
+        #[derive(serde::Deserialize)]
+        struct Vectors {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Case {
+            name: String,
+            roles: Vec<VectorRole>,
+            owner: bool,
+            holds: Vec<Uuid>,
+            category_overrides: Vec<VectorOverride>,
+            channel_overrides: Vec<VectorOverride>,
+            community: Vec<Permission>,
+            channel: Vec<Permission>,
+            rank: i32,
+        }
+        #[derive(serde::Deserialize)]
+        struct VectorRole {
+            id: Uuid,
+            position: i32,
+            permissions: Vec<Permission>,
+            everyone: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct VectorOverride {
+            role: Uuid,
+            allow: Vec<Permission>,
+            deny: Vec<Permission>,
+        }
+        let overrides = |list: &[VectorOverride]| -> Vec<Override> {
+            list.iter()
+                .map(|o| Override {
+                    role: RoleId(o.role),
+                    allow: from_names(&o.allow),
+                    deny: from_names(&o.deny),
+                })
+                .collect()
+        };
+        let vectors: Vectors =
+            serde_json::from_str(include_str!("../../../spec/permission_vectors.json"))
+                .expect("the vectors parse");
+        assert!(!vectors.cases.is_empty());
+        for case in vectors.cases {
+            let roles = case
+                .roles
+                .iter()
+                .filter(|r| r.everyone || case.holds.contains(&r.id))
+                .map(|r| role_grant(r.id, r.position, &r.permissions, r.everyone))
+                .collect();
+            let access = CommunityAccess::resolve(
+                UserId(Uuid::from_u128(100)),
+                CommunityId(Uuid::from_u128(200)),
+                case.owner,
+                roles,
+            );
+            assert_eq!(
+                to_names(access.permissions),
+                case.community,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                to_names(access.in_channel(
+                    &overrides(&case.category_overrides),
+                    &overrides(&case.channel_overrides)
+                )),
+                case.channel,
+                "{}",
+                case.name
+            );
+            assert_eq!(access.rank(), case.rank, "{}", case.name);
+        }
+    }
+
+    fn role_grant(
+        id: Uuid,
+        position: i32,
+        permissions: &[Permission],
+        everyone: bool,
+    ) -> RoleGrant {
+        RoleGrant {
+            id: RoleId(id),
+            position,
+            permissions: from_names(permissions),
+            everyone,
+        }
+    }
 }

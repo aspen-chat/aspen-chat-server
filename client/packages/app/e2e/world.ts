@@ -15,6 +15,50 @@ import { signedIn, uuid } from "./stubs";
 export const me = uuid;
 export const bob = "0190f0a0-0000-7000-8000-000000000002";
 export const community = "0190f0a0-0000-7000-8000-000000000010";
+const everyoneRole = "0190f0a0-0000-7000-8000-000000000040";
+const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
+const channelPermissions = [
+  "viewChannel",
+  "sendMessages",
+  "attachFiles",
+  "addReactions",
+  "startThreads",
+  "sendInThreads",
+  "createPolls",
+  "joinVoice",
+  "speak",
+  "shareScreen",
+];
+const roles = [
+  {
+    id: everyoneRole,
+    community,
+    name: "everyone",
+    position: 0,
+    permissions: [...channelPermissions, "createInvites"],
+    everyone: true,
+  },
+  {
+    id: organiserRole,
+    community,
+    name: "Organiser",
+    position: 1,
+    permissions: [
+      "manageCommunity",
+      "manageChannels",
+      "manageCategories",
+      "createInvites",
+      "manageInvites",
+      "manageRoles",
+      "assignRoles",
+      "removeMembers",
+      "pinMessages",
+      "manageCalls",
+      ...channelPermissions,
+    ],
+    everyone: false,
+  },
+];
 export const general = "0190f0a0-0000-7000-8000-000000000011";
 export const lounge = "0190f0a0-0000-7000-8000-000000000012";
 export const planning = "0190f0a0-0000-7000-8000-000000000013";
@@ -532,17 +576,22 @@ async function answer(
       "GET",
       /^\/users\/@me\/communities$/,
       () => ({
-        data: [{ id: community, name: "Family", icon: null }],
+        // Bob owns the community; the signed-in user organises it, managing everything but
+        // other people's messages.
+        data: [{ id: community, name: "Family", icon: null, owner: bob }],
         included: {
           channels,
+          roles,
+          channelOverrides: [],
+          categoryOverrides: [],
           categories: [
             { id: planning, community, name: "Planning", sortIndex: 0 },
             { id: archive, community, name: "Archive", sortIndex: 1 },
           ],
           users,
           userCommunities: [
-            { community, user: me, sortIndex: 0 },
-            { community, user: bob, sortIndex: 1 },
+            { community, user: me, sortIndex: 0, roles: [organiserRole] },
+            { community, user: bob, sortIndex: 1, roles: [] },
           ],
           voiceSessions: [],
           voiceParticipants: [],
@@ -562,6 +611,7 @@ async function answer(
       }),
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
+    ["GET", /^\/channels\/[^/]+\/pins$/, () => []],
     // Everyone who reacted with an emoji, in one page.
     [
       "GET",

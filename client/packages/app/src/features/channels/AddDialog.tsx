@@ -1,5 +1,6 @@
 import type { Community } from "@aspen/protocol";
 import { useState } from "react";
+import { useCan } from "@/api/hooks";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateCategoryForm } from "@/features/channels/CreateCategoryForm";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
@@ -19,10 +20,15 @@ type Step = "choose" | "user" | "text" | "voice" | "category";
 
 /**
  * The sidebar's "Add new…" button: pick what to add to the community, then fill it in. A user
- * is added by inviting them, so that choice opens the invite manager.
+ * is added by inviting them, so that choice opens the invite manager. Only what the caller may
+ * add is offered, and without anything to offer there is no button.
  */
 export function AddDialog({ community }: { community: Community }) {
   const m = useMessages();
+  const offers = useOffers(community.id);
+  if (!offers.user && !offers.channel && !offers.category) {
+    return null;
+  }
   return (
     <DialogTrigger>
       <Button className={secondaryButtonClass + " w-full"}>{m.addNew}</Button>
@@ -37,8 +43,18 @@ export function AddDialog({ community }: { community: Community }) {
   );
 }
 
+/** What the caller may add to a community. */
+function useOffers(communityId: string): { user: boolean; channel: boolean; category: boolean } {
+  return {
+    user: useCan(communityId, "createInvites"),
+    channel: useCan(communityId, "manageChannels"),
+    category: useCan(communityId, "manageCategories"),
+  };
+}
+
 function Steps({ community, close }: { community: Community; close: () => void }) {
   const m = useMessages();
+  const offers = useOffers(community.id);
   const [step, setStep] = useState<Step>("choose");
   const back = () => {
     setStep("choose");
@@ -52,26 +68,34 @@ function Steps({ community, close }: { community: Community; close: () => void }
       return (
         <>
           <DialogHeading>{m.addNew}</DialogHeading>
-          <OptionButton
-            title={m.addOptions.user}
-            hint={m.addOptions.userHint}
-            onPress={choose("user")}
-          />
-          <OptionButton
-            title={m.addOptions.textChannel}
-            hint={m.addOptions.textChannelHint}
-            onPress={choose("text")}
-          />
-          <OptionButton
-            title={m.addOptions.voiceChannel}
-            hint={m.addOptions.voiceChannelHint}
-            onPress={choose("voice")}
-          />
-          <OptionButton
-            title={m.addOptions.category}
-            hint={m.addOptions.categoryHint}
-            onPress={choose("category")}
-          />
+          {offers.user && (
+            <OptionButton
+              title={m.addOptions.user}
+              hint={m.addOptions.userHint}
+              onPress={choose("user")}
+            />
+          )}
+          {offers.channel && (
+            <>
+              <OptionButton
+                title={m.addOptions.textChannel}
+                hint={m.addOptions.textChannelHint}
+                onPress={choose("text")}
+              />
+              <OptionButton
+                title={m.addOptions.voiceChannel}
+                hint={m.addOptions.voiceChannelHint}
+                onPress={choose("voice")}
+              />
+            </>
+          )}
+          {offers.category && (
+            <OptionButton
+              title={m.addOptions.category}
+              hint={m.addOptions.categoryHint}
+              onPress={choose("category")}
+            />
+          )}
         </>
       );
     case "user":

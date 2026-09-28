@@ -32,7 +32,12 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("settings, invites, and new polls close from their X", async ({ page }) => {
-  await expectClosesFromCorner(page, () => page.getByRole("button", { name: "Settings" }).click());
+  await expectClosesFromCorner(page, () =>
+    page.getByRole("button", { name: "Settings", exact: true }).click(),
+  );
+  await expectClosesFromCorner(page, () =>
+    page.getByRole("button", { name: "Community settings" }).click(),
+  );
   await expectClosesFromCorner(page, () =>
     page.getByRole("button", { name: "Invite people" }).click(),
   );
