@@ -1,7 +1,8 @@
 pub use aspen_limits::{Limit, LimitSetting, RuleTable};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
+use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AspenConfig {
@@ -33,6 +34,8 @@ pub struct AspenConfig {
     pub registration: RegistrationConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub federation: FederationConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -239,6 +242,106 @@ pub struct LimitsConfig {
     pub max_communities_per_user: u32,
 }
 
+/// Federation: which of this deployment's users and bots may use other deployments, and whose
+/// may use this one (`app::federation`).
+///
+/// Each direction has a gate. The deployment's policy, in the terms operators use, is the gates
+/// of its users: none (both closed, the default), emigration (only `emigration` open or on a
+/// list), immigration (only `immigration`), and full (both), each either open or with a list.
+/// Bots have gates of their own, which work the same way.
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FederationConfig {
+    /// This deployment's name among deployments: the domain it is served at, with `:port` when
+    /// that is not 443, such as `chat.example.org`. Required when any gate is not closed.
+    /// Other deployments pin the key they find at this name, so it must not change.
+    pub domain: Option<String>,
+    pub users: MigrationRules,
+    pub bots: MigrationRules,
+    /// Settings for trying federation on one machine; a deployment others use leaves them out.
+    pub development: FederationDevelopment,
+}
+
+/// Who may cross between this deployment and others, one direction at a time.
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct MigrationRules {
+    /// This deployment's accounts using other deployments.
+    pub emigration: Gate,
+    /// Other deployments' accounts using this one.
+    pub immigration: Gate,
+    /// Both directions read one list instead of a list each. Both gates must then use a list,
+    /// and the same kind of list.
+    pub shared_list: bool,
+}
+
+/// One direction's gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum Gate {
+    /// No one crosses.
+    #[default]
+    Closed,
+    /// Anyone crosses, to or from any deployment.
+    Open,
+    /// Only to or from the deployments on this direction's allow list.
+    AllowList,
+    /// To or from any deployment but those on this direction's block list.
+    BlockList,
+}
+
+crate::app::wire_name_traits!(Gate);
+
+/// Settings for running deployments side by side on one machine.
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FederationDevelopment {
+    /// PEM files of certificate authorities trusted, besides the system's, when this server
+    /// calls other deployments: a development authority that signed certificates for names
+    /// such as `beta.localhost`.
+    pub extra_root_certificates: Vec<std::path::PathBuf>,
+    /// Lets this server call deployments at loopback and private network addresses, which it
+    /// otherwise refuses so that naming a deployment cannot make it reach inside its own
+    /// network.
+    pub allow_private_addresses: bool,
+}
+
+impl FederationConfig {
+    /// Whether any gate lets anyone cross.
+    pub fn enabled(&self) -> bool {
+        [&self.users, &self.bots]
+            .iter()
+            .any(|rules| rules.emigration != Gate::Closed || rules.immigration != Gate::Closed)
+    }
+
+    fn validate(&self) -> Result<(), config::ConfigError> {
+        if self.enabled() && self.domain.is_none() {
+            return Err(config::ConfigError::Message(
+                "federation.domain must be set when a federation gate is not closed".into(),
+            ));
+        }
+        if let Some(domain) = &self.domain {
+            crate::app::federation::Domain::parse(domain).map_err(|_| {
+                config::ConfigError::Message(format!(
+                    "federation.domain {domain:?} is not a domain, optionally with a port"
+                ))
+            })?;
+        }
+        for (name, rules) in [("users", &self.users), ("bots", &self.bots)] {
+            let listed = |gate: Gate| matches!(gate, Gate::AllowList | Gate::BlockList);
+            if rules.shared_list
+                && !(listed(rules.emigration) && rules.emigration == rules.immigration)
+            {
+                return Err(config::ConfigError::Message(format!(
+                    "federation.{name}.shared_list needs emigration and immigration to be the \
+                     same kind of list"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Bots: accounts that sign in only with a token, each made and managed by a person
 /// (`app::bot`).
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
@@ -388,6 +491,7 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     // `aspen.toml` into the built-in one field by field.
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
+    loaded.federation.validate()?;
     Ok(loaded)
 }
 
@@ -427,10 +531,44 @@ mod tests {
         assert_eq!(config.presence.away_after_seconds, 600);
         assert_eq!(config.limits.max_communities_per_user, 500);
         assert!(config.metrics.enabled);
+        assert!(!config.federation.enabled());
+        assert_eq!(config.federation.users.emigration, Gate::Closed);
         assert_eq!(config.event_queue_size, 512);
         assert_eq!(
             config.voice.token_secret,
             VoiceConfig::default().token_secret
         );
+    }
+
+    fn federation(toml: &str) -> Result<(), config::ConfigError> {
+        config::Config::builder()
+            .add_source(config::File::from_str(toml, config::FileFormat::Toml))
+            .build()?
+            .try_deserialize::<FederationConfig>()?
+            .validate()
+    }
+
+    /// An open gate needs the deployment's domain, and a shared list needs both directions to
+    /// use the same kind of list.
+    #[test]
+    fn federation_settings_are_checked() {
+        assert!(federation("[users]\nemigration = \"open\"").is_err());
+        assert!(
+            federation("domain = \"chat.example.org\"\n[users]\nemigration = \"open\"").is_ok()
+        );
+        assert!(federation("domain = \"https://chat.example.org\"").is_err());
+        assert!(
+            federation(
+                "domain = \"a.example\"\n[users]\nemigration = \"allowList\"\nimmigration = \"blockList\"\nshared_list = true"
+            )
+            .is_err()
+        );
+        assert!(
+            federation(
+                "domain = \"a.example:8443\"\n[bots]\nemigration = \"blockList\"\nimmigration = \"blockList\"\nshared_list = true"
+            )
+            .is_ok()
+        );
+        assert!(federation("[users]\nemigration = \"sometimes\"").is_err());
     }
 }

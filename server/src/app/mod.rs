@@ -25,6 +25,7 @@ pub mod deployment;
 pub mod dm;
 mod error;
 pub mod event_feed;
+pub mod federation;
 pub mod fleet;
 pub mod icon;
 pub mod invite;
@@ -34,6 +35,7 @@ pub mod markdown;
 pub mod media_store;
 pub mod mention;
 pub mod message;
+pub mod outbound;
 pub mod passkey;
 pub mod permissions;
 pub mod poll;
@@ -104,6 +106,34 @@ macro_rules! bigint_sql_traits {
     };
 }
 pub(crate) use bigint_sql_traits;
+
+/// Diesel's `FromSql` and `ToSql` for a type stored as `TEXT` in its `Display` form and read
+/// back through `FromStr`, such as an enum with `wire_name_traits!`.
+macro_rules! text_sql_traits {
+    ($type_name:ty) => {
+        impl diesel::deserialize::FromSql<diesel::sql_types::Text, diesel::pg::Pg> for $type_name {
+            fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
+                let text = <String as diesel::deserialize::FromSql<
+                    diesel::sql_types::Text,
+                    diesel::pg::Pg,
+                >>::from_sql(bytes)?;
+                Ok(text.parse::<$type_name>()?)
+            }
+        }
+
+        impl diesel::serialize::ToSql<diesel::sql_types::Text, diesel::pg::Pg> for $type_name {
+            fn to_sql<'b>(
+                &'b self,
+                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+            ) -> diesel::serialize::Result {
+                use std::io::Write;
+                write!(out, "{self}")?;
+                Ok(diesel::serialize::IsNull::No)
+            }
+        }
+    };
+}
+pub(crate) use text_sql_traits;
 
 macro_rules! id_type {
     ($type_name:ident) => {
@@ -188,6 +218,7 @@ id_type!(LinkPreviewImageId);
 id_type!(PasskeyId);
 id_type!(RoleId);
 id_type!(DeploymentRoleId);
+id_type!(FederationKeyId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

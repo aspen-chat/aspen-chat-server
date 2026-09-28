@@ -27,6 +27,7 @@ pub(crate) mod dm;
 pub(crate) mod error;
 mod event_stream;
 pub(crate) mod extract;
+pub(crate) mod federation;
 pub(crate) mod icon;
 pub(crate) mod include;
 pub(crate) mod invite;
@@ -206,7 +207,6 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::claim_passkey_ceremony))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
-        .routes(routes!(auth::other_server_token))
         .routes(routes!(user::create_user))
         .routes(routes!(
             user::get_user,
@@ -304,6 +304,22 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::revoke_registration_invite))
         .routes(routes!(admin::get_fleet))
         .routes(routes!(admin::get_growth))
+        .routes(routes!(federation::get_federation))
+        .routes(routes!(
+            federation::list_deployments,
+            federation::add_deployment
+        ))
+        .routes(routes!(
+            federation::get_deployment,
+            federation::update_deployment,
+            federation::remove_deployment
+        ))
+        .routes(routes!(federation::contact_deployment))
+        .routes(routes!(federation::accept_key))
+        .routes(routes!(
+            federation::add_to_list,
+            federation::remove_from_list
+        ))
         .routes(routes!(
             deployment::list_deployment_roles,
             deployment::create_deployment_role
@@ -437,9 +453,21 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             rate_limit::limit_requests,
         ))
         .route_layer(axum::middleware::from_fn(metrics::observe));
+    // Other deployments read this deployment's document here (`app::federation`).
+    let well_known = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::WELL_KNOWN.1,
+            axum::routing::get(federation::well_known),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     let router = OpenApiRouter::<GlobalServerContext>::new()
         .nest(API_PREFIX, v1)
-        .merge(page);
+        .merge(page)
+        .merge(well_known);
     if context.config.metrics.enabled {
         aspen_metrics::install(context.config.metrics.listen_addr)
             .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
@@ -450,6 +478,9 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     app::voice::spawn_report_listener(context.clone()).await?;
     app::voice::spawn_reaper(context.clone());
     app::fleet::spawn_heartbeat(context.clone());
+    if context.config.federation.domain.is_some() {
+        app::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
+    }
     let cors = cors_layer(&context.config.cors);
     let router: axum::Router = router.with_state(context).into();
     Ok(match cors {
@@ -591,6 +622,8 @@ pub struct GlobalServerContext {
     /// The server's one reading of the event stream, which every event stream connection
     /// registers with.
     pub event_feed: app::event_feed::EventFeed,
+    /// What every call to another deployment is made with (`app::federation::fetch`).
+    pub federation_client: reqwest::Client,
 }
 
 impl GlobalServerContext {
@@ -633,6 +666,7 @@ impl GlobalServerContext {
 
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
         let webauthn = app::passkey::relying_party(&config.auth)?;
+        let federation_client = app::federation::fetch::client(&config.federation)?;
 
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
@@ -651,6 +685,7 @@ impl GlobalServerContext {
             media_store,
             rate_limiter: Arc::new(rate_limiter),
             webauthn,
+            federation_client,
             config: config.into(),
         })
     }

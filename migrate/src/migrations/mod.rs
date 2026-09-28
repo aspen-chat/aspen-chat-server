@@ -52,3 +52,4 @@ pub mod m20260928_070500_community_owners;
 pub mod m20260928_161434_user_block;
 pub mod m20260928_182041_bots;
 pub mod m20260928_185407_mentions;
+pub mod m20260928_213600_federation;

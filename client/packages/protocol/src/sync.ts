@@ -49,6 +49,11 @@ export type RegistrationInviteRequest = components["schemas"]["RegistrationInvit
 export type Fleet = components["schemas"]["Fleet"];
 export type ApiServerHealth = components["schemas"]["ApiServerHealth"];
 export type VoiceServerHealth = components["schemas"]["VoiceServerHealth"];
+export type FederationOverview = components["schemas"]["FederationOverview"];
+export type FederatedDeployment = components["schemas"]["FederatedDeployment"];
+export type FederationList = components["schemas"]["FederationList"];
+export type ContactResult = components["schemas"]["ContactResult"];
+export type Gate = components["schemas"]["Gate"];
 
 export type UserSort = NonNullable<
   NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
@@ -1050,6 +1055,96 @@ export class AspenSync {
     const result = await this.#client.api.DELETE("/api/v1/admin/registration-invites/{code}", {
       params: { path: { code } },
     });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** This deployment's part in federation: its domain, key, gates, and lists in force. */
+  async federation(): Promise<FederationOverview> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/federation"));
+  }
+
+  /** A page of the other deployments this one knows, alphabetically, searched by domain. */
+  async federatedDeployments(
+    query: Omit<AdminListQuery<never>, "sort"> = {},
+  ): Promise<FederatedDeployment[]> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/federation/deployments", {
+        params: { query: listQuery(query) },
+      }),
+    );
+  }
+
+  /** Adds a deployment to the directory, not yet contacted. */
+  async addFederatedDeployment(domain: string, note?: string): Promise<FederatedDeployment> {
+    return this.#adminRead(
+      await this.#client.api.POST("/api/v1/admin/federation/deployments", {
+        body: {
+          domain,
+          ...(note === undefined || note.trim() === "" ? {} : { note: note.trim() }),
+        },
+      }),
+    );
+  }
+
+  /** Changes or, with `null`, clears the note kept on a deployment. */
+  async setFederatedDeploymentNote(
+    domain: string,
+    note: string | null,
+  ): Promise<FederatedDeployment> {
+    return this.#adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/federation/deployments/{domain}", {
+        params: { path: { domain } },
+        body: { note },
+      }),
+    );
+  }
+
+  /** Forgets a deployment: its pinned key and the lists it is on. */
+  async removeFederatedDeployment(domain: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/federation/deployments/{domain}", {
+      params: { path: { domain } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Reads a deployment's document now, pinning or checking its key. */
+  async contactFederatedDeployment(domain: string): Promise<ContactResult> {
+    return this.#adminRead(
+      await this.#client.api.POST("/api/v1/admin/federation/deployments/{domain}/contact", {
+        params: { path: { domain } },
+      }),
+    );
+  }
+
+  /** Accepts the key a deployment offers in place of its pinned one: exactly `publicKey`. */
+  async acceptFederatedDeploymentKey(
+    domain: string,
+    publicKey: string,
+  ): Promise<FederatedDeployment> {
+    return this.#adminRead(
+      await this.#client.api.PUT("/api/v1/admin/federation/deployments/{domain}/key", {
+        params: { path: { domain } },
+        body: { publicKey },
+      }),
+    );
+  }
+
+  /** Puts a deployment on a list or takes it off. */
+  async setFederationListed(domain: string, list: FederationList, listed: boolean): Promise<void> {
+    const params = { params: { path: { domain, list } } };
+    const result = listed
+      ? await this.#client.api.PUT(
+          "/api/v1/admin/federation/deployments/{domain}/lists/{list}",
+          params,
+        )
+      : await this.#client.api.DELETE(
+          "/api/v1/admin/federation/deployments/{domain}/lists/{list}",
+          params,
+        );
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }

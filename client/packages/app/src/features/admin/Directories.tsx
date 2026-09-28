@@ -60,7 +60,7 @@ const PAGE_SIZES = [15, 30, 50, 100] as const;
  * A column of a list: its heading, its cell, and, when it sorts, the two orders it sorts by and
  * which it tries first (names A to Z, dates and counts largest first).
  */
-interface Column<T, S extends string> {
+export interface Column<T, S extends string> {
   heading: string;
   numeric?: boolean;
   sort?: { ascending: S; descending: S; first: "ascending" | "descending" };
@@ -399,27 +399,31 @@ export function CommunityDirectory() {
  * A searchable, sortable list, a page at a time. What the search field holds is sent once
  * typing pauses; a sortable heading sorts by its column, and again the other way; searching,
  * sorting, or a new page size goes back to the first page. Each page asks for one row more
- * than it shows, to know whether there is a next.
+ * than it shows, to know whether there is a next. A new `version` reads the page again where
+ * it is, as after a change to its rows.
  */
-function Directory<T extends { id: string }, S extends string>({
+export function Directory<T extends { id: string }, S extends string>({
   id,
   title,
   searchLabel,
   load,
   defaultSort,
   columns,
+  version = 0,
 }: {
   id: string;
   title: string;
   searchLabel: string;
   load: (query: AdminListQuery<S>) => Promise<T[]>;
-  defaultSort: S;
+  /** The order when no heading is chosen; the server's own when absent. */
+  defaultSort?: S;
   columns: readonly Column<T, S>[];
+  version?: number;
 }) {
   const m = useMessages();
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<S>(defaultSort);
+  const [sort, setSort] = useState<S | undefined>(defaultSort);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]);
   const [page, setPage] = useState(0);
   const [rows, setRows] = useState<{ items: readonly T[]; more: boolean } | null>(null);
@@ -445,7 +449,12 @@ function Directory<T extends { id: string }, S extends string>({
 
   useEffect(() => {
     let current = true;
-    load({ name: search, sort, offset: page * pageSize, limit: pageSize + 1 }).then(
+    load({
+      name: search,
+      ...(sort === undefined ? {} : { sort }),
+      offset: page * pageSize,
+      limit: pageSize + 1,
+    }).then(
       (found) => {
         if (current) {
           setRows({ items: found.slice(0, pageSize), more: found.length > pageSize });
@@ -463,7 +472,7 @@ function Directory<T extends { id: string }, S extends string>({
     return () => {
       current = false;
     };
-  }, [load, search, sort, page, pageSize, attempt]);
+  }, [load, search, sort, page, pageSize, attempt, version]);
 
   /** Moves to another page or order; the rows shown stay, faded, until it arrives. */
   function go(change: () => void) {
@@ -564,7 +573,7 @@ function Directory<T extends { id: string }, S extends string>({
           }}
           className="flex items-center gap-2"
         >
-          <Label className="text-ink-muted">{m.admin.rowsPerPage}</Label>
+          <Label className="whitespace-nowrap text-ink-muted">{m.admin.rowsPerPage}</Label>
           <Button className={selectButtonClass + " w-20 py-1"}>
             <SelectValue />
             <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />

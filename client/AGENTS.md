@@ -372,7 +372,7 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   deletion nor assigning. With `manageBots`, the admin users directory deletes ownerless bots.
 - Blocks are store state (`RecordStore.blocked`, topic `block:<userId>`, and `blockedUsers`,
   topic `blocks`; `useBlocked`, `useBlockedUsers`), read at bootstrap from `GET
-  /users/@me/blocks` with the blocked users sideloaded and kept by `userBlockChanged` events.
+/users/@me/blocks` with the blocked users sideloaded and kept by `userBlockChanged` events.
   `AspenSync.blockUser` and `unblockUser` apply their answer at once; a change from either
   source sets the user's call gain (`#userGain`: silent while blocked, whatever their volume
   and "mute for me" say) and reads again what the server counts without them: every read
@@ -414,9 +414,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each section shows
   only with the permission it needs: the totals, growth, and fleet with `viewDashboard`,
   registration invites with `manageRegistrationInvites`, the directories with `viewDashboard`
-  or `moderateCommunities`, the moderation log with `viewDashboard`, and the deployment roles
-  to everyone, editable with `manageDeploymentRoles` below the caller's highest role
-  (`deploymentRoles.ts`). The users directory shows each person's deployment roles and, for
+  or `moderateCommunities`, the moderation log with `viewDashboard`, federation with
+  `manageFederation` (`Federation.tsx`: this deployment's domain, key fingerprint, and gates;
+  adding a deployment, which is contacted at once; and the directory of those known, each
+  checked again, put on the lists the gates read, its offered key reviewed and accepted, or
+  forgotten), and the deployment roles to everyone, editable with `manageDeploymentRoles` below
+  the caller's highest role (`deploymentRoles.ts`). The directories share `Directory`, which
+  reads its page again when its `version` changes. The users directory shows each person's deployment roles and, for
   those who may, a picker to change them; for a moderator, it lists anyone's DMs to open, and
   the communities directory opens any community. A moderator's access is part of the resolver
   (`CommunityPermissions.moderator`, `MODERATION`, both in the shared vectors): they see every

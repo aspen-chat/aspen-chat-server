@@ -84,6 +84,9 @@ pub enum ProblemCode {
     /// The server has too much of this kind of work queued, as when many people sign in at
     /// once. `Retry-After` says how many seconds to wait.
     ServerBusy,
+    /// Another deployment could not be reached, or did not answer as a deployment does.
+    /// `detail` says which.
+    DeploymentUnreachable,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -117,6 +120,7 @@ impl ProblemCode {
             | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
             ProblemCode::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
+            ProblemCode::DeploymentUnreachable => StatusCode::BAD_GATEWAY,
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -149,6 +153,7 @@ impl ProblemCode {
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
+            ProblemCode::DeploymentUnreachable => t!("problemDeploymentUnreachable"),
             ProblemCode::Internal => t!("tryAgainLater"),
         }
     }
@@ -265,6 +270,9 @@ impl From<app::Error> for ApiError {
             }
             app::Error::AdminRequired => Self::new(ProblemCode::AdminRequired),
             app::Error::Blocked => Self::new(ProblemCode::Blocked),
+            app::Error::DeploymentUnreachable(detail) => {
+                Self::new(ProblemCode::DeploymentUnreachable).with_detail(detail)
+            }
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }

@@ -164,7 +164,14 @@ fn tag_at(text: &str) -> Option<(Found, usize)> {
     let end = body.find('>')?;
     let id = Uuid::parse_str(body.get(..end)?).ok()?;
     let len = text.len() - body.len() + end + 1;
-    Some((if role { Found::Role(id) } else { Found::User(id) }, len))
+    Some((
+        if role {
+            Found::Role(id)
+        } else {
+            Found::User(id)
+        },
+        len,
+    ))
 }
 
 /// The tags among `requested` that count in `channel`, posted by someone with `access`

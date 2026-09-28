@@ -1,5 +1,5 @@
-//! The Aspen API server. Without a subcommand it serves the API; `limits` and `bench` hold
-//! commands an operator runs against a deployment (`operator`).
+//! The Aspen API server. Without a subcommand it serves the API; the subcommands are what an
+//! operator runs against a deployment (`operator`).
 
 use std::{
     cell::RefCell,
@@ -116,6 +116,12 @@ enum Command {
         #[clap(subcommand)]
         action: operator::InvitesCommand,
     },
+    /// Operator commands for federation: the directory of other deployments, and this
+    /// deployment's key.
+    Federation {
+        #[clap(subcommand)]
+        action: operator::FederationCommand,
+    },
 }
 
 thread_local! {
@@ -179,6 +185,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Admin { action } => operator::admin(&config, action).await,
             Command::Invites { action } => operator::invites(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
+            Command::Federation { action } => operator::federation(&config, action).await,
         };
     }
     let app = api::make_router(options.gen_openapi_schema).await?;

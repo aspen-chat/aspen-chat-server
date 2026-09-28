@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
-const OTHER_SERVER_AUTH_LIFETIME: Duration = Duration::minutes(10);
 pub const PASSWORD_MIN_LENGTH: usize = 8;
 
 /// Credentials issued by a completed sign-in.
@@ -470,27 +469,6 @@ pub async fn revoke_other_sessions(
     .execute(conn)
     .await?;
     Ok(())
-}
-
-pub async fn try_other_server_auth(
-    state: &GlobalServerContext,
-    user: UserId,
-    other_server_domain: &str,
-) -> Result<String, app::Error> {
-    use schema::other_server_auth_token;
-
-    let other_server_auth_token = make_token();
-    let expires = (Utc::now() + OTHER_SERVER_AUTH_LIFETIME).naive_utc();
-    diesel::insert_into(other_server_auth_token::table)
-        .values((
-            other_server_auth_token::dsl::token.eq(other_server_auth_token.as_str()),
-            other_server_auth_token::dsl::user.eq(user.0),
-            other_server_auth_token::dsl::expires.eq(expires),
-            other_server_auth_token::dsl::domain.eq(other_server_domain),
-        ))
-        .execute(&mut state.connection_pool.get().await?)
-        .await?;
-    Ok(other_server_auth_token)
 }
 
 #[cfg(test)]

@@ -110,6 +110,11 @@ export {
   type RegistrationInvite,
   type RegistrationInviteRequest,
   type VoiceServerHealth,
+  type ContactResult,
+  type FederatedDeployment,
+  type FederationList,
+  type FederationOverview,
+  type Gate,
 } from "./sync";
 export type {
   Category,

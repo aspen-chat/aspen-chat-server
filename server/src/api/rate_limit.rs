@@ -30,9 +30,12 @@ const EVENT_STREAM_ROUTE: (&str, &str) = ("GET", "/events");
 /// The passkey handoff page, served outside `API_PREFIX` and not in the OpenAPI document. Its
 /// route key is its path as served.
 pub const PASSKEY_PAGE: (&str, &str) = ("GET", "/auth/passkey");
+/// This deployment's federation document, served outside `API_PREFIX` at the path every
+/// deployment uses, and not in the OpenAPI document.
+pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
 
-/// Every route the limits can name: the OpenAPI document's operations, the event stream, and
-/// the passkey page.
+/// Every route the limits can name: the OpenAPI document's operations, the event stream, the
+/// passkey page, and the federation document.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::api::openapi();
     let mut routes = Vec::new();
@@ -42,7 +45,7 @@ pub fn routes() -> Vec<Route> {
             routes.push(Route::new(method, template, access(operation)));
         }
     }
-    for (method, template) in [EVENT_STREAM_ROUTE, PASSKEY_PAGE] {
+    for (method, template) in [EVENT_STREAM_ROUTE, PASSKEY_PAGE, WELL_KNOWN] {
         routes.push(Route::new(method, template, Access::Anonymous));
     }
     routes

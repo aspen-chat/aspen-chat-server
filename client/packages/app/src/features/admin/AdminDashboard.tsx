@@ -3,6 +3,7 @@ import { Button } from "react-aria-components";
 import { useCallback } from "react";
 import { useDeploymentPermissions, useIsAdmin, useSync } from "@/api/hooks";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
+import { FederationSection } from "@/features/admin/Federation";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoles";
 import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
@@ -17,8 +18,8 @@ import { format } from "@/i18n/messages";
 
 /**
  * The Administration Dashboard, `/admin`: the deployment's totals, the health of its servers,
- * registration invites, its roles, searchable lists of its users and communities, and the
- * moderation log. Each part shows only to those with the deployment permission it needs; the
+ * registration invites, its roles, searchable lists of its users and communities, federation
+ * with other deployments, and the moderation log. Each part shows only to those with the deployment permission it needs; the
  * server refuses everyone else whatever this page shows.
  */
 export function AdminDashboard() {
@@ -51,6 +52,7 @@ function Sections() {
           <CommunityDirectory />
         </>
       )}
+      {permissions.has("manageFederation") && <FederationSection />}
       {view && <ModerationLog />}
     </>
   );

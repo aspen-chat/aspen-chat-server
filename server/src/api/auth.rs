@@ -651,43 +651,6 @@ pub async fn token_refresh(
     }
 }
 
-#[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct OtherServerTokenRequest {
-    pub other_server_domain: String,
-}
-
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct OtherServerTokenResponse {
-    pub other_server_auth_token: String,
-}
-
-/// Placeholder for federation. Mints a short-lived token the calling user can present to
-/// another Aspen server. Federation design is not finalised; do not build on this yet.
-#[utoipa::path(
-    post,
-    path = "/auth/other-server-token",
-    tag = TAG_AUTH,
-    security(("bearerAuth" = [])),
-    responses(
-        (status = OK, body = OtherServerTokenResponse),
-        (status = UNAUTHORIZED, body = Problem),
-        (status = INTERNAL_SERVER_ERROR, body = Problem),
-    )
-)]
-pub async fn other_server_token(
-    State(state): State<GlobalServerContext>,
-    SessionUser { user, .. }: SessionUser,
-    Json(request): Json<OtherServerTokenRequest>,
-) -> ApiResult<Json<OtherServerTokenResponse>> {
-    let other_server_auth_token =
-        app::login::try_other_server_auth(&state, user.id, &request.other_server_domain).await?;
-    Ok(Json(OtherServerTokenResponse {
-        other_server_auth_token,
-    }))
-}
-
 /// The authenticated caller. Extracting it requires a valid `Authorization: Bearer <session
 /// token>` header; anything else is rejected with a `401` Problem. A session whose account
 /// still owes the server a second factor is rejected with `twoFactorEnrollmentRequired`;

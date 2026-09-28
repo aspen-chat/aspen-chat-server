@@ -1,6 +1,6 @@
 //! What people may do across the whole deployment, rather than in one community: open the
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
-//! own roles, and moderate any community.
+//! own roles, bots, and federation with other deployments, and moderate any community.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -43,6 +43,7 @@ bitflags::bitflags! {
         const MANAGE_DEPLOYMENT_ROLES = 1 << 3;
         const MODERATE_COMMUNITIES = 1 << 4;
         const MANAGE_BOTS = 1 << 5;
+        const MANAGE_FEDERATION = 1 << 6;
     }
 }
 
@@ -81,6 +82,7 @@ pub enum DeploymentPermission {
     ManageDeploymentRoles,
     ModerateCommunities,
     ManageBots,
+    ManageFederation,
 }
 
 impl DeploymentPermission {
@@ -94,6 +96,7 @@ impl DeploymentPermission {
             Self::ManageDeploymentRoles => DeploymentPermissions::MANAGE_DEPLOYMENT_ROLES,
             Self::ModerateCommunities => DeploymentPermissions::MODERATE_COMMUNITIES,
             Self::ManageBots => DeploymentPermissions::MANAGE_BOTS,
+            Self::ManageFederation => DeploymentPermissions::MANAGE_FEDERATION,
         }
     }
 
@@ -105,6 +108,7 @@ impl DeploymentPermission {
             Self::ManageDeploymentRoles => t!("deploymentManageDeploymentRoles"),
             Self::ModerateCommunities => t!("deploymentModerateCommunities"),
             Self::ManageBots => t!("deploymentManageBots"),
+            Self::ManageFederation => t!("deploymentManageFederation"),
         }
     }
 }
@@ -755,7 +759,7 @@ mod tests {
             DeploymentPermission::ALL.to_vec()
         );
         // The number the migration gives existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 47);
+        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 111);
     }
 
     #[test]

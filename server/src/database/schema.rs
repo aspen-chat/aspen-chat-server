@@ -171,6 +171,40 @@ diesel::table! {
 }
 
 diesel::table! {
+    federated_deployment (domain) {
+        domain -> Text,
+        origin -> Text,
+        added_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        note -> Nullable<Text>,
+        public_key -> Nullable<Bytea>,
+        first_contact_at -> Nullable<Timestamptz>,
+        last_contact_at -> Nullable<Timestamptz>,
+        offered_key -> Nullable<Bytea>,
+        offered_key_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    federation_key (id) {
+        id -> Uuid,
+        private_key -> Bytea,
+        public_key -> Bytea,
+        created_at -> Timestamptz,
+        retired_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    federation_list_entry (domain, list) {
+        domain -> Text,
+        list -> Text,
+        added_by -> Nullable<Uuid>,
+        added_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     icon (id) {
         id -> Uuid,
         icon_mime_type -> Text,
@@ -255,15 +289,6 @@ diesel::table! {
         channel -> Nullable<Uuid>,
         subject -> Nullable<Text>,
         at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    other_server_auth_token (token) {
-        token -> Text,
-        expires -> Timestamp,
-        user -> Uuid,
-        domain -> Text,
     }
 }
 
@@ -500,6 +525,9 @@ diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
+diesel::joinable!(federated_deployment -> user (added_by));
+diesel::joinable!(federation_list_entry -> federated_deployment (domain));
+diesel::joinable!(federation_list_entry -> user (added_by));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(mention -> channel (channel));
@@ -514,7 +542,6 @@ diesel::joinable!(message_link_preview -> message (message_id));
 diesel::joinable!(moderation_log -> channel (channel));
 diesel::joinable!(moderation_log -> community (community));
 diesel::joinable!(moderation_log -> user (actor));
-diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(passkey -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
@@ -559,6 +586,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_user,
     deployment_role,
     dm_recipient,
+    federated_deployment,
+    federation_key,
+    federation_list_entry,
     icon,
     invite,
     mention,
@@ -566,7 +596,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     message_attachment,
     message_link_preview,
     moderation_log,
-    other_server_auth_token,
     passkey,
     pin,
     poll,

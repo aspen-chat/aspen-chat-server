@@ -57,7 +57,6 @@ use lru::LruCache;
 use pulldown_cmark::{Event, Tag, TagEnd};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -734,7 +733,7 @@ async fn fetch_metadata_uncached(url: &Url) -> Option<ParsedMetadata> {
 }
 
 async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
-    // Block all IP address classes which could unintentionally leak internal information.
+    // Refuse hosts inside a network (`app::outbound`).
     let domain = url.domain()?;
     let port = url.port().or_else(|| match url.scheme() {
         "https" => Some(443),
@@ -749,28 +748,10 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
         }
     };
     for socket_addr in socket_addrs {
-        let ip = socket_addr.ip().to_canonical();
-        if ip.is_loopback() || ip.is_multicast() || ip.is_unspecified() {
+        let ip = socket_addr.ip();
+        if !crate::app::outbound::is_public_address(ip) {
             info!("preview generation: IP address {ip} blocked");
             return None;
-        }
-        match ip {
-            IpAddr::V4(v4) => {
-                if v4.is_broadcast()
-                    || v4.is_documentation()
-                    || v4.is_link_local()
-                    || v4.is_private()
-                {
-                    info!("preview generation: IPv4 address {v4} blocked");
-                    return None;
-                }
-            }
-            IpAddr::V6(v6) => {
-                if v6.is_unicast_link_local() || v6.is_unique_local() {
-                    info!("preview generation: IPv6 address {v6} blocked");
-                    return None;
-                }
-            }
         }
     }
     let response = match http_client().get(url.as_str()).send().await {

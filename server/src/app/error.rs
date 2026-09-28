@@ -105,6 +105,10 @@ pub enum Error {
     Totp(String),
     #[error("the server is too busy to do this now")]
     Busy,
+    /// Another deployment could not be reached, or did not answer as a deployment does; the
+    /// reason is localized for the administrator who asked.
+    #[error("another deployment could not be reached: {0}")]
+    DeploymentUnreachable(Cow<'static, str>),
     #[error("the server's event feed has stopped")]
     EventFeedStopped,
     #[error("tokio join error {0}")]

@@ -23,8 +23,9 @@
 #   ip_per_<param>    one address's, per value of the path parameter
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
-# document, plus `GET /events` for the event stream and `GET /auth/passkey` for the passkey
-# page (which is served at that path, outside `/api/v1`).
+# document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,
+# and `GET /.well-known/aspen` for the federation document (both served at those paths, outside
+# `/api/v1`).
 
 [rate_limits]
 enabled = true
@@ -97,6 +98,16 @@ endpoints = [
   "DELETE /admin/users/{user}/roles/{role}",
   "GET /admin/moderation-log",
   "GET /admin/users/{user}/dms",
+  "GET /admin/federation",
+  "GET /admin/federation/deployments",
+  "POST /admin/federation/deployments",
+  "GET /admin/federation/deployments/{domain}",
+  "PATCH /admin/federation/deployments/{domain}",
+  "DELETE /admin/federation/deployments/{domain}",
+  "POST /admin/federation/deployments/{domain}/contact",
+  "PUT /admin/federation/deployments/{domain}/key",
+  "PUT /admin/federation/deployments/{domain}/lists/{list}",
+  "DELETE /admin/federation/deployments/{domain}/lists/{list}",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -151,8 +162,15 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."GET /auth/methods"]
 ip = { requests = 60, per_seconds = 60, burst = 20 }
 
-[rate_limits.endpoints."POST /auth/other-server-token"]
-user = { requests = 10, per_seconds = 60, burst = 5 }
+[rate_limits.endpoints."GET /.well-known/aspen"]
+# Other deployments read it when they meet this one and now and then after; each API server of
+# theirs reads it on its own.
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."POST /admin/federation/deployments/{domain}/contact"]
+# Each makes a call to another deployment.
+user = { requests = 20, per_seconds = 60, burst = 10 }
+user_per_domain = { requests = 6, per_seconds = 60, burst = 5 }
 
 [rate_limits.endpoints."GET /events"]
 # Reconnecting event streams; a whole office may share the address.
