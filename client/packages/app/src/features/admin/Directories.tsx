@@ -360,16 +360,21 @@ function Directory<T extends { id: string }, S extends string>({
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
-  // The search follows what is typed once typing pauses, from the first page.
+  // The search follows what is typed once typing pauses, from the first page. Only a change
+  // to it goes back there: paging while the box holds what was already searched stays put.
   useEffect(() => {
+    if (typed === search) {
+      return;
+    }
     const timer = setTimeout(() => {
+      setLoading(true);
       setSearch(typed);
       setPage(0);
     }, SEARCH_DELAY_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [typed]);
+  }, [typed, search]);
 
   useEffect(() => {
     let current = true;

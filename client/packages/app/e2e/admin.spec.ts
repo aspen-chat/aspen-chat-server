@@ -88,6 +88,9 @@ test("users and communities are searched, sorted, and paged", async ({ page }) =
   await users.getByRole("button", { name: "Next" }).click();
   await expect(rows).toHaveCount(8);
   await expect(users.getByText("16–22")).toBeVisible();
+  // Paging before the search box has ever been typed in stays put once its pause has passed.
+  await page.waitForTimeout(500);
+  await expect(users.getByText("16–22")).toBeVisible();
   await expect(users.getByRole("button", { name: "Next" })).toBeDisabled();
   await users.getByRole("button", { name: "Previous" }).click();
   await expect(users.getByText("1–15")).toBeVisible();
