@@ -151,7 +151,13 @@ async fn sideload_messages(
                 let ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
                 app::react::read_summaries(state, caller, &ids)
                     .await
-                    .map(|rows| Some(rows.into_iter().map(Into::into).collect()))
+                    .map(|rows| {
+                        Some(
+                            rows.into_iter()
+                                .map(api::react::ReactionSummary::from)
+                                .collect(),
+                        )
+                    })
             } else {
                 Ok(None)
             }
@@ -162,7 +168,12 @@ async fn sideload_messages(
         None => (None, None, None),
     };
     Ok(Included {
-        users: users.map(|users| users.into_iter().map(Into::into).collect()),
+        users: users.map(|users| {
+            users
+                .into_iter()
+                .map(api::message_enum::User::from)
+                .collect()
+        }),
         attachments: attachments.map(|rows| {
             rows.into_iter()
                 .map(|row| api::attachment::attachment_to_api(state, row))

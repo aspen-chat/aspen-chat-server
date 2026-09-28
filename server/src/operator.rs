@@ -425,8 +425,9 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             expires,
             note,
         } => {
-            let expires_in = expires
-                .map(|d| chrono::Duration::from_std(d.into()).unwrap_or(chrono::Duration::MAX));
+            let expires_in = expires.map(|d| {
+                chrono::Duration::from_std(Duration::from(d)).unwrap_or(chrono::Duration::MAX)
+            });
             let invite = registration_invite::create(&mut conn, None, uses, expires_in, note)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;

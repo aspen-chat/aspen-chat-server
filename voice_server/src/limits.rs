@@ -45,6 +45,13 @@ enum Dimension {
     Channel,
 }
 
+impl Dimension {
+    /// Its name in the limits' configuration.
+    fn name(self) -> &'static str {
+        self.into()
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Rule {
     dimension: Dimension,
@@ -162,7 +169,7 @@ impl Limits {
                     Dimension::Channel => caller.channel?.to_string(),
                 };
                 Some((
-                    format!("{}:{}:{who}", rule.bucket, <&str>::from(rule.dimension)),
+                    format!("{}:{}:{who}", rule.bucket, rule.dimension.name()),
                     rule.rate,
                 ))
             })
@@ -242,10 +249,10 @@ fn compile(
             let place = format!("rate_limits.{section}.{name}.{dimension}");
             let parsed = dimensions
                 .iter()
-                .find(|known| <&str>::from(*known) == dimension)
+                .find(|known| known.name() == dimension)
                 .copied()
                 .ok_or_else(|| {
-                    let allowed: Vec<&str> = dimensions.iter().map(|d| <&str>::from(*d)).collect();
+                    let allowed: Vec<&str> = dimensions.iter().map(|d| d.name()).collect();
                     format!("{place}: not a dimension here ({})", allowed.join(", "))
                 })?;
             if let Some(limit) = setting.limit(&place)? {

@@ -196,9 +196,24 @@ pub async fn sideload_communities(
                 .map(api::channel::channel_to_api)
                 .collect()
         }),
-        categories: categories.map(|categories| categories.into_iter().map(Into::into).collect()),
-        read_states: read_states.map(|states| states.into_iter().map(Into::into).collect()),
-        channel_mutes: mutes.map(|mutes| mutes.into_iter().map(Into::into).collect()),
+        categories: categories.map(|categories| {
+            categories
+                .into_iter()
+                .map(message_enum::Category::from)
+                .collect()
+        }),
+        read_states: read_states.map(|states| {
+            states
+                .into_iter()
+                .map(api::read_state::ReadState::from)
+                .collect()
+        }),
+        channel_mutes: mutes.map(|mutes| {
+            mutes
+                .into_iter()
+                .map(api::channel_mute::ChannelMute::from)
+                .collect()
+        }),
         category_collapses: collapses.map(|collapses| {
             collapses
                 .into_iter()
@@ -231,7 +246,7 @@ pub async fn sideload_communities(
                 roles: membership.roles,
             });
             if seen.insert(user_id) {
-                users.push(membership.user.into());
+                users.push(User::from(membership.user));
             }
         }
         included.users = Some(users);
@@ -416,7 +431,7 @@ pub async fn list_community_members(
             sort_index: membership.sort_index,
             roles: membership.roles,
         });
-        users.push(membership.user.into());
+        users.push(User::from(membership.user));
     }
     Ok(Json(MemberList::new(
         users,

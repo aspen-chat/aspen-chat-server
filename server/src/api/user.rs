@@ -191,7 +191,10 @@ pub async fn list_user_communities(
     let included =
         api::community::sideload_communities(&state, user_id, &ids, &query.include).await?;
     Ok(Json(CommunityList::new(
-        communities.into_iter().map(Into::into).collect(),
+        communities
+            .into_iter()
+            .map(api::message_enum::Community::from)
+            .collect(),
         included,
     )))
 }

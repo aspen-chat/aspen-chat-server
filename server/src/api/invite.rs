@@ -148,7 +148,7 @@ pub async fn get_invite(
     let mut included = Included::default();
     if query.include.contains(InviteInclude::Community) {
         let community = app::community::read_invited_community(&state, invite.community).await?;
-        included.communities = Some(vec![community.into()]);
+        included.communities = Some(vec![message_enum::Community::from(community)]);
     }
     Ok(Json(InviteRead::new(
         message_enum::Invite::from(&invite),

@@ -222,8 +222,8 @@ pub async fn is_moderator(conn: &mut AsyncPgConnection, user: UserId) -> app::Re
         .has(DeploymentPermission::ModerateCommunities))
 }
 
-/// One action for the moderation log, named there as the client's `moderationActions` names it.
-#[derive(Debug, Clone, Copy, strum::IntoStaticStr)]
+/// One action for the moderation log, named there as `spec/moderation_actions.json` lists it.
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr, strum::VariantArray)]
 #[strum(serialize_all = "camelCase")]
 pub enum ModerationAction {
     ReadDm,
@@ -722,6 +722,23 @@ pub async fn holders(conn: &mut AsyncPgConnection) -> app::Result<Vec<(String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The log's action names are the ones `spec/moderation_actions.json` lists, which the
+    /// client names in its dashboard.
+    #[test]
+    fn moderation_actions_match_the_spec() {
+        #[derive(serde::Deserialize)]
+        struct Spec {
+            actions: Vec<String>,
+        }
+        let spec: Spec =
+            serde_json::from_str(include_str!("../../../spec/moderation_actions.json")).unwrap();
+        let names: Vec<String> = <ModerationAction as strum::VariantArray>::VARIANTS
+            .iter()
+            .map(|action| <&str>::from(*action).to_string())
+            .collect();
+        assert_eq!(names, spec.actions);
+    }
 
     #[test]
     fn every_deployment_permission_has_one_name_and_back() {

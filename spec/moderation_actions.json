@@ -1,0 +1,15 @@
+{
+  "description": "The actions the moderation log records, by the name the server writes (app::deployment::ModerationAction) and the client names in its dashboard (moderationActions in packages/app/src/i18n/messages.ts). Both test against this list, so an action added to one cannot go unnamed in the other.",
+  "actions": [
+    "readDm",
+    "deleteMessage",
+    "removeAttachment",
+    "removeReaction",
+    "removeMember",
+    "renameChannel",
+    "deleteChannel",
+    "renameCommunity",
+    "deleteCommunity",
+    "removeWriteIn"
+  ]
+}
