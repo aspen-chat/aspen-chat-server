@@ -1,4 +1,4 @@
-import { Outlet, useParams } from "@tanstack/react-router";
+import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
 import { SyncProvider } from "@/api/sync";
@@ -27,13 +27,23 @@ export function RootLayout() {
   return <SignedIn />;
 }
 
+/**
+ * Signed out. A registration link (`/register`, with `?invite=` from the Administration
+ * Dashboard) opens on the create-account screen with the invite filled in.
+ */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
-  const [screen, setScreen] = useState<"login" | "register">("login");
+  const { pathname } = useLocation();
+  const search: { invite?: unknown } = useSearch({ strict: false });
+  const invite = typeof search.invite === "string" ? search.invite : undefined;
+  const [screen, setScreen] = useState<"login" | "register">(
+    pathname === "/register" || invite !== undefined ? "register" : "login",
+  );
   return (
     <main className="flex min-h-full items-center justify-center p-6">
       {screen === "register" ? (
         <RegisterForm
+          initialInvite={invite}
           onSwitchToLogin={() => {
             setScreen("login");
           }}

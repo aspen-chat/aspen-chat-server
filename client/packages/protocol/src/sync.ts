@@ -15,7 +15,7 @@
 
 import { EventStream, type EventStreamOptions } from "./events";
 import type { ServerEvent } from "./generated/events";
-import type { components } from "./generated/openapi";
+import type { components, paths } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
@@ -27,7 +27,7 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
-import { RecordStore } from "./store";
+import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
 
@@ -41,6 +41,48 @@ type Category = components["schemas"]["Category"];
 type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
+export type AdminOverview = components["schemas"]["AdminOverview"];
+export type AdminUserEntry = components["schemas"]["AdminUserEntry"];
+export type AdminCommunityEntry = components["schemas"]["AdminCommunityEntry"];
+export type RegistrationInvite = components["schemas"]["RegistrationInvite"];
+export type RegistrationInviteRequest = components["schemas"]["RegistrationInviteRequest"];
+export type Fleet = components["schemas"]["Fleet"];
+export type ApiServerHealth = components["schemas"]["ApiServerHealth"];
+export type VoiceServerHealth = components["schemas"]["VoiceServerHealth"];
+
+export type UserSort = NonNullable<
+  NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
+>;
+export type CommunitySort = NonNullable<
+  NonNullable<paths["/api/v1/admin/communities"]["get"]["parameters"]["query"]>["sort"]
+>;
+export type Growth = components["schemas"]["Growth"];
+export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
+
+/** A page of one of the dashboard's lists. */
+export interface AdminListQuery<S extends string> {
+  /** Only those whose names contain this, ignoring case. */
+  name?: string;
+  /** The order; newest first when absent. */
+  sort?: S;
+  /** How many rows to skip. */
+  offset?: number;
+  /** How many rows the page holds. */
+  limit?: number;
+}
+
+function listQuery<S extends string>(
+  query: AdminListQuery<S>,
+): { "filter[name]"?: string; sort?: S; offset?: number; limit?: number } {
+  return {
+    ...(query.name === undefined || query.name.trim() === ""
+      ? {}
+      : { "filter[name]": query.name.trim() }),
+    ...(query.sort === undefined ? {} : { sort: query.sort }),
+    ...(query.offset === undefined || query.offset === 0 ? {} : { offset: query.offset }),
+    ...(query.limit === undefined ? {} : { limit: query.limit }),
+  };
+}
 type Icon = components["schemas"]["Icon"];
 type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"];
@@ -76,6 +118,12 @@ export const PRESENCE_POLL_MS = 30_000;
  * this long however fast messages scroll past, well inside the server's limit on reports.
  */
 export const READ_REPORT_MS = 1_000;
+
+/** How many people a page of a reaction list holds. */
+export const REACTORS_PAGE = 50;
+
+/** The longest delay `setTimeout` keeps; a longer one fires at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 /**
  * The least time between two activity reports; mirrors the event stream's `ACTIVITY_INTERVAL`,
  * which ignores reports closer together.
@@ -166,6 +214,7 @@ export class AspenSync {
   /** Per channel, the furthest message read and not yet reported. */
   readonly #unreported = new Map<string, string>();
   #readTimer: ReturnType<typeof setTimeout> | null = null;
+  #muteTimer: ReturnType<typeof setTimeout> | null = null;
   readonly #missingPolls = new Set<string>();
   readonly #iconLoads = new Map<string, Promise<void>>();
   readonly #missingIcons = new Set<string>();
@@ -303,6 +352,10 @@ export class AspenSync {
     if (this.#readTimer !== null) {
       clearTimeout(this.#readTimer);
       this.#readTimer = null;
+    }
+    if (this.#muteTimer !== null) {
+      clearTimeout(this.#muteTimer);
+      this.#muteTimer = null;
     }
     this.store.clear();
     this.#setStatus("stopped");
@@ -659,13 +712,14 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/messages/{message}", {
       params: {
         path: { message: messageId },
-        query: { include: ["authors", "attachments", "polls", "threads"] },
+        query: { include: ["authors", "attachments", "polls", "threads", "reactions"] },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.ingest({ ...result.data.included, messages: [result.data.data] });
+    this.store.setReactions([result.data.data.id], result.data.included.reactions ?? []);
     return result.data.data;
   }
 
@@ -793,6 +847,25 @@ export class AspenSync {
     this.store.applyEvent({ serverEvent: "react", type: "create", ...result.data });
   }
 
+  /**
+   * Everyone who reacted to a message with an emoji, earliest first, a page at a time: the page
+   * after `after`, or the first. A page shorter than `REACTORS_PAGE` is the last. The users are
+   * stored as they come.
+   */
+  async loadReactors(messageId: string, emoji: string, after?: string): Promise<User[]> {
+    const result = await this.#client.api.GET("/api/v1/messages/{message}/reactions/{emoji}", {
+      params: {
+        path: { message: messageId, emoji },
+        query: after === undefined ? { limit: REACTORS_PAGE } : { after, limit: REACTORS_PAGE },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data });
+    return result.data;
+  }
+
   /** Removes the caller's reaction, dropping it from the cache at once. */
   async removeReaction(messageId: string, emoji: string): Promise<void> {
     const me = this.store.myUserId;
@@ -892,6 +965,108 @@ export class AspenSync {
     this.#readTimer ??= setTimeout(() => {
       this.flushReads();
     }, READ_REPORT_MS);
+  }
+
+  /**
+   * Mutes a channel or DM for the caller, for `durationSeconds` or, with `null`, until they
+   * unmute it. The store follows the `channelMuteChanged` event.
+   */
+  async muteChannel(channelId: string, durationSeconds: number | null): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/channels/{channel}/mutes/@me", {
+      params: { path: { channel: channelId } },
+      body: { durationSeconds },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  // --- The Administration Dashboard. Its reads are queries rather than cached records: each
+  // answers what the server says now, and the dashboard holds the answer while it shows it.
+
+  /** The deployment's totals. */
+  async adminOverview(): Promise<AdminOverview> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/overview"));
+  }
+
+  /** A page of the deployment's users, searched and sorted. */
+  async adminUsers(query: AdminListQuery<UserSort> = {}): Promise<AdminUserEntry[]> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/users", { params: { query: listQuery(query) } }),
+    );
+  }
+
+  /** A page of the deployment's communities, searched and sorted. */
+  async adminCommunities(
+    query: AdminListQuery<CommunitySort> = {},
+  ): Promise<AdminCommunityEntry[]> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/communities", {
+        params: { query: listQuery(query) },
+      }),
+    );
+  }
+
+  /** The newest registration invites, usable or not. */
+  async registrationInvites(): Promise<RegistrationInvite[]> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/registration-invites"));
+  }
+
+  /** Makes a registration invite. */
+  async createRegistrationInvite(request: RegistrationInviteRequest): Promise<RegistrationInvite> {
+    return this.#adminRead(
+      await this.#client.api.POST("/api/v1/admin/registration-invites", { body: request }),
+    );
+  }
+
+  /** Revokes a registration invite; the accounts it made are kept. */
+  async revokeRegistrationInvite(code: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/registration-invites/{code}", {
+      params: { path: { code } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** How many users and communities there were at each step of `range`. */
+  async adminGrowth(range: GrowthRange): Promise<Growth> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/growth", { params: { query: { range } } }),
+    );
+  }
+
+  /** The health of the deployment's API and voice servers. */
+  async fleet(): Promise<Fleet> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/fleet"));
+  }
+
+  #adminRead<T>(result: { data?: T; error?: unknown; response: Response }): T {
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.data;
+  }
+
+  /** Collapses or expands a category in the caller's channel list. The store follows the event. */
+  async setCategoryCollapsed(categoryId: string, collapsed: boolean): Promise<void> {
+    const params = { params: { path: { category: categoryId } } };
+    const result = collapsed
+      ? await this.#client.api.PUT("/api/v1/categories/{category}/collapses/@me", params)
+      : await this.#client.api.DELETE("/api/v1/categories/{category}/collapses/@me", params);
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Lifts the caller's mute of a channel or DM. The store follows the event. */
+  async unmuteChannel(channelId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/channels/{channel}/mutes/@me", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /** Reports what has been read and not yet reported, now; for a page about to be hidden. */
@@ -1127,7 +1302,17 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/communities/{community}", {
       params: {
         path: { community: communityId },
-        query: { include: ["channels", "categories", "members", "voice", "readStates"] },
+        query: {
+          include: [
+            "channels",
+            "categories",
+            "members",
+            "voice",
+            "readStates",
+            "mutes",
+            "collapses",
+          ],
+        },
       },
     });
     if (result.data === undefined) {
@@ -1186,17 +1371,28 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms] = await Promise.all([
+      const [me, communities, dms, admin] = await Promise.all([
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
             path: { user: "@me" },
-            query: { include: ["channels", "categories", "members", "voice", "readStates"] },
+            query: {
+              include: [
+                "channels",
+                "categories",
+                "members",
+                "voice",
+                "readStates",
+                "mutes",
+                "collapses",
+              ],
+            },
           },
         }),
         this.#client.api.GET("/api/v1/users/@me/dms", {
-          params: { query: { include: ["users", "readStates"] } },
+          params: { query: { include: ["users", "readStates", "mutes"] } },
         }),
+        this.#client.api.GET("/api/v1/users/@me/admin"),
       ]);
       if (generation !== this.#generation) {
         return false;
@@ -1213,6 +1409,15 @@ export class AspenSync {
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data);
+      this.store.replaceMutes([
+        ...(communities.data.included.channelMutes ?? []),
+        ...(dms.data.included.channelMutes ?? []),
+      ]);
+      this.#scheduleMuteEnd();
+      this.store.setAdmin(admin.data?.admin ?? false);
+      this.store.replaceCollapsed(
+        (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
+      );
       await this.preferences.loadAccount();
       this.#bootstrappedAt = startedAt;
       const held = this.#held;
@@ -1361,6 +1566,53 @@ export class AspenSync {
     if (event.serverEvent === "voiceSessionEnded") {
       this.voice.onSessionEnded(event);
     }
+    if (event.serverEvent === "channelMuteChanged") {
+      this.#scheduleMuteEnd();
+    }
+    if (event.serverEvent === "react" && event.type === "delete") {
+      // One of the few a summary names left; the next to have reacted is read again.
+      const summary = this.store.reactions(event.messageId).get(event.emoji);
+      if (
+        summary !== undefined &&
+        summary.users.length < Math.min(summary.count, REACTION_SUMMARY_USERS)
+      ) {
+        void this.#reloadReactions(event.messageId);
+      }
+    }
+  }
+
+  async #reloadReactions(messageId: string): Promise<void> {
+    const generation = this.#generation;
+    const result = await this.#client.api
+      .GET("/api/v1/messages/{message}", {
+        params: { path: { message: messageId }, query: { include: ["reactions"] } },
+      })
+      .catch(() => undefined);
+    if (result?.data !== undefined && generation === this.#generation) {
+      this.store.setReactions([messageId], result.data.included.reactions ?? []);
+    }
+  }
+
+  /**
+   * Ends each timed mute when its time comes, by this device's clock, since the server announces
+   * no end it did not make; a device that slept past one ends it on waking, when the timer runs.
+   */
+  #scheduleMuteEnd(): void {
+    if (this.#muteTimer !== null) {
+      clearTimeout(this.#muteTimer);
+      this.#muteTimer = null;
+    }
+    const next = this.store.nextMuteEnd();
+    if (next === null) {
+      return;
+    }
+    // A timer longer than this overflows and fires at once; a later end is waited for in steps.
+    const delay = Math.min(Math.max(next - Date.now(), 0), MAX_TIMER_MS);
+    this.#muteTimer = setTimeout(() => {
+      this.#muteTimer = null;
+      this.store.expireMutes(Date.now());
+      this.#scheduleMuteEnd();
+    }, delay);
   }
 
   #loadWindow(channelId: string, load: () => Promise<void>): Promise<void> {
@@ -1391,13 +1643,20 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/messages", {
       params: {
         path: { channel: channelId },
-        query: { ...query, include: ["authors", "attachments", "polls", "threads", "echoes"] },
+        query: {
+          ...query,
+          include: ["authors", "attachments", "polls", "threads", "echoes", "reactions"],
+        },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.ingest(result.data.included);
+    this.store.setReactions(
+      result.data.data.map((m) => m.id),
+      result.data.included.reactions ?? [],
+    );
     return result.data.data;
   }
 }

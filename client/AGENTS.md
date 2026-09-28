@@ -324,6 +324,52 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   channel or hiding the page flushes the report. The "New Messages" line is placed where the
   read position was when the channel opened, and only if it was unread then, and stays there
   while the channel is open; posting removes it.
+- Muting is store state from the `mutes` sideload of the community and DM lists (replaced
+  whole at each bootstrap by `replaceMutes`), kept current by `channelMuteChanged` events;
+  `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
+  server announces no end it did not make. A muted channel or DM (`useMute`) is drawn in
+  `text-ink-faint` with a muted bell, is never marked unread, and does not count toward
+  `unreadPlaces`; its read position is kept, so it is unread again once the mute ends, and the
+  "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) mutes for
+  one of the offered lengths or unmutes, showing when a mute ends; it opens on a right click on
+  a text channel's or DM's row, or from the row's `ChannelMenuButton`, which keyboards and touch
+  screens use, since a long press on a row starts dragging it.
+- Folded categories are store state from the `collapses` sideload of the community list
+  (replaced whole at each bootstrap by `replaceCollapsed`), kept current by
+  `categoryCollapseChanged` events (`useCollapsed`). A category's heading in `ChannelSidebar`
+  is a button that folds it (`AspenSync.setCategoryCollapsed`, `aria-expanded`); folded, it
+  still lists the channel being viewed and whatever `RecordStore.shownWhenCollapsed` keeps (an
+  unread, unmuted channel, or a voice channel with someone in the call; `useShownWhenCollapsed`
+  follows them). Drops and reorders in a folded category still place channels among all of
+  its channels, shown or not.
+- Reactions are store state per message (`RecordStore.reactions`, topic `reactions:<messageId>`):
+  per emoji, the count, whether the caller reacted, and the first few to react, installed from
+  the `reactions` sideload of every message read (`setReactions`) and kept current by `react`
+  events. The caller's own reaction is applied from the request's answer and again from its
+  event, which changes nothing the second time. When one of the named few leaves, `AspenSync`
+  reads the message's summary again. `ReactionChips` (`src/features/messages/Reactions.tsx`)
+  shows the most popular first (ties in the order first used), at most twenty, then a `+N` chip
+  and an add chip that opens the picker at once; each chip's tooltip names the first four and
+  counts the rest. `ReactionsDialog`, opened from the `+N` chip or the message's "View
+  reactions" action, lists every emoji and, for the chosen one, everyone who reacted, a page at
+  a time (`AspenSync.loadReactors`).
+- The Administration Dashboard is `/admin` (`src/features/admin`), offered in the community
+  rail only to administrators (`RecordStore.admin`, read at bootstrap from
+  `GET /users/@me/admin`; `useIsAdmin`). Its reads are `AspenSync` methods (`adminOverview`,
+  `adminUsers`, `adminCommunities`, `registrationInvites`, `fleet`) whose answers are queries of
+  the moment rather than cached records, held where they are shown by `useAdminRead`, which
+  also re-reads the fleet every ten seconds while the page is visible. Figures follow the
+  dataviz rules: stat tiles for totals, tables with aligned figures for the fleet, and every
+  state an icon and a word, never color alone. Growth is two single-series line charts
+  (`LineChart`, hand-drawn SVG) under one row of range buttons, users and communities apart
+  because one chart with two scales would invent a relation between them; each has a 2px line
+  over a 10% wash, round-number gridlines from zero, its latest value at the end, a crosshair
+  and readout on hover and from the arrow keys, and the table view carries every value. The
+  user and community lists sort from their headings (`aria-sort`) and page by offset, 15 rows
+  by default, with the page size chosen beside them. A registration invite copies as
+  `/register?invite=CODE` where the app has a web address, or as its code in the shells. That
+  link opens the create-account screen with the code filled in, and `RegisterForm` asks for a
+  code whenever `GET /auth/methods` says the server requires one (`useAuthMethods`).
 - Presence is pulled. The server pushes no status events; `AspenSync` asks
   `GET /users/statuses` for `RecordStore.presenceCandidates()` (the members shown for every
   community and everyone in a call), in batches of `PRESENCE_BATCH`, when the sync goes live,
@@ -380,6 +426,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `src/features/invites/dialog.ts`, which never grows taller than the screen and scrolls within
   itself, so a long form on a phone reaches its buttons. Build new modals on those rather than
   on a class string of their own.
+  Every modal is titled with `DialogHeading` (`src/features/layout/DialogHeading.tsx`), which
+  puts a Phosphor X in its top right that closes it through the `Dialog`'s `close` slot, and
+  has no other button that only closes it (no Cancel, Close, Done, or OK); whatever closing
+  must do (answering the screen picker, abandoning a crop) goes in the overlay's
+  `onOpenChange`, which the X, Escape, and a click outside all reach. The one exception is a
+  modal that must not be left before the reader acts, such as the recovery codes.
 - User-facing strings live in `packages/app/src/i18n/messages.ts` with camelCase keys, matching
   the server's locale files. Server Problem text is already localized and is shown as-is.
 - Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
@@ -420,7 +472,9 @@ on two phones (`phone-chromium`, a Pixel 7, and `phone-webkit`, an iPhone 14), w
 `e2e/mobile.spec.ts`: the one-pane navigation, no sideways scrolling, tap-revealed message actions,
 44px touch areas, and pickers that fit the screen. Specs that need a signed-in account with
 communities, channels, a thread, and a DM sign in to the stubbed world in `e2e/world.ts`, which
-refuses any request it does not answer with a Problem naming it. `E2E_PORT` picks the dev server's
+refuses any request it does not answer with a Problem naming it. Outside CI a run uses at most
+four workers, each with its own browser; the Docker suite starts its own dev server too, so run
+it separately from a local run rather than alongside one. `E2E_PORT` picks the dev server's
 port (5173 by default) when another one is already running there. `pnpm e2e:docker` runs the
 suite, or the projects named after it (`pnpm e2e:docker --project=phone-webkit`), in Playwright's
 own Docker image, which has every browser: WebKit has no supported build for most Linux

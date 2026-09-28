@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
-import { Button, Dialog, Heading, Modal, ModalOverlay } from "react-aria-components";
-import {
-  dialogClass,
-  headingClass,
-  overlayClass,
-  secondaryButtonClass,
-  wideModalClass,
-} from "@/features/invites/dialog";
+import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
+import { dialogClass, overlayClass, wideModalClass } from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** A screen or window the desktop shell can share, as it lists them. */
@@ -66,9 +61,7 @@ export function SourcePickerDialog() {
     >
       <Modal className={wideModalClass}>
         <Dialog className={dialogClass}>
-          <Heading slot="title" className={headingClass}>
-            {m.voice.pickSourceHeading}
-          </Heading>
+          <DialogHeading>{m.voice.pickSourceHeading}</DialogHeading>
           <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto">
             <SourceGroup heading={m.voice.pickScreens} sources={screens} onPick={answer} />
             <SourceGroup heading={m.voice.pickWindows} sources={windows} onPick={answer} />
@@ -89,14 +82,6 @@ export function SourcePickerDialog() {
             ) : (
               <span />
             )}
-            <Button
-              onPress={() => {
-                answer(null);
-              }}
-              className={secondaryButtonClass}
-            >
-              {m.cancel}
-            </Button>
           </div>
         </Dialog>
       </Modal>

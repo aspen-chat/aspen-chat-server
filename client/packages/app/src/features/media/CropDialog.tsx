@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import {
   Button,
   Dialog,
-  Heading,
   Label,
   Modal,
   ModalOverlay,
@@ -11,13 +10,7 @@ import {
   SliderTrack,
 } from "react-aria-components";
 import { primaryButtonClass } from "@/features/auth/styles";
-import {
-  dialogClass,
-  headingClass,
-  modalClass,
-  overlayClass,
-  secondaryButtonClass,
-} from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import {
   boundingSquare,
   clampCircle,
@@ -28,6 +21,7 @@ import {
   MIN_RADIUS,
   type Circle,
 } from "@/features/media/crop";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** The largest the picture is shown at inside the dialog. */
@@ -113,9 +107,7 @@ export function CropDialog({
     >
       <Modal className={modalClass}>
         <Dialog className={dialogClass}>
-          <Heading slot="title" className={headingClass}>
-            {m.crop.heading}
-          </Heading>
+          <DialogHeading>{m.crop.heading}</DialogHeading>
           <p className="text-sm text-ink-muted">{m.crop.hint}</p>
           {failed ? (
             <p role="alert" className="text-sm text-danger">
@@ -135,9 +127,6 @@ export function CropDialog({
             />
           )}
           <div className="flex justify-end gap-2">
-            <Button onPress={onCancel} className={secondaryButtonClass}>
-              {m.cancel}
-            </Button>
             <Button
               onPress={confirm}
               isDisabled={image === null || failed}

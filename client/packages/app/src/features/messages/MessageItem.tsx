@@ -17,7 +17,7 @@ import { playerSrc } from "@/features/messages/video";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { PollCard } from "@/features/messages/PollCard";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
-import { ReactionChips, ReactionPicker } from "@/features/messages/Reactions";
+import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -183,6 +183,7 @@ export function MessageItem({
               className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:invisible pointer-coarse:absolute pointer-coarse:-top-4 pointer-coarse:right-2 pointer-coarse:z-10 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-line pointer-coarse:bg-surface-raised pointer-coarse:shadow-md pointer-coarse:group-focus-within:visible"
             >
               <ReactionPicker messageId={id} triggerClassName={actionClass} />
+              <ViewReactionsButton messageId={id} triggerClassName={actionClass} />
               {canThread && (
                 <Tooltip text={m.threads.replyInThread}>
                   <Button

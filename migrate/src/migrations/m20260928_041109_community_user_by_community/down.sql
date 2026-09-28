@@ -1,0 +1,1 @@
+DROP INDEX community_user_by_community;

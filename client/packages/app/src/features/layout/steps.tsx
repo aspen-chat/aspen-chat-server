@@ -1,7 +1,8 @@
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { Button, Heading } from "react-aria-components";
-import { headingClass } from "@/features/invites/dialog";
+import { Button } from "react-aria-components";
+
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** One choice on the first step of a stepped dialog: a title with a line of explanation. */
@@ -37,9 +38,7 @@ export function StepHeading({ onBack, children }: { onBack: () => void; children
       >
         <ArrowLeftIcon size={18} aria-hidden="true" />
       </Button>
-      <Heading slot="title" className={headingClass}>
-        {children}
-      </Heading>
+      <DialogHeading>{children}</DialogHeading>
     </div>
   );
 }

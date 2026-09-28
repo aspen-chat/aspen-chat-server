@@ -20,6 +20,10 @@ enum MessageEnumSource {
         name: String,
         #[message_gen(secret)]
         password: String,
+        // The registration invite, needed when `[registration] invite_required` is set; see
+        // `app::registration_invite`.
+        #[message_gen(secret)]
+        invite_code: Option<String>,
         icon: Option<IconId>,
         #[message_gen(server_authoritative)]
         online_status: UserOnlineStatus,
@@ -44,6 +48,21 @@ enum MessageEnumSource {
     ChannelRead {
         channel: ChannelId,
         last_read: MessageId,
+    },
+    // The user collapsed or expanded a category in their channel list, on one of their
+    // devices; the others follow. See `app::category_collapse`.
+    #[message_gen(custom_event)]
+    CategoryCollapseChanged {
+        category: CategoryId,
+        collapsed: bool,
+    },
+    // The user muted or unmuted a channel, on one of their devices; the others follow. A mute
+    // with no `until` lasts until it is lifted. See `app::channel_mute`.
+    #[message_gen(custom_event)]
+    ChannelMuteChanged {
+        channel: ChannelId,
+        muted: bool,
+        until: Option<chrono::DateTime<Utc>>,
     },
     Message {
         #[message_gen(id)]

@@ -15,7 +15,6 @@ import {
   Dialog,
   DialogTrigger,
   Form,
-  Heading,
   Input,
   Label,
   ListBox,
@@ -41,11 +40,11 @@ import {
 } from "@/features/auth/styles";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 import { MAX_OPTION_CHARS } from "@/features/messages/poll";
@@ -164,9 +163,7 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
       }}
       className="flex flex-col gap-4"
     >
-      <Heading slot="title" className={headingClass}>
-        {m.poll.heading}
-      </Heading>
+      <DialogHeading>{m.poll.heading}</DialogHeading>
       {error !== null && (
         <p role="alert" className={alertClass}>
           {error}
@@ -297,9 +294,6 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
         hint={m.poll.anonymousHint}
       />
       <div className="flex justify-end gap-2">
-        <Button onPress={close} className={secondaryButtonClass}>
-          {m.cancel}
-        </Button>
         <Button type="submit" isDisabled={!canSubmit} className={primaryButtonClass}>
           {pending ? m.poll.creating : m.poll.create}
         </Button>

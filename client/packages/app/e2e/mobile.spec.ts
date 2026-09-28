@@ -233,6 +233,8 @@ test.describe("on a phone", () => {
     await expectTouchable(page.getByRole("button", { name: "Settings" }));
     await expectTouchable(page.getByRole("button", { name: "Edit profile" }));
     await expectTouchable(page.getByRole("button", { name: "Add a channel to Planning" }));
+    // Always shown on a touch screen, where there is no right click or hover.
+    await expectTouchable(page.getByRole("button", { name: "Options for roadmap" }));
     await openChannel(page, "general");
     await expectTouchable(page.getByRole("link", { name: "Back to channels" }));
     await page.getByRole("link", { name: /2 replies/ }).click();

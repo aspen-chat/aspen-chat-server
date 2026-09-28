@@ -8,8 +8,10 @@
 //!    removes objects when their owning DB row goes away.
 //! 2. **Client-driven uploads via presigned URLs.** [`presign_put`] mints a
 //!    short-lived URL the client PUTs raw bytes to without ever touching the
-//!    Aspen API process. [`head_object`] is how the confirm endpoint verifies
-//!    the bytes actually landed before flipping the DB row to "ready".
+//!    Aspen API process. The URL names the S3 API as clients reach it
+//!    (`public_endpoint`), which need not be the address the server uses.
+//!    [`head_object`] is how the confirm endpoint verifies the bytes actually
+//!    landed before flipping the DB row to "ready".
 //!
 //! Downloads do not pass through Aspen at all; clients hit the
 //! `public_base_url` (an anonymous-read endpoint operated alongside the S3
@@ -30,7 +32,7 @@ use chrono::{DateTime, Duration, Utc};
 use std::time::Duration as StdDuration;
 
 use crate::app;
-use crate::aspen_config::AspenConfig;
+use crate::aspen_config::{AspenConfig, MediaS3Config};
 
 /// Result of a successful presign request.
 #[derive(Debug, Clone)]
@@ -44,6 +46,10 @@ pub struct PresignedUpload {
 #[derive(Clone)]
 pub struct MediaStore {
     client: Client,
+    /// Signs upload URLs for clients: the same credentials, addressed to the S3
+    /// API as clients reach it. Signing is local, so this client never needs to
+    /// reach that address itself.
+    presign_client: Client,
     bucket: String,
     public_base_url: String,
     upload_url_ttl: StdDuration,
@@ -51,7 +57,10 @@ pub struct MediaStore {
 
 impl MediaStore {
     pub async fn new(config: &AspenConfig) -> app::error::Result<Self> {
-        let s3 = &config.media.s3;
+        Self::from_s3(&config.media.s3).await
+    }
+
+    async fn from_s3(s3: &MediaS3Config) -> app::error::Result<Self> {
         let sdk_config = aws_config::defaults(BehaviorVersion::latest())
             .region(Region::new(s3.region.clone()))
             .credentials_provider(Credentials::new(
@@ -63,13 +72,17 @@ impl MediaStore {
             ))
             .load()
             .await;
-        let s3_config = aws_sdk_s3::config::Builder::from(&sdk_config)
-            .endpoint_url(s3.endpoint.clone())
-            .force_path_style(true)
-            .build();
-        let client = Client::from_conf(s3_config);
+        let client_for = |endpoint: &str| {
+            Client::from_conf(
+                aws_sdk_s3::config::Builder::from(&sdk_config)
+                    .endpoint_url(endpoint)
+                    .force_path_style(true)
+                    .build(),
+            )
+        };
         Ok(Self {
-            client,
+            client: client_for(&s3.endpoint),
+            presign_client: client_for(s3.public_endpoint.as_deref().unwrap_or(&s3.endpoint)),
             bucket: s3.bucket.clone(),
             public_base_url: s3.public_base_url.trim_end_matches('/').to_string(),
             upload_url_ttl: StdDuration::from_secs(s3.upload_url_ttl_seconds),
@@ -111,7 +124,7 @@ impl MediaStore {
     ) -> app::error::Result<PresignedUpload> {
         let presigning = PresigningConfig::expires_in(self.upload_url_ttl)?;
         let presigned = self
-            .client
+            .presign_client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -171,5 +184,37 @@ impl MediaStore {
     /// leading `/` in `key`.
     pub fn public_url(&self, key: &str) -> String {
         format!("{}/{}", self.public_base_url, key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn upload_urls_name_storage_as_clients_reach_it() {
+        let internal = MediaS3Config {
+            endpoint: "http://127.0.0.1:8333".to_string(),
+            ..MediaS3Config::default()
+        };
+        let store = MediaStore::from_s3(&internal).await.unwrap();
+        let url = store
+            .presign_put("attachments/a", "text/plain")
+            .await
+            .unwrap()
+            .url;
+        assert!(url.starts_with("http://127.0.0.1:8333/"), "{url}");
+
+        let public = MediaS3Config {
+            public_endpoint: Some("https://media.example.org".to_string()),
+            ..internal
+        };
+        let store = MediaStore::from_s3(&public).await.unwrap();
+        let url = store
+            .presign_put("attachments/a", "text/plain")
+            .await
+            .unwrap()
+            .url;
+        assert!(url.starts_with("https://media.example.org/"), "{url}");
     }
 }

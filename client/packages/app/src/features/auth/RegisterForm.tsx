@@ -2,6 +2,7 @@ import { ApiProblemError } from "@aspen/protocol";
 import { useState, type SyntheticEvent } from "react";
 import { Button, FieldError, Form, Input, Label, Text, TextField } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
+import { useAuthMethods } from "@/features/auth/authMethods";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
@@ -17,9 +18,21 @@ const PASSWORD_MIN_LENGTH = 8;
  * Creates an account, then signs in with the same credentials so the user lands in the app
  * without typing them twice. Server Problems are attached to the field they concern.
  */
-export function RegisterForm({ onSwitchToLogin }: { onSwitchToLogin: () => void }) {
+export function RegisterForm({
+  onSwitchToLogin,
+  initialInvite,
+}: {
+  onSwitchToLogin: () => void;
+  /** The invite code a link brought, filled in. */
+  initialInvite?: string | undefined;
+}) {
   const m = useMessages();
   const client = useAspenClient();
+  const methods = useAuthMethods();
+  const inviteRequired = methods?.registrationInviteRequired === true;
+  // Asked for when the server requires one, or when a link brought one to check.
+  const askInvite = inviteRequired || initialInvite !== undefined;
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -32,6 +45,8 @@ export function RegisterForm({ onSwitchToLogin }: { onSwitchToLogin: () => void 
     const username = formString(data, "username");
     const password = formString(data, "password");
     const confirm = formString(data, "confirmPassword");
+    const invite = askInvite ? formString(data, "invite").trim() : "";
+    setInviteError(null);
     setUsernameError(null);
     setPasswordError(null);
     setConfirmError(null);
@@ -46,7 +61,7 @@ export function RegisterForm({ onSwitchToLogin }: { onSwitchToLogin: () => void 
     }
     setPending(true);
     try {
-      await client.register(username, password);
+      await client.register(username, password, invite === "" ? undefined : invite);
       await client.login(username, password);
     } catch (e) {
       if (e instanceof ApiProblemError) {
@@ -57,6 +72,10 @@ export function RegisterForm({ onSwitchToLogin }: { onSwitchToLogin: () => void 
             break;
           case "passwordRequirementsNotMet":
             setPasswordError(e.message);
+            break;
+          case "registrationInviteRequired":
+          case "registrationInviteInvalid":
+            setInviteError(e.message);
             break;
           default:
             setError(e.message);
@@ -77,6 +96,26 @@ export function RegisterForm({ onSwitchToLogin }: { onSwitchToLogin: () => void 
       className="flex w-full max-w-sm flex-col gap-4"
     >
       <h1 className="text-2xl font-semibold">{m.registerHeading}</h1>
+      {askInvite && (
+        <TextField
+          name="invite"
+          isRequired={inviteRequired}
+          {...(initialInvite === undefined ? {} : { defaultValue: initialInvite })}
+          autoComplete="off"
+          isInvalid={inviteError !== null}
+          className={fieldClass}
+        >
+          <Label className={labelClass}>{m.inviteCodeLabel}</Label>
+          <Input className={inputClass + " font-mono"} spellCheck={false} autoCapitalize="off" />
+          {inviteError === null ? (
+            <Text slot="description" className="text-sm text-ink-muted">
+              {inviteRequired ? m.inviteCodeRequiredHint : m.inviteCodeHint}
+            </Text>
+          ) : (
+            <FieldError className="text-sm text-danger">{inviteError}</FieldError>
+          )}
+        </TextField>
+      )}
       <TextField
         name="username"
         isRequired

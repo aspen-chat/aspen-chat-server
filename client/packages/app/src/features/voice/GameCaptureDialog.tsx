@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Dialog,
-  Heading,
   Label,
   ListBox,
   ListBoxItem,
@@ -17,11 +16,9 @@ import { useSync } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   optionClass,
   overlayClass,
-  secondaryButtonClass,
   selectButtonClass,
 } from "@/features/invites/dialog";
 import {
@@ -35,6 +32,7 @@ import {
   type CaptureChoice,
   type GameCaptureBridge,
 } from "@/features/voice/gameCapture";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -162,9 +160,7 @@ export function GameCaptureDialog({
     >
       <Modal className={modalClass}>
         <Dialog className={dialogClass}>
-          <Heading slot="title" className={headingClass}>
-            {m.voice.shareGameHeading}
-          </Heading>
+          <DialogHeading>{m.voice.shareGameHeading}</DialogHeading>
           {catalogue === null && (
             <p className="text-sm text-ink-muted">{m.voice.shareGameLoading}</p>
           )}
@@ -233,11 +229,6 @@ export function GameCaptureDialog({
               {error}
             </p>
           )}
-          <div className="flex justify-end">
-            <Button onPress={onClose} className={secondaryButtonClass}>
-              {m.cancel}
-            </Button>
-          </div>
         </Dialog>
       </Modal>
     </ModalOverlay>

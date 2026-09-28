@@ -135,6 +135,20 @@ pub fn allocated_bytes() -> Option<u64> {
         .map(|bytes| bytes as u64)
 }
 
+/// Bytes the allocator holds in physical memory, by jemalloc's count, refreshed as it is read;
+/// `None` if the statistics cannot be read, or the program does not use jemalloc.
+pub fn resident_bytes() -> Option<u64> {
+    #[cfg(feature = "jemalloc")]
+    {
+        tikv_jemalloc_ctl::epoch::advance().ok()?;
+        tikv_jemalloc_ctl::stats::resident::read()
+            .ok()
+            .map(|bytes| bytes as u64)
+    }
+    #[cfg(not(feature = "jemalloc"))]
+    None
+}
+
 /// Reads jemalloc's statistics into the `memory` gauges. They are refreshed only when the
 /// epoch advances, which is done here.
 #[cfg(feature = "jemalloc")]

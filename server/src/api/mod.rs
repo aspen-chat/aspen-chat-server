@@ -12,10 +12,13 @@ use std::fs;
 use std::io::Write;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+pub(crate) mod admin;
 pub(crate) mod attachment;
 pub(crate) mod auth;
 pub(crate) mod category;
+pub(crate) mod category_collapse;
 pub(crate) mod channel;
+pub(crate) mod channel_mute;
 pub(crate) mod community;
 pub(crate) mod dm;
 pub(crate) mod error;
@@ -73,6 +76,7 @@ pub const TAG_ATTACHMENTS: &str = "attachments";
 pub const TAG_ICONS: &str = "icons";
 pub const TAG_DMS: &str = "dms";
 pub const TAG_SECURITY: &str = "security";
+pub const TAG_ADMIN: &str = "administration";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -264,6 +268,18 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(dm::add_recipient))
         .routes(routes!(dm::leave_dm))
         .routes(routes!(react::add_reaction, react::remove_reaction))
+        .routes(routes!(react::list_reactors))
+        .routes(routes!(admin::get_admin_access))
+        .routes(routes!(admin::get_overview))
+        .routes(routes!(admin::list_users))
+        .routes(routes!(admin::list_communities))
+        .routes(routes!(
+            admin::list_registration_invites,
+            admin::create_registration_invite
+        ))
+        .routes(routes!(admin::revoke_registration_invite))
+        .routes(routes!(admin::get_fleet))
+        .routes(routes!(admin::get_growth))
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))
         .routes(routes!(poll::add_vote, poll::remove_vote))
@@ -272,6 +288,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(
             read_state::get_read_state,
             read_state::put_read_state
+        ))
+        .routes(routes!(
+            channel_mute::mute_channel,
+            channel_mute::unmute_channel
+        ))
+        .routes(routes!(
+            category_collapse::collapse_category,
+            category_collapse::expand_category
         ))
         .routes(routes!(voice::join_voice))
         .routes(routes!(voice::get_channel_voice))
@@ -380,6 +404,7 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     app::voice::seed_servers(&context).await?;
     app::voice::spawn_report_listener(context.clone()).await?;
     app::voice::spawn_reaper(context.clone());
+    app::fleet::spawn_heartbeat(context.clone());
     let cors = cors_layer(&context.config.cors);
     let router: axum::Router = router.with_state(context).into();
     Ok(match cors {

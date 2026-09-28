@@ -196,6 +196,7 @@ struct OpenStream;
 impl OpenStream {
     fn new() -> Self {
         metrics::gauge!(aspen_metrics::api::EVENT_STREAMS).increment(1.0);
+        crate::app::fleet::note_event_stream(1);
         OpenStream
     }
 }
@@ -203,6 +204,7 @@ impl OpenStream {
 impl Drop for OpenStream {
     fn drop(&mut self) {
         metrics::gauge!(aspen_metrics::api::EVENT_STREAMS).decrement(1.0);
+        crate::app::fleet::note_event_stream(-1);
     }
 }
 

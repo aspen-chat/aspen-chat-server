@@ -14,6 +14,10 @@ const phoneOnly = /mobile\.spec\.ts$/;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // Every worker runs its own browser. Playwright's default, half the cores, starts a dozen or
+  // more on a large workstation, which with a desktop's own programs can exhaust its memory,
+  // so a run outside CI keeps to a few.
+  ...(process.env["CI"] === undefined ? { workers: 4 } : {}),
   forbidOnly: process.env["CI"] !== undefined,
   retries: process.env["CI"] !== undefined ? 2 : 0,
   reporter: process.env["CI"] !== undefined ? "github" : "list",

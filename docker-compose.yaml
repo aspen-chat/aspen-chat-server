@@ -24,7 +24,8 @@ services:
       - "6379:6379"
   seaweedfs:
     image: chrislusf/seaweedfs:4.22
-    command: server -s3
+    network_mode: "host"
+    command: server -s3 -ip 0.0.0.0 
     volumes:
       - seaweeddata:/data 
     ports:

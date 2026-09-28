@@ -39,6 +39,8 @@ export type PollVote = components["schemas"]["PollVote"];
  * after it. An empty `lastRead` is before every message.
  */
 export type ReadState = components["schemas"]["ReadState"];
+/** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
+export type ChannelMute = components["schemas"]["ChannelMute"];
 
 export type Listener = () => void;
 
@@ -109,8 +111,24 @@ export interface ChannelVoice {
 
 const NO_VOICE: ChannelVoice = { session: null, participants: [] };
 
-/** `emoji -> user ids`, insertion ordered. */
-export type Reactions = ReadonlyMap<string, ReadonlySet<string>>;
+/**
+ * One emoji's reactions to a message, in brief: how many, whether the caller is among them, and
+ * the first few to react, earliest first (`REACTION_SUMMARY_USERS` at most).
+ */
+export interface EmojiReactions {
+  readonly count: number;
+  readonly me: boolean;
+  readonly users: readonly string[];
+}
+
+/** A message's reactions, `emoji -> summary`, each emoji in the order it was first used. */
+export type Reactions = ReadonlyMap<string, EmojiReactions>;
+
+/** A message read's summary of one emoji's reactions. */
+export type ReactionSummary = components["schemas"]["ReactionSummary"];
+
+/** How many of an emoji's reactors a summary names, as the server's `SUMMARY_USERS`. */
+export const REACTION_SUMMARY_USERS = 4;
 
 const EMPTY_IDS: readonly string[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
@@ -176,13 +194,16 @@ export class RecordStore {
   readonly #members = new Map<string, Set<string>>();
   /** `user -> community ids`, the reverse of `#members`, for invalidating member lists. */
   readonly #memberOf = new Map<string, Set<string>>();
-  readonly #reactions = new Map<string, Map<string, Set<string>>>();
+  readonly #reactions = new Map<string, Reactions>();
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
   /** The options the caller wrote in, by poll, which an anonymous poll's record never says. */
   readonly #myWriteIns = new Map<string, ReadonlySet<number>>();
   readonly #readStates = new Map<string, ReadState>();
+  readonly #mutes = new Map<string, ChannelMute>();
+  readonly #collapsed = new Set<string>();
+  #admin = false;
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
@@ -331,16 +352,69 @@ export class RecordStore {
     return state?.lastMessage != null && state.lastMessage > state.lastRead;
   }
 
+  /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
+  mute(channelId: string): ChannelMute | undefined {
+    return this.#mutes.get(channelId);
+  }
+
+  /** Topic `admin`: whether the caller may open the Administration Dashboard. */
+  admin(): boolean {
+    return this.#admin;
+  }
+
+  /** Records whether the caller may open the Administration Dashboard, as the server says. */
+  setAdmin(admin: boolean): void {
+    this.#batch(() => {
+      if (this.#admin !== admin) {
+        this.#admin = admin;
+        this.#touch("admin");
+      }
+    });
+  }
+
+  /** Topic `collapse:<categoryId>`: whether the caller has the category collapsed. */
+  collapsed(categoryId: string): boolean {
+    return this.#collapsed.has(categoryId);
+  }
+
+  /**
+   * Whether a channel stays in view under its collapsed category: while it is unread and not
+   * muted, or its call has someone in it. Reads topics `read:<channelId>`, `mute:<channelId>`,
+   * and `voice:<channelId>`; `unread` covers the first two.
+   */
+  shownWhenCollapsed(channelId: string): boolean {
+    return (
+      (this.unread(channelId) && !this.#mutes.has(channelId)) ||
+      this.channelVoice(channelId).participants.length > 0
+    );
+  }
+
+  /** When the first timed mute ends, as milliseconds since the epoch; `null` with none. */
+  nextMuteEnd(): number | null {
+    let next: number | null = null;
+    for (const mute of this.#mutes.values()) {
+      if (mute.until != null) {
+        const end = Date.parse(mute.until);
+        next = next === null ? end : Math.min(next, end);
+      }
+    }
+    return next;
+  }
+
   /**
    * Topic `unread`: the communities with an unread channel, and `UNREAD_DMS` when a DM is
-   * unread.
+   * unread. A muted channel counts for neither.
    */
   unreadPlaces(): ReadonlySet<string> {
     return this.#memoized("unread", () => {
       const places = new Set<string>();
       for (const state of this.#readStates.values()) {
         const channel = this.#channels.get(state.channel);
-        if (channel !== undefined && this.unread(state.channel)) {
+        if (
+          channel !== undefined &&
+          !this.#mutes.has(state.channel) &&
+          this.unread(state.channel)
+        ) {
           places.add(channel.community ?? UNREAD_DMS);
         }
       }
@@ -504,7 +578,7 @@ export class RecordStore {
     return this.#windows.get(channelId);
   }
 
-  /** Topic `reactions:<messageId>`. */
+  /** Topic `reactions:<messageId>`: the message's reactions, emoji in the order first used. */
   reactions(messageId: string): Reactions {
     return this.#reactions.get(messageId) ?? EMPTY_REACTIONS;
   }
@@ -639,6 +713,12 @@ export class RecordStore {
       }
       for (const state of included.readStates ?? []) {
         this.#putReadState(state);
+      }
+      for (const mute of included.channelMutes ?? []) {
+        this.#putMute(mute);
+      }
+      for (const { category } of included.categoryCollapses ?? []) {
+        this.#setCollapsed(category, true);
       }
       for (const session of included.voiceSessions ?? []) {
         this.#putVoiceSession(session);
@@ -853,6 +933,47 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Replaces every mute held with `mutes`, the complete list a bootstrap read, so a mute lifted
+   * while the stream was away does not linger.
+   */
+  replaceMutes(mutes: readonly ChannelMute[]): void {
+    this.#batch(() => {
+      for (const channelId of Array.from(this.#mutes.keys())) {
+        this.#removeMute(channelId);
+      }
+      for (const mute of mutes) {
+        this.#putMute(mute);
+      }
+    });
+  }
+
+  /**
+   * Replaces every collapsed category held with `categories`, the complete list a bootstrap
+   * read, so one expanded while the stream was away does not stay folded.
+   */
+  replaceCollapsed(categories: readonly string[]): void {
+    this.#batch(() => {
+      for (const category of Array.from(this.#collapsed)) {
+        this.#setCollapsed(category, false);
+      }
+      for (const category of categories) {
+        this.#setCollapsed(category, true);
+      }
+    });
+  }
+
+  /** Ends the mutes whose time is up at `now` (milliseconds since the epoch). */
+  expireMutes(now: number): void {
+    this.#batch(() => {
+      for (const mute of Array.from(this.#mutes.values())) {
+        if (mute.until != null && Date.parse(mute.until) <= now) {
+          this.#removeMute(mute.channel);
+        }
+      }
+    });
+  }
+
   /** Stores a read state the server sent for one channel, replacing what was held. */
   putReadState(state: ReadState): void {
     this.#batch(() => {
@@ -962,6 +1083,9 @@ export class RecordStore {
       this.#myVotes.clear();
       this.#myWriteIns.clear();
       this.#readStates.clear();
+      this.#mutes.clear();
+      this.#collapsed.clear();
+      this.#admin = false;
       this.#windows.clear();
       this.#invites.clear();
       this.#myCommunities.clear();
@@ -1080,40 +1204,9 @@ export class RecordStore {
             this.#removeMessage(event.id);
           }
           break;
-        case "react": {
-          let byEmoji = this.#reactions.get(event.messageId);
-          if (event.type === "create") {
-            if (byEmoji === undefined) {
-              byEmoji = new Map();
-              this.#reactions.set(event.messageId, byEmoji);
-            }
-            let users = byEmoji.get(event.emoji);
-            if (users === undefined) {
-              users = new Set();
-              byEmoji.set(event.emoji, users);
-            }
-            users.add(event.userId);
-          } else if (byEmoji !== undefined) {
-            const users = byEmoji.get(event.emoji);
-            users?.delete(event.userId);
-            if (users?.size === 0) {
-              byEmoji.delete(event.emoji);
-            }
-            if (byEmoji.size === 0) {
-              this.#reactions.delete(event.messageId);
-            }
-          }
-          // A fresh map so subscribers see a new reference.
-          const current = this.#reactions.get(event.messageId);
-          if (current !== undefined) {
-            this.#reactions.set(
-              event.messageId,
-              new Map(Array.from(current, ([emoji, users]) => [emoji, new Set(users)])),
-            );
-          }
-          this.#touch(`reactions:${event.messageId}`);
+        case "react":
+          this.#applyReaction(event.messageId, event.emoji, event.userId, event.type === "create");
           break;
-        }
         case "invite":
           if (event.type === "create") {
             this.#putInvite(created(event));
@@ -1164,6 +1257,16 @@ export class RecordStore {
             }
           } else {
             this.#removeVoiceParticipant(event.session, event.user);
+          }
+          break;
+        case "categoryCollapseChanged":
+          this.#setCollapsed(event.category, event.collapsed);
+          break;
+        case "channelMuteChanged":
+          if (event.muted) {
+            this.#putMute({ channel: event.channel, until: event.until ?? null });
+          } else {
+            this.#removeMute(event.channel);
           }
           break;
         case "channelRead": {
@@ -1359,6 +1462,31 @@ export class RecordStore {
     }
   }
 
+  #setCollapsed(categoryId: string, collapsed: boolean): void {
+    if (this.#collapsed.has(categoryId) === collapsed) {
+      return;
+    }
+    if (collapsed) {
+      this.#collapsed.add(categoryId);
+    } else {
+      this.#collapsed.delete(categoryId);
+    }
+    this.#touch(`collapse:${categoryId}`);
+  }
+
+  #putMute(mute: ChannelMute): void {
+    this.#mutes.set(mute.channel, mute);
+    this.#touch(`mute:${mute.channel}`);
+    this.#touch("unread");
+  }
+
+  #removeMute(channelId: string): void {
+    if (this.#mutes.delete(channelId)) {
+      this.#touch(`mute:${channelId}`);
+      this.#touch("unread");
+    }
+  }
+
   #putReadState(state: ReadState): void {
     this.#readStates.set(state.channel, state);
     this.#touch(`read:${state.channel}`);
@@ -1399,6 +1527,7 @@ export class RecordStore {
       this.#touch(`read:${id}`);
       this.#touch("unread");
     }
+    this.#removeMute(id);
     this.#channels.delete(id);
     this.#removedChannels.add(id);
     this.#touch(`channel:${id}`);
@@ -1544,6 +1673,88 @@ export class RecordStore {
     if (this.#polls.delete(id) || this.#myVotes.delete(id) || writeIns) {
       this.#touch(`poll:${id}`);
     }
+  }
+
+  /**
+   * Installs the reactions a message read brought for `messageIds`, replacing what was held for
+   * each; a message the read brought no summary for has none.
+   */
+  setReactions(messageIds: readonly string[], summaries: readonly ReactionSummary[]): void {
+    this.#batch(() => {
+      const byMessage = new Map<string, Map<string, EmojiReactions>>();
+      for (const summary of summaries) {
+        let byEmoji = byMessage.get(summary.messageId);
+        if (byEmoji === undefined) {
+          byEmoji = new Map();
+          byMessage.set(summary.messageId, byEmoji);
+        }
+        byEmoji.set(summary.emoji, {
+          count: summary.count,
+          me: summary.me,
+          users: summary.users,
+        });
+      }
+      for (const id of messageIds) {
+        const byEmoji = byMessage.get(id);
+        if (byEmoji === undefined) {
+          if (!this.#reactions.delete(id)) {
+            continue;
+          }
+        } else {
+          this.#reactions.set(id, byEmoji);
+        }
+        this.#touch(`reactions:${id}`);
+      }
+    });
+  }
+
+  /**
+   * Counts one person's reaction in or out. The caller's own reaction is applied from the
+   * request's answer and again from its event, so a second telling of it changes nothing;
+   * anyone else's arrives once, as an event.
+   */
+  #applyReaction(messageId: string, emoji: string, userId: string, added: boolean): void {
+    const current = this.#reactions.get(messageId) ?? EMPTY_REACTIONS;
+    const summary = current.get(emoji);
+    const mine = userId === this.#myUserId;
+    const counted = summary !== undefined && (mine ? summary.me : summary.users.includes(userId));
+    // Told twice. Whether someone else beyond the named few already reacted cannot be told,
+    // but their events arrive once.
+    if (added && counted) {
+      return;
+    }
+    // The caller's own reaction, already gone.
+    if (!added && mine && !counted) {
+      return;
+    }
+    // A fresh map, so subscribers see a new reference, in the same emoji order.
+    const next = new Map(current);
+    if (added) {
+      const base = summary ?? { count: 0, me: false, users: [] };
+      next.set(emoji, {
+        count: base.count + 1,
+        me: base.me || mine,
+        users: base.users.length < REACTION_SUMMARY_USERS ? [...base.users, userId] : base.users,
+      });
+    } else if (summary !== undefined) {
+      if (summary.count <= 1) {
+        next.delete(emoji);
+      } else {
+        next.set(emoji, {
+          count: summary.count - 1,
+          me: summary.me && !mine,
+          users: summary.users.filter((id) => id !== userId),
+        });
+      }
+    } else {
+      return;
+    }
+    if (next.size === 0) {
+      this.#reactions.delete(messageId);
+    } else {
+      this.#reactions.set(messageId, next);
+    }
+    this.#touch(`reactions:${messageId}`);
   }
 
   #removeMessage(id: string): void {

@@ -42,6 +42,10 @@ pub enum CommunityInclude {
     Voice,
     /// How far the caller has read each of the communities' channels, as `included.readStates`.
     ReadStates,
+    /// The caller's mutes of the communities' channels, as `included.channelMutes`.
+    Mutes,
+    /// The communities' categories the caller has collapsed, as `included.categoryCollapses`.
+    Collapses,
 }
 
 /// Body of a community read. Named aliases rather than `Sideloaded<Community>` at the handler
@@ -70,7 +74,7 @@ pub async fn sideload_communities(
     communities: &[CommunityId],
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
-    let (channels, categories, members, voice, read_states) = tokio::try_join!(
+    let (channels, categories, members, voice, read_states, mutes, collapses) = tokio::try_join!(
         async {
             if include.contains(CommunityInclude::Channels) {
                 app::community::read_communities_channels(state, communities)
@@ -116,6 +120,24 @@ pub async fn sideload_communities(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(CommunityInclude::Mutes) {
+                app::channel_mute::read_mutes(state, caller, &[], communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Collapses) {
+                app::category_collapse::read_collapsed(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let mut included = Included {
         channels: channels.map(|channels| {
@@ -134,6 +156,18 @@ pub async fn sideload_communities(
             states
                 .into_iter()
                 .map(api::read_state::read_state_to_api)
+                .collect()
+        }),
+        channel_mutes: mutes.map(|mutes| {
+            mutes
+                .into_iter()
+                .map(api::channel_mute::mute_to_api)
+                .collect()
+        }),
+        category_collapses: collapses.map(|collapses| {
+            collapses
+                .into_iter()
+                .map(|category| api::category_collapse::CategoryCollapse { category })
                 .collect()
         }),
         ..Included::default()

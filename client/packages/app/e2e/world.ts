@@ -6,7 +6,8 @@ import { signedIn, uuid } from "./stubs";
  * text channel, a voice channel, and a category; a conversation in the text channel with a
  * thread and an echoed reply, then a poll of Bob's that takes write-ins; and a one-to-one DM.
  * The caller has read #general up to Bob's "Sounds good" (`lastReadText`) and has not read the
- * DM. #roadmap shows as unread without any history, for checking the channel list alone. Every API read the app makes about it is
+ * DM. #roadmap shows as unread without any history, for checking the channel list alone;
+ * #ideas, beside it in Planning, is read. The Archive category is empty. Every API read the app makes about it is
  * answered from here, and anything else is refused with a Problem naming the request, so a
  * spec fails loudly rather than waiting on a request nobody answers.
  */
@@ -21,6 +22,9 @@ export const roadmap = "0190f0a0-0000-7000-8000-000000000014";
 export const thread = "0190f0a0-0000-7000-8000-000000000015";
 export const dm = "0190f0a0-0000-7000-8000-000000000016";
 export const lunchPoll = "0190f0a0-0000-7000-8000-000000000017";
+export const ideas = "0190f0a0-0000-7000-8000-000000000018";
+/** A category with no channels. */
+export const archive = "0190f0a0-0000-7000-8000-000000000019";
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -61,6 +65,7 @@ const channels = [
   channel(general, "general", "text"),
   channel(lounge, "Lounge", "voice", { sortIndex: 1 }),
   channel(roadmap, "roadmap", "text", { parentCategory: planning }),
+  channel(ideas, "ideas", "text", { parentCategory: planning, sortIndex: 1 }),
 ];
 
 // Ids grow with time, as UUIDv7 ones do: a window is ordered by them.
@@ -131,6 +136,58 @@ const communityReadStates = [
   { channel: general, lastRead: messageId(204), lastMessage: messageId(207) },
   { channel: lounge, lastRead: messageId(1), lastMessage: null },
   { channel: roadmap, lastRead: messageId(1), lastMessage: messageId(230) },
+  { channel: ideas, lastRead: messageId(1), lastMessage: null },
+];
+
+/** Bob's "Sounds good" message, which has a crowd of reactions. */
+export const reactedText = lastReadText;
+const reactedId = messageId(204);
+
+/** Emoji with one reaction each, in the order first used, after the popular two. */
+export const singleReactions = [
+  "😀",
+  "😂",
+  "🥲",
+  "😍",
+  "🤔",
+  "😎",
+  "🙃",
+  "😴",
+  "🤯",
+  "🥳",
+  "😇",
+  "🤖",
+  "👻",
+  "🐱",
+  "🐶",
+  "🍕",
+  "🌮",
+  "☕",
+  "🚀",
+  "🌈",
+];
+
+/**
+ * The reactions to Bob's message, in brief, emoji in the order first used: one each for the
+ * singles, six 🎉, and seven 👍 (Kate and Bob first), used last but the most popular.
+ */
+const reactionSummaries = [
+  ...singleReactions.slice(0, 1).map((emoji) => ({
+    messageId: reactedId,
+    emoji,
+    count: 1,
+    me: false,
+    users: [bob],
+  })),
+  { messageId: reactedId, emoji: "🎉", count: 6, me: false, users: [bob] },
+  ...singleReactions.slice(1).map((emoji) => ({
+    messageId: reactedId,
+    emoji,
+    count: 1,
+    me: false,
+    users: [bob],
+  })),
+  { messageId: reactedId, emoji: "👍", count: 7, me: true, users: [me, bob] },
 ];
 
 /** The community's one invite. */
@@ -159,6 +216,228 @@ export const dmMessageId = messageId(220);
 
 /** Sends a server event down the page's event stream. */
 type Publish = (event: Record<string, unknown>) => void;
+
+/** A registration invite of the world's, as the admin API lists it. */
+interface WorldInvite {
+  code: string;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+  maxUses: number;
+  uses: number;
+  revokedAt: string | null;
+  note: string | null;
+  usable: boolean;
+}
+
+/** The invite already made from the terminal, used once of its two uses. */
+export const standingInvite = "Terminal01";
+
+/**
+ * The Administration Dashboard's side of the world: the caller administers it; its invites
+ * change as a spec makes and revokes them, one set per page.
+ */
+function administration() {
+  const invites: WorldInvite[] = [
+    {
+      code: standingInvite,
+      createdBy: null,
+      createdAt: minutesAgo(600),
+      expiresAt: null,
+      maxUses: 2,
+      uses: 1,
+      revokedAt: null,
+      note: "for the family",
+      usable: true,
+    },
+  ];
+  const directory = [
+    {
+      id: bob,
+      name: "bob",
+      displayName: "Bob With A Rather Long Display Name",
+      icon: null,
+      createdAt: minutesAgo(900),
+      admin: false,
+      registeredWith: standingInvite,
+    },
+    {
+      id: me,
+      name: "kate",
+      displayName: "Kate",
+      icon: null,
+      createdAt: minutesAgo(1200),
+      admin: true,
+      registeredWith: null,
+    },
+  ];
+  // Twenty more people who joined a day apart, so the list runs to more than one page.
+  for (let i = 1; i <= 20; i++) {
+    directory.push({
+      id: `0190f0a0-0000-7000-8000-0000000001${String(i).padStart(2, "0")}`,
+      name: `member${String(i).padStart(2, "0")}`,
+      displayName: `Member ${String(i).padStart(2, "0")}`,
+      icon: null,
+      createdAt: minutesAgo(1440 * i + 1500),
+      admin: false,
+      registeredWith: standingInvite,
+    });
+  }
+  const communities = [
+    { id: community, name: "Family", icon: null, members: 2, createdAt: minutesAgo(3000) },
+    {
+      id: "0190f0a0-0000-7000-8000-000000000020",
+      name: "Book club",
+      icon: null,
+      members: 9,
+      createdAt: minutesAgo(9000),
+    },
+  ];
+  const named = (url: URL) => (url.searchParams.get("filter[name]") ?? "").toLowerCase();
+  /** A page of `rows` as the server gives it: sorted by `sort`, from `offset`, `limit` long. */
+  function page<T extends Record<string, unknown>>(
+    rows: T[],
+    url: URL,
+    keyOf: (row: T, field: string) => string | number,
+  ): T[] {
+    const sort = url.searchParams.get("sort") ?? "-createdAt";
+    const field = sort.replace(/^-/, "");
+    const sign = sort.startsWith("-") ? -1 : 1;
+    const sorted = [...rows].sort((a, b) => {
+      const x = keyOf(a, field);
+      const y = keyOf(b, field);
+      return (x < y ? -1 : x > y ? 1 : 0) * sign;
+    });
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    const limit = Number(url.searchParams.get("limit") ?? "15");
+    return sorted.slice(offset, offset + limit);
+  }
+  return {
+    overview: () => ({
+      users: 22,
+      newUsersThisWeek: 2,
+      communities: 2,
+      registrationInviteRequired: true,
+    }),
+    users: (url: URL) =>
+      page(
+        directory.filter((u) =>
+          [u.name, u.displayName].some((n) => n.toLowerCase().includes(named(url))),
+        ),
+        url,
+        (u, field) => (field === "name" ? u.displayName.toLowerCase() : u.createdAt),
+      ),
+    communities: (url: URL) =>
+      page(
+        communities.filter((c) => c.name.toLowerCase().includes(named(url))),
+        url,
+        (c, field) =>
+          field === "name" ? c.name.toLowerCase() : field === "members" ? c.members : c.createdAt,
+      ),
+    growth: (url: URL) => {
+      const monthly = url.searchParams.get("range") === "fiveYears";
+      const steps = monthly ? 61 : 92;
+      return {
+        unit: monthly ? "month" : "day",
+        points: Array.from({ length: steps }, (_, i) => {
+          const back = steps - 1 - i;
+          const at = new Date(Date.now() - back * (monthly ? 30 : 1) * 86_400_000);
+          return {
+            at: at.toISOString(),
+            users: Math.round((monthly ? 4 : 380) + i * (monthly ? 6 : 0.4)),
+            communities: Math.round((monthly ? 1 : 30) + i * (monthly ? 0.5 : 0.08)),
+          };
+        }),
+      };
+    },
+    invites: () => invites,
+    create: (body: { maxUses?: number; note?: string }) => {
+      const invite: WorldInvite = {
+        code: `Made${String(invites.length).padStart(4, "0")}`,
+        createdBy: me,
+        createdAt: new Date().toISOString(),
+        expiresAt: null,
+        maxUses: body.maxUses ?? 1,
+        uses: 0,
+        revokedAt: null,
+        note: body.note ?? null,
+        usable: true,
+      };
+      invites.unshift(invite);
+      return reply(invite, 201);
+    },
+    revoke: (code: string) => {
+      const invite = invites.find((i) => i.code === code);
+      if (invite !== undefined) {
+        invite.revokedAt = new Date().toISOString();
+        invite.usable = false;
+      }
+      return reply(null, 204);
+    },
+    fleet: () => ({
+      apiServers: [
+        {
+          instance: "a",
+          host: "api-1",
+          version: "0.1.0",
+          startedAt: minutesAgo(60 * 26),
+          reportedAt: minutesAgo(0),
+          eventStreams: 42,
+          requestsPerMinute: 318.5,
+          serverErrorsPerMinute: 0,
+          residentBytes: 214 * 1024 * 1024,
+          dbConnections: 8,
+          dbConnectionsIdle: 6,
+        },
+        {
+          instance: "b",
+          host: "api-2",
+          version: "0.1.0",
+          startedAt: minutesAgo(90),
+          reportedAt: minutesAgo(0),
+          eventStreams: 17,
+          requestsPerMinute: 120,
+          serverErrorsPerMinute: 2.5,
+          residentBytes: 180 * 1024 * 1024,
+          dbConnections: 4,
+          dbConnectionsIdle: 4,
+        },
+      ],
+      voiceServers: [
+        {
+          id: "0190f0a0-0000-7000-8000-000000000031",
+          name: "voice-east",
+          url: "https://voice-east.example",
+          enabled: true,
+          capacity: 500,
+          participants: 12,
+          lastReportAt: minutesAgo(0),
+          reporting: true,
+        },
+        {
+          id: "0190f0a0-0000-7000-8000-000000000032",
+          name: "voice-west",
+          url: "https://voice-west.example",
+          enabled: true,
+          capacity: 500,
+          participants: 0,
+          lastReportAt: minutesAgo(45),
+          reporting: false,
+        },
+        {
+          id: "0190f0a0-0000-7000-8000-000000000033",
+          name: "voice-spare",
+          url: "https://voice-spare.example",
+          enabled: false,
+          capacity: 100,
+          participants: 0,
+          lastReportAt: null,
+          reporting: false,
+        },
+      ],
+    }),
+  };
+}
 
 /**
  * Bob's poll, one per page so that what a spec writes in stays in that spec. Bob has written in
@@ -230,7 +509,12 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 /** Answers every API request the app makes about the world above. */
-async function answer(route: Route, poll: ReturnType<typeof lunch>) {
+async function answer(
+  route: Route,
+  poll: ReturnType<typeof lunch>,
+  publish: Publish,
+  admin: ReturnType<typeof administration>,
+) {
   const request = route.request();
   const url = new URL(request.url());
   const path = decodeURIComponent(url.pathname.replace(/^.*\/api\/v1/, ""));
@@ -251,7 +535,10 @@ async function answer(route: Route, poll: ReturnType<typeof lunch>) {
         data: [{ id: community, name: "Family", icon: null }],
         included: {
           channels,
-          categories: [{ id: planning, community, name: "Planning", sortIndex: 0 }],
+          categories: [
+            { id: planning, community, name: "Planning", sortIndex: 0 },
+            { id: archive, community, name: "Archive", sortIndex: 1 },
+          ],
           users,
           userCommunities: [
             { community, user: me, sortIndex: 0 },
@@ -275,6 +562,58 @@ async function answer(route: Route, poll: ReturnType<typeof lunch>) {
       }),
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
+    // Everyone who reacted with an emoji, in one page.
+    [
+      "GET",
+      new RegExp(`^/messages/${reactedId}/reactions/[^/]+$`),
+      () => (path.endsWith("👍") ? [users[0], users[1]] : [users[1]]),
+    ],
+    // Folding a category answers as the server does, and tells the caller's devices by event.
+    [
+      "PUT",
+      /^\/categories\/[^/]+\/collapses\/@me$/,
+      () => {
+        const category = path.split("/")[2] ?? "";
+        publish({ serverEvent: "categoryCollapseChanged", category, collapsed: true });
+        return reply({ category }, 201);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/categories\/[^/]+\/collapses\/@me$/,
+      () => {
+        const category = path.split("/")[2] ?? "";
+        publish({ serverEvent: "categoryCollapseChanged", category, collapsed: false });
+        return reply(null, 204);
+      },
+    ],
+    // Muting answers as the server does, and tells the caller's devices by event.
+    [
+      "PUT",
+      /^\/channels\/[^/]+\/mutes\/@me$/,
+      () => {
+        const channel = path.split("/")[2] ?? "";
+        const { durationSeconds } = request.postDataJSON() as { durationSeconds: number | null };
+        const until =
+          durationSeconds === null
+            ? null
+            : new Date(Date.now() + durationSeconds * 1000).toISOString();
+        publish({ serverEvent: "channelMuteChanged", channel, muted: true, until });
+        return reply({ channel, until }, 201);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/channels\/[^/]+\/mutes\/@me$/,
+      () => {
+        publish({
+          serverEvent: "channelMuteChanged",
+          channel: path.split("/")[2] ?? "",
+          muted: false,
+        });
+        return reply(null, 204);
+      },
+    ],
     [
       "GET",
       new RegExp(`^/communities/${community}/invites$`),
@@ -288,6 +627,23 @@ async function answer(route: Route, poll: ReturnType<typeof lunch>) {
         },
       ],
     ],
+    ["GET", /^\/users\/@me\/admin$/, () => ({ admin: true })],
+    ["GET", /^\/admin\/overview$/, admin.overview],
+    ["GET", /^\/admin\/users$/, () => admin.users(url)],
+    ["GET", /^\/admin\/communities$/, () => admin.communities(url)],
+    ["GET", /^\/admin\/registration-invites$/, admin.invites],
+    [
+      "POST",
+      /^\/admin\/registration-invites$/,
+      () => admin.create(request.postDataJSON() as { maxUses?: number; note?: string }),
+    ],
+    [
+      "DELETE",
+      /^\/admin\/registration-invites\/[^/]+$/,
+      () => admin.revoke(path.split("/").pop() ?? ""),
+    ],
+    ["GET", /^\/admin\/fleet$/, admin.fleet],
+    ["GET", /^\/admin\/growth$/, () => admin.growth(url)],
     ["GET", /^\/users\/@me\/preferences$/, () => ({ values: {}, updatedAt: minutesAgo(600) })],
     ["GET", /^\/users\/statuses$/, () => users.map((u) => ({ id: u.id, onlineStatus: "online" }))],
     [
@@ -295,7 +651,12 @@ async function answer(route: Route, poll: ReturnType<typeof lunch>) {
       new RegExp(`^/channels/${general}/messages$`),
       () => ({
         data: generalPage(url),
-        included: { users, channels: [threadRecord], messages: [threadReplies[1]] },
+        included: {
+          users,
+          channels: [threadRecord],
+          messages: [threadReplies[1]],
+          reactions: generalPage(url).some((m) => m.id === reactedId) ? reactionSummaries : [],
+        },
       }),
     ],
     [
@@ -385,8 +746,10 @@ async function events(page: Page): Promise<Publish> {
 
 /** Stubs the world and signs in through the form, as a user would. */
 export async function signInToWorld(page: Page): Promise<void> {
-  const poll = lunch(await events(page));
-  await page.route(/\/api\/v1\//, (route) => answer(route, poll));
+  const publish = await events(page);
+  const poll = lunch(publish);
+  const admin = administration();
+  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin));
   await page.goto("/");
   await page.getByLabel("Username").fill("kate");
   await page.getByLabel("Password").fill("hunter22");

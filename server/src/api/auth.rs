@@ -192,6 +192,9 @@ pub struct AuthMethods {
     pub passkeys: Option<PasskeySupport>,
     /// Every account must have a second factor.
     pub two_factor_required: bool,
+    /// Creating an account takes an invite from the server's administrators
+    /// (`UserCreateRequest.inviteCode`).
+    pub registration_invite_required: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -203,7 +206,7 @@ pub struct PasskeySupport {
     pub rp_id: String,
 }
 
-/// How this server lets people sign in. Unauthenticated.
+/// How this server lets people sign in and register. Unauthenticated.
 #[utoipa::path(
     get,
     path = "/auth/methods",
@@ -221,6 +224,7 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
                 rp_id: passkeys.rp_id.clone(),
             }),
         two_factor_required: auth.require_two_factor,
+        registration_invite_required: state.config.registration.invite_required,
     })
 }
 

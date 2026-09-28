@@ -52,6 +52,9 @@ pub enum MessageInclude {
     Threads,
     /// The thread replies the messages that are echoes show, as `included.messages`.
     Echoes,
+    /// The messages' reactions in brief, one summary per message and emoji, as
+    /// `included.reactions`.
+    Reactions,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -83,7 +86,7 @@ async fn sideload_messages(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let (users, attachments, polls, threads, echoes) = tokio::try_join!(
+    let (users, attachments, polls, threads, echoes, reactions) = tokio::try_join!(
         async {
             if include.contains(MessageInclude::Authors) {
                 let authors: Vec<UserId> = messages
@@ -141,6 +144,16 @@ async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::Reactions) {
+                let ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
+                app::react::read_summaries(state, caller, &ids)
+                    .await
+                    .map(|rows| Some(rows.into_iter().map(api::react::summary_to_api).collect()))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes, own_write_ins) = match polls {
         Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
@@ -158,6 +171,7 @@ async fn sideload_messages(
         own_write_ins,
         channels: threads,
         messages: echoes,
+        reactions,
         ..Included::default()
     })
 }

@@ -1,11 +1,12 @@
 import type { Category } from "@aspen/protocol";
 import { PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { Button, Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
-import { dialogClass, headingClass, modalClass, overlayClass } from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { OptionButton, StepHeading } from "@/features/layout/steps";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -49,9 +50,7 @@ function Steps({ category, close }: { category: Category; close: () => void }) {
     case "choose":
       return (
         <>
-          <Heading slot="title" className={headingClass}>
-            {format(m.newChannelIn, { category: category.name })}
-          </Heading>
+          <DialogHeading>{format(m.newChannelIn, { category: category.name })}</DialogHeading>
           <OptionButton
             title={m.addOptions.textChannel}
             hint={m.addOptions.textChannelHint}

@@ -61,6 +61,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
+    "/api/v1/users/@me/admin": () => json({ admin: false }),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -69,7 +70,9 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
           .map((id) => ({ id, onlineStatus: id === me.id ? "online" : "offline" })),
       ),
     "/api/v1/users/@me/communities": (url) => {
-      expect(url.searchParams.get("include")).toBe("channels,categories,members,voice,readStates");
+      expect(url.searchParams.get("include")).toBe(
+        "channels,categories,members,voice,readStates,mutes,collapses",
+      );
       return json({
         data: [aspen],
         included: {
@@ -82,7 +85,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
       });
     },
     "/api/v1/users/@me/dms": (url) => {
-      expect(url.searchParams.get("include")).toBe("users,readStates");
+      expect(url.searchParams.get("include")).toBe("users,readStates,mutes");
       return json({ data: [], included: { users: [] } });
     },
   };
@@ -220,6 +223,7 @@ describe("AspenSync", () => {
       "/api/v1/users/%40me",
       "/api/v1/users/%40me/communities",
       "/api/v1/users/@me/dms",
+      "/api/v1/users/@me/admin",
       "/api/v1/users/%40me/preferences",
       "/api/v1/users/statuses",
     ]);
@@ -355,7 +359,9 @@ describe("AspenSync", () => {
     const { sync, calls } = makeSync({
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/messages`]: (url) => {
-        expect(url.searchParams.get("include")).toBe("authors,attachments,polls,threads,echoes");
+        expect(url.searchParams.get("include")).toBe(
+          "authors,attachments,polls,threads,echoes,reactions",
+        );
         if (url.searchParams.get("before") !== null) {
           return json({ data: [message(50)], included: { users: [], attachments: [] } });
         }
@@ -490,7 +496,7 @@ describe("AspenSync", () => {
           json({ community: cedar.id, user: me.id, sortIndex: 0 }, 201),
         [`/api/v1/communities/${cedar.id}`]: (url) => {
           expect(url.searchParams.get("include")).toBe(
-            "channels,categories,members,voice,readStates",
+            "channels,categories,members,voice,readStates,mutes,collapses",
           );
           return json({
             data: cedar,
@@ -698,7 +704,11 @@ describe("AspenSync", () => {
     await goLive(sync);
     await sync.loadLatest(general.id);
     await sync.addReaction(target.id, "👍");
-    expect(Array.from(sync.store.reactions(target.id).get("👍") ?? [])).toEqual([me.id]);
+    expect(sync.store.reactions(target.id).get("👍")).toEqual({
+      count: 1,
+      me: true,
+      users: [me.id],
+    });
     await sync.removeReaction(target.id, "👍");
     expect(sync.store.reactions(target.id).size).toBe(0);
   });
@@ -802,6 +812,28 @@ describe("AspenSync", () => {
 
     await sync.removeWriteIn(lunch.id, 2);
     expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([]);
+  });
+
+  it("learns at bootstrap whether the caller administers the server, and searches its users", async () => {
+    const searches: string[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/admin": () => json({ admin: true }),
+      "/api/v1/admin/users": (url) => {
+        searches.push(url.search);
+        return json([]);
+      },
+    });
+    await goLive(sync);
+    expect(sync.store.admin()).toBe(true);
+    await sync.adminUsers({ name: "  kate " });
+    await sync.adminUsers({ name: " ", sort: "-name", offset: 30, limit: 15 });
+    expect(searches.map((s) => new URLSearchParams(s))).toEqual([
+      new URLSearchParams({ "filter[name]": "kate" }),
+      new URLSearchParams({ sort: "-name", offset: "30", limit: "15" }),
+    ]);
+    sync.stop();
+    expect(sync.store.admin()).toBe(false);
   });
 
   it("reports reading once for everything read meanwhile, and never backwards", async () => {

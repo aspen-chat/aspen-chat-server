@@ -101,6 +101,16 @@ enum Command {
         #[clap(subcommand)]
         action: operator::BenchCommand,
     },
+    /// Operator commands for who may open the Administration Dashboard.
+    Admin {
+        #[clap(subcommand)]
+        action: operator::AdminCommand,
+    },
+    /// Operator commands for registration invites.
+    Invites {
+        #[clap(subcommand)]
+        action: operator::InvitesCommand,
+    },
 }
 
 thread_local! {
@@ -161,6 +171,8 @@ async fn run(options: Opt) -> Result<()> {
         return match command {
             Command::Limits { action } => operator::limits(&config, action).await,
             Command::Bench { action } => operator::bench(&config, action).await,
+            Command::Admin { action } => operator::admin(&config, action).await,
+            Command::Invites { action } => operator::invites(&config, action).await,
         };
     }
     let app = api::make_router(options.gen_openapi_schema).await?;

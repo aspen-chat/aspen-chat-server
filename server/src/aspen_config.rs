@@ -27,6 +27,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub presence: PresenceConfig,
     #[serde(default)]
+    pub registration: RegistrationConfig,
+    #[serde(default)]
     pub metrics: MetricsConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
@@ -176,6 +178,16 @@ fn default_metrics_enabled() -> bool {
 
 fn default_metrics_listen_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([127, 0, 0, 1], 9464))
+}
+
+/// Who may create an account (`app::registration_invite`).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RegistrationConfig {
+    /// Whether creating an account takes an invite from the deployment's administrators. Off,
+    /// anyone who reaches the server may register. On, the first account's invite is made
+    /// from the terminal (`aspen-chat-server invites create`).
+    #[serde(default)]
+    pub invite_required: bool,
 }
 
 /// Whether people show as online, away, or offline (`app::user_status`).
@@ -410,7 +422,10 @@ pub struct MediaConfig {
 /// Object-storage configuration.
 ///
 /// `endpoint` is the authenticated S3 API the server talks to (PUTs preview
-/// images, presigns uploads, deletes objects). `public_base_url` is what
+/// images, deletes objects, checks uploads). `public_endpoint`, when set, is the
+/// same API as clients reach it, and is the host the presigned upload URLs they
+/// are handed name; without it they name `endpoint`, which is right only when
+/// clients reach storage at the same address the server does. `public_base_url` is what
 /// clients see in `downloadUrl` fields and is expected to be served by an
 /// operator-configured anonymous read path (e.g. Garage's `s3_web` website
 /// endpoint, or an AWS bucket with `BlockPublicAccess=false` plus a
@@ -421,6 +436,8 @@ pub struct MediaConfig {
 pub struct MediaS3Config {
     #[serde(default = "default_media_s3_endpoint")]
     pub endpoint: String,
+    #[serde(default)]
+    pub public_endpoint: Option<String>,
     #[serde(default = "default_media_s3_region")]
     pub region: String,
     #[serde(default = "default_media_s3_bucket")]
@@ -439,6 +456,7 @@ impl Default for MediaS3Config {
     fn default() -> Self {
         Self {
             endpoint: default_media_s3_endpoint(),
+            public_endpoint: None,
             region: default_media_s3_region(),
             bucket: default_media_s3_bucket(),
             access_key: default_media_s3_access_key(),

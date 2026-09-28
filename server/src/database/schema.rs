@@ -54,6 +54,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    category_collapse (user, category) {
+        user -> Uuid,
+        category -> Uuid,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ChannelType;
 
@@ -70,6 +77,14 @@ diesel::table! {
         reply_count -> Int4,
         last_reply_at -> Nullable<Timestamptz>,
         dm_key -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    channel_mute (user, channel) {
+        user -> Uuid,
+        channel -> Uuid,
+        until -> Nullable<Timestamptz>,
     }
 }
 
@@ -264,6 +279,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    registration_invite (code) {
+        code -> Text,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        expires_at -> Nullable<Timestamptz>,
+        max_uses -> Int4,
+        uses -> Int4,
+        revoked_at -> Nullable<Timestamptz>,
+        note -> Nullable<Text>,
+        used_up_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     session (token) {
         token -> Text,
         expires -> Timestamp,
@@ -295,6 +324,8 @@ diesel::table! {
         bio -> Nullable<Text>,
         status_text -> Nullable<Text>,
         status_emoji -> Nullable<Text>,
+        admin -> Bool,
+        registered_with -> Nullable<Text>,
     }
 }
 
@@ -353,8 +384,12 @@ diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
 diesel::joinable!(benchmark_user -> user (user));
 diesel::joinable!(category -> community (community));
+diesel::joinable!(category_collapse -> category (category));
+diesel::joinable!(category_collapse -> user (user));
 diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
+diesel::joinable!(channel_mute -> channel (channel));
+diesel::joinable!(channel_mute -> user (user));
 diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
 diesel::joinable!(dm_recipient -> channel (channel));
@@ -397,7 +432,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_run,
     benchmark_user,
     category,
+    category_collapse,
     channel,
+    channel_mute,
     community,
     community_user,
     dm_recipient,
@@ -416,6 +453,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     read_state,
     recovery_code,
     refresh_token,
+    registration_invite,
     session,
     totp_secret,
     user,

@@ -20,3 +20,5 @@ syn = { version = "2.0.101", features = ["full", "parsing", "extra-traits"] }
 quote = "1.0.40"
 prettyplease = "0.2"
 colored = "3.1.1"
+# The same version as the server's, so both agree on an emoji's canonical form.
+emojis = "0.8.0"

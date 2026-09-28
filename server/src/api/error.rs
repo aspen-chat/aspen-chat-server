@@ -68,6 +68,12 @@ pub enum ProblemCode {
     UsernameTaken,
     /// Invite creation: the requested custom code is already in use.
     InviteCodeTaken,
+    /// Registration: this server takes new accounts only with an invite, and none was given.
+    RegistrationInviteRequired,
+    /// Registration: the invite given does not exist, has expired, was revoked, or is used up.
+    RegistrationInviteInvalid,
+    /// Only the deployment's administrators may use the Administration Dashboard.
+    AdminRequired,
     /// Password change: the current password did not match.
     OldPasswordIncorrect,
     /// Password change: the new password fails a requirement named in `requirement`.
@@ -90,7 +96,10 @@ impl ProblemCode {
             | ProblemCode::OldPasswordIncorrect
             | ProblemCode::VerificationFailed
             | ProblemCode::ReauthenticationRequired
-            | ProblemCode::TwoFactorEnrollmentRequired => StatusCode::FORBIDDEN,
+            | ProblemCode::TwoFactorEnrollmentRequired
+            | ProblemCode::RegistrationInviteRequired
+            | ProblemCode::RegistrationInviteInvalid
+            | ProblemCode::AdminRequired => StatusCode::FORBIDDEN,
             ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
                 StatusCode::TOO_MANY_REQUESTS
             }
@@ -129,6 +138,9 @@ impl ProblemCode {
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
+            ProblemCode::RegistrationInviteRequired => t!("problemRegistrationInviteRequired"),
+            ProblemCode::RegistrationInviteInvalid => t!("problemRegistrationInviteInvalid"),
+            ProblemCode::AdminRequired => t!("problemAdminRequired"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
@@ -239,6 +251,13 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::PasskeyRejected)
             }
             app::Error::PollClosed => Self::new(ProblemCode::PollClosed),
+            app::Error::RegistrationInviteRequired => {
+                Self::new(ProblemCode::RegistrationInviteRequired)
+            }
+            app::Error::RegistrationInviteInvalid => {
+                Self::new(ProblemCode::RegistrationInviteInvalid)
+            }
+            app::Error::AdminRequired => Self::new(ProblemCode::AdminRequired),
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }

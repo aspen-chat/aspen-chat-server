@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
-import { Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateCommunityForm } from "@/features/communities/CreateCommunityForm";
-import { dialogClass, headingClass, modalClass, overlayClass } from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { JoinForm } from "@/features/invites/JoinForm";
 import { OptionButton, StepHeading } from "@/features/layout/steps";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 export type AddCommunityStep = "choose" | "create" | "join";
@@ -45,9 +46,7 @@ function Steps({ initialStep, close }: { initialStep: AddCommunityStep; close: (
   if (step === "choose") {
     return (
       <>
-        <Heading slot="title" className={headingClass}>
-          {m.addCommunity}
-        </Heading>
+        <DialogHeading>{m.addCommunity}</DialogHeading>
         <OptionButton
           title={m.createCommunity}
           hint={m.createCommunityHint}

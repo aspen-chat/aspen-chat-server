@@ -28,6 +28,8 @@ pub enum DmInclude {
     Users,
     /// How far the caller has read each DM, as `included.readStates`.
     ReadStates,
+    /// The caller's mutes of the DMs, as `included.channelMutes`.
+    Mutes,
 }
 
 /// Body of a DM list read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -82,7 +84,8 @@ pub async fn open_dm(
 }
 
 /// The caller's DMs and group DMs, the most recently active first. `include=users` sideloads
-/// their recipients, and `include=readStates` how far the caller has read each.
+/// their recipients, `include=readStates` how far the caller has read each, and
+/// `include=mutes` which the caller has muted.
 #[utoipa::path(
     get,
     path = "/users/@me/dms",
@@ -131,6 +134,18 @@ pub async fn list_dms(
     } else {
         None
     };
+    let channel_mutes = if query.include.contains(DmInclude::Mutes) {
+        let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
+        Some(
+            app::channel_mute::read_mutes(&state, user.id, &ids, &[])
+                .await?
+                .into_iter()
+                .map(crate::api::channel_mute::mute_to_api)
+                .collect(),
+        )
+    } else {
+        None
+    };
     let records = dms
         .into_iter()
         .map(|(dm, recipients)| app::channel::record(&dm, recipients))
@@ -140,6 +155,7 @@ pub async fn list_dms(
         Included {
             users,
             read_states,
+            channel_mutes,
             ..Included::default()
         },
     )))

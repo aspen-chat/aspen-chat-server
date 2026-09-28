@@ -99,6 +99,7 @@ pub fn user_to_api(user: app::user::User) -> User {
     responses(
         (status = CREATED, body = User, headers(("Location" = String, description = "URL of the new user"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (username rules)", body = Problem),
+        (status = FORBIDDEN, description = "`registrationInviteRequired`, or `registrationInviteInvalid` when the server requires an invite and this one is not usable", body = Problem),
         (status = CONFLICT, description = "`usernameTaken`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
         (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),

@@ -6,7 +6,6 @@ import {
   Dialog,
   DialogTrigger,
   Form,
-  Heading,
   Input,
   Modal,
   ModalOverlay,
@@ -18,7 +17,6 @@ import { inputClass } from "@/features/auth/styles";
 import {
   dangerButtonClass,
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
@@ -35,6 +33,7 @@ import {
   type PollChoice,
 } from "@/features/messages/poll";
 import { displayNameOf } from "@/features/users/profile";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -307,9 +306,7 @@ function ConfirmRemove({
 
   return (
     <>
-      <Heading slot="title" className={headingClass}>
-        {m.poll.removeWriteInHeading}
-      </Heading>
+      <DialogHeading>{m.poll.removeWriteInHeading}</DialogHeading>
       <p className="text-sm text-ink-muted">
         {format(m.poll.removeWriteInHint, { option: label })}
       </p>
@@ -319,9 +316,6 @@ function ConfirmRemove({
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button onPress={close} className={secondaryButtonClass}>
-          {m.cancel}
-        </Button>
         <Button
           isDisabled={pending}
           onPress={() => {

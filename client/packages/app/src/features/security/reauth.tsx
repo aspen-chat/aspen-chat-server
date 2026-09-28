@@ -10,7 +10,6 @@ import {
   Dialog,
   FieldError,
   Form,
-  Heading,
   Input,
   Label,
   Modal,
@@ -29,12 +28,12 @@ import {
 } from "@/features/auth/styles";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { formString } from "@/forms";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import type { SecuritySettings } from "./api";
 import { ReauthContext, type WithReauth } from "./reauthContext";
@@ -132,9 +131,7 @@ function ReauthDialog({
     >
       <Modal className={modalClass}>
         <Dialog className={dialogClass} aria-label={m.security.reauthHeading}>
-          <Heading slot="title" className={headingClass}>
-            {m.security.reauthHeading}
-          </Heading>
+          <DialogHeading>{m.security.reauthHeading}</DialogHeading>
           <Form
             className="flex flex-col gap-3"
             onSubmit={(event) => {
@@ -192,14 +189,6 @@ function ReauthDialog({
                   {m.twoFactor.usePasskey}
                 </Button>
               )}
-              <Button
-                onPress={() => {
-                  onFinish(false);
-                }}
-                className={secondaryButtonClass}
-              >
-                {m.security.cancel}
-              </Button>
               {(!twoFactor || codesAvailable) && (
                 <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
                   {pending ? m.twoFactor.verifying : m.security.confirm}

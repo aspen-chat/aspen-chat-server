@@ -5,7 +5,6 @@ import {
   Button,
   Dialog,
   DialogTrigger,
-  Heading,
   Input,
   ListBox,
   ListBoxItem,
@@ -17,14 +16,9 @@ import {
 import { usePeople, useUsers } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
-import {
-  dialogClass,
-  headingClass,
-  modalClass,
-  overlayClass,
-  secondaryButtonClass,
-} from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -129,9 +123,7 @@ function PickerBody({
 
   return (
     <>
-      <Heading slot="title" className={headingClass}>
-        {heading}
-      </Heading>
+      <DialogHeading>{heading}</DialogHeading>
       <SearchField
         aria-label={m.dms.search}
         value={query}
@@ -182,9 +174,6 @@ function PickerBody({
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button onPress={close} className={secondaryButtonClass}>
-          {m.cancel}
-        </Button>
         <Button
           isDisabled={pending || selected.size === 0 || tooMany}
           onPress={() => {

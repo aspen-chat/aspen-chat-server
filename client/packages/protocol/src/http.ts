@@ -273,8 +273,11 @@ export class AspenClient {
    * with `login`. Throws `ApiProblemError` (`usernameTaken`, `validation`,
    * `passwordRequirementsNotMet`) on failure.
    */
-  async register(name: string, password: string): Promise<Schemas["User"]> {
-    const result = await this.api.POST(`${API_PREFIX}/users`, { body: { name, password } });
+  /** Creates an account; `inviteCode` is the registration invite, which some servers require. */
+  async register(name: string, password: string, inviteCode?: string): Promise<Schemas["User"]> {
+    const result = await this.api.POST(`${API_PREFIX}/users`, {
+      body: { name, password, ...(inviteCode === undefined ? {} : { inviteCode }) },
+    });
     return unwrap(result);
   }
 

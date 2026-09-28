@@ -76,6 +76,21 @@ limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "secu
 endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /icons", "POST /icons/{icon}/confirm"]
 limits = { user = { requests = 60, per_seconds = 600, burst = 20, bucket = "uploads" } }
 
+# The Administration Dashboard. Its searches read whole tables, so even an administrator is
+# kept to a pace a person clicking through the dashboard never reaches.
+[rate_limits.groups.admin]
+endpoints = [
+  "GET /admin/overview",
+  "GET /admin/users",
+  "GET /admin/communities",
+  "GET /admin/registration-invites",
+  "POST /admin/registration-invites",
+  "DELETE /admin/registration-invites/{code}",
+  "GET /admin/fleet",
+  "GET /admin/growth",
+]
+limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
+
 # Shaping communities, their channels and invites, calls, and the voice server registry.
 [rate_limits.groups.manage]
 endpoints = [
@@ -162,6 +177,20 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 # moving between channels reports each one.
 [rate_limits.endpoints."PUT /channels/{channel}/read-states/@me"]
 user = { requests = 120, per_seconds = 60, burst = 30 }
+
+# Muting and unmuting are the caller's own settings, but each change is published.
+[rate_limits.endpoints."PUT /channels/{channel}/mutes/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."DELETE /channels/{channel}/mutes/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+# Folding a category is the caller's own setting, but each change is published.
+[rate_limits.endpoints."PUT /categories/{category}/collapses/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."DELETE /categories/{category}/collapses/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
 
 [rate_limits.endpoints."POST /communities"]
 user = { requests = 10, per_seconds = 3600, burst = 3 }

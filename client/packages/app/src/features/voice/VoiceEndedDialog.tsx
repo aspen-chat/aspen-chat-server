@@ -1,7 +1,7 @@
-import { Button, Dialog, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Dialog, Modal, ModalOverlay } from "react-aria-components";
 import { useSync, useVoiceCall } from "@/api/hooks";
-import { primaryButtonClass } from "@/features/auth/styles";
-import { dialogClass, headingClass, modalClass, overlayClass } from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -33,17 +33,10 @@ export function VoiceEndedDialog() {
     >
       <Modal className={modalClass}>
         <Dialog role="alertdialog" className={dialogClass}>
-          <Heading slot="title" className={headingClass}>
-            {kicked ? m.voice.kickedHeading : m.voice.idleEndedHeading}
-          </Heading>
+          <DialogHeading>{kicked ? m.voice.kickedHeading : m.voice.idleEndedHeading}</DialogHeading>
           <p className="text-sm text-ink-muted">
             {kicked ? m.voice.kickedHint : m.voice.idleEndedHint}
           </p>
-          <div className="flex justify-end">
-            <Button onPress={dismiss} className={primaryButtonClass}>
-              {m.voice.idleEndedOk}
-            </Button>
-          </div>
         </Dialog>
       </Modal>
     </ModalOverlay>

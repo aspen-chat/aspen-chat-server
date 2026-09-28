@@ -7,6 +7,7 @@ use crate::app;
 use crate::app::icon::Icon;
 use crate::app::login::{PASSWORD_MIN_LENGTH, hash_password};
 use crate::app::react::validate_emoji;
+use crate::app::registration_invite;
 use crate::app::{IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::{self, refresh_token, session, user};
 use chrono::Utc;
@@ -151,26 +152,60 @@ pub async fn create_user(
             return Err(e.into());
         }
     };
+    let invite_required = state.config.registration.invite_required;
+    let invite_code = command
+        .invite_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty());
+    // Refused before the password is hashed, which is the expensive part.
+    if invite_required && invite_code.is_none() {
+        return Err(app::Error::RegistrationInviteRequired);
+    }
     let password_hash = hash_password(command.password.to_string()).await?;
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
-    diesel::insert_into(user::table)
-        .values(UserPg {
-            id: new_user_id,
-            name: command.name.clone(),
-            icon: command.icon.map(MaybeLoaded::NotLoaded),
-            password_hash,
-            created_at: now,
-            last_seen_at: now,
-            deleted_at: None,
-            display_name: command.display_name.clone(),
-            pronouns: command.pronouns.clone(),
-            bio: command.bio.clone(),
-            status_text: command.status.as_ref().map(|s| s.text.clone()),
-            status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
-        })
-        .execute(conn.as_mut())
-        .await?;
+    conn.transaction(|conn| {
+        async move {
+            // The invite is used in the transaction that makes the account, so an invite with
+            // one use left makes one account however many register with it at once. Where
+            // invites are optional, one that no longer works is ignored rather than refused.
+            let registered_with = match invite_code {
+                Some(code) => match registration_invite::redeem(conn.as_mut(), code).await {
+                    Ok(()) => Some(code.to_string()),
+                    Err(app::Error::RegistrationInviteInvalid) if !invite_required => None,
+                    Err(e) => return Err(e),
+                },
+                None => None,
+            };
+            diesel::insert_into(user::table)
+                .values(UserPg {
+                    id: new_user_id,
+                    name: command.name.clone(),
+                    icon: command.icon.map(MaybeLoaded::NotLoaded),
+                    password_hash,
+                    created_at: now,
+                    last_seen_at: now,
+                    deleted_at: None,
+                    display_name: command.display_name.clone(),
+                    pronouns: command.pronouns.clone(),
+                    bio: command.bio.clone(),
+                    status_text: command.status.as_ref().map(|s| s.text.clone()),
+                    status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
+                })
+                .execute(conn.as_mut())
+                .await?;
+            if registered_with.is_some() {
+                diesel::update(user::table.filter(user::id.eq(new_user_id)))
+                    .set(user::registered_with.eq(registered_with))
+                    .execute(conn.as_mut())
+                    .await?;
+            }
+            Ok::<_, app::Error>(())
+        }
+        .scope_boxed()
+    })
+    .await?;
     Ok(new_user_id)
 }
 

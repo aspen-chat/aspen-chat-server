@@ -16,6 +16,9 @@ use rand::RngExt;
 use rust_i18n::t;
 
 const INVITE_CODE_LENGTH: usize = 16;
+/// How long after it stops working an invite, a community's or a registration invite, is still
+/// listed; after that only the terminal lists it (registration invites) or nothing does.
+pub const STALE_AFTER_DAYS: i64 = 7;
 const ALPHANUMERIC: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -37,7 +40,7 @@ pub struct InviteChangeset {
     pub expires_at: Option<Option<chrono::DateTime<Utc>>>,
 }
 
-fn generate_invite_code() -> String {
+pub(crate) fn generate_invite_code() -> String {
     CHACHA_RNG.with(|rng| {
         let mut rng = rng.borrow_mut();
         (0..INVITE_CODE_LENGTH)
@@ -258,17 +261,26 @@ pub(crate) async fn read_invite(state: &GlobalServerContext, code: &str) -> app:
         .map_err(Into::into)
 }
 
+/// A community's invites, newest first. Revoked ones are gone; expired ones are listed for
+/// `STALE_AFTER_DAYS` after they expire, so a link that just stopped working can still be seen
+/// for what it was.
 pub(crate) async fn read_community_invites(
     state: &GlobalServerContext,
     community: CommunityId,
 ) -> app::Result<Vec<Invite>> {
     let mut conn = state.connection_pool.get().await?;
+    let cutoff = Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
     let invites = invite::table
         .select(Invite::as_select())
         .filter(
             invite::community
                 .eq(community)
-                .and(invite::deleted_at.is_null()),
+                .and(invite::deleted_at.is_null())
+                .and(
+                    invite::expires_at
+                        .is_null()
+                        .or(invite::expires_at.gt(cutoff)),
+                ),
         )
         .order_by(invite::created_at.desc())
         .load(conn.as_mut())

@@ -1,17 +1,17 @@
 import type { Community } from "@aspen/protocol";
 import { useState } from "react";
-import { Button, Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateCategoryForm } from "@/features/channels/CreateCategoryForm";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { InviteManager } from "@/features/invites/InviteDialog";
 import { OptionButton, StepHeading } from "@/features/layout/steps";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -51,9 +51,7 @@ function Steps({ community, close }: { community: Community; close: () => void }
     case "choose":
       return (
         <>
-          <Heading slot="title" className={headingClass}>
-            {m.addNew}
-          </Heading>
+          <DialogHeading>{m.addNew}</DialogHeading>
           <OptionButton
             title={m.addOptions.user}
             hint={m.addOptions.userHint}

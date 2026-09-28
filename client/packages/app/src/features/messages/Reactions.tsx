@@ -1,10 +1,36 @@
-import { ApiProblemError } from "@aspen/protocol";
-import { SmileyIcon } from "@phosphor-icons/react";
-import { lazy, Suspense, useState } from "react";
-import { Button, Dialog, DialogTrigger, Popover, ToggleButton } from "react-aria-components";
-import { useMe, useReactions, useStore, useSync } from "@/api/hooks";
+import {
+  ApiProblemError,
+  REACTORS_PAGE,
+  type EmojiReactions,
+  type Reactions,
+} from "@aspen/protocol";
+import { SmileyIcon, UsersIcon } from "@phosphor-icons/react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+  Button,
+  Dialog,
+  DialogTrigger,
+  Modal,
+  ModalOverlay,
+  Popover,
+  Tab,
+  TabList,
+  TabPanel,
+  Tabs,
+  ToggleButton,
+} from "react-aria-components";
+import { useReactions, useSync, useUser, useUsers } from "@/api/hooks";
+import { Avatar } from "@/features/communities/Avatar";
+import {
+  dialogClass,
+  overlayClass,
+  secondaryButtonClass,
+  wideModalClass,
+} from "@/features/invites/dialog";
+import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -14,51 +40,290 @@ const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
 const chipClass =
   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm outline-none " +
   "pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50";
+const plainChipClass = chipClass + " border-line bg-surface-raised hover:bg-surface-hover";
 
-/** The reaction chips under a message. Clicking one adds or removes the caller's own. */
+/** How many emoji show as chips under a message; the rest are counted in a "+N" chip. */
+const VISIBLE_REACTIONS = 20;
+
+interface Entry {
+  emoji: string;
+  reactions: EmojiReactions;
+}
+
+/** A message's reactions, most popular first; equally popular ones in the order first used. */
+function byPopularity(reactions: Reactions): Entry[] {
+  return Array.from(reactions, ([emoji, r]) => ({ emoji, reactions: r })).sort(
+    (a, b) => b.reactions.count - a.reactions.count,
+  );
+}
+
+/**
+ * The reaction chips under a message, most popular first: at most `VISIBLE_REACTIONS`, then a
+ * chip counting the rest that opens the full list, then a chip that adds one. Clicking an emoji
+ * chip adds or removes the caller's own.
+ */
 export function ReactionChips({ messageId }: { messageId: string }) {
   const m = useMessages();
-  const sync = useSync();
-  const store = useStore();
-  const me = useMe();
   const reactions = useReactions(messageId);
+  const [listOpen, setListOpen] = useState(false);
+  if (reactions.size === 0) {
+    return null;
+  }
+  const entries = byPopularity(reactions);
+  const shown = entries.slice(0, VISIBLE_REACTIONS);
+  const hidden = entries.length - shown.length;
+  return (
+    <ul aria-label={m.reactionsLabel} className="mt-1 flex flex-wrap gap-1">
+      {shown.map(({ emoji, reactions: r }) => (
+        <li key={emoji}>
+          <ReactionChip messageId={messageId} emoji={emoji} reactions={r} />
+        </li>
+      ))}
+      {hidden > 0 && (
+        <li>
+          <Tooltip text={format(m.moreReactions, { count: String(hidden) })}>
+            <Button
+              aria-label={format(m.moreReactions, { count: String(hidden) })}
+              onPress={() => {
+                setListOpen(true);
+              }}
+              className={plainChipClass + " tabular-nums"}
+            >
+              +{hidden}
+            </Button>
+          </Tooltip>
+          <ReactionsDialog messageId={messageId} isOpen={listOpen} onOpenChange={setListOpen} />
+        </li>
+      )}
+      <li>
+        <ReactionPicker
+          messageId={messageId}
+          triggerClassName={plainChipClass + " text-ink-muted"}
+        />
+      </li>
+    </ul>
+  );
+}
+
+/**
+ * One emoji's chip. Its tooltip names the first `REACTION_SUMMARY_USERS` to react with it and
+ * counts the rest.
+ */
+function ReactionChip({
+  messageId,
+  emoji,
+  reactions,
+}: {
+  messageId: string;
+  emoji: string;
+  reactions: EmojiReactions;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const users = useUsers(reactions.users);
+  const names = users.map((user) => (user === undefined ? m.unknownUser : displayNameOf(user)));
+  const more = reactions.count - names.length;
+  const who =
+    more > 0
+      ? format(m.reactedByMore, { names: names.join(", "), count: String(more), emoji })
+      : format(m.reactedBy, { names: names.join(", "), emoji });
+  return (
+    <Tooltip text={who}>
+      <ToggleButton
+        isSelected={reactions.me}
+        aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji })}
+        onChange={(selected) => {
+          void (
+            selected ? sync.addReaction(messageId, emoji) : sync.removeReaction(messageId, emoji)
+          ).catch(() => undefined);
+        }}
+        className={
+          reactions.me
+            ? chipClass + " border-accent bg-accent-soft text-accent-strong"
+            : plainChipClass
+        }
+      >
+        <span>{emoji}</span>
+        <span className="tabular-nums">{reactions.count}</span>
+      </ToggleButton>
+    </Tooltip>
+  );
+}
+
+/** The "View reactions" control in a message's toolbar, while the message has any. */
+export function ViewReactionsButton({
+  messageId,
+  triggerClassName,
+}: {
+  messageId: string;
+  triggerClassName: string;
+}) {
+  const m = useMessages();
+  const reactions = useReactions(messageId);
+  const [open, setOpen] = useState(false);
   if (reactions.size === 0) {
     return null;
   }
   return (
-    <ul aria-label={m.reactionsLabel} className="mt-1 flex flex-wrap gap-1">
-      {Array.from(reactions, ([emoji, users]) => {
-        const mine = me !== null && users.has(me.id);
-        const names = Array.from(users, (id) => {
-          const user = store.user(id);
-          return user === undefined ? m.unknownUser : displayNameOf(user);
-        });
-        return (
-          <li key={emoji} title={format(m.reactedBy, { names: names.join(", "), emoji })}>
-            <ToggleButton
-              isSelected={mine}
-              aria-label={format(mine ? m.youReactedWith : m.reactWith, { emoji })}
-              onChange={(selected) => {
-                void (
-                  selected
-                    ? sync.addReaction(messageId, emoji)
-                    : sync.removeReaction(messageId, emoji)
-                ).catch(() => undefined);
-              }}
-              className={
-                chipClass +
-                (mine
-                  ? " border-accent bg-accent-soft text-accent-strong"
-                  : " border-line bg-surface-raised hover:bg-surface-hover")
-              }
+    <>
+      <Tooltip text={m.viewReactions}>
+        <Button
+          aria-label={m.viewReactions}
+          onPress={() => {
+            setOpen(true);
+          }}
+          className={triggerClassName}
+        >
+          <UsersIcon size={16} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      <ReactionsDialog messageId={messageId} isOpen={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
+/**
+ * Every reaction to a message: each emoji with its count, most popular first, and everyone who
+ * reacted with the chosen one, earliest first, read a page at a time. The emoji run down the
+ * side on a wide screen and across the top on a narrow one.
+ */
+function ReactionsDialog({
+  messageId,
+  isOpen,
+  onOpenChange,
+}: {
+  messageId: string;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const m = useMessages();
+  const reactions = useReactions(messageId);
+  const wide = useMediaQuery(MEDIUM_SCREEN);
+  const entries = byPopularity(reactions);
+  return (
+    <ModalOverlay
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      isDismissable
+      className={overlayClass}
+    >
+      <Modal className={wideModalClass}>
+        <Dialog className={dialogClass}>
+          <DialogHeading>{m.reactionsHeading}</DialogHeading>
+          {entries.length === 0 ? (
+            <p className="text-sm text-ink-muted">{m.noReactions}</p>
+          ) : (
+            <Tabs
+              orientation={wide ? "vertical" : "horizontal"}
+              className="flex min-h-0 flex-col gap-3 md:flex-row"
             >
-              <span>{emoji}</span>
-              <span className="tabular-nums">{users.size}</span>
-            </ToggleButton>
-          </li>
-        );
-      })}
-    </ul>
+              <TabList
+                aria-label={m.reactionsLabel}
+                items={entries}
+                className="flex shrink-0 gap-1 overflow-x-auto md:max-h-96 md:w-28 md:flex-col md:overflow-x-visible md:overflow-y-auto"
+              >
+                {({ emoji, reactions: r }) => (
+                  <Tab
+                    id={emoji}
+                    aria-label={format(m.reactionCount, { emoji, count: String(r.count) })}
+                    className="flex shrink-0 cursor-default items-center justify-between gap-2 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
+                  >
+                    <span>{emoji}</span>
+                    <span className="tabular-nums">{r.count}</span>
+                  </Tab>
+                )}
+              </TabList>
+              {entries.map(({ emoji }) => (
+                <TabPanel key={emoji} id={emoji} className="min-w-0 flex-1 outline-none">
+                  <ReactorList messageId={messageId} emoji={emoji} />
+                </TabPanel>
+              ))}
+            </Tabs>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+}
+
+/** Everyone who reacted with one emoji, earliest first, read a page at a time. */
+function ReactorList({ messageId, emoji }: { messageId: string; emoji: string }) {
+  const m = useMessages();
+  const sync = useSync();
+  // The ids of a paged read, in the server's order; the records themselves are in the store.
+  const [ids, setIds] = useState<readonly string[]>([]);
+  const [complete, setComplete] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const read = useCallback(
+    (after: string | undefined, isCurrent: () => boolean) => {
+      sync.loadReactors(messageId, emoji, after).then(
+        (users) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const page = users.map((u) => u.id);
+          setIds((held) => (after === undefined ? page : [...held, ...page]));
+          setComplete(users.length < REACTORS_PAGE);
+          setLoading(false);
+        },
+        (e: unknown) => {
+          if (isCurrent()) {
+            setError(e instanceof ApiProblemError ? e.message : String(e));
+            setLoading(false);
+          }
+        },
+      );
+    },
+    [sync, messageId, emoji],
+  );
+
+  useEffect(() => {
+    let current = true;
+    read(undefined, () => current);
+    return () => {
+      current = false;
+    };
+  }, [read]);
+
+  function showMore() {
+    setLoading(true);
+    setError(null);
+    read(ids[ids.length - 1], () => true);
+  }
+
+  return (
+    <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
+      <ul aria-label={format(m.reactedWithLabel, { emoji })} className="flex flex-col gap-1">
+        {ids.map((id) => (
+          <Reactor key={id} userId={id} />
+        ))}
+      </ul>
+      {loading && <p className="px-1 text-sm text-ink-muted">{m.loading}</p>}
+      {error !== null && (
+        <p role="alert" className="px-1 text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {!loading && !complete && ids.length > 0 && (
+        <Button onPress={showMore} className={secondaryButtonClass + " self-start"}>
+          {m.showMore}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function Reactor({ userId }: { userId: string }) {
+  const m = useMessages();
+  const user = useUser(userId);
+  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  return (
+    <li className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">
+      <Avatar name={name} iconId={user?.icon} size="sm" />
+      <span className="truncate">{name}</span>
+    </li>
   );
 }
 

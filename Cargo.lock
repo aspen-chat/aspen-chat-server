@@ -409,6 +409,7 @@ dependencies = [
  "colored",
  "diesel",
  "diesel-async",
+ "emojis",
  "prettyplease",
  "quote",
  "serde",

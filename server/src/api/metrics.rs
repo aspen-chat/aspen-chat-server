@@ -16,6 +16,7 @@ pub async fn observe(request: Request, next: Next) -> Response {
     });
     let started = Instant::now();
     let response = next.run(request).await;
+    crate::app::fleet::note_request(response.status().as_u16());
     if let Some(route) = route {
         metrics::histogram!(aspen_metrics::api::HTTP_DURATION, "route" => route.clone())
             .record(started.elapsed().as_secs_f64());

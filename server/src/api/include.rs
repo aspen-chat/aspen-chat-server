@@ -14,11 +14,14 @@
 //! describes an array query parameter with `style: form, explode: false`.
 
 use crate::api::attachment::Attachment;
+use crate::api::category_collapse::CategoryCollapse;
+use crate::api::channel_mute::ChannelMute;
 use crate::api::message_enum::{
     Category, Channel, Community, Message, Poll, User, UserCommunity, VoiceParticipant,
     VoiceSession,
 };
 use crate::api::poll::{OwnWriteIn, PollVote};
+use crate::api::react::ReactionSummary;
 use crate::api::read_state::ReadState;
 use serde::Serialize;
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
@@ -111,6 +114,19 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub read_states: Option<Vec<ReadState>>,
+    /// The caller's mutes in force among the channels in the read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub channel_mutes: Option<Vec<ChannelMute>>,
+    /// The categories in the read the caller has collapsed in their channel list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub category_collapses: Option<Vec<CategoryCollapse>>,
+    /// The messages' reactions in brief, one per message and emoji, each message's emoji in the
+    /// order they were first used on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub reactions: Option<Vec<ReactionSummary>>,
     /// The calls in progress on the communities' voice channels, with who is in them as
     /// `voiceParticipants`. Present together whenever voice was requested.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -8,18 +8,13 @@ import {
 } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { Button, Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { useDmTitle } from "@/features/dms/useDmTitle";
-import {
-  dialogClass,
-  headingClass,
-  modalClass,
-  overlayClass,
-  secondaryButtonClass,
-} from "@/features/invites/dialog";
+import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** The most people a group DM holds, the caller included; the server's `MAX_RECIPIENTS`. */
@@ -97,9 +92,7 @@ function LeaveGroup({ channelId }: { channelId: string }) {
           <Dialog role="alertdialog" className={dialogClass}>
             {({ close }) => (
               <>
-                <Heading slot="title" className={headingClass}>
-                  {m.dms.leaveHeading}
-                </Heading>
+                <DialogHeading>{m.dms.leaveHeading}</DialogHeading>
                 <p className="text-sm text-ink-muted">{m.dms.leaveHint}</p>
                 {error !== null && (
                   <p role="alert" className="text-sm text-danger">
@@ -107,9 +100,6 @@ function LeaveGroup({ channelId }: { channelId: string }) {
                   </p>
                 )}
                 <div className="flex justify-end gap-2">
-                  <Button onPress={close} className={secondaryButtonClass}>
-                    {m.cancel}
-                  </Button>
                   <Button
                     onPress={() => {
                       sync.leaveDm(channelId).then(

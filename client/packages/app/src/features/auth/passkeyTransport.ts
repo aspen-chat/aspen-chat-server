@@ -1,7 +1,6 @@
 import {
   canRunInPage,
   parseHandoffReturn,
-  type AspenClient,
   type AuthMethods,
   type HandoffReturn,
   type PasskeyHandoff,
@@ -10,6 +9,7 @@ import {
 import { useEffect, useState } from "react";
 import { useAspenClient } from "@/api/context";
 import { detectShell, type Shell } from "@/config";
+import { authMethods } from "@/features/auth/authMethods";
 
 /**
  * The web client runs passkey ceremonies in its own page when it is served under the relying
@@ -87,19 +87,6 @@ const mobileHandoff: PasskeyHandoff = {
     };
   },
 };
-
-const methodsByServer = new Map<string, Promise<AuthMethods>>();
-
-/** The server's sign-in methods, asked once per server. A failed ask is asked again next time. */
-function authMethods(client: AspenClient): Promise<AuthMethods> {
-  let pending = methodsByServer.get(client.baseUrl);
-  if (pending === undefined) {
-    pending = client.authMethods();
-    pending.catch(() => methodsByServer.delete(client.baseUrl));
-    methodsByServer.set(client.baseUrl, pending);
-  }
-  return pending;
-}
 
 /**
  * How this shell reaches passkeys on the current server; `null` while unknown or when passkeys

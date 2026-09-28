@@ -1,13 +1,16 @@
 import type { Channel } from "@aspen/protocol";
-import { NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
-import { useDms, useMe, useSync, useUnread, useUser } from "@/api/hooks";
+import { useDms, useMe, useMute, useSync, useUnread, useUser } from "@/api/hooks";
+import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { Avatar } from "@/features/communities/Avatar";
 import { MAX_DM_PEOPLE } from "@/features/dms/DmHeader";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { otherRecipients } from "@/features/dms/dmName";
 import { useDmTitle } from "@/features/dms/useDmTitle";
+import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { unreadMarkClass } from "@/features/channels/ChannelSidebar";
 import { displayNameOf } from "@/features/users/profile";
@@ -72,49 +75,90 @@ function DmSidebar({ current }: { current: string | undefined }) {
           <DmRow key={dm.id} dm={dm} current={dm.id === current} />
         ))}
       </nav>
+      <SidebarFooter />
     </div>
   );
 }
 
+/**
+ * One DM in the list, marked while it holds something the caller has not read, or dimmed with a
+ * muted bell while they have muted it. Its menu opens on a right click or from its options
+ * button, which sits over the row's right end, in room the link leaves for it.
+ */
 function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
   const m = useMessages();
   const me = useMe();
   const title = useDmTitle(dm);
   const first = useUser(otherRecipients(dm, me?.id ?? null)[0]);
   const unread = useUnread(dm.id);
+  const muted = useMute(dm.id) !== undefined;
+  const row = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const accessibleName = muted
+    ? format(m.mutedLabel, { name: title })
+    : unread
+      ? format(m.unreadLabel, { name: title })
+      : null;
   return (
-    <Link
-      to="/dms/$channelId"
-      params={{ channelId: dm.id }}
-      aria-current={current ? "page" : undefined}
-      className={
-        "flex items-center gap-2 rounded-md text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
-        (current
-          ? "bg-surface-hover px-2 py-1.5 font-medium text-ink"
-          : unread
-            ? // The border and this padding make up the usual padding, so nothing moves.
-              "px-[7px] py-[5px] " + unreadMarkClass
-            : "px-2 py-1.5 text-ink-muted")
-      }
+    <div
+      ref={row}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuOpen(true);
+      }}
+      className="group relative"
     >
-      {dm.ty === "groupDm" ? (
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-ink-muted">
-          <UsersThreeIcon size={16} aria-hidden="true" />
-        </span>
-      ) : (
-        <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
-      )}
-      {unread ? (
-        <>
-          <span aria-hidden="true" className="min-w-0 flex-1 truncate">
-            {title}
+      <Link
+        to="/dms/$channelId"
+        params={{ channelId: dm.id }}
+        aria-current={current ? "page" : undefined}
+        className={
+          "flex items-center gap-2 rounded-md text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+          (current
+            ? "bg-surface-hover py-1.5 pr-8 pl-2 font-medium text-ink"
+            : unread && !muted
+              ? // The border and this padding make up the usual padding, so nothing moves.
+                "py-[5px] pr-[31px] pl-[7px] " + unreadMarkClass
+              : "py-1.5 pr-8 pl-2 " + (muted ? "text-ink-faint" : "text-ink-muted"))
+        }
+      >
+        {dm.ty === "groupDm" ? (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-ink-muted">
+            <UsersThreeIcon size={16} aria-hidden="true" />
           </span>
-          <span className="sr-only">{format(m.unreadLabel, { name: title })}</span>
-        </>
-      ) : (
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-      )}
-    </Link>
+        ) : (
+          <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
+        )}
+        {accessibleName === null ? (
+          <span className="min-w-0 flex-1 truncate">{title}</span>
+        ) : (
+          <>
+            <span aria-hidden="true" className="min-w-0 flex-1 truncate">
+              {title}
+            </span>
+            <span className="sr-only">{accessibleName}</span>
+          </>
+        )}
+        {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
+      </Link>
+      {/* Placed by a wrapper, since the button's own touch area keeps it `relative`. */}
+      <span className="absolute top-1/2 right-2 flex -translate-y-1/2">
+        <ChannelMenuButton
+          name={title}
+          isOpen={menuOpen}
+          onPress={() => {
+            setMenuOpen((open) => !open);
+          }}
+        />
+      </span>
+      <ChannelMenu
+        channelId={dm.id}
+        name={title}
+        anchorRef={row}
+        isOpen={menuOpen}
+        onOpenChange={setMenuOpen}
+      />
+    </div>
   );
 }
 

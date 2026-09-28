@@ -7,6 +7,7 @@ import type {
   AspenSync,
   Attachment,
   Category,
+  ChannelMute,
   ChannelVoice,
   PreferenceDefinition,
   Channel,
@@ -191,6 +192,50 @@ export function useMyVotes(pollId: string): ReadonlySet<number> {
 /** How far the caller has read a channel, if it keeps a read position. */
 export function useReadState(channelId: string): ReadState | undefined {
   return useTopic(`read:${channelId}`, (s) => s.readState(channelId));
+}
+
+/** Whether the caller may open the Administration Dashboard. */
+export function useIsAdmin(): boolean {
+  return useTopic("admin", (s) => s.admin());
+}
+
+/** Whether the caller has a category collapsed in their channel list. */
+export function useCollapsed(categoryId: string): boolean {
+  return useTopic(`collapse:${categoryId}`, (s) => s.collapsed(categoryId));
+}
+
+/**
+ * The channels among `channelIds` that stay in view under a collapsed category: the unread and
+ * unmuted ones, and voice channels with someone in the call. Subscribes to `unread`, which
+ * every read state and mute change touches, and to each channel's call.
+ */
+export function useShownWhenCollapsed(channelIds: readonly string[]): ReadonlySet<string> {
+  const store = useStore();
+  const key = channelIds.join("\n");
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const ids = key === "" ? [] : key.split("\n");
+      const unsubscribes = ["unread", ...ids.map((id) => `voice:${id}`)].map((topic) =>
+        store.subscribe(topic, listener),
+      );
+      return () => {
+        for (const unsubscribe of unsubscribes) {
+          unsubscribe();
+        }
+      };
+    },
+    [store, key],
+  );
+  // A string, so the snapshot compares equal while nothing changes.
+  const shown = useSyncExternalStore(subscribe, () =>
+    (key === "" ? [] : key.split("\n")).filter((id) => store.shownWhenCollapsed(id)).join("\n"),
+  );
+  return useMemo(() => new Set(shown === "" ? [] : shown.split("\n")), [shown]);
+}
+
+/** The caller's mute of a channel while it lasts, if any. */
+export function useMute(channelId: string): ChannelMute | undefined {
+  return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));
 }
 
 /** Whether a channel holds a message by someone else that the caller has not read. */

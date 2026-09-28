@@ -6,7 +6,6 @@ import {
   Dialog,
   DialogTrigger,
   Form,
-  Heading,
   Input,
   Label,
   Modal,
@@ -25,7 +24,6 @@ import {
 } from "@/features/auth/styles";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
@@ -34,6 +32,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { IconPicker } from "@/features/media/IconPicker";
 import { profileForm, profilePatch, type ProfileForm } from "@/features/users/profile";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
@@ -112,9 +111,7 @@ function ProfileEditor({ user, close }: { user: User; close: () => void }) {
       }}
       className="flex flex-col gap-4"
     >
-      <Heading slot="title" className={headingClass}>
-        {m.profile.heading}
-      </Heading>
+      <DialogHeading>{m.profile.heading}</DialogHeading>
       {error !== null && (
         <p role="alert" className={alertClass}>
           {error}
@@ -222,9 +219,6 @@ function ProfileEditor({ user, close }: { user: User; close: () => void }) {
         />
       </TextField>
       <div className="flex justify-end gap-2">
-        <Button onPress={close} className={secondaryButtonClass}>
-          {m.cancel}
-        </Button>
         <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
           {pending ? m.profile.saving : m.save}
         </Button>

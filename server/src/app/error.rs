@@ -46,6 +46,12 @@ pub enum Error {
     Validation(Cow<'static, str>),
     #[error("the poll is closed")]
     PollClosed,
+    #[error("an invite is required to create an account")]
+    RegistrationInviteRequired,
+    #[error("the registration invite is not valid")]
+    RegistrationInviteInvalid,
+    #[error("only the deployment's administrators may do this")]
+    AdminRequired,
     #[error("password does not meet requirement {0:?}")]
     PasswordRequirement(crate::api::error::PasswordRequirement),
     #[error("error putting object to media store {0}")]

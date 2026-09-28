@@ -60,18 +60,22 @@ export {
   type ReadyInfo,
 } from "./events";
 export {
+  REACTION_SUMMARY_USERS,
   RecordStore,
   UNREAD_DMS,
   WINDOW_MAX_MESSAGES,
   groupChannels,
   isDm,
   type Attachment,
+  type ChannelMute,
   type ChannelVoice,
   type Icon,
   type Included,
   type Listener,
   type MessageWindow,
   type PollVote,
+  type EmojiReactions,
+  type ReactionSummary,
   type Reactions,
   type ReadState,
   type VoiceParticipantState,
@@ -87,6 +91,19 @@ export {
   type InviteLookup,
   type SyncListener,
   type SyncStatus,
+  type AdminCommunityEntry,
+  type AdminListQuery,
+  type AdminOverview,
+  type AdminUserEntry,
+  type ApiServerHealth,
+  type CommunitySort,
+  type Fleet,
+  type Growth,
+  type GrowthRange,
+  type UserSort,
+  type RegistrationInvite,
+  type RegistrationInviteRequest,
+  type VoiceServerHealth,
 } from "./sync";
 export type {
   Category,
@@ -110,7 +127,7 @@ export type {
   VoiceSessionEndReason,
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
-export { PRESENCE_BATCH, PRESENCE_POLL_MS, READ_REPORT_MS } from "./sync";
+export { PRESENCE_BATCH, PRESENCE_POLL_MS, READ_REPORT_MS, REACTORS_PAGE } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
   MicrophoneError,

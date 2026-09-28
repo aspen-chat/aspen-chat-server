@@ -15,7 +15,6 @@ import {
   Button,
   Dialog,
   DialogTrigger,
-  Heading,
   Label,
   ListBox,
   ListBoxItem,
@@ -29,7 +28,6 @@ import { useAspenClient } from "@/api/context";
 import { usePreference, useSync } from "@/api/hooks";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   optionClass,
   overlayClass,
@@ -40,6 +38,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { ThemePicker } from "@/theme/ThemePicker";
 
@@ -64,9 +63,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>
-                <Heading slot="title" className={headingClass}>
-                  {m.settings.title}
-                </Heading>
+                <DialogHeading>{m.settings.title}</DialogHeading>
                 <AudioSection />
                 <section aria-labelledby="settings-appearance" className="flex flex-col gap-3">
                   <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
@@ -90,9 +87,6 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   >
                     <SignOutIcon size={16} aria-hidden="true" />
                     {m.signOut}
-                  </Button>
-                  <Button onPress={close} className={secondaryButtonClass}>
-                    {m.settings.done}
                   </Button>
                 </div>
               </>

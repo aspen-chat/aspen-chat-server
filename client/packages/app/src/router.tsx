@@ -1,4 +1,5 @@
 import {
+  Navigate,
   createBrowserHistory,
   createHashHistory,
   createRootRoute,
@@ -6,6 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { detectShell } from "@/config";
+import { AdminDashboard } from "@/features/admin/AdminDashboard";
 import { ChannelSidebarLayout, CommunityIndex } from "@/features/channels/CommunityScreen";
 import { DmIndex, DmLayout } from "@/features/dms/DmLayout";
 import { Home } from "@/features/home/Home";
@@ -28,6 +30,9 @@ import { NotFound } from "@/features/layout/NotFound";
  *   /dms/{channel}, /dms/{channel}/messages/{message}, /dms/{channel}/threads/{thread}
  *                                                       a DM, as a channel is above
  *   /invite/{code}                                      what an invite link opens: join or open
+ *   /register?invite={code}                             create an account with a registration
+ *                                                       invite; signed in, the home screen
+ *   /admin                                              the Administration Dashboard
  *
  * The web build uses real paths. Electron loads the bundle from `file://` and Capacitor from
  * an app-local origin, where the server cannot rewrite deep links to `index.html`, so those
@@ -48,6 +53,22 @@ export const inviteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/invite/$code",
   component: InviteScreen,
+});
+
+export const registerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/register",
+  validateSearch: (search: Record<string, unknown>): { invite?: string } =>
+    typeof search.invite === "string" ? { invite: search.invite } : {},
+  // Signed out, the root layout shows the create-account screen; signed in, there is nothing
+  // to register.
+  component: () => <Navigate to="/" replace />,
+});
+
+export const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: AdminDashboard,
 });
 
 export const communityRoute = createRoute({
@@ -113,6 +134,8 @@ export const dmThreadRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   inviteRoute,
+  registerRoute,
+  adminRoute,
   communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),
   dmsRoute.addChildren([dmsIndexRoute, dmRoute, dmMessageRoute, dmThreadRoute]),
 ]);

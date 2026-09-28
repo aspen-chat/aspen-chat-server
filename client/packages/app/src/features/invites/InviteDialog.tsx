@@ -5,7 +5,6 @@ import {
   Button,
   Dialog,
   DialogTrigger,
-  Heading,
   Label,
   ListBox,
   ListBoxItem,
@@ -20,13 +19,13 @@ import { primaryButtonClass } from "@/features/auth/styles";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { inviteLink } from "@/features/invites/inviteCode";
 import { copyText } from "@/features/layout/clipboard";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -58,17 +57,10 @@ export function InviteDialog({ community }: { community: Community }) {
       <ModalOverlay className={overlayClass} isDismissable>
         <Modal className={modalClass}>
           <Dialog className={dialogClass}>
-            {({ close }) => (
-              <>
-                <Heading slot="title" className={headingClass}>
-                  {format(m.inviteDialogHeading, { community: community.name })}
-                </Heading>
-                <InviteManager communityId={community.id} />
-                <Button onPress={close} className={secondaryButtonClass + " self-end"}>
-                  {m.close}
-                </Button>
-              </>
-            )}
+            <DialogHeading>
+              {format(m.inviteDialogHeading, { community: community.name })}
+            </DialogHeading>
+            <InviteManager communityId={community.id} />
           </Dialog>
         </Modal>
       </ModalOverlay>

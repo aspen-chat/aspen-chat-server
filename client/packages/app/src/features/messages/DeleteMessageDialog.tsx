@@ -1,17 +1,16 @@
 import { ApiProblemError } from "@aspen/protocol";
 import { TrashIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { Button, Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   dangerButtonClass,
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
-  secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
 /** A message's Delete control and the confirmation it asks for. */
@@ -61,9 +60,7 @@ function Confirm({ messageId, close }: { messageId: string; close: () => void })
 
   return (
     <>
-      <Heading slot="title" className={headingClass}>
-        {m.deleteMessageHeading}
-      </Heading>
+      <DialogHeading>{m.deleteMessageHeading}</DialogHeading>
       <p className="text-sm text-ink-muted">{m.deleteMessageHint}</p>
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
@@ -71,9 +68,6 @@ function Confirm({ messageId, close }: { messageId: string; close: () => void })
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <Button onPress={close} className={secondaryButtonClass}>
-          {m.cancel}
-        </Button>
         <Button
           isDisabled={pending}
           onPress={() => {

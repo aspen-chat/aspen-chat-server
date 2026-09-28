@@ -14,13 +14,23 @@ export function signedIn(status: "signedIn" | null = "signedIn"): string {
   });
 }
 
-/** A server that offers passwords only, so the sign-in screen shows no passkey button. */
-export async function stubAuthMethods(page: Page): Promise<void> {
+/**
+ * A server that offers passwords only, so the sign-in screen shows no passkey button, and takes
+ * new accounts from anyone unless `registrationInviteRequired`.
+ */
+export async function stubAuthMethods(
+  page: Page,
+  { registrationInviteRequired = false }: { registrationInviteRequired?: boolean } = {},
+): Promise<void> {
   await page.route("**/api/v1/auth/methods", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ passkeys: null, twoFactorRequired: false }),
+      body: JSON.stringify({
+        passkeys: null,
+        twoFactorRequired: false,
+        registrationInviteRequired,
+      }),
     }),
   );
 }

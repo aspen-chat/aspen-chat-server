@@ -261,7 +261,7 @@ describe("RecordStore events", () => {
       userId: bob.id,
     });
     const first = store.reactions(target);
-    expect(Array.from(first.get("😁") ?? [])).toEqual([me.id, bob.id]);
+    expect(first.get("😁")).toEqual({ count: 2, me: true, users: [me.id, bob.id] });
     store.applyEvent({
       serverEvent: "react",
       type: "delete",
@@ -270,7 +270,7 @@ describe("RecordStore events", () => {
       userId: me.id,
     });
     expect(store.reactions(target)).not.toBe(first);
-    expect(Array.from(store.reactions(target).get("😁") ?? [])).toEqual([bob.id]);
+    expect(store.reactions(target).get("😁")).toEqual({ count: 1, me: false, users: [bob.id] });
     store.applyEvent({
       serverEvent: "react",
       type: "delete",
@@ -279,6 +279,46 @@ describe("RecordStore events", () => {
       userId: bob.id,
     });
     expect(store.reactions(target).size).toBe(0);
+  });
+});
+
+describe("RecordStore reaction summaries", () => {
+  it("installs a read's summaries, clearing messages it brought none for", () => {
+    const store = bootstrapped();
+    const [a, b] = [id(1501), id(1502)];
+    store.setReactions([a], [{ messageId: a, emoji: "🎉", count: 1, me: false, users: [bob.id] }]);
+    store.setReactions(
+      [a, b],
+      [
+        { messageId: b, emoji: "👍", count: 9, me: true, users: [bob.id, me.id] },
+        { messageId: b, emoji: "🎉", count: 2, me: false, users: [bob.id] },
+      ],
+    );
+    expect(store.reactions(a).size).toBe(0);
+    expect(Array.from(store.reactions(b).keys())).toEqual(["👍", "🎉"]);
+  });
+
+  it("counts someone beyond the named few, and the caller's own reaction once", () => {
+    const store = bootstrapped();
+    const target = id(1503);
+    const others = [id(91), id(92), id(93), id(94)];
+    store.setReactions(
+      [target],
+      [{ messageId: target, emoji: "👍", count: 4, me: false, users: others }],
+    );
+    const react = (userId: string, type: "create" | "delete") => {
+      store.applyEvent({ serverEvent: "react", type, messageId: target, emoji: "👍", userId });
+    };
+    react(bob.id, "create");
+    expect(store.reactions(target).get("👍")).toEqual({ count: 5, me: false, users: others });
+    react(me.id, "create");
+    react(me.id, "create");
+    expect(store.reactions(target).get("👍")?.count).toBe(6);
+    expect(store.reactions(target).get("👍")?.me).toBe(true);
+    react(bob.id, "delete");
+    react(me.id, "delete");
+    react(me.id, "delete");
+    expect(store.reactions(target).get("👍")).toEqual({ count: 4, me: false, users: others });
   });
 });
 
@@ -584,6 +624,77 @@ describe("RecordStore read states", () => {
     store.applyEvent({ serverEvent: "channel", type: "delete", id: general.id });
     expect(store.readState(general.id)).toBeUndefined();
     expect(store.unreadPlaces().size).toBe(0);
+  });
+});
+
+describe("RecordStore mutes", () => {
+  const unreadGeneral = { channel: general.id, lastRead: id(1100), lastMessage: id(1101) };
+
+  it("keeps a muted channel's unread out of its community's mark", () => {
+    const store = bootstrapped();
+    store.ingest({ readStates: [unreadGeneral] });
+    expect(Array.from(store.unreadPlaces())).toEqual([aspen.id]);
+    store.applyEvent({ serverEvent: "channelMuteChanged", channel: general.id, muted: true });
+    expect(store.mute(general.id)).toEqual({ channel: general.id, until: null });
+    expect(store.unreadPlaces().size).toBe(0);
+    // Still unread underneath, for when the mute ends.
+    expect(store.unread(general.id)).toBe(true);
+    store.applyEvent({ serverEvent: "channelMuteChanged", channel: general.id, muted: false });
+    expect(store.mute(general.id)).toBeUndefined();
+    expect(Array.from(store.unreadPlaces())).toEqual([aspen.id]);
+  });
+
+  it("ends timed mutes when their time is up, and names the next to end", () => {
+    const store = bootstrapped();
+    store.ingest({
+      channelMutes: [
+        { channel: general.id, until: "2026-09-28T12:00:00Z" },
+        { channel: dev.id, until: "2026-09-28T13:00:00Z" },
+      ],
+    });
+    expect(store.nextMuteEnd()).toBe(Date.parse("2026-09-28T12:00:00Z"));
+    store.expireMutes(Date.parse("2026-09-28T12:00:00Z"));
+    expect(store.mute(general.id)).toBeUndefined();
+    expect(store.mute(dev.id)).toBeDefined();
+    expect(store.nextMuteEnd()).toBe(Date.parse("2026-09-28T13:00:00Z"));
+  });
+
+  it("replaces every mute with what a bootstrap read", () => {
+    const store = bootstrapped();
+    store.ingest({ channelMutes: [{ channel: general.id, until: null }] });
+    store.replaceMutes([{ channel: dev.id, until: null }]);
+    expect(store.mute(general.id)).toBeUndefined();
+    expect(store.mute(dev.id)).toEqual({ channel: dev.id, until: null });
+  });
+});
+
+describe("RecordStore collapsed categories", () => {
+  it("follows the caller's devices and replaces what a bootstrap read", () => {
+    const store = bootstrapped();
+    store.ingest({ categoryCollapses: [{ category: work.id }] });
+    expect(store.collapsed(work.id)).toBe(true);
+    store.applyEvent({
+      serverEvent: "categoryCollapseChanged",
+      category: work.id,
+      collapsed: false,
+    });
+    expect(store.collapsed(work.id)).toBe(false);
+    store.applyEvent({
+      serverEvent: "categoryCollapseChanged",
+      category: work.id,
+      collapsed: true,
+    });
+    store.replaceCollapsed([]);
+    expect(store.collapsed(work.id)).toBe(false);
+  });
+
+  it("keeps an unread channel in view under a collapsed category, unless it is muted", () => {
+    const store = bootstrapped();
+    store.ingest({ readStates: [{ channel: dev.id, lastRead: id(1100), lastMessage: id(1101) }] });
+    expect(store.shownWhenCollapsed(dev.id)).toBe(true);
+    expect(store.shownWhenCollapsed(general.id)).toBe(false);
+    store.applyEvent({ serverEvent: "channelMuteChanged", channel: dev.id, muted: true });
+    expect(store.shownWhenCollapsed(dev.id)).toBe(false);
   });
 });
 

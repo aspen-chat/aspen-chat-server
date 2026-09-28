@@ -39,4 +39,11 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260927_055541_benchmark_runs::M,
     &migrations::m20260928_002524_poll_write_ins::M,
     &migrations::m20260928_010907_read_state::M,
+    &migrations::m20260928_020453_channel_mute::M,
+    &migrations::m20260928_022402_category_collapse::M,
+    &migrations::m20260928_031305_react_by_message::M,
+    &migrations::m20260928_035647_canonical_reaction_emoji::M,
+    &migrations::m20260928_040739_administration::M,
+    &migrations::m20260928_041109_community_user_by_community::M,
+    &migrations::m20260928_043652_registration_invite_used_up_at::M,
 ];

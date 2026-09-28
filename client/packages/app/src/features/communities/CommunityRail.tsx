@@ -1,8 +1,8 @@
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { UNREAD_DMS } from "@aspen/protocol";
-import { useCommunities, useSync, useUnreadPlaces } from "@/api/hooks";
+import { useCommunities, useIsAdmin, useSync, useUnreadPlaces } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
-import { ChatsTeardropIcon, DotsSixVerticalIcon, PlusIcon } from "@phosphor-icons/react";
+import { ChatsTeardropIcon, DotsSixVerticalIcon, GaugeIcon, PlusIcon } from "@phosphor-icons/react";
 import {
   Button,
   DropIndicator,
@@ -35,6 +35,8 @@ export function CommunityRail() {
   const { communityId: current } = useParams({ strict: false });
   const matchRoute = useMatchRoute();
   const inDms = matchRoute({ to: "/dms", fuzzy: true }) !== false;
+  const inAdmin = matchRoute({ to: "/admin" }) !== false;
+  const admin = useIsAdmin();
   const { dragAndDropHooks } = useDragAndDrop({
     getItems: (keys) => Array.from(keys, (key) => ({ [COMMUNITY_DRAG_TYPE]: String(key) })),
     acceptedDragTypes: [COMMUNITY_DRAG_TYPE],
@@ -132,6 +134,26 @@ export function CommunityRail() {
           </Button>
         }
       />
+      {admin && (
+        <>
+          <div aria-hidden="true" className="h-px w-8 shrink-0 bg-line" />
+          <Tooltip text={m.admin.open}>
+            <Link
+              to="/admin"
+              aria-label={m.admin.open}
+              aria-current={inAdmin ? "page" : undefined}
+              className={
+                "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
+                (inAdmin
+                  ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-rail"
+                  : "")
+              }
+            >
+              <GaugeIcon size={22} aria-hidden="true" />
+            </Link>
+          </Tooltip>
+        </>
+      )}
     </nav>
   );
 }
