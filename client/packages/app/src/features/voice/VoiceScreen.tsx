@@ -16,6 +16,7 @@ import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { Avatar } from "@/features/communities/Avatar";
 import { displayNameOf } from "@/features/users/profile";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
+import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
 import { ScreenTile } from "@/features/voice/ScreenTile";
@@ -56,7 +57,12 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
         glyph={<SpeakerHighIcon size={16} aria-hidden="true" />}
         name={channel.name}
       >
-        {inThisCall && <ShareControl variant="panel" onError={setShareError} />}
+        {/* A narrow screen shares from the call bar below instead. */}
+        {inThisCall && (
+          <div className="hidden md:flex">
+            <ShareControl variant="panel" onError={setShareError} />
+          </div>
+        )}
       </ChannelHeader>
       {shareError !== null && (
         <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
@@ -120,6 +126,13 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
           </div>
         )}
       </div>
+      {/* The call bar lives with the channel list, which a narrow screen does not show
+          beside the call; it shows here instead, so the call can be muted and left. */}
+      {inThisCall && (
+        <div className="md:hidden">
+          <CallBar />
+        </div>
+      )}
     </main>
   );
 }

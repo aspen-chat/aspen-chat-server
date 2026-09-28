@@ -70,6 +70,12 @@ const BOOTSTRAP_STALE_AFTER_MS = EVENT_REPLAY_WINDOW_MS - 10_000;
  * pulled for the users on screen rather than pushed to everyone.
  */
 export const PRESENCE_POLL_MS = 30_000;
+
+/**
+ * How long reading a channel is gathered before it is reported: one report per channel per
+ * this long however fast messages scroll past, well inside the server's limit on reports.
+ */
+export const READ_REPORT_MS = 1_000;
 /**
  * The least time between two activity reports; mirrors the event stream's `ACTIVITY_INTERVAL`,
  * which ignores reports closer together.
@@ -157,6 +163,9 @@ export class AspenSync {
   readonly #attachmentLoads = new Map<string, Promise<void>>();
   readonly #missingAttachments = new Set<string>();
   readonly #pollLoads = new Map<string, Promise<void>>();
+  /** Per channel, the furthest message read and not yet reported. */
+  readonly #unreported = new Map<string, string>();
+  #readTimer: ReturnType<typeof setTimeout> | null = null;
   readonly #missingPolls = new Set<string>();
   readonly #iconLoads = new Map<string, Promise<void>>();
   readonly #missingIcons = new Set<string>();
@@ -290,6 +299,11 @@ export class AspenSync {
     this.#userLoads.clear();
     this.#pollLoads.clear();
     this.#iconLoads.clear();
+    this.#unreported.clear();
+    if (this.#readTimer !== null) {
+      clearTimeout(this.#readTimer);
+      this.#readTimer = null;
+    }
     this.store.clear();
     this.#setStatus("stopped");
   }
@@ -841,6 +855,87 @@ export class AspenSync {
     this.store.setMyVote(pollId, option, false);
   }
 
+  /**
+   * Adds the caller's own answer to a poll that allows write-ins, which also votes for it for
+   * them. An answer the poll already has is voted for instead of added. Resolves to the option
+   * the vote went to. The poll's new answers and tally come by event.
+   */
+  async writeIn(pollId: string, label: string): Promise<number> {
+    const result = await this.#client.api.POST("/api/v1/polls/{poll}/write-ins", {
+      params: { path: { poll: pollId } },
+      body: { label },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const { option } = result.data;
+    this.store.setMyVote(pollId, option, true);
+    if (result.response.status === 201) {
+      this.store.setMyWriteIn(pollId, option, true);
+    }
+    return option;
+  }
+
+  /** Removes a written-in answer, and every vote for it. */
+  /**
+   * Records that the caller has seen `messageId` in `channelId`: at once in the store, and to
+   * the server within `READ_REPORT_MS`, together with whatever else was read meanwhile. Reading
+   * behind the current position changes nothing.
+   */
+  markRead(channelId: string, messageId: string): void {
+    const state = this.store.readState(channelId);
+    if (state === undefined || messageId <= state.lastRead) {
+      return;
+    }
+    this.store.setLastRead(channelId, messageId);
+    this.#unreported.set(channelId, messageId);
+    this.#readTimer ??= setTimeout(() => {
+      this.flushReads();
+    }, READ_REPORT_MS);
+  }
+
+  /** Reports what has been read and not yet reported, now; for a page about to be hidden. */
+  flushReads(): void {
+    if (this.#readTimer !== null) {
+      clearTimeout(this.#readTimer);
+      this.#readTimer = null;
+    }
+    const reports = Array.from(this.#unreported);
+    this.#unreported.clear();
+    for (const [channelId, messageId] of reports) {
+      // A failed report is not retried: the next message read reports a later position.
+      void this.#client.api
+        .PUT("/api/v1/channels/{channel}/read-states/@me", {
+          params: { path: { channel: channelId } },
+          body: { lastRead: messageId },
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  async #reloadReadState(channelId: string): Promise<void> {
+    const generation = this.#generation;
+    const result = await this.#client.api
+      .GET("/api/v1/channels/{channel}/read-states/@me", {
+        params: { path: { channel: channelId } },
+      })
+      .catch(() => undefined);
+    if (result?.data !== undefined && generation === this.#generation) {
+      this.store.putReadState(result.data);
+    }
+  }
+
+  async removeWriteIn(pollId: string, option: number): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/polls/{poll}/write-ins/{option}", {
+      params: { path: { poll: pollId, option } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.setMyWriteIn(pollId, option, false);
+    this.store.setMyVote(pollId, option, false);
+  }
+
   /** Fetches a poll the cache lacks, with the caller's votes on it, once. */
   ensurePoll(pollId: string): void {
     if (
@@ -1032,7 +1127,7 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/communities/{community}", {
       params: {
         path: { community: communityId },
-        query: { include: ["channels", "categories", "members", "voice"] },
+        query: { include: ["channels", "categories", "members", "voice", "readStates"] },
       },
     });
     if (result.data === undefined) {
@@ -1096,11 +1191,11 @@ export class AspenSync {
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
             path: { user: "@me" },
-            query: { include: ["channels", "categories", "members", "voice"] },
+            query: { include: ["channels", "categories", "members", "voice", "readStates"] },
           },
         }),
         this.#client.api.GET("/api/v1/users/@me/dms", {
-          params: { query: { include: ["users"] } },
+          params: { query: { include: ["users", "readStates"] } },
         }),
       ]);
       if (generation !== this.#generation) {
@@ -1242,7 +1337,16 @@ export class AspenSync {
   }
 
   #apply(event: ServerEvent): void {
+    // A deleted message that was a channel's newest leaves the store unable to say what is
+    // newest now, so the channel's read state is read again.
+    const orphaned =
+      event.serverEvent === "message" && event.type === "delete"
+        ? this.store.channelsLastMessaged(event.id)
+        : [];
     this.store.applyEvent(event);
+    for (const channelId of orphaned) {
+      void this.#reloadReadState(channelId);
+    }
     if (event.serverEvent === "message" && event.type === "create") {
       this.ensureUser(event.author);
     }

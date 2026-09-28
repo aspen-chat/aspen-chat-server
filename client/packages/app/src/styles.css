@@ -16,6 +16,13 @@
   --color-surface: var(--palette-surface);
   --color-surface-raised: var(--palette-surface-raised);
   --color-surface-sunken: var(--palette-surface-sunken);
+  /* The community rail: most of the way from sunken to the raised lists beside it, so it reads
+     as part of the same frame rather than a separate strip. Mixed from each palette's own. */
+  --color-surface-rail: color-mix(
+    in oklab,
+    var(--palette-surface-raised) 70%,
+    var(--palette-surface-sunken)
+  );
   --color-surface-hover: var(--palette-surface-hover);
   --color-ink: var(--palette-ink);
   --color-ink-muted: var(--palette-ink-muted);
@@ -99,6 +106,38 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* The page is laid out edge to edge (`viewport-fit=cover`), so on a phone with a notch or a
+   home indicator, and in the mobile shell, the app keeps clear of both. */
+#root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+/* A modal's overlay covers the whole screen outside `#root`, so it keeps its content clear of the
+   notch and the home indicator itself, with at least 1rem all round. */
+@utility overlay-inset {
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+/* A control on a touch screen answers a finger anywhere in a 44px square around it, however
+   small it is drawn, without changing the layout. Controls that sit close together are made
+   larger instead, so their areas do not overlap. */
+@utility tap-target {
+  position: relative;
+  @media (pointer: coarse) {
+    &::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
 }
 
 body {
@@ -281,5 +320,8 @@ body {
   --epr-picker-border-color: transparent;
   --epr-category-icon-active-color: var(--color-accent);
   --epr-skin-tone-picker-menu-color: var(--color-surface-raised);
+  /* Eight 38px cells and the list's own padding fit the 320px picker; the library's 40px
+     cells do not, and its last column would be cut off. */
+  --epr-emoji-padding: 4px;
   border: 0;
 }

@@ -32,6 +32,7 @@ pub(crate) mod passkey_page;
 pub mod poll;
 pub(crate) mod rate_limit;
 pub(crate) mod react;
+pub(crate) mod read_state;
 pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
@@ -266,6 +267,12 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))
         .routes(routes!(poll::add_vote, poll::remove_vote))
+        .routes(routes!(poll::add_write_in))
+        .routes(routes!(poll::remove_write_in))
+        .routes(routes!(
+            read_state::get_read_state,
+            read_state::put_read_state
+        ))
         .routes(routes!(voice::join_voice))
         .routes(routes!(voice::get_channel_voice))
         .routes(routes!(

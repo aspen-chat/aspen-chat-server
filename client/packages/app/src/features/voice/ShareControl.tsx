@@ -8,6 +8,16 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 
 /**
+ * Whether this browser can capture a screen: mobile browsers cannot, and a page not served
+ * over HTTPS has no media devices at all.
+ */
+function canShareScreen(): boolean {
+  return (
+    "mediaDevices" in navigator && typeof navigator.mediaDevices.getDisplayMedia === "function"
+  );
+}
+
+/**
  * The screen-share control, shared by the call bar and the voice channel screen so both offer
  * the same choices. In a browser it shares the screen straight away; on the desktop shell,
  * where the game-capture helper is present, it opens a menu to share the screen or a game.
@@ -68,7 +78,7 @@ export function ShareControl({
   const bar = variant === "bar";
   const triggerClass = bar
     ? "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-      "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+      "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-2.5"
     : "flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-ink-muted outline-none " +
       "hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50";
   const menuItemClass =
@@ -106,6 +116,10 @@ export function ShareControl({
   );
 
   if (gameBridge === null) {
+    // Mobile browsers cannot capture the screen; there is nothing to offer.
+    if (!canShareScreen()) {
+      return null;
+    }
     const button = (
       <Button
         aria-label={m.voice.shareScreen}

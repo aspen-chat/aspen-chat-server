@@ -10,7 +10,7 @@ import {
   useDragAndDrop,
   type DropItem,
 } from "react-aria-components";
-import { useCategories, useChannels, useMe, useSync } from "@/api/hooks";
+import { useCategories, useChannels, useMe, useSync, useUnread } from "@/api/hooks";
 import { AddDialog } from "@/features/channels/AddDialog";
 import { AddToCategoryDialog } from "@/features/channels/AddToCategoryDialog";
 import { Avatar } from "@/features/communities/Avatar";
@@ -196,12 +196,7 @@ function ChannelGroup({
             (channel.id === current ? "bg-surface-hover font-medium text-ink" : "")
           }
         >
-          {channel.ty === "text" ? (
-            <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
-          ) : (
-            <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
-          )}
-          <span className="truncate">{channel.name}</span>
+          <ChannelLabel channel={channel} current={channel.id === current} />
           {/* The handle keyboard and screen reader users drag with; pointer users drag the row. */}
           <Button
             slot="drag"
@@ -226,8 +221,8 @@ const headerButtonClass =
   "pressed:bg-surface-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent/50";
 
 const footerButtonClass =
-  "rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover " +
-  "focus-visible:ring-2 focus-visible:ring-accent/50";
+  "tap-target rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
+  "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 function UserFooter() {
   const me = useMe();
@@ -245,5 +240,48 @@ function UserFooter() {
       {me !== null && <EditProfileDialog user={me} triggerClassName={footerButtonClass} />}
       <SettingsDialog triggerClassName={footerButtonClass} />
     </div>
+  );
+}
+
+/**
+ * How an unread channel or DM is marked in its list: brighter, inside a rounded accent outline
+ * over a faint accent fill. Where it goes supplies padding that, with the 1px border, makes up
+ * the row's own padding, so nothing moves when the mark comes and goes.
+ */
+export const unreadMarkClass = "rounded-md border border-accent bg-accent/20 text-ink";
+
+/**
+ * A channel's icon and name in the list, marked together while the channel holds something the
+ * caller has not read. The label takes all the width up to the drag handle, so every unread
+ * channel's mark is as wide as the next. The mark fills the row's padding: 3px and the border
+ * make its 4px top and bottom, 6px and the border its 8px sides, less the 1px the row keeps at
+ * its edges.
+ */
+function ChannelLabel({ channel, current }: { channel: Channel; current: boolean }) {
+  const m = useMessages();
+  const unread = useUnread(channel.id);
+  return (
+    <span
+      className={
+        "flex min-w-0 flex-1 items-center gap-1.5" +
+        (unread && !current ? " -mx-[7px] -my-1 px-1.5 py-[3px] " + unreadMarkClass : "")
+      }
+    >
+      {channel.ty === "text" ? (
+        <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
+      ) : (
+        <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
+      )}
+      {unread ? (
+        <>
+          <span aria-hidden="true" className="truncate">
+            {channel.name}
+          </span>
+          <span className="sr-only">{format(m.unreadLabel, { name: channel.name })}</span>
+        </>
+      ) : (
+        <span className="truncate">{channel.name}</span>
+      )}
+    </span>
   );
 }

@@ -37,3 +37,5 @@ pub mod m20260926_151436_user_preferences;
 pub mod m20260927_014901_threads_and_dms;
 pub mod m20260927_032431_two_factor_and_passkeys;
 pub mod m20260927_055541_benchmark_runs;
+pub mod m20260928_002524_poll_write_ins;
+pub mod m20260928_010907_read_state;

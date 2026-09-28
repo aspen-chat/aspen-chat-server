@@ -17,6 +17,7 @@ import type {
   MessageWindow,
   Poll,
   Reactions,
+  ReadState,
   RecordStore,
   SyncStatus,
   Topic,
@@ -185,6 +186,26 @@ export function usePoll(id: string): Poll | undefined {
 /** The options the caller has voted for on a poll. */
 export function useMyVotes(pollId: string): ReadonlySet<number> {
   return useTopic(`poll:${pollId}`, (s) => s.myVotes(pollId));
+}
+
+/** How far the caller has read a channel, if it keeps a read position. */
+export function useReadState(channelId: string): ReadState | undefined {
+  return useTopic(`read:${channelId}`, (s) => s.readState(channelId));
+}
+
+/** Whether a channel holds a message by someone else that the caller has not read. */
+export function useUnread(channelId: string): boolean {
+  return useTopic(`read:${channelId}`, (s) => s.unread(channelId));
+}
+
+/** The communities with an unread channel, and `UNREAD_DMS` when a DM is unread. */
+export function useUnreadPlaces(): ReadonlySet<string> {
+  return useTopic("unread", (s) => s.unreadPlaces());
+}
+
+/** The options on a poll that are the caller's own write-ins. */
+export function useMyWriteIns(pollId: string): ReadonlySet<number> {
+  return useTopic(`poll:${pollId}`, (s) => s.myWriteIns(pollId));
 }
 
 /**

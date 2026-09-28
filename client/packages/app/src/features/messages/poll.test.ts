@@ -1,6 +1,16 @@
 import type { Poll } from "@aspen/protocol";
 import { describe, expect, it } from "vitest";
-import { optionName, pollOpen, pollOutcome, sharePercent, timeLeft } from "./poll";
+import { format, en } from "@/i18n/messages";
+import {
+  choiceAt,
+  optionName,
+  outcomeText,
+  pollChoices,
+  pollOpen,
+  pollOutcome,
+  sharePercent,
+  timeLeft,
+} from "./poll";
 
 function poll(counts: number[], extra: Partial<Poll> = {}): Poll {
   return {
@@ -14,6 +24,8 @@ function poll(counts: number[], extra: Partial<Poll> = {}): Poll {
     question: "q",
     options: counts.map((_, i) => ({ label: `o${String(i)}` })),
     multipleChoice: false,
+    allowWriteIns: false,
+    writeIns: [],
     anonymous: true,
     results: counts.map((count) => ({ count })),
     ...extra,
@@ -21,6 +33,23 @@ function poll(counts: number[], extra: Partial<Poll> = {}): Poll {
 }
 
 describe("polls", () => {
+  it("lists write-ins after the options, keeping the indices of removed ones", () => {
+    const tacos = poll([1, 0, 3, 0, 2], {
+      options: [{ label: "o0" }, { label: "o1" }],
+      writeIns: [{ label: "Tacos", writtenBy: "w" }, null, { label: "Curry" }],
+    });
+    expect(
+      pollChoices(tacos).map((c) => [c.index, c.option.label, c.writeIn, c.writtenBy]),
+    ).toEqual([
+      [0, "o0", false, null],
+      [1, "o1", false, null],
+      [2, "Tacos", true, "w"],
+      [4, "Curry", true, null],
+    ]);
+    expect(choiceAt(tacos, 3)).toBeUndefined();
+    expect(outcomeText(en, tacos)).toBe(format(en.poll.winner, { option: "Tacos", count: "3" }));
+  });
+
   it("reports a winner, a tie, or no votes", () => {
     expect(pollOutcome(poll([0, 0]))).toEqual({ kind: "noVotes" });
     expect(pollOutcome(poll([1, 3, 2]))).toEqual({ kind: "winner", option: 1, count: 3 });

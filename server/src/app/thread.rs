@@ -163,13 +163,14 @@ pub async fn record_reply(
 }
 
 /// Counts a message posted at `at` toward its channel's thread summary, when the channel is a
-/// thread; for messages made outside `app::message::create_message`, such as polls.
+/// thread; for messages made outside `app::message::create_message`, such as polls. Returns
+/// whether the channel is a thread.
 pub async fn record_if_reply(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     channel_id: ChannelId,
     at: DateTime<Utc>,
-) -> app::Result<()> {
+) -> app::Result<bool> {
     let ty: ChannelType = channel::table
         .select(channel::ty)
         .filter(channel::id.eq(channel_id))
@@ -177,8 +178,9 @@ pub async fn record_if_reply(
         .await?;
     if ty == ChannelType::Thread {
         record_reply(state, conn, channel_id, at).await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Takes a deleted reply out of its thread's summary and announces it. The reply is already

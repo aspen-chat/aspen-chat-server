@@ -5,7 +5,14 @@ use crate::api::include::{IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::api::link_preview::LinkPreview;
 use crate::api::message_enum::Message;
 use crate::api::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
-use crate::api::poll::PollVote;
+use crate::api::poll::{OwnWriteIn, PollVote};
+
+/// The polls on a page of messages, with the caller's own votes and write-ins on them.
+type PollSideload = (
+    Vec<crate::api::message_enum::Poll>,
+    Vec<PollVote>,
+    Vec<OwnWriteIn>,
+);
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_MESSAGES};
 use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use crate::app::{AttachmentId, ChannelId, MessageId, PollId, UserId};
@@ -106,13 +113,12 @@ async fn sideload_messages(
         },
         async {
             if include.contains(MessageInclude::Polls) {
-                let (polls, votes) = tokio::try_join!(
+                let (polls, votes, write_ins) = tokio::try_join!(
                     app::poll::read_polls(state, &poll_ids),
                     app::poll::read_votes(state, caller, &poll_ids),
+                    app::poll::read_own_write_ins(state, caller, &poll_ids),
                 )?;
-                Ok::<Option<(Vec<crate::api::message_enum::Poll>, Vec<PollVote>)>, app::Error>(
-                    Some((polls, votes)),
-                )
+                Ok::<Option<PollSideload>, app::Error>(Some((polls, votes, write_ins)))
             } else {
                 Ok(None)
             }
@@ -136,9 +142,9 @@ async fn sideload_messages(
             }
         },
     )?;
-    let (polls, poll_votes) = match polls {
-        Some((polls, votes)) => (Some(polls), Some(votes)),
-        None => (None, None),
+    let (polls, poll_votes, own_write_ins) = match polls {
+        Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
+        None => (None, None, None),
     };
     Ok(Included {
         users: users.map(|users| users.into_iter().map(api::user::user_to_api).collect()),
@@ -149,6 +155,7 @@ async fn sideload_messages(
         }),
         polls,
         poll_votes,
+        own_write_ins,
         channels: threads,
         messages: echoes,
         ..Included::default()

@@ -126,7 +126,9 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::Category(_)
         | ServerEvent::Invite(_) => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,
-        ServerEvent::UserPreferencesChanged { .. } => ScopeKind::User,
+        ServerEvent::UserPreferencesChanged { .. } | ServerEvent::ChannelRead { .. } => {
+            ScopeKind::User
+        }
         ServerEvent::User(_) => ScopeKind::UserEverywhere,
     }
 }

@@ -150,6 +150,19 @@ user = { requests = 60, per_seconds = 60, burst = 20, bucket = "votes" }
 [rate_limits.endpoints."DELETE /polls/{poll}/votes/{option}/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20, bucket = "votes" }
 
+# A write-in adds an answer everyone sees, so it is slower than a vote.
+[rate_limits.endpoints."POST /polls/{poll}/write-ins"]
+user = { requests = 10, per_seconds = 60, burst = 3 }
+per_poll = { requests = 60, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."DELETE /polls/{poll}/write-ins/{option}"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+# Clients report reading as it happens, at most every few seconds per channel, and a reader
+# moving between channels reports each one.
+[rate_limits.endpoints."PUT /channels/{channel}/read-states/@me"]
+user = { requests = 120, per_seconds = 60, burst = 30 }
+
 [rate_limits.endpoints."POST /communities"]
 user = { requests = 10, per_seconds = 3600, burst = 3 }
 

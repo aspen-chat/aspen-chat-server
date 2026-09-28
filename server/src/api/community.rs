@@ -40,6 +40,8 @@ pub enum CommunityInclude {
     /// The calls in progress on the communities' voice channels, as `included.voiceSessions`
     /// and `included.voiceParticipants`.
     Voice,
+    /// How far the caller has read each of the communities' channels, as `included.readStates`.
+    ReadStates,
 }
 
 /// Body of a community read. Named aliases rather than `Sideloaded<Community>` at the handler
@@ -68,7 +70,7 @@ pub async fn sideload_communities(
     communities: &[CommunityId],
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
-    let (channels, categories, members, voice) = tokio::try_join!(
+    let (channels, categories, members, voice, read_states) = tokio::try_join!(
         async {
             if include.contains(CommunityInclude::Channels) {
                 app::community::read_communities_channels(state, communities)
@@ -105,6 +107,15 @@ pub async fn sideload_communities(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(CommunityInclude::ReadStates) {
+                app::read_state::read_communities_read_states(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let mut included = Included {
         channels: channels.map(|channels| {
@@ -117,6 +128,12 @@ pub async fn sideload_communities(
             categories
                 .into_iter()
                 .map(api::category::category_to_api)
+                .collect()
+        }),
+        read_states: read_states.map(|states| {
+            states
+                .into_iter()
+                .map(api::read_state::read_state_to_api)
                 .collect()
         }),
         ..Included::default()

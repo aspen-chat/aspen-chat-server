@@ -1,4 +1,6 @@
 node_modules/
+# Vite's dependency cache.
+.vite/
 dist/
 dist-electron/
 out/

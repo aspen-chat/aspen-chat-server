@@ -61,6 +61,7 @@ export {
 } from "./events";
 export {
   RecordStore,
+  UNREAD_DMS,
   WINDOW_MAX_MESSAGES,
   groupChannels,
   isDm,
@@ -72,6 +73,7 @@ export {
   type MessageWindow,
   type PollVote,
   type Reactions,
+  type ReadState,
   type VoiceParticipantState,
   type Topic,
 } from "./store";
@@ -99,6 +101,7 @@ export type {
   Poll,
   PollOption,
   PollOptionResult,
+  PollWriteIn,
   User,
   UserCommunity,
   UserOnlineStatus,
@@ -107,7 +110,7 @@ export type {
   VoiceSessionEndReason,
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
-export { PRESENCE_BATCH, PRESENCE_POLL_MS } from "./sync";
+export { PRESENCE_BATCH, PRESENCE_POLL_MS, READ_REPORT_MS } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
   MicrophoneError,

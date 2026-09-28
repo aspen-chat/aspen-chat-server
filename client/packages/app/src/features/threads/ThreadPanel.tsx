@@ -87,7 +87,7 @@ export function ThreadPanel({
             onPress={() => {
               void navigate(channelLink(home, parentId));
             }}
-            className="rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="tap-target rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             <XIcon size={18} aria-hidden="true" />
           </Button>

@@ -5,6 +5,7 @@ import {
   headingClass,
   overlayClass,
   secondaryButtonClass,
+  wideModalClass,
 } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
 
@@ -63,7 +64,7 @@ export function SourcePickerDialog() {
       isDismissable
       className={overlayClass}
     >
-      <Modal className="w-full max-w-3xl rounded-lg border border-line bg-surface-raised p-5 shadow-xl outline-none">
+      <Modal className={wideModalClass}>
         <Dialog className={dialogClass}>
           <Heading slot="title" className={headingClass}>
             {m.voice.pickSourceHeading}

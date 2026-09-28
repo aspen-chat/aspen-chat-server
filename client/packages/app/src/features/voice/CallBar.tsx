@@ -13,7 +13,7 @@ import { useMessages } from "@/i18n/context";
 
 const buttonClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover " +
-  "focus-visible:ring-2 focus-visible:ring-accent/50";
+  "focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-2.5";
 
 /** The call the user is in, above their user bar: where they are, and mute, deafen, leave. */
 export function CallBar() {

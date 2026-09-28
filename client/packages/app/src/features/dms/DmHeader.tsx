@@ -42,7 +42,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
       <Link
         to="/dms"
         aria-label={m.dms.back}
-        className="rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
+        className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >
         <ArrowLeftIcon size={18} aria-hidden="true" />
       </Link>

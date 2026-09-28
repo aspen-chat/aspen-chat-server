@@ -1,4 +1,4 @@
-import { Outlet } from "@tanstack/react-router";
+import { Outlet, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
 import { SyncProvider } from "@/api/sync";
@@ -51,15 +51,23 @@ function SignedOut() {
   );
 }
 
+/**
+ * The signed-in app: the community rail beside the route. On a narrow screen a conversation
+ * (a channel, a DM, a thread) takes the whole width, and the rail shows with the lists the
+ * back links lead to.
+ */
 function SignedIn() {
   const client = useAspenClient();
+  const { channelId } = useParams({ strict: false });
   return (
     <SyncProvider client={client}>
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />
         <div className="flex min-h-0 flex-1">
-          <CommunityRail />
+          <div className={channelId === undefined ? "flex" : "hidden md:flex"}>
+            <CommunityRail />
+          </div>
           <Outlet />
         </div>
       </div>

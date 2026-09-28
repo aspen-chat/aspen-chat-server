@@ -5,6 +5,7 @@ import { Button, Dialog, DialogTrigger, Heading, Modal, ModalOverlay } from "rea
 import { useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
+  dangerButtonClass,
   dialogClass,
   headingClass,
   modalClass,
@@ -12,10 +13,6 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
-
-const dangerButtonClass =
-  "rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-accent-contrast outline-none " +
-  "hover:opacity-90 pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-danger/50";
 
 /** A message's Delete control and the confirmation it asks for. */
 export function DeleteMessageDialog({

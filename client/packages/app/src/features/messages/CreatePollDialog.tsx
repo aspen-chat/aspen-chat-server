@@ -48,6 +48,7 @@ import {
 } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
+import { MAX_OPTION_CHARS } from "@/features/messages/poll";
 
 /** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
 const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
@@ -56,7 +57,6 @@ const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 10;
 const MAX_QUESTION_CHARS = 300;
-const MAX_OPTION_CHARS = 100;
 
 const DURATIONS: readonly { key: keyof Messages["poll"]["durations"]; seconds: number }[] = [
   { key: "fiveMinutes", seconds: 5 * 60 },
@@ -118,6 +118,7 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
   const [options, setOptions] = useState<PollOption[]>([{ label: "" }, { label: "" }]);
   const [multipleChoice, setMultipleChoice] = useState(false);
   const [anonymous, setAnonymous] = useState(false);
+  const [allowWriteIns, setAllowWriteIns] = useState(false);
   const [duration, setDuration] = useState<string>("day");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +146,7 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
         options: trimmedOptions,
         multipleChoice,
         anonymous,
+        allowWriteIns,
         durationSeconds: seconds,
       });
       close();
@@ -282,22 +284,18 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
           </ListBox>
         </Popover>
       </Select>
-      <CheckboxField isSelected={anonymous} onChange={setAnonymous}>
-        <CheckboxButton className={radioClass}>
-          <span className={boxClass}>
-            <CheckIcon
-              size={12}
-              weight="bold"
-              aria-hidden="true"
-              className="hidden group-selected:block"
-            />
-          </span>
-          <span className="flex flex-col">
-            <span className="font-medium">{m.poll.anonymous}</span>
-            <span className="text-xs text-ink-muted">{m.poll.anonymousHint}</span>
-          </span>
-        </CheckboxButton>
-      </CheckboxField>
+      <PollCheckbox
+        isSelected={allowWriteIns}
+        onChange={setAllowWriteIns}
+        label={m.poll.allowWriteIns}
+        hint={m.poll.allowWriteInsHint}
+      />
+      <PollCheckbox
+        isSelected={anonymous}
+        onChange={setAnonymous}
+        label={m.poll.anonymous}
+        hint={m.poll.anonymousHint}
+      />
       <div className="flex justify-end gap-2">
         <Button onPress={close} className={secondaryButtonClass}>
           {m.cancel}
@@ -369,6 +367,37 @@ function OptionEmojiPicker({
         </Dialog>
       </Popover>
     </DialogTrigger>
+  );
+}
+
+function PollCheckbox({
+  isSelected,
+  onChange,
+  label,
+  hint,
+}: {
+  isSelected: boolean;
+  onChange: (selected: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <CheckboxField isSelected={isSelected} onChange={onChange}>
+      <CheckboxButton className={radioClass}>
+        <span className={boxClass}>
+          <CheckIcon
+            size={12}
+            weight="bold"
+            aria-hidden="true"
+            className="hidden group-selected:block"
+          />
+        </span>
+        <span className="flex flex-col">
+          <span className="font-medium">{label}</span>
+          <span className="text-xs text-ink-muted">{hint}</span>
+        </span>
+      </CheckboxButton>
+    </CheckboxField>
   );
 }
 

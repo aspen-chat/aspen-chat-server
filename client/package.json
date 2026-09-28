@@ -21,7 +21,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm -r --filter './packages/*' test",
-    "e2e": "pnpm --filter @aspen/app e2e"
+    "e2e": "pnpm --filter @aspen/app e2e",
+    "e2e:docker": "scripts/e2e-docker.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

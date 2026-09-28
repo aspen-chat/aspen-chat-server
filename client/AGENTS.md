@@ -127,6 +127,16 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   validates it as a single emoji. The outcome text of the announcement is
   composed on the client from the final tally (`src/features/messages/poll.ts`), so it is
   localized like everything else.
+  A poll whose creator allowed write-ins lists its `writeIns` after its `options`, and both
+  share one index space that votes use: write-in `i` is answer `options.length + i`, and a
+  removed one stays as `null` so no index moves (`pollChoices`, `choiceAt`). Each write-in
+  notes who wrote it in, or only that it was written in on an anonymous poll. Reads with votes
+  also sideload `ownWriteIns`, the caller's own standing write-ins (`store.myWriteIns`), which
+  decide whether the card offers the field for one (one each) and a remove control, offered
+  to the writer and the poll's creator. Writing in an answer the poll already has votes for
+  it instead (`sync.writeIn` resolves to the answer voted for). A poll's `update` event that
+  nulls an answer also drops the caller's vote and write-in on it, since anyone permitted may
+  remove one.
 - Reordering is drag and drop from React Aria (`useDragAndDrop` on a `GridList` for the
   community rail and one per channel group, each row carrying a `Button slot="drag"` handle
   that keyboard and screen reader users drag with), with `src/features/layout/reorder.ts`
@@ -299,6 +309,21 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   A profile card's Message button opens the one-to-one DM (`AspenSync.openDm`). `DmHeader`
   titles a DM with the other people's names (`useDmTitle`) and, for a group, offers
   `addDmRecipient` and `leaveDm`. `ChannelScreen` serves DMs and community channels alike.
+- Unread is `RecordStore` state from the `readStates` sideload of the community list and the
+  DM list, one `ReadState` per channel (topic `read:<channelId>`; `useReadState`, `useUnread`),
+  kept current by events: someone else's new message moves `lastMessage`, the caller's own
+  moves `lastRead`, `channelRead` brings another device's reading, and a deleted message that
+  was a channel's `lastMessage` makes `AspenSync` read that channel's state again. A channel is
+  unread while `lastMessage` sorts after `lastRead`. `unreadPlaces()` (topic `unread`,
+  `useUnreadPlaces`) names the communities with something unread, and `UNREAD_DMS` for the DMs,
+  for the rail's dots, which sit half under the entry's icon. An unread channel's icon and name,
+  or a whole unread DM row, are marked with `unreadMarkClass` (an accent outline over a faint
+  accent fill, padded so nothing moves), and every unread row's accessible name says so. `MessageList` marks the newest message on screen read through
+  `AspenSync.markRead`, which updates the store at once and reports to the server at most every
+  `READ_REPORT_MS` per channel, and only while the page is visible and focused; leaving the
+  channel or hiding the page flushes the report. The "New Messages" line is placed where the
+  read position was when the channel opened, and only if it was unread then, and stays there
+  while the channel is open; posting removes it.
 - Presence is pulled. The server pushes no status events; `AspenSync` asks
   `GET /users/statuses` for `RecordStore.presenceCandidates()` (the members shown for every
   community and everyone in a call), in batches of `PRESENCE_BATCH`, when the sync goes live,
@@ -333,6 +358,28 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 - Styling is Tailwind CSS 4 with `tailwindcss-react-aria-components`, so interaction states are
   the `pressed:`, `selected:`, `focus-visible:`, `invalid:` variants driven by React Aria's data
   attributes. Do not add `:hover`/`:active` CSS by hand for those states.
+- Phones get the same app, one pane at a time. Below Tailwind's `md` breakpoint a list (the
+  channel list, the DM list) and a conversation never share the screen: a conversation takes the
+  whole width, the community rail included, and its back link leads to the list. Layout choices
+  made in code use `useMediaQuery(MEDIUM_SCREEN)` (`src/features/layout/useMediaQuery.ts`) so they
+  agree with the class names; `CommunityIndex`, for one, opens the first channel only on a wide
+  screen, since on a narrow one the index is the channel list.
+- Copy to the clipboard with `copyText` (`src/features/layout/clipboard.ts`), never
+  `navigator.clipboard` directly: the Clipboard API is missing on a page served over plain HTTP,
+  such as a dev server a phone reaches by address, and `copyText` falls back to a copy that
+  works there and in iOS Safari.
+- Nothing may depend on hover, which a touch screen does not have. A control revealed on hover is
+  also revealed by focus (a message focuses when tapped, which shows its actions) or shown
+  outright with `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
+  widens what a finger can hit to 44px on a touch screen without moving anything; controls side
+  by side are drawn larger with `pointer-coarse:` instead, so their areas do not overlap. The app
+  pads itself by the safe-area insets, since the page is laid out under a notch
+  (`viewport-fit=cover`); a modal's overlay sits outside `#root` and pads itself the same way
+  (`overlay-inset`).
+- Every modal is drawn in `modalClass` (or `wideModalClass`) from
+  `src/features/invites/dialog.ts`, which never grows taller than the screen and scrolls within
+  itself, so a long form on a phone reaches its buttons. Build new modals on those rather than
+  on a class string of their own.
 - User-facing strings live in `packages/app/src/i18n/messages.ts` with camelCase keys, matching
   the server's locale files. Server Problem text is already localized and is shown as-is.
 - Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
@@ -350,7 +397,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   and dropping the segment never reloads the window. History pages in on its own as the reader
   nears either end of the loaded window (`loadOlder` / `loadNewer`), and the store keeps the
   window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records; the viewport is
-  re-anchored on the topmost visible message after every change. A window that is not at the
+  re-anchored on the topmost visible message after every change, measured when the change is
+  shown rather than when its page was asked for, since the reader keeps scrolling meanwhile.
+  `MessageList` shows a change only once the list is at rest (no finger on it, and no scroll event
+  for `SETTLE_MS`): iOS Safari has no scroll anchoring of its own and loses or fights a scroll
+  correction made while the list is dragged or coasting. Nothing above the view may change height
+  while a page loads; the loading lines keep theirs. A window that is not at the
   latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
   which reloads the newest page.
 - The UI thread is the only thread. Anything that awaits (network, storage) must not block
@@ -362,6 +414,16 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 pnpm typecheck && pnpm lint && pnpm test
 ```
 
-Run `pnpm e2e` when a change touches the login flow or anything the Playwright specs cover. The
-suite runs against a stubbed server in Chromium, Firefox, and WebKit; add browser-specific
-regressions there rather than in unit tests.
+Run `pnpm e2e` when a change touches the login flow, the layout, or anything the Playwright specs
+cover. The suite runs against a stubbed server in Chromium, Firefox, and WebKit at desktop size and
+on two phones (`phone-chromium`, a Pixel 7, and `phone-webkit`, an iPhone 14), which also run
+`e2e/mobile.spec.ts`: the one-pane navigation, no sideways scrolling, tap-revealed message actions,
+44px touch areas, and pickers that fit the screen. Specs that need a signed-in account with
+communities, channels, a thread, and a DM sign in to the stubbed world in `e2e/world.ts`, which
+refuses any request it does not answer with a Problem naming it. `E2E_PORT` picks the dev server's
+port (5173 by default) when another one is already running there. `pnpm e2e:docker` runs the
+suite, or the projects named after it (`pnpm e2e:docker --project=phone-webkit`), in Playwright's
+own Docker image, which has every browser: WebKit has no supported build for most Linux
+distributions (Arch among them), and this is how to run the WebKit projects there. Add
+browser-specific regressions there rather than in unit tests; CI runs the Chromium desktop and
+phone projects.

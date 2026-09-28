@@ -1,5 +1,5 @@
 use crate::api::link_preview::LinkPreview;
-use crate::api::poll::{PollOption, PollOptionResult};
+use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
 use crate::api::user::{CustomStatus, UserOnlineStatus};
 use crate::api::voice::VoiceSessionEndReason;
 use crate::api::{ChannelType, MessageKind};
@@ -36,6 +36,14 @@ enum MessageEnumSource {
     UserPreferencesChanged {
         user: UserId,
         updated_at: chrono::DateTime<Utc>,
+    },
+    // How far the user has read a channel moved forward, on one of their devices or by their
+    // posting there; the others follow. `last_read` is a position among the channel's message
+    // ids (see `app::read_state`), and it only ever moves forward.
+    #[message_gen(custom_event)]
+    ChannelRead {
+        channel: ChannelId,
+        last_read: MessageId,
     },
     Message {
         #[message_gen(id)]
@@ -91,7 +99,8 @@ enum MessageEnumSource {
         // Set by the closer once `closes_at` has passed; votes are refused from then on.
         #[message_gen(server_authoritative = "mutable")]
         closed_at: Option<chrono::DateTime<Utc>>,
-        // One entry per option, in option order, updated with every vote.
+        // One entry per option, the creator's then the written-in ones, in index order, updated
+        // with every vote.
         #[message_gen(server_authoritative = "mutable")]
         results: Vec<PollOptionResult>,
         #[message_gen(permanent)]
@@ -100,6 +109,14 @@ enum MessageEnumSource {
         options: Vec<PollOption>,
         #[message_gen(permanent)]
         multiple_choice: bool,
+        // Whether voters may add answers of their own, one each.
+        #[message_gen(permanent)]
+        allow_write_ins: bool,
+        // The answers voters added, in the order they were added, after `options` in the index
+        // space votes use: the first is option `options.len()`. A removed one stays as `null`,
+        // keeping its index, so an answer's index never changes.
+        #[message_gen(server_authoritative = "mutable")]
+        write_ins: Vec<Option<PollWriteIn>>,
         // An anonymous poll reports counts only; who voted is never sent to any client.
         #[message_gen(permanent)]
         anonymous: bool,

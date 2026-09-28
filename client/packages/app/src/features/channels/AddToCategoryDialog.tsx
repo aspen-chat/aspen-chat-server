@@ -23,7 +23,7 @@ export function AddToCategoryDialog({ category }: { category: Category }) {
       <Tooltip text={label}>
         <Button
           aria-label={label}
-          className="rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 hover:bg-surface-hover hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="tap-target rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 pointer-coarse:opacity-100 hover:bg-surface-hover hover:text-ink focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <PlusIcon size={14} aria-hidden="true" />
         </Button>

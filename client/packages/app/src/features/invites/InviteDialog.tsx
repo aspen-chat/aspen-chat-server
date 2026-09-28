@@ -26,6 +26,7 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { inviteLink } from "@/features/invites/inviteCode";
+import { copyText } from "@/features/layout/clipboard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -176,28 +177,50 @@ function InviteRow({ invite, now }: { invite: Invite; now: number }) {
   const m = useMessages();
   const sync = useSync();
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const link = inviteLink(invite.code);
   const expiresAt = invite.expiresAt == null ? null : new Date(invite.expiresAt);
   const expired = expiresAt !== null && expiresAt.getTime() < now;
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(link);
+  async function copy(near: Element) {
+    if (await copyText(link, near)) {
+      setCopyFailed(false);
       setCopied(true);
       setTimeout(() => {
         setCopied(false);
       }, 2000);
-    } catch {
-      // Clipboard access can be refused; the link is on screen to copy by hand.
+    } else {
+      setCopyFailed(true);
     }
   }
 
+  // The code is what tells invites apart; the rest of the link is the same for all of them, so
+  // it shows only where it is copied from, or when copying failed and it must be copied by hand.
   return (
     <li className="flex flex-col gap-1 rounded-md border border-line px-3 py-2 text-sm">
-      <code className="truncate font-mono text-xs" title={link}>
-        {link}
+      <code className="truncate font-mono text-sm" title={link}>
+        {invite.code}
       </code>
+      {copyFailed && (
+        <div className="flex flex-col gap-1">
+          <p role="alert" className="text-xs text-ink-muted">
+            {m.copyFailed}
+          </p>
+          <input
+            readOnly
+            value={link}
+            aria-label={m.copyLink}
+            ref={(field) => {
+              field?.select();
+            }}
+            onFocus={(event) => {
+              event.currentTarget.select();
+            }}
+            className="w-full rounded border border-line bg-surface px-2 py-1 font-mono text-base md:text-xs"
+          />
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <span className={"flex-1 " + (expired ? "text-danger" : "text-ink-muted")}>
           {expiresAt === null
@@ -207,8 +230,8 @@ function InviteRow({ invite, now }: { invite: Invite; now: number }) {
               : format(m.expiresOn, { date: dateFormat.format(expiresAt) })}
         </span>
         <Button
-          onPress={() => {
-            void copy();
+          onPress={(event) => {
+            void copy(event.target);
           }}
           className={secondaryButtonClass}
         >

@@ -33,6 +33,12 @@ export type Attachment = components["schemas"]["Attachment"];
 export type Icon = components["schemas"]["Icon"];
 export type Included = components["schemas"]["Included"];
 export type PollVote = components["schemas"]["PollVote"];
+/**
+ * How far the caller has read a channel. `lastRead` is a position among the channel's message
+ * ids, whose lexical order is chronological, so the channel is unread while `lastMessage` sorts
+ * after it. An empty `lastRead` is before every message.
+ */
+export type ReadState = components["schemas"]["ReadState"];
 
 export type Listener = () => void;
 
@@ -63,6 +69,9 @@ export type Topic = string;
  * holds more than this many messages in memory; what was dropped is read again on the way back.
  */
 export const WINDOW_MAX_MESSAGES = 150;
+
+/** Stands for the DMs among `RecordStore.unreadPlaces`, beside community ids. */
+export const UNREAD_DMS = "dms";
 
 /**
  * The loaded portion of a channel's history. Message ids are UUIDv7, so their lexical order is
@@ -171,6 +180,9 @@ export class RecordStore {
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
+  /** The options the caller wrote in, by poll, which an anonymous poll's record never says. */
+  readonly #myWriteIns = new Map<string, ReadonlySet<number>>();
+  readonly #readStates = new Map<string, ReadState>();
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
@@ -301,6 +313,50 @@ export class RecordStore {
   /** Topic `poll:<id>`: the options the calling user has voted for on the poll. */
   myVotes(pollId: string): ReadonlySet<number> {
     return this.#myVotes.get(pollId) ?? EMPTY_VOTES;
+  }
+
+  /** Topic `poll:<id>`: the options the calling user wrote in on the poll and still stand. */
+  myWriteIns(pollId: string): ReadonlySet<number> {
+    return this.#myWriteIns.get(pollId) ?? EMPTY_VOTES;
+  }
+
+  /** Topic `read:<channelId>`: how far the caller has read the channel, if it is tracked. */
+  readState(channelId: string): ReadState | undefined {
+    return this.#readStates.get(channelId);
+  }
+
+  /** Topic `read:<channelId>`: whether the channel holds a message by someone else not yet read. */
+  unread(channelId: string): boolean {
+    const state = this.#readStates.get(channelId);
+    return state?.lastMessage != null && state.lastMessage > state.lastRead;
+  }
+
+  /**
+   * Topic `unread`: the communities with an unread channel, and `UNREAD_DMS` when a DM is
+   * unread.
+   */
+  unreadPlaces(): ReadonlySet<string> {
+    return this.#memoized("unread", () => {
+      const places = new Set<string>();
+      for (const state of this.#readStates.values()) {
+        const channel = this.#channels.get(state.channel);
+        if (channel !== undefined && this.unread(state.channel)) {
+          places.add(channel.community ?? UNREAD_DMS);
+        }
+      }
+      return places;
+    });
+  }
+
+  /** The tracked channels whose newest message by someone else is `messageId`. */
+  channelsLastMessaged(messageId: string): string[] {
+    const channels: string[] = [];
+    for (const state of this.#readStates.values()) {
+      if (state.lastMessage === messageId) {
+        channels.push(state.channel);
+      }
+    }
+    return channels;
   }
 
   /**
@@ -541,6 +597,7 @@ export class RecordStore {
       }
       this.#polls.clear();
       this.#myVotes.clear();
+      this.#myWriteIns.clear();
       // Calls are re-read with the communities; anything not in the bootstrap is over.
       for (const session of this.#voiceSessions.values()) {
         this.#touch(`voice:${session.channel}`);
@@ -580,6 +637,9 @@ export class RecordStore {
       for (const poll of included.polls ?? []) {
         this.#putPoll(poll);
       }
+      for (const state of included.readStates ?? []) {
+        this.#putReadState(state);
+      }
       for (const session of included.voiceSessions ?? []) {
         this.#putVoiceSession(session);
       }
@@ -612,6 +672,23 @@ export class RecordStore {
         }
         for (const [pollId, options] of byPoll) {
           this.#setMyVotes(pollId, options);
+        }
+        // The caller's own write-ins come the same way, with the same polls.
+        const written = new Map<string, Set<number>>();
+        for (const poll of included.polls ?? []) {
+          written.set(poll.id, new Set());
+        }
+        for (const own of included.ownWriteIns ?? []) {
+          let options = written.get(own.poll);
+          if (options === undefined) {
+            options = new Set();
+            written.set(own.poll, options);
+          }
+          options.add(own.option);
+        }
+        for (const [pollId, options] of written) {
+          this.#myWriteIns.set(pollId, options);
+          this.#touch(`poll:${pollId}`);
         }
       }
       const memberships = included.userCommunities;
@@ -762,6 +839,58 @@ export class RecordStore {
     });
   }
 
+  /** Records that the caller's write-in at `option` was added or removed. */
+  /**
+   * Records that the caller has read `channelId` up to `messageId`, ahead of the server's
+   * `channelRead`. A position only moves forward.
+   */
+  setLastRead(channelId: string, messageId: string): void {
+    this.#batch(() => {
+      const state = this.#readStates.get(channelId);
+      if (state !== undefined && messageId > state.lastRead) {
+        this.#putReadState({ ...state, lastRead: messageId });
+      }
+    });
+  }
+
+  /** Stores a read state the server sent for one channel, replacing what was held. */
+  putReadState(state: ReadState): void {
+    this.#batch(() => {
+      this.#putReadState(state);
+    });
+  }
+
+  setMyWriteIn(pollId: string, option: number, mine: boolean): void {
+    this.#batch(() => {
+      const next = new Set(this.myWriteIns(pollId));
+      if (mine) {
+        next.add(option);
+      } else {
+        next.delete(option);
+      }
+      this.#myWriteIns.set(pollId, next);
+      this.#touch(`poll:${pollId}`);
+    });
+  }
+
+  /**
+   * Drops the caller's votes and write-ins on answers the poll no longer offers, which anyone
+   * may have removed: a removed write-in keeps its index but loses its votes.
+   */
+  #forgetRemovedWriteIns(poll: Poll): void {
+    const removed = (option: number) =>
+      option >= poll.options.length && poll.writeIns[option - poll.options.length] == null;
+    const votes = this.myVotes(poll.id);
+    if (Array.from(votes).some(removed)) {
+      this.#setMyVotes(poll.id, new Set(Array.from(votes).filter((o) => !removed(o))));
+    }
+    const writeIns = this.myWriteIns(poll.id);
+    if (Array.from(writeIns).some(removed)) {
+      this.#myWriteIns.set(poll.id, new Set(Array.from(writeIns).filter((o) => !removed(o))));
+      this.#touch(`poll:${poll.id}`);
+    }
+  }
+
   /** Installs a community's invite list as read from the server, replacing what was held. */
   replaceInvites(communityId: string, invites: readonly Invite[]): void {
     this.#batch(() => {
@@ -831,6 +960,8 @@ export class RecordStore {
       this.#reactions.clear();
       this.#polls.clear();
       this.#myVotes.clear();
+      this.#myWriteIns.clear();
+      this.#readStates.clear();
       this.#windows.clear();
       this.#invites.clear();
       this.#myCommunities.clear();
@@ -939,6 +1070,7 @@ export class RecordStore {
             this.#putMessage(message);
             this.#appendToWindow(message);
             this.#noteDmActivity(message.channelId, message.id);
+            this.#noteNewMessage(message);
           } else if (event.type === "update") {
             const message = this.#messages.get(event.id);
             if (message !== undefined) {
@@ -1000,7 +1132,11 @@ export class RecordStore {
           } else if (event.type === "update") {
             const poll = this.#polls.get(event.id);
             if (poll !== undefined) {
-              this.#putPoll(mergePatch(poll, event));
+              const next = mergePatch(poll, event);
+              this.#putPoll(next);
+              if (event.writeIns != null) {
+                this.#forgetRemovedWriteIns(next);
+              }
             }
           } else {
             this.#removePoll(event.id);
@@ -1030,6 +1166,13 @@ export class RecordStore {
             this.#removeVoiceParticipant(event.session, event.user);
           }
           break;
+        case "channelRead": {
+          const state = this.#readStates.get(event.channel);
+          if (state !== undefined && event.lastRead > state.lastRead) {
+            this.#putReadState({ ...state, lastRead: event.lastRead });
+          }
+          break;
+        }
         case "voiceSpeaking": {
           const session = Array.from(this.#voiceSessions.values()).find(
             (s) => s.channel === event.channel,
@@ -1197,6 +1340,10 @@ export class RecordStore {
     this.#channels.set(channel.id, channel);
     this.#removedChannels.delete(channel.id);
     this.#touch(`channel:${channel.id}`);
+    // Where an unread channel counts depends on the channel, which may arrive after its state.
+    if (this.#readStates.has(channel.id)) {
+      this.#touch("unread");
+    }
     if (isDm(channel)) {
       // A DM the listing did not have is new, so newer than everything listed.
       if (!this.#dmOrder.includes(channel.id) && !this.#dmActivity.has(channel.id)) {
@@ -1212,10 +1359,45 @@ export class RecordStore {
     }
   }
 
+  #putReadState(state: ReadState): void {
+    this.#readStates.set(state.channel, state);
+    this.#touch(`read:${state.channel}`);
+    this.#touch("unread");
+  }
+
+  /**
+   * Keeps read states current as messages arrive: someone else's message is the channel's
+   * newest, and the caller's own is read, as the server records it. A channel with no read
+   * state yet, one made since the caller's channels were last read, is unread from its start.
+   * Threads keep no read state.
+   */
+  #noteNewMessage(message: Message): void {
+    const channel = this.#channels.get(message.channelId);
+    if (channel === undefined || channel.ty === "thread") {
+      return;
+    }
+    const state = this.#readStates.get(message.channelId) ?? {
+      channel: message.channelId,
+      lastRead: "",
+      lastMessage: null,
+    };
+    if (message.author === this.#myUserId) {
+      if (message.id > state.lastRead) {
+        this.#putReadState({ ...state, lastRead: message.id });
+      }
+    } else if (state.lastMessage == null || message.id > state.lastMessage) {
+      this.#putReadState({ ...state, lastMessage: message.id });
+    }
+  }
+
   #removeChannel(id: string): void {
     const channel = this.#channels.get(id);
     if (channel === undefined) {
       return;
+    }
+    if (this.#readStates.delete(id)) {
+      this.#touch(`read:${id}`);
+      this.#touch("unread");
     }
     this.#channels.delete(id);
     this.#removedChannels.add(id);
@@ -1358,7 +1540,8 @@ export class RecordStore {
   }
 
   #removePoll(id: string): void {
-    if (this.#polls.delete(id) || this.#myVotes.delete(id)) {
+    const writeIns = this.#myWriteIns.delete(id);
+    if (this.#polls.delete(id) || this.#myVotes.delete(id) || writeIns) {
       this.#touch(`poll:${id}`);
     }
   }

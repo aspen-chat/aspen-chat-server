@@ -18,7 +18,8 @@ use crate::api::message_enum::{
     Category, Channel, Community, Message, Poll, User, UserCommunity, VoiceParticipant,
     VoiceSession,
 };
-use crate::api::poll::PollVote;
+use crate::api::poll::{OwnWriteIn, PollVote};
+use crate::api::read_state::ReadState;
 use serde::Serialize;
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 use std::borrow::Cow;
@@ -100,6 +101,16 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub poll_votes: Option<Vec<PollVote>>,
+    /// The calling user's own standing write-ins on the same polls, present with `pollVotes`,
+    /// since an anonymous poll's record does not say who wrote what.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub own_write_ins: Option<Vec<OwnWriteIn>>,
+    /// How far the caller has read each channel in the read, one record per channel they
+    /// belong to, threads excepted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub read_states: Option<Vec<ReadState>>,
     /// The calls in progress on the communities' voice channels, with who is in them as
     /// `voiceParticipants`. Present together whenever voice was requested.
     #[serde(skip_serializing_if = "Option::is_none")]

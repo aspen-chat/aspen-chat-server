@@ -10,6 +10,7 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
+import { copyText } from "@/features/layout/clipboard";
 
 /**
  * Shows a fresh set of recovery codes once. It closes only through "I've saved them", so the
@@ -49,9 +50,10 @@ export function RecoveryCodesDialog({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex gap-2">
               <Button
-                onPress={() => {
-                  void navigator.clipboard.writeText(text).then(() => {
-                    setCopied(true);
+                onPress={(event) => {
+                  void copyText(text, event.target).then((done) => {
+                    // Where copying is impossible the codes are on screen, and can be downloaded.
+                    setCopied(done);
                   });
                 }}
                 className={secondaryButtonClass + " flex items-center gap-1.5"}

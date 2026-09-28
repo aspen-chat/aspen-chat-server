@@ -5,11 +5,20 @@
 //!
 //! Results are computed inside the same transaction that changes the votes, with the poll row
 //! locked, so the `Update` events for one poll leave in the order their tallies were taken.
+//!
+//! A poll's creator may allow write-ins: each voter may add one answer of their own, which
+//! counts as their vote for it and is offered to everyone else, noting who wrote it except on
+//! an anonymous poll. A written-in answer is an option like the creator's, numbered after them;
+//! one that matches an answer already on the poll (ignoring case and spacing) is a vote for that
+//! answer instead. The writer or the poll's creator may remove a write-in, which takes its votes
+//! with it and leaves its index empty, so no other answer's index changes. Under the Insanity
+//! the server lets anyone remove one; the client offers it to the writer and the creator.
 
 use crate::api::message_enum::request::PollCreateRequest;
 use crate::api::message_enum::server_event::{MessageEvent, PollEvent, ServerEvent};
 use crate::api::poll::{
-    PollOption as PollOptionRecord, PollOptionResult, PollVote as PollVoteRecord,
+    OwnWriteIn, PollOption as PollOptionRecord, PollOptionResult, PollVote as PollVoteRecord,
+    PollWriteIn,
 };
 use crate::api::{GlobalServerContext, MessageKind, message_enum};
 use crate::app;
@@ -36,6 +45,9 @@ pub const MAX_OPTION_CHARS: usize = 100;
 pub const MIN_DURATION_SECONDS: u32 = 10;
 /// Four weeks.
 pub const MAX_DURATION_SECONDS: u32 = 4 * 7 * 24 * 60 * 60;
+/// The most answers voters may add to one poll, removed ones included, since each keeps its
+/// index.
+pub const MAX_WRITE_INS: usize = 25;
 /// How often the closer looks for polls whose deadline has passed.
 const CLOSER_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -49,6 +61,7 @@ pub struct Poll {
     pub question: String,
     pub multiple_choice: bool,
     pub anonymous: bool,
+    pub allow_write_ins: bool,
     pub created_at: DateTime<Utc>,
     pub closes_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
@@ -62,6 +75,9 @@ struct PollOption {
     index: i32,
     label: String,
     emoji: Option<String>,
+    write_in: bool,
+    written_by: Option<UserId>,
+    removed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -136,6 +152,7 @@ pub async fn create_poll(
         question,
         multiple_choice: request.multiple_choice,
         anonymous: request.anonymous,
+        allow_write_ins: request.allow_write_ins,
         created_at: now,
         closes_at: now + chrono::Duration::seconds(i64::from(request.duration_seconds)),
         closed_at: None,
@@ -157,6 +174,9 @@ pub async fn create_poll(
                     index: index as i32,
                     label: option.label.clone(),
                     emoji: option.emoji.clone(),
+                    write_in: false,
+                    written_by: None,
+                    removed_at: None,
                 })
                 .collect();
             diesel::insert_into(poll_option::table)
@@ -168,7 +188,11 @@ pub async fn create_poll(
                 .execute(conn.as_mut())
                 .await?;
             let results = empty_results(&row, options.len());
-            let poll_record = to_record(&row, message_row.id, options, results);
+            let choices = Choices {
+                options,
+                write_ins: Vec::new(),
+            };
+            let poll_record = to_record(&row, message_row.id, choices, results);
             let message_record = message_record(&message_row);
             // The poll goes out first so a client holds it by the time its message arrives.
             publish_event(
@@ -185,7 +209,10 @@ pub async fn create_poll(
                 &ServerEvent::Message(MessageEvent::Create(message_record.clone())),
             )
             .await?;
-            app::thread::record_if_reply(state, conn.as_mut(), channel, now).await?;
+            if !app::thread::record_if_reply(state, conn.as_mut(), channel, now).await? {
+                app::read_state::advance(state, conn.as_mut(), creator, channel, message_row.id)
+                    .await?;
+            }
             Ok((poll_record, message_record))
         }
         .scope_boxed()
@@ -223,10 +250,24 @@ fn empty_results(poll: &Poll, option_count: usize) -> Vec<PollOptionResult> {
         .collect()
 }
 
+/// A poll's answers: the creator's, then the written-in ones, `None` where one was removed.
+#[derive(Debug, Default)]
+struct Choices {
+    options: Vec<PollOptionRecord>,
+    write_ins: Vec<Option<PollWriteIn>>,
+}
+
+impl Choices {
+    /// How many indices the answers take, removed write-ins included.
+    fn len(&self) -> usize {
+        self.options.len() + self.write_ins.len()
+    }
+}
+
 fn to_record(
     row: &Poll,
     message_id: MessageId,
-    options: Vec<PollOptionRecord>,
+    choices: Choices,
     results: Vec<PollOptionResult>,
 ) -> message_enum::Poll {
     message_enum::Poll {
@@ -239,31 +280,47 @@ fn to_record(
         closed_at: row.closed_at,
         results,
         question: row.question.clone(),
-        options,
+        options: choices.options,
         multiple_choice: row.multiple_choice,
+        allow_write_ins: row.allow_write_ins,
+        write_ins: choices.write_ins,
         anonymous: row.anonymous,
     }
 }
 
-/// The options of each poll, in option order.
+/// The answers of each poll in `polls`, in index order. Who wrote an answer in is left out of
+/// an anonymous poll's.
 async fn load_options(
     conn: &mut AsyncPgConnection,
-    ids: &[PollId],
-) -> app::Result<HashMap<PollId, Vec<PollOptionRecord>>> {
+    polls: &[Poll],
+) -> app::Result<HashMap<PollId, Choices>> {
+    let ids: Vec<PollId> = polls.iter().map(|poll| poll.id).collect();
+    let anonymous: HashMap<PollId, bool> = polls.iter().map(|p| (p.id, p.anonymous)).collect();
     let rows: Vec<PollOption> = poll_option::table
         .select(PollOption::as_select())
-        .filter(poll_option::poll.eq_any(ids))
+        .filter(poll_option::poll.eq_any(&ids))
         .order((poll_option::poll, poll_option::index))
         .load(conn)
         .await?;
-    let mut options: HashMap<PollId, Vec<PollOptionRecord>> = HashMap::new();
+    let mut choices: HashMap<PollId, Choices> = HashMap::new();
     for row in rows {
-        options.entry(row.poll).or_default().push(PollOptionRecord {
-            label: row.label,
-            emoji: row.emoji,
-        });
+        let entry = choices.entry(row.poll).or_default();
+        if !row.write_in {
+            entry.options.push(PollOptionRecord {
+                label: row.label,
+                emoji: row.emoji,
+            });
+        } else if row.removed_at.is_some() {
+            entry.write_ins.push(None);
+        } else {
+            let hidden = anonymous.get(&row.poll).copied().unwrap_or(true);
+            entry.write_ins.push(Some(PollWriteIn {
+                label: row.label,
+                written_by: if hidden { None } else { row.written_by },
+            }));
+        }
     }
-    Ok(options)
+    Ok(choices)
 }
 
 /// The tally of every poll in `polls`: one entry per option, with the voters listed for polls
@@ -318,10 +375,10 @@ async fn load_records(
     rows: Vec<Poll>,
 ) -> app::Result<Vec<message_enum::Poll>> {
     let ids: Vec<PollId> = rows.iter().map(|row| row.id).collect();
-    let mut options = load_options(conn, &ids).await?;
+    let mut options = load_options(conn, &rows).await?;
     let counts: Vec<(&Poll, usize)> = rows
         .iter()
-        .map(|row| (row, options.get(&row.id).map_or(0, Vec::len)))
+        .map(|row| (row, options.get(&row.id).map_or(0, Choices::len)))
         .collect();
     let mut results = load_results(conn, &counts).await?;
     let shown_by: HashMap<PollId, MessageId> = message::table
@@ -426,11 +483,20 @@ fn ensure_open(poll: &Poll, now: DateTime<Utc>) -> app::Result<()> {
     Ok(())
 }
 
-/// Publishes the poll's current tally and returns its record.
+/// Whether an update to a poll changes its written-in answers, which then go out with the tally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteIns {
+    Unchanged,
+    Changed,
+}
+
+/// Publishes the poll's current tally, and its written-in answers when they changed, and returns
+/// its record.
 async fn publish_results(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     row: Poll,
+    write_ins: WriteIns,
 ) -> app::Result<message_enum::Poll> {
     let record = load_records(conn, vec![row])
         .await?
@@ -445,6 +511,7 @@ async fn publish_results(
             id: record.id,
             closed_at: record.closed_at.map(Some),
             results: Some(record.results.clone()),
+            write_ins: (write_ins == WriteIns::Changed).then(|| record.write_ins.clone()),
         }),
     )
     .await?;
@@ -466,44 +533,239 @@ pub async fn add_vote(
             let row = lock_poll(conn.as_mut(), id).await?;
             app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
-            let option_count: i64 = poll_option::table
-                .filter(poll_option::poll.eq(id))
-                .count()
-                .get_result(conn.as_mut())
-                .await?;
             let Ok(option_index) = i32::try_from(option) else {
                 return Err(app::Error::Validation(t!("pollOptionOutOfRange")));
             };
-            if i64::from(option_index) >= option_count {
+            // A removed write-in keeps its index but takes no votes.
+            let standing: i64 = poll_option::table
+                .filter(
+                    poll_option::poll
+                        .eq(id)
+                        .and(poll_option::index.eq(option_index))
+                        .and(poll_option::removed_at.is_null()),
+                )
+                .count()
+                .get_result(conn.as_mut())
+                .await?;
+            if standing == 0 {
                 return Err(app::Error::Validation(t!("pollOptionOutOfRange")));
             }
-            if !row.multiple_choice {
-                diesel::delete(poll_vote::table)
-                    .filter(
-                        poll_vote::poll
-                            .eq(id)
-                            .and(poll_vote::user.eq(user))
-                            .and(poll_vote::option_index.ne(option_index)),
-                    )
-                    .execute(conn.as_mut())
-                    .await?;
-            }
-            let inserted = diesel::insert_into(poll_vote::table)
-                .values(&PollVote {
-                    poll: id,
-                    option_index,
-                    user,
-                    timestamp: now,
-                })
-                .on_conflict_do_nothing()
-                .execute(conn.as_mut())
-                .await?;
-            let record = publish_results(state, conn.as_mut(), row).await?;
-            Ok((inserted > 0, record))
+            let inserted = cast_vote(conn.as_mut(), &row, user, option_index, now).await?;
+            let record = publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
+            Ok((inserted, record))
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Records `user`'s vote for `option_index`, first withdrawing their others on a
+/// single-choice poll. Says whether the vote is new.
+async fn cast_vote(
+    conn: &mut AsyncPgConnection,
+    row: &Poll,
+    user: UserId,
+    option_index: i32,
+    now: DateTime<Utc>,
+) -> app::Result<bool> {
+    if !row.multiple_choice {
+        diesel::delete(poll_vote::table)
+            .filter(
+                poll_vote::poll
+                    .eq(row.id)
+                    .and(poll_vote::user.eq(user))
+                    .and(poll_vote::option_index.ne(option_index)),
+            )
+            .execute(conn)
+            .await?;
+    }
+    let inserted = diesel::insert_into(poll_vote::table)
+        .values(&PollVote {
+            poll: row.id,
+            option_index,
+            user,
+            timestamp: now,
+        })
+        .on_conflict_do_nothing()
+        .execute(conn)
+        .await?;
+    Ok(inserted > 0)
+}
+
+/// An answer's text as compared for sameness: case and runs of whitespace do not count.
+fn comparable(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// What adding a written-in answer came to.
+#[derive(Debug)]
+pub enum WriteInOutcome {
+    /// A new answer, at this index, with the writer's vote.
+    Added(u32),
+    /// The poll already had this answer, at this index, and the writer's vote went to it.
+    Existing(u32),
+}
+
+/// Adds `label` to the poll as `user`'s own answer and votes for it for them, or, when the poll
+/// already has the same answer, votes for that one. Refused when the poll does not allow
+/// write-ins, is closed, already holds as many as it may, or `user` already has a standing
+/// write-in on it.
+pub async fn write_in(
+    state: &GlobalServerContext,
+    user: UserId,
+    id: PollId,
+    label: &str,
+) -> app::Result<(WriteInOutcome, message_enum::Poll)> {
+    let label = label.trim().to_string();
+    if label.is_empty() || label.chars().count() > MAX_OPTION_CHARS {
+        return Err(app::Error::Validation(t!(
+            "pollOptionLength",
+            max = MAX_OPTION_CHARS
+        )));
+    }
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let now = Utc::now();
+            let row = lock_poll(conn.as_mut(), id).await?;
+            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
+            ensure_open(&row, now)?;
+            if !row.allow_write_ins {
+                return Err(app::Error::Validation(t!("pollWriteInsOff")));
+            }
+            let options: Vec<PollOption> = poll_option::table
+                .select(PollOption::as_select())
+                .filter(poll_option::poll.eq(id))
+                .order(poll_option::index)
+                .load(conn.as_mut())
+                .await?;
+            let wanted = comparable(&label);
+            let same = options
+                .iter()
+                .find(|o| o.removed_at.is_none() && comparable(&o.label) == wanted);
+            if let Some(existing) = same {
+                cast_vote(conn.as_mut(), &row, user, existing.index, now).await?;
+                let record =
+                    publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
+                return Ok((WriteInOutcome::Existing(existing.index as u32), record));
+            }
+            let written = options.iter().filter(|o| o.write_in);
+            if written
+                .clone()
+                .any(|o| o.removed_at.is_none() && o.written_by == Some(user))
+            {
+                return Err(app::Error::Conflict(t!("pollWriteInOnePerPerson")));
+            }
+            if written.count() >= MAX_WRITE_INS {
+                return Err(app::Error::Validation(t!(
+                    "pollWriteInsFull",
+                    max = MAX_WRITE_INS
+                )));
+            }
+            let index = options.last().map_or(0, |o| o.index + 1);
+            diesel::insert_into(poll_option::table)
+                .values(&PollOption {
+                    poll: id,
+                    index,
+                    label: label.clone(),
+                    emoji: None,
+                    write_in: true,
+                    written_by: Some(user),
+                    removed_at: None,
+                })
+                .execute(conn.as_mut())
+                .await?;
+            cast_vote(conn.as_mut(), &row, user, index, now).await?;
+            let record = publish_results(state, conn.as_mut(), row, WriteIns::Changed).await?;
+            Ok((WriteInOutcome::Added(index as u32), record))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Removes the written-in answer at `option` and every vote for it, keeping its index. Only
+/// written-in answers can be removed, and only while the poll is open.
+pub async fn remove_write_in(
+    state: &GlobalServerContext,
+    user: UserId,
+    id: PollId,
+    option: u32,
+) -> app::Result<()> {
+    let Ok(option_index) = i32::try_from(option) else {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    };
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let now = Utc::now();
+            let row = lock_poll(conn.as_mut(), id).await?;
+            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
+            ensure_open(&row, now)?;
+            let removed = diesel::update(poll_option::table)
+                .filter(
+                    poll_option::poll
+                        .eq(id)
+                        .and(poll_option::index.eq(option_index))
+                        .and(poll_option::write_in)
+                        .and(poll_option::removed_at.is_null()),
+                )
+                .set(poll_option::removed_at.eq(now))
+                .execute(conn.as_mut())
+                .await?;
+            if removed == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            diesel::delete(poll_vote::table)
+                .filter(
+                    poll_vote::poll
+                        .eq(id)
+                        .and(poll_vote::option_index.eq(option_index)),
+                )
+                .execute(conn.as_mut())
+                .await?;
+            publish_results(state, conn.as_mut(), row, WriteIns::Changed).await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// `user`'s own standing write-ins on the polls in `ids`.
+pub async fn read_own_write_ins(
+    state: &GlobalServerContext,
+    user: UserId,
+    ids: &[PollId],
+) -> app::Result<Vec<OwnWriteIn>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<(PollId, i32)> = poll_option::table
+        .select((poll_option::poll, poll_option::index))
+        .filter(
+            poll_option::poll
+                .eq_any(ids)
+                .and(poll_option::write_in)
+                .and(poll_option::written_by.eq(user))
+                .and(poll_option::removed_at.is_null()),
+        )
+        .load(conn.as_mut())
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(poll, index)| {
+            Some(OwnWriteIn {
+                poll,
+                option: u32::try_from(index).ok()?,
+            })
+        })
+        .collect())
 }
 
 /// Withdraws `user`'s vote for `option`, if they had one.
@@ -531,7 +793,7 @@ pub async fn remove_vote(
                 .execute(conn.as_mut())
                 .await?;
             if deleted > 0 {
-                publish_results(state, conn.as_mut(), row).await?;
+                publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
             }
             Ok(())
         }
@@ -604,7 +866,7 @@ async fn close_due_polls(state: &GlobalServerContext) -> app::Result<()> {
                     .values(&announcement)
                     .execute(conn.as_mut())
                     .await?;
-                publish_results(state, conn.as_mut(), row).await?;
+                publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
                 publish_event(
                     state,
                     conn.as_mut(),
@@ -643,8 +905,41 @@ mod tests {
                 .collect(),
             multiple_choice: false,
             anonymous: false,
+            allow_write_ins: false,
             duration_seconds,
         }
+    }
+
+    #[test]
+    fn answers_compare_without_case_or_spacing() {
+        assert_eq!(comparable("  Pad  Thai "), comparable("pad thai"));
+        assert_eq!(comparable("PAD\tTHAI"), "pad thai");
+        assert_ne!(comparable("Pad Thai"), comparable("Padthai"));
+    }
+
+    #[test]
+    fn answers_count_removed_write_ins_among_their_indices() {
+        let choices = Choices {
+            options: vec![
+                PollOptionRecord {
+                    label: "Pizza".into(),
+                    emoji: None,
+                },
+                PollOptionRecord {
+                    label: "Sushi".into(),
+                    emoji: None,
+                },
+            ],
+            write_ins: vec![
+                None,
+                Some(PollWriteIn {
+                    label: "Tacos".into(),
+                    written_by: None,
+                }),
+            ],
+        };
+        // The tally has a place for the removed answer, so "Tacos" stays option 3.
+        assert_eq!(choices.len(), 4);
     }
 
     #[test]
@@ -681,6 +976,7 @@ mod tests {
             question: "q".to_string(),
             multiple_choice: false,
             anonymous: true,
+            allow_write_ins: false,
             created_at: now,
             closes_at: now + chrono::Duration::seconds(30),
             closed_at: None,

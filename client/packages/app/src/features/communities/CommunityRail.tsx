@@ -1,5 +1,6 @@
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useCommunities, useSync } from "@/api/hooks";
+import { UNREAD_DMS } from "@aspen/protocol";
+import { useCommunities, useSync, useUnreadPlaces } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { ChatsTeardropIcon, DotsSixVerticalIcon, PlusIcon } from "@phosphor-icons/react";
 import {
@@ -30,6 +31,7 @@ export function CommunityRail() {
   const sync = useSync();
   const navigate = useNavigate();
   const communities = useCommunities();
+  const unread = useUnreadPlaces();
   const { communityId: current } = useParams({ strict: false });
   const matchRoute = useMatchRoute();
   const inDms = matchRoute({ to: "/dms", fuzzy: true }) !== false;
@@ -55,28 +57,35 @@ export function CommunityRail() {
   return (
     <nav
       aria-label={m.communitiesLabel}
-      className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-line bg-surface-sunken py-3"
+      className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-line bg-surface-rail py-3"
     >
-      <Tooltip text={m.dms.label}>
-        <Link
-          to="/dms"
-          aria-label={m.dms.label}
-          aria-current={inDms ? "page" : undefined}
-          className={
-            "flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
-            (inDms ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-sunken" : "")
-          }
-        >
-          <ChatsTeardropIcon size={22} aria-hidden="true" />
-        </Link>
-      </Tooltip>
+      {/* The dot sits beside the link rather than in it, so the link's own round background
+          covers it; see `UnreadDot`. */}
+      <div className="relative isolate">
+        {unread.has(UNREAD_DMS) && <UnreadDot />}
+        <Tooltip text={m.dms.label}>
+          <Link
+            to="/dms"
+            aria-label={
+              unread.has(UNREAD_DMS) ? format(m.unreadLabel, { name: m.dms.label }) : m.dms.label
+            }
+            aria-current={inDms ? "page" : undefined}
+            className={
+              "flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
+              (inDms ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-rail" : "")
+            }
+          >
+            <ChatsTeardropIcon size={22} aria-hidden="true" />
+          </Link>
+        </Tooltip>
+      </div>
       <div aria-hidden="true" className="h-px w-8 bg-line" />
       <GridList
         aria-label={m.communitiesLabel}
         items={communities}
         // The list caches each item's rendering by its data; the ring around the current
         // community comes from the route, so the route is declared as a dependency.
-        dependencies={[current]}
+        dependencies={[current, unread]}
         selectionMode="none"
         onAction={(key) => {
           void navigate({ to: "/communities/$communityId", params: { communityId: String(key) } });
@@ -88,14 +97,19 @@ export function CommunityRail() {
           <GridListItem
             id={community.id}
             textValue={community.name}
-            aria-label={community.name}
+            aria-label={
+              unread.has(community.id)
+                ? format(m.unreadLabel, { name: community.name })
+                : community.name
+            }
             className={
-              "group relative cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/60 dragging:opacity-50 " +
+              "group relative isolate cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-accent/60 dragging:opacity-50 " +
               (community.id === current
-                ? "ring-2 ring-accent ring-offset-2 ring-offset-surface-sunken"
+                ? "ring-2 ring-accent ring-offset-2 ring-offset-surface-rail"
                 : "")
             }
           >
+            {unread.has(community.id) && <UnreadDot />}
             <Avatar name={community.name} iconId={community.icon} size="lg" />
             {/* The handle keyboard and screen reader users drag with; it shows only on focus. */}
             <Button
@@ -119,5 +133,19 @@ export function CommunityRail() {
         }
       />
     </nav>
+  );
+}
+
+/**
+ * The mark beside a rail entry that has something unread: a dot at its left edge, half tucked
+ * under the entry's icon. It goes in an element that `isolate`s a stacking context, so its
+ * negative z-index puts it beneath the icon without sending it behind the rail itself.
+ */
+function UnreadDot() {
+  return (
+    <span
+      aria-hidden="true"
+      className="absolute top-1/2 -left-1 -z-10 h-2 w-2 -translate-y-1/2 rounded-full bg-ink"
+    />
   );
 }

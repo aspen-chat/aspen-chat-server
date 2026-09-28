@@ -2,15 +2,17 @@ import type { Channel } from "@aspen/protocol";
 import { NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
-import { useDms, useMe, useSync, useUser } from "@/api/hooks";
+import { useDms, useMe, useSync, useUnread, useUser } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { MAX_DM_PEOPLE } from "@/features/dms/DmHeader";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { otherRecipients } from "@/features/dms/dmName";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { unreadMarkClass } from "@/features/channels/ChannelSidebar";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 
 /**
  * `/dms`: the caller's DMs and group DMs beside the route's content, the most recently active
@@ -45,7 +47,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
             <Tooltip text={m.dms.newMessage}>
               <Button
                 aria-label={m.dms.newMessage}
-                className="rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+                className="tap-target rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
               >
                 <NotePencilIcon size={18} aria-hidden="true" />
               </Button>
@@ -75,17 +77,24 @@ function DmSidebar({ current }: { current: string | undefined }) {
 }
 
 function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
+  const m = useMessages();
   const me = useMe();
   const title = useDmTitle(dm);
   const first = useUser(otherRecipients(dm, me?.id ?? null)[0]);
+  const unread = useUnread(dm.id);
   return (
     <Link
       to="/dms/$channelId"
       params={{ channelId: dm.id }}
       aria-current={current ? "page" : undefined}
       className={
-        "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
-        (current ? "bg-surface-hover font-medium text-ink" : "text-ink-muted")
+        "flex items-center gap-2 rounded-md text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        (current
+          ? "bg-surface-hover px-2 py-1.5 font-medium text-ink"
+          : unread
+            ? // The border and this padding make up the usual padding, so nothing moves.
+              "px-[7px] py-[5px] " + unreadMarkClass
+            : "px-2 py-1.5 text-ink-muted")
       }
     >
       {dm.ty === "groupDm" ? (
@@ -95,7 +104,16 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
       ) : (
         <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
       )}
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {unread ? (
+        <>
+          <span aria-hidden="true" className="min-w-0 flex-1 truncate">
+            {title}
+          </span>
+          <span className="sr-only">{format(m.unreadLabel, { name: title })}</span>
+        </>
+      ) : (
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+      )}
     </Link>
   );
 }

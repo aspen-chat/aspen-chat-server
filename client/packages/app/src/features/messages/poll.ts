@@ -1,6 +1,56 @@
 import type { Poll, PollOption } from "@aspen/protocol";
 import { format, type Messages } from "@/i18n/messages";
 
+/** The longest option or written-in answer the server accepts, in characters. */
+export const MAX_OPTION_CHARS = 100;
+/** The most answers voters may write in to one poll, removed ones included. */
+export const MAX_WRITE_INS = 25;
+
+/** One answer a poll offers, at the index votes name it by. */
+export interface PollChoice {
+  index: number;
+  option: PollOption;
+  /** Whether a voter wrote it in, rather than the poll's creator listing it. */
+  writeIn: boolean;
+  /** Who wrote it in, when the poll says: never on an anonymous poll. */
+  writtenBy: string | null;
+}
+
+/**
+ * Every answer a poll offers: its creator's options, then the standing write-ins. Write-ins
+ * number on from the options, and a removed one keeps its index, so the indices can skip.
+ */
+export function pollChoices(poll: Poll): PollChoice[] {
+  const listed = poll.options.map((option, index) => ({
+    index,
+    option,
+    writeIn: false,
+    writtenBy: null,
+  }));
+  const written = poll.writeIns.flatMap((w, i) =>
+    w === null
+      ? []
+      : [
+          {
+            index: poll.options.length + i,
+            option: { label: w.label },
+            writeIn: true,
+            writtenBy: w.writtenBy ?? null,
+          },
+        ],
+  );
+  return [...listed, ...written];
+}
+
+/** The answer at `index`, an option or a standing write-in. */
+export function choiceAt(poll: Poll, index: number): PollOption | undefined {
+  if (index < poll.options.length) {
+    return poll.options[index];
+  }
+  const written = poll.writeIns[index - poll.options.length];
+  return written == null ? undefined : { label: written.label };
+}
+
 /** How a closed poll came out, as its announcement describes it. */
 export type PollOutcome =
   | { kind: "noVotes" }
@@ -80,12 +130,12 @@ export function outcomeText(m: Messages, poll: Poll): string {
       return m.poll.noVotes;
     case "winner":
       return format(outcome.count === 1 ? m.poll.winnerSingular : m.poll.winner, {
-        option: optionName(poll.options[outcome.option]),
+        option: optionName(choiceAt(poll, outcome.option)),
         count: String(outcome.count),
       });
     case "tie":
       return format(outcome.count === 1 ? m.poll.tieSingular : m.poll.tie, {
-        options: outcome.options.map((i) => optionName(poll.options[i])).join(", "),
+        options: outcome.options.map((i) => optionName(choiceAt(poll, i))).join(", "),
         count: String(outcome.count),
       });
   }

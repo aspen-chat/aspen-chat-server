@@ -29,7 +29,7 @@ export function ChannelHeader({
         to="/communities/$communityId"
         params={{ communityId }}
         aria-label={m.backToChannels}
-        className="rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
+        className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >
         <ArrowLeftIcon size={18} aria-hidden="true" />
       </Link>

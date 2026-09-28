@@ -9,6 +9,7 @@ export default tseslint.config(
   {
     ignores: [
       "**/node_modules/",
+      "**/.vite/",
       "**/dist/",
       "**/dist-electron/",
       "**/out/",

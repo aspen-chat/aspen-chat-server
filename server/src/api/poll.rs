@@ -15,6 +15,7 @@ use crate::app;
 use crate::app::{ChannelId, PollId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -40,6 +41,42 @@ pub struct PollOption {
 }
 
 /// One of the calling user's votes: the option they chose on a poll.
+/// An answer a voter added to a poll.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PollWriteIn {
+    pub label: String,
+    /// Who wrote it in. Absent on an anonymous poll, where it would say how they voted, and
+    /// once their account is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written_by: Option<UserId>,
+}
+
+/// One of the calling user's own write-ins: the poll and the answer's index. Sent only to the
+/// writer, since an anonymous poll's record does not say who wrote what.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnWriteIn {
+    pub poll: PollId,
+    pub option: u32,
+}
+
+/// What adding a written-in answer did: the answer the caller's vote went to, a new one or the
+/// poll's matching answer, and the poll with its updated tally.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteInResult {
+    pub option: u32,
+    pub poll: Poll,
+}
+
+/// A voter's own answer to add to a poll.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteInRequest {
+    pub label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PollVote {
@@ -116,15 +153,21 @@ pub async fn get_poll(
     Query(query): Query<PollReadQuery>,
 ) -> ApiResult<Json<PollRead>> {
     let record = app::poll::read_poll(&state, user.id, poll).await?;
-    let poll_votes = if query.include.contains(PollInclude::Votes) {
-        Some(app::poll::read_votes(&state, user.id, &[poll]).await?)
+    let (poll_votes, own_write_ins) = if query.include.contains(PollInclude::Votes) {
+        let ids = [poll];
+        let (votes, write_ins) = tokio::try_join!(
+            app::poll::read_votes(&state, user.id, &ids),
+            app::poll::read_own_write_ins(&state, user.id, &ids),
+        )?;
+        (Some(votes), Some(write_ins))
     } else {
-        None
+        (None, None)
     };
     Ok(Json(PollRead::new(
         record,
         Included {
             poll_votes,
+            own_write_ins,
             ..Included::default()
         },
     )))
@@ -189,5 +232,82 @@ pub async fn remove_vote(
     Path((poll, option)): Path<(PollId, u32)>,
 ) -> ApiResult<NoContent> {
     app::poll::remove_vote(&state, user.id, poll, option).await?;
+    Ok(NoContent)
+}
+
+/// Adds the caller's own answer to a poll that allows write-ins, and votes for it for them. An
+/// answer the poll already has (ignoring case and spacing) is voted for instead of added, and
+/// does not use up the caller's one write-in.
+#[utoipa::path(
+    post,
+    path = "/polls/{poll}/write-ins",
+    tag = TAG_POLLS,
+    params(("poll" = PollId, Path)),
+    request_body = WriteInRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "Added, with the caller's vote", body = WriteInResult, headers(("Location" = String, description = "URL of the new answer"))),
+        (status = OK, description = "The poll already had this answer; the caller's vote went to it", body = WriteInResult),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (write-ins not allowed, answer length, or the poll holds all it may)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, description = "`pollClosed`, or `conflict`: the caller already has a write-in on this poll", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn add_write_in(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(poll): Path<PollId>,
+    Json(request): Json<WriteInRequest>,
+) -> ApiResult<Response> {
+    let (outcome, record) = app::poll::write_in(&state, user.id, poll, &request.label).await?;
+    Ok(match outcome {
+        app::poll::WriteInOutcome::Added(option) => Created::new(
+            format!("{API_PREFIX}/polls/{}/write-ins/{option}", poll.0),
+            WriteInResult {
+                option,
+                poll: record,
+            },
+        )
+        .into_response(),
+        app::poll::WriteInOutcome::Existing(option) => (
+            StatusCode::OK,
+            Json(WriteInResult {
+                option,
+                poll: record,
+            }),
+        )
+            .into_response(),
+    })
+}
+
+/// Removes a written-in answer and every vote for it. Its index stays empty (`null` in
+/// `writeIns`), so no other answer's index changes. Offered to the answer's writer and the
+/// poll's creator; under the Insanity anyone may.
+#[utoipa::path(
+    delete,
+    path = "/polls/{poll}/write-ins/{option}",
+    tag = TAG_POLLS,
+    params(
+        ("poll" = PollId, Path),
+        ("option" = u32, Path, description = "The answer's index: `options.len()` plus its place in `writeIns`"),
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT, description = "Removed"),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such standing write-in", body = Problem),
+        (status = CONFLICT, description = "`pollClosed`", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn remove_write_in(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((poll, option)): Path<(PollId, u32)>,
+) -> ApiResult<NoContent> {
+    app::poll::remove_write_in(&state, user.id, poll, option).await?;
     Ok(NoContent)
 }

@@ -87,6 +87,7 @@ diesel::table! {
         user -> Uuid,
         community -> Uuid,
         sort_index -> Int4,
+        joined_at -> Timestamptz,
     }
 }
 
@@ -203,6 +204,7 @@ diesel::table! {
         created_at -> Timestamptz,
         closes_at -> Timestamptz,
         closed_at -> Nullable<Timestamptz>,
+        allow_write_ins -> Bool,
     }
 }
 
@@ -212,6 +214,9 @@ diesel::table! {
         index -> Int4,
         label -> Text,
         emoji -> Nullable<Text>,
+        write_in -> Bool,
+        written_by -> Nullable<Uuid>,
+        removed_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -230,6 +235,14 @@ diesel::table! {
         author -> Uuid,
         message -> Uuid,
         timestamp -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    read_state (user, channel) {
+        user -> Uuid,
+        channel -> Uuid,
+        message -> Uuid,
     }
 }
 
@@ -360,9 +373,12 @@ diesel::joinable!(pin -> message (message_id));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
 diesel::joinable!(poll_option -> poll (poll));
+diesel::joinable!(poll_option -> user (written_by));
 diesel::joinable!(poll_vote -> user (user));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
+diesel::joinable!(read_state -> channel (channel));
+diesel::joinable!(read_state -> user (user));
 diesel::joinable!(recovery_code -> user (user));
 diesel::joinable!(refresh_token -> user (user));
 diesel::joinable!(session -> refresh_token (refresh_token));
@@ -397,6 +413,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     poll_option,
     poll_vote,
     react,
+    read_state,
     recovery_code,
     refresh_token,
     session,

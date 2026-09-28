@@ -6,7 +6,9 @@ use crate::app;
 use crate::app::channel::Channel;
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
 use crate::app::user::User;
-use crate::app::{AttachmentId, ChannelId, EventScope, PollId, UserId, dm, publish_event, thread};
+use crate::app::{
+    AttachmentId, ChannelId, EventScope, PollId, UserId, dm, publish_event, read_state, thread,
+};
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
 use crate::database::schema::channel;
@@ -177,6 +179,9 @@ pub async fn create_message(
                     if echo_to_parent && let Some(parent) = target.parent_channel {
                         thread::echo(state, conn.as_mut(), parent, &message).await?;
                     }
+                } else {
+                    read_state::advance(state, conn.as_mut(), author, channel_id, message.id)
+                        .await?;
                 }
                 Ok::<_, app::Error>(message)
             }

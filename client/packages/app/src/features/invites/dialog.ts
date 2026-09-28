@@ -1,10 +1,22 @@
 /** Tailwind class strings shared by the modal dialogs. */
 export const overlayClass =
-  "fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4 entering:animate-in exiting:animate-out";
-export const modalClass =
-  "w-full max-w-md rounded-lg border border-line bg-surface-raised p-5 shadow-xl outline-none";
+  "overlay-inset fixed inset-0 z-10 flex items-center justify-center bg-black/40 entering:animate-in exiting:animate-out";
+/**
+ * The frame every modal is drawn in. It is never taller than the overlay leaves room for, and
+ * scrolls within itself when its content is taller than that, as a long form is on a phone;
+ * the scroll stays in the dialog rather than passing to the page behind it.
+ */
+const modalFrameClass =
+  "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-raised " +
+  "p-4 shadow-xl outline-none sm:p-5";
+export const modalClass = modalFrameClass + " max-w-md";
+/** A modal with room for a grid of choices, such as the screen share picker. */
+export const wideModalClass = modalFrameClass + " max-w-3xl";
 export const dialogClass = "flex flex-col gap-4 outline-none";
 export const headingClass = "text-lg font-semibold";
+export const dangerButtonClass =
+  "rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-accent-contrast outline-none " +
+  "hover:opacity-90 pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-danger/50";
 export const secondaryButtonClass =
   "rounded-md border border-line px-3 py-1.5 text-sm outline-none hover:bg-surface-hover " +
   "pressed:bg-surface-hover disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50";

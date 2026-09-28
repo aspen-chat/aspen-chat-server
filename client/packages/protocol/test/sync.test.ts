@@ -69,7 +69,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
           .map((id) => ({ id, onlineStatus: id === me.id ? "online" : "offline" })),
       ),
     "/api/v1/users/@me/communities": (url) => {
-      expect(url.searchParams.get("include")).toBe("channels,categories,members,voice");
+      expect(url.searchParams.get("include")).toBe("channels,categories,members,voice,readStates");
       return json({
         data: [aspen],
         included: {
@@ -77,27 +77,31 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
           categories: [],
           users: [me],
           userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
+          readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: id(1002) }],
         },
       });
     },
     "/api/v1/users/@me/dms": (url) => {
-      expect(url.searchParams.get("include")).toBe("users");
+      expect(url.searchParams.get("include")).toBe("users,readStates");
       return json({ data: [], included: { users: [] } });
     },
   };
 }
 
-/** Routes requests by pathname; the handler may inspect the query string. */
-function routedFetch(routes: Record<string, (url: URL) => Response>) {
+/** Routes requests by pathname; the handler may inspect the query string and the request. */
+type Route = (url: URL, request: Request) => Response | Promise<Response>;
+
+function routedFetch(routes: Record<string, Route>) {
   const calls: URL[] = [];
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = new URL(new Request(input, init).url);
+    const request = new Request(input, init);
+    const url = new URL(request.url);
     calls.push(url);
     const handler = routes[decodeURIComponent(url.pathname)];
     if (handler === undefined) {
       throw new Error(`unexpected request ${url.toString()}`);
     }
-    return Promise.resolve(handler(url));
+    return Promise.resolve(handler(url, request));
   };
   return { fetch, calls };
 }
@@ -144,7 +148,7 @@ function liveSession(): Session {
 }
 
 function makeSync(
-  routes: Record<string, (url: URL) => Response>,
+  routes: Record<string, Route>,
   now = () => 0,
   extra: Partial<AspenSyncOptions> = {},
 ) {
@@ -485,7 +489,9 @@ describe("AspenSync", () => {
         [`/api/v1/communities/${cedar.id}/members/@me`]: () =>
           json({ community: cedar.id, user: me.id, sortIndex: 0 }, 201),
         [`/api/v1/communities/${cedar.id}`]: (url) => {
-          expect(url.searchParams.get("include")).toBe("channels,categories,members,voice");
+          expect(url.searchParams.get("include")).toBe(
+            "channels,categories,members,voice,readStates",
+          );
           return json({
             data: cedar,
             included: {
@@ -709,6 +715,8 @@ describe("AspenSync", () => {
       question: "Lunch?",
       options: [{ label: "Pizza", emoji: "🍕" }, { label: "Sushi" }],
       multipleChoice: false,
+      allowWriteIns: true,
+      writeIns: [],
       anonymous: true,
       results: [{ count: 0 }, { count: 0 }],
     };
@@ -736,6 +744,7 @@ describe("AspenSync", () => {
       options: [{ label: "Pizza", emoji: "🍕" }, { label: "Sushi" }],
       multipleChoice: false,
       anonymous: true,
+      allowWriteIns: true,
       durationSeconds: 3600,
     });
     expect(created).toEqual(lunch);
@@ -753,6 +762,98 @@ describe("AspenSync", () => {
     await settle();
     expect(sync.store.poll(other.id)).toEqual(other);
     expect(Array.from(sync.store.myVotes(other.id))).toEqual([0]);
+  });
+
+  it("writes in an answer, or votes for the one the poll already has, and removes it", async () => {
+    const lunch = {
+      id: id(3001),
+      channelId: general.id,
+      messageId: id(1001),
+      createdBy: me.id,
+      createdAt: "2026-09-25T12:00:00Z",
+      closesAt: "2026-09-25T13:00:00Z",
+      closedAt: null,
+      question: "Lunch?",
+      options: [{ label: "Pizza" }, { label: "Sushi" }],
+      multipleChoice: false,
+      allowWriteIns: true,
+      writeIns: [],
+      anonymous: true,
+      results: [{ count: 0 }, { count: 0 }],
+    };
+    // The first answer is new; the second matches one the poll already has.
+    const answers = [json({ option: 2, poll: lunch }, 201), json({ option: 0, poll: lunch }, 200)];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/polls/${lunch.id}/write-ins`]: () => answers.shift() ?? json({}, 500),
+      [`/api/v1/polls/${lunch.id}/write-ins/2`]: () => new Response(null, { status: 204 }),
+    });
+    await goLive(sync);
+    sync.store.addPoll(lunch);
+
+    expect(await sync.writeIn(lunch.id, "Tacos")).toBe(2);
+    expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([2]);
+    expect(Array.from(sync.store.myVotes(lunch.id))).toEqual([2]);
+
+    // The poll already had it: a vote, not a write-in of the caller's.
+    expect(await sync.writeIn(lunch.id, "pizza")).toBe(0);
+    expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([2]);
+    expect(Array.from(sync.store.myVotes(lunch.id))).toEqual([0]);
+
+    await sync.removeWriteIn(lunch.id, 2);
+    expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([]);
+  });
+
+  it("reports reading once for everything read meanwhile, and never backwards", async () => {
+    const reports: unknown[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/read-states/@me`]: async (_url, request) => {
+        reports.push(await request.json());
+        return new Response(null, { status: 204 });
+      },
+    });
+    await goLive(sync);
+    expect(sync.store.unread(general.id)).toBe(true);
+    sync.markRead(general.id, id(1001));
+    sync.markRead(general.id, id(1002));
+    // Behind the position already recorded: nothing to report.
+    sync.markRead(general.id, id(1000));
+    expect(sync.store.readState(general.id)?.lastRead).toBe(id(1002));
+    expect(sync.store.unread(general.id)).toBe(false);
+    sync.flushReads();
+    await settle();
+    expect(reports).toEqual([{ lastRead: id(1002) }]);
+    sync.flushReads();
+    await settle();
+    expect(reports).toHaveLength(1);
+  });
+
+  it("reads a channel's read state again when its newest message is deleted", async () => {
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/read-states/@me`]: () => {
+        reads += 1;
+        return json({ channel: general.id, lastRead: id(1000), lastMessage: id(999) });
+      },
+    });
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "message", type: "delete", id: id(1001) },
+    });
+    await settle();
+    expect(reads).toBe(0);
+    socket.frame({
+      type: "event",
+      sequence: 2,
+      event: { serverEvent: "message", type: "delete", id: id(1002) },
+    });
+    await settle();
+    expect(reads).toBe(1);
+    expect(sync.store.unread(general.id)).toBe(false);
   });
 
   it("renumbers only the communities and channels whose position changed", async () => {

@@ -1,5 +1,7 @@
+import type { MessageWindow } from "@aspen/protocol";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -8,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Button } from "react-aria-components";
-import { useChannel, useMessageWindow, useSync } from "@/api/hooks";
+import { useChannel, useMessageWindow, useReadState, useStore, useSync } from "@/api/hooks";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useMessages } from "@/i18n/context";
@@ -16,18 +18,30 @@ import { useMessages } from "@/i18n/context";
 /**
  * The loaded window of a channel, oldest at the top. Stays pinned to the bottom while the user
  * is there and keeps the message under the viewport still when the window changes around it.
+ * Keeping it still takes a scroll correction, which is made against where the view is when the
+ * change is shown, and only while the list is at rest: iOS Safari has no scroll anchoring of its
+ * own, and a correction made while a finger drags the list or it coasts afterwards is lost or
+ * fought, so a change that arrives meanwhile waits until the list settles.
  * Nearing the top reads the previous page of history; nearing the bottom of a window that is
  * not at the latest reads the next one. The store keeps the window bounded, so a long scroll
  * drops what is far from the viewport, and the jump control returns to the present.
  *
  * A linked message is scrolled into view once. The first scroll the user makes afterwards drops
  * the message from the URL, so the link is shareable but does not keep pulling the view back.
+ *
+ * In a channel that keeps a read position (any but a thread), the newest message on screen
+ * counts as read while the page is visible and has focus. A channel opened with something
+ * unread shows the "New Messages" line under the message it had been read up to, and keeps it
+ * there while it stays open, though reading moves the position at once; the line goes when the
+ * reader leaves or posts.
  */
 const PROGRAMMATIC_SCROLL_MS = 200;
 /** How long after a wheel, touch, scrollbar press, or key a scroll event still counts as the reader's. */
 const USER_SCROLL_MS = 500;
 /** How close to either end of the window, in pixels, the next page is read. */
 const LOAD_MORE_PX = 800;
+/** How long after its last scroll event, with no finger down, the list counts as at rest. */
+const SETTLE_MS = 150;
 const SCROLL_KEYS: ReadonlySet<string> = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -56,7 +70,13 @@ export function MessageList({
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
-  const window = useMessageWindow(channelId);
+  const latest = useMessageWindow(channelId);
+  // What is on screen: the store's window, except that a change to it waits while the list
+  // moves. A different channel, or the first page of one, is shown at once.
+  const [shown, setShown] = useState({ channelId, window: latest });
+  const window =
+    shown.channelId === channelId && shown.window !== undefined ? shown.window : latest;
+  const held = window !== latest;
   const channel = useChannel(channelId);
   // A thread's messages cannot start threads, and link to the thread rather than to a place in
   // a channel's history.
@@ -78,6 +98,33 @@ export function MessageList({
    * when a script scrolls a message into view, and none of those mean the reader moved on.
    */
   const userScrollAt = useRef(0);
+  /** When the list last scrolled, and whether a finger is on it. */
+  const scrolledAt = useRef(0);
+  const touching = useRef(false);
+  const store = useStore();
+  const readState = useReadState(channelId);
+  /**
+   * Where the "New Messages" line goes in this channel: after the read position it had when
+   * opened, or nowhere when nothing was unread then. Set once per channel, when its read state
+   * is first known.
+   */
+  const [line, setLine] = useState<{ channelId: string; after: string | null } | null>(null);
+  if (readState !== undefined && line?.channelId !== channelId) {
+    const unread = readState.lastMessage != null && readState.lastMessage > readState.lastRead;
+    setLine({ channelId, after: unread ? readState.lastRead : null });
+  }
+  const lineAfter = line?.channelId === channelId ? line.after : null;
+  // Posting ends the line: what came before the reader's own message is read.
+  const newest = latest?.ids[latest.ids.length - 1];
+  if (
+    lineAfter !== null &&
+    newest !== undefined &&
+    newest > lineAfter &&
+    store.message(newest)?.author === store.myUserId
+  ) {
+    setLine({ channelId, after: null });
+  }
+  const seenFrame = useRef<number | null>(null);
 
   const loaded = window !== undefined;
   const ids = window?.ids;
@@ -101,6 +148,33 @@ export function MessageList({
     }
     return null;
   }
+
+  // Shows the store's window once the list is at rest, noting where the view was so the layout
+  // effect below can keep it there.
+  useEffect(() => {
+    if (shown.channelId === channelId && shown.window === latest) {
+      return;
+    }
+    // Shown directly already (see `window`); the state only catches up.
+    const direct = shown.channelId !== channelId || shown.window === undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const commit = () => {
+      const quietFor = Date.now() - scrolledAt.current;
+      if (!direct && (touching.current || quietFor < SETTLE_MS)) {
+        timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
+        return;
+      }
+      if (!direct) {
+        anchor.current =
+          stickToBottom.current && latest?.atLatest === true ? null : captureAnchor();
+      }
+      setShown({ channelId, window: latest });
+    };
+    timer = setTimeout(commit, 0);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [channelId, latest, shown]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -165,33 +239,29 @@ export function MessageList({
     };
   }, [loaded, atLatest]);
 
+  // A page already read but not yet shown is waiting for the list to settle; reading the next
+  // one before it shows would only pile changes up.
   function loadOlder() {
-    if (loadingOlder || !hasOlder) {
+    if (loadingOlder || !hasOlder || held) {
       return;
     }
-    anchor.current = captureAnchor();
     setLoadingOlder(true);
     sync
       .loadOlder(channelId)
-      .catch(() => {
-        anchor.current = null;
-      })
+      .catch(() => undefined)
       .finally(() => {
         setLoadingOlder(false);
       });
   }
 
   function loadNewer() {
-    if (loadingNewer || atLatest) {
+    if (loadingNewer || atLatest || held) {
       return;
     }
-    anchor.current = captureAnchor();
     setLoadingNewer(true);
     sync
       .loadNewer(channelId)
-      .catch(() => {
-        anchor.current = null;
-      })
+      .catch(() => undefined)
       .finally(() => {
         setLoadingNewer(false);
       });
@@ -222,6 +292,8 @@ export function MessageList({
   }, [loaded, firstId, lastId]);
 
   function onScroll() {
+    scrolledAt.current = Date.now();
+    noteSeenSoon();
     const element = scroller.current;
     if (element === null) {
       return;
@@ -265,17 +337,103 @@ export function MessageList({
     }
   }
 
+  /**
+   * Marks the newest message with any part on screen as read, when the reader can see the page.
+   * Messages of other channels drawn inside this one's, such as the reply an echo shows, are
+   * not this channel's to mark.
+   */
+  function noteSeen() {
+    const element = scroller.current;
+    if (
+      element === null ||
+      readState === undefined ||
+      ids === undefined ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
+    ) {
+      return;
+    }
+    const inWindow = new Set(ids);
+    const view = element.getBoundingClientRect();
+    let seen: string | undefined;
+    for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
+      const id = article.dataset.messageId;
+      if (id === undefined || !inWindow.has(id)) {
+        continue;
+      }
+      const rect = article.getBoundingClientRect();
+      if (rect.top >= view.bottom) {
+        break;
+      }
+      if (rect.bottom > view.top) {
+        seen = id;
+      }
+    }
+    if (seen !== undefined) {
+      sync.markRead(channelId, seen);
+    }
+  }
+
+  // Once a frame at most, however fast the list scrolls.
+  function noteSeenSoon() {
+    seenFrame.current ??= requestAnimationFrame(() => {
+      seenFrame.current = null;
+      noteSeen();
+    });
+  }
+
+  // What is on screen changes with the window, and becomes seen when the page is looked at.
+  useEffect(() => {
+    noteSeenSoon();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        sync.flushReads();
+      } else {
+        noteSeenSoon();
+      }
+    };
+    globalThis.addEventListener("focus", noteSeenSoon);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      globalThis.removeEventListener("focus", noteSeenSoon);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  });
+
+  // Leaving the channel reports what was read in it straight away.
+  useEffect(
+    () => () => {
+      if (seenFrame.current !== null) {
+        cancelAnimationFrame(seenFrame.current);
+        seenFrame.current = null;
+      }
+      sync.flushReads();
+    },
+    [sync, channelId],
+  );
+
   if (window === undefined) {
     return (
       <div className="flex flex-1 items-center justify-center text-ink-muted">{m.loading}</div>
     );
   }
 
+  const lineIndex = lineAt(window, lineAfter);
+
   return (
     <div
       ref={scroller}
       onScroll={onScroll}
       onWheel={noteUserScroll}
+      onTouchStart={() => {
+        touching.current = true;
+      }}
+      onTouchEnd={() => {
+        touching.current = false;
+      }}
+      onTouchCancel={() => {
+        touching.current = false;
+      }}
       onTouchMove={noteUserScroll}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
@@ -283,24 +441,29 @@ export function MessageList({
     >
       <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
         {window.hasOlder ? (
-          <p aria-live="polite" className="py-2 text-center text-sm text-ink-faint">
+          // Its height does not change with its text: the text comes and goes above what is being
+          // read, and a line appearing there would push the view down.
+          <p aria-live="polite" className="min-h-9 py-2 text-center text-sm text-ink-faint">
             {loadingOlder ? m.loading : ""}
           </p>
         ) : (
           <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
         )}
-        {window.ids.map((id) => (
-          <MessageItem
-            key={id}
-            id={id}
-            home={home}
-            channelId={channelId}
-            parentId={parentId}
-            highlighted={id === highlightId}
-          />
+        {lineIndex === -1 && <NewMessagesLine />}
+        {window.ids.map((id, index) => (
+          <Fragment key={id}>
+            <MessageItem
+              id={id}
+              home={home}
+              channelId={channelId}
+              parentId={parentId}
+              highlighted={id === highlightId}
+            />
+            {index === lineIndex && <NewMessagesLine />}
+          </Fragment>
         ))}
         {!window.atLatest && (
-          <p aria-live="polite" className="py-2 text-center text-sm text-ink-faint">
+          <p aria-live="polite" className="min-h-9 py-2 text-center text-sm text-ink-faint">
             {loadingNewer ? m.loading : ""}
           </p>
         )}
@@ -313,6 +476,44 @@ export function MessageList({
           {m.jumpToLatest}
         </Button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The index of the message the "New Messages" line goes under, the last one at or before
+ * `after`; `-1` for the top of the channel, when everything in it is new; `null` for no line in
+ * this window, when nothing after `after` is loaded, or the line belongs above what is loaded.
+ */
+function lineAt(window: MessageWindow, after: string | null): number | null {
+  if (after === null) {
+    return null;
+  }
+  let index = -1;
+  for (const [i, id] of window.ids.entries()) {
+    if (id > after) {
+      break;
+    }
+    index = i;
+  }
+  if (index === window.ids.length - 1 || (index === -1 && window.hasOlder)) {
+    return null;
+  }
+  return index;
+}
+
+/** The accent line under the last message read, with "New Messages" at its centre. */
+function NewMessagesLine() {
+  const m = useMessages();
+  return (
+    <div
+      role="separator"
+      aria-label={m.newMessages}
+      className="flex items-center gap-2 py-1 text-xs font-semibold text-accent"
+    >
+      <span aria-hidden="true" className="h-px flex-1 bg-accent" />
+      <span aria-hidden="true">{m.newMessages}</span>
+      <span aria-hidden="true" className="h-px flex-1 bg-accent" />
     </div>
   );
 }

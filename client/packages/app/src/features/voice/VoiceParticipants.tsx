@@ -133,7 +133,7 @@ function ParticipantRow({
             onPress={() => {
               setMenuOpen((open) => !open);
             }}
-            className="ml-auto opacity-0 group-hover/participant:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
+            className="tap-target ml-auto opacity-0 group-hover/participant:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
           />
           <ParticipantMenu
             channelId={channelId}

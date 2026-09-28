@@ -22,7 +22,7 @@ export function SecurityDialog() {
         {m.security.open}
       </Button>
       <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={modalClass + " max-h-[90vh] overflow-y-auto"}>
+        <Modal className={modalClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>

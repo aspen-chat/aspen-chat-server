@@ -418,6 +418,8 @@ function poll(n: number, anonymous = false): Poll {
     question: "Lunch?",
     options: [{ label: "Pizza", emoji: "🍕" }, { label: "Sushi" }],
     multipleChoice: false,
+    allowWriteIns: true,
+    writeIns: [],
     anonymous,
     results: anonymous
       ? [{ count: 0 }, { count: 0 }]
@@ -498,6 +500,125 @@ describe("RecordStore window bounds", () => {
     expect(window?.ids[0]).toBe(message(101).id);
     expect(window?.hasOlder).toBe(true);
     expect(store.message(message(100).id)).toBeUndefined();
+  });
+});
+
+describe("RecordStore read states", () => {
+  const at = (n: number) => id(1000 + n);
+  const readOf = (store: RecordStore) => store.readState(general.id);
+
+  it("says a channel is unread while someone else's message is after the position", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [
+        { channel: general.id, lastRead: at(100), lastMessage: at(101) },
+        { channel: dev.id, lastRead: at(100), lastMessage: at(90) },
+      ],
+    });
+    expect(store.unread(general.id)).toBe(true);
+    expect(store.unread(dev.id)).toBe(false);
+    expect(Array.from(store.unreadPlaces())).toEqual([aspen.id]);
+    store.setLastRead(general.id, at(101));
+    expect(store.unread(general.id)).toBe(false);
+    expect(store.unreadPlaces().size).toBe(0);
+  });
+
+  it("follows messages as they arrive: someone else's is new, the caller's own is read", () => {
+    const store = bootstrapped();
+    store.ingest({ readStates: [{ channel: general.id, lastRead: at(100), lastMessage: null }] });
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...message(110, general.id, bob.id),
+    });
+    expect(readOf(store)).toEqual({ channel: general.id, lastRead: at(100), lastMessage: at(110) });
+    expect(store.unread(general.id)).toBe(true);
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...message(111, general.id, me.id),
+    });
+    expect(readOf(store)?.lastRead).toBe(at(111));
+    expect(store.unread(general.id)).toBe(false);
+    // A channel with no read state yet is unread from its start.
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(112, dev.id, bob.id) });
+    expect(store.readState(dev.id)).toEqual({
+      channel: dev.id,
+      lastRead: "",
+      lastMessage: at(112),
+    });
+    expect(store.unread(dev.id)).toBe(true);
+  });
+
+  it("moves forward when another device reads, never back", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(105) }],
+    });
+    store.applyEvent({ serverEvent: "channelRead", channel: general.id, lastRead: at(99) });
+    expect(readOf(store)?.lastRead).toBe(at(100));
+    store.applyEvent({ serverEvent: "channelRead", channel: general.id, lastRead: at(105) });
+    expect(readOf(store)?.lastRead).toBe(at(105));
+    expect(store.channelsLastMessaged(at(105))).toEqual([general.id]);
+  });
+
+  it("keeps no read state for threads, nor for a channel once it is gone", () => {
+    const store = bootstrapped();
+    const thread: Channel = {
+      ...general,
+      id: id(29),
+      ty: "thread",
+      parentChannel: general.id,
+      starterMessage: at(100),
+    };
+    store.ingest({
+      channels: [thread],
+      readStates: [{ channel: general.id, lastRead: at(100), lastMessage: at(101) }],
+    });
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...message(120, thread.id, bob.id),
+    });
+    expect(store.readState(thread.id)).toBeUndefined();
+    store.applyEvent({ serverEvent: "channel", type: "delete", id: general.id });
+    expect(store.readState(general.id)).toBeUndefined();
+    expect(store.unreadPlaces().size).toBe(0);
+  });
+});
+
+describe("RecordStore poll write-ins", () => {
+  it("holds the caller's own write-ins and follows the answers others add and remove", () => {
+    const store = bootstrapped();
+    const lunch = poll(1, true);
+    store.ingest({
+      polls: [lunch],
+      pollVotes: [{ poll: lunch.id, option: 2 }],
+      ownWriteIns: [{ poll: lunch.id, option: 2 }],
+    });
+    expect(Array.from(store.myWriteIns(lunch.id))).toEqual([2]);
+    store.applyEvent({
+      serverEvent: "poll",
+      type: "update",
+      id: lunch.id,
+      writeIns: [{ label: "Tacos" }, null, { label: "Curry" }],
+      results: [{ count: 0 }, { count: 0 }, { count: 1 }, { count: 0 }, { count: 1 }],
+    });
+    expect(store.poll(lunch.id)?.writeIns).toEqual([{ label: "Tacos" }, null, { label: "Curry" }]);
+    // Someone else removed the caller's answer: it, and their vote for it, are gone.
+    store.applyEvent({
+      serverEvent: "poll",
+      type: "update",
+      id: lunch.id,
+      writeIns: [null, null, { label: "Curry" }],
+      results: [{ count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }, { count: 1 }],
+    });
+    expect(Array.from(store.myWriteIns(lunch.id))).toEqual([]);
+    expect(Array.from(store.myVotes(lunch.id))).toEqual([]);
+    // A later read says the caller has none on the poll.
+    store.setMyWriteIn(lunch.id, 4, true);
+    store.ingest({ polls: [lunch], pollVotes: [], ownWriteIns: [] });
+    expect(Array.from(store.myWriteIns(lunch.id))).toEqual([]);
   });
 });
 

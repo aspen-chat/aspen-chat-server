@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useChannels, useCommunity } from "@/api/hooks";
 import { ChannelSidebar } from "@/features/channels/ChannelSidebar";
 import { MemberList } from "@/features/members/MemberList";
+import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { MembersPanelContext } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
 import { communityRoute } from "@/router";
@@ -51,11 +52,19 @@ export function ChannelSidebarLayout() {
   );
 }
 
-/** The community's index: on wide screens, open its first text channel. */
+/**
+ * The community's index: on wide screens, open its first text channel. On narrow ones the
+ * index is where the channel list shows, and it is what a channel's back link leads to, so it
+ * stays put.
+ */
 export function CommunityIndex() {
   const m = useMessages();
   const { communityId } = useParams({ from: communityRoute.id });
   const channels = useChannels(communityId);
+  const wide = useMediaQuery(MEDIUM_SCREEN);
+  if (!wide) {
+    return null;
+  }
   const first = channels.find((c) => c.ty === "text");
   if (first !== undefined) {
     return (

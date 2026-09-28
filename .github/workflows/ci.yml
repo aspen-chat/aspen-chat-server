@@ -86,6 +86,12 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # The Playwright specs answer every request from stubs, so they need no server. Chromium
+      # covers a desktop and a phone; the full matrix is `pnpm e2e` locally.
+      - name: Browser tests (desktop and phone, Chromium)
+        run: |
+          pnpm --filter @aspen/app exec playwright install --with-deps chromium
+          pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium
 
   arm64-native:
     name: ARM64 (Debian 12) — build and test natively
