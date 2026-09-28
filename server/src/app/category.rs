@@ -156,8 +156,10 @@ pub(crate) async fn read_category_channels(
     category: CategoryId,
 ) -> app::error::Result<Vec<Channel>> {
     let mut conn = state.connection_pool.get().await?;
-    member_category(conn.as_mut(), caller, category).await?;
-    let channels = channel::table
+    let (row, _) = member_category(conn.as_mut(), caller, category).await?;
+    let visibility =
+        crate::app::visibility::Visibility::load(state, caller, &[*row.community.id()]).await?;
+    let channels: Vec<Channel> = channel::table
         .select(Channel::as_select())
         .filter(
             channel::parent_category
@@ -167,7 +169,10 @@ pub(crate) async fn read_category_channels(
         .order_by(channel::sort_index.asc())
         .load(conn.as_mut())
         .await?;
-    Ok(channels)
+    Ok(channels
+        .into_iter()
+        .filter(|c| visibility.can_view(c.id))
+        .collect())
 }
 
 #[derive(Debug, Clone, AsChangeset)]

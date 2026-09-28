@@ -41,6 +41,9 @@ pub enum RoomError {
     Media(String),
     #[error("{0}")]
     BadParameters(String),
+    /// The join token does not grant sending from this source.
+    #[error("this call does not let you send {0:?}")]
+    NotPermitted(voice_protocol::signal::MediaSource),
 }
 
 /// Where a participant's frames go: the writer half of their socket.

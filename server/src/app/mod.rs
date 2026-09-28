@@ -42,6 +42,7 @@ pub mod thread;
 pub mod two_factor;
 pub mod user;
 pub mod user_status;
+pub mod visibility;
 pub mod voice;
 use crate::api::GlobalServerContext;
 pub use error::Error;

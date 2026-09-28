@@ -567,6 +567,7 @@ pub(crate) async fn read_communities_channels(
     Ok(channels)
 }
 
+/// The top-level channels of a community the caller may view.
 pub(crate) async fn read_community_channels(
     state: &GlobalServerContext,
     caller: UserId,
@@ -574,6 +575,7 @@ pub(crate) async fn read_community_channels(
 ) -> app::error::Result<Vec<app::channel::Channel>> {
     let mut conn = state.connection_pool.get().await?;
     require_member(conn.as_mut(), caller, community).await?;
+    let visibility = app::visibility::Visibility::load(state, caller, &[community]).await?;
     let channels = channel::table
         .select(app::channel::Channel::as_select())
         .filter(
@@ -584,7 +586,10 @@ pub(crate) async fn read_community_channels(
                 .and(channel::deleted_at.is_null()),
         )
         .order_by(channel::sort_index.asc())
-        .load(conn.as_mut())
-        .await?;
+        .load::<app::channel::Channel>(conn.as_mut())
+        .await?
+        .into_iter()
+        .filter(|c| visibility.can_view(c.id))
+        .collect();
     Ok(channels)
 }

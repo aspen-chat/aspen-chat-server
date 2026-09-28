@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
-use voice_protocol::token::{JoinClaims, verify};
+use voice_protocol::token::verify;
 
 /// How long a client has to identify before the socket is closed.
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -140,7 +140,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
     };
     // Identified: the socket no longer counts against its address's unidentified ones.
     drop(pending);
-    let JoinClaims { user, channel, .. } = claims;
+    let (user, channel) = (claims.user, claims.channel);
     let caller = Caller {
         ip: Some(ip),
         user: Some(user),
@@ -204,6 +204,11 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                     .rooms
                     .connect_transport(channel, user, &transport_id, dtls_parameters)
                     .await
+            }
+            ClientMessage::Produce { source, .. } | ClientMessage::ProduceRtp { source }
+                if !claims.may_produce(source) =>
+            {
+                Err(RoomError::NotPermitted(source))
             }
             ClientMessage::Produce {
                 transport_id,

@@ -23,6 +23,23 @@ pub struct JoinClaims {
     pub expires_at: i64,
     /// Makes two tokens for the same user and channel distinct.
     pub nonce: Uuid,
+    /// Whether they may send their microphone, the channel's Speak permission when the token
+    /// was issued.
+    pub speak: bool,
+    /// Whether they may share a screen or game, picture and sound, the channel's Share screen
+    /// permission when the token was issued.
+    pub share_screen: bool,
+}
+
+impl JoinClaims {
+    /// Whether the token lets its holder produce media from `source`.
+    pub fn may_produce(&self, source: crate::signal::MediaSource) -> bool {
+        use crate::signal::MediaSource;
+        match source {
+            MediaSource::Microphone => self.speak,
+            MediaSource::Screen | MediaSource::ScreenAudio => self.share_screen,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -92,6 +109,8 @@ mod tests {
             servers: vec![Uuid::now_v7(), Uuid::now_v7()],
             expires_at: 1_000,
             nonce: Uuid::now_v7(),
+            speak: true,
+            share_screen: false,
         }
     }
 
@@ -123,5 +142,14 @@ mod tests {
             verify("nodot", b"secret", server, 999),
             Err(TokenError::Malformed)
         );
+    }
+
+    #[test]
+    fn grants_decide_what_may_be_produced() {
+        use crate::signal::MediaSource;
+        let claims = claims();
+        assert!(claims.may_produce(MediaSource::Microphone));
+        assert!(!claims.may_produce(MediaSource::Screen));
+        assert!(!claims.may_produce(MediaSource::ScreenAudio));
     }
 }

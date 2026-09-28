@@ -247,10 +247,11 @@ pub struct JoinOffer {
     pub candidates: Vec<VoiceServer>,
     pub token: String,
     pub expires_at: DateTime<Utc>,
+    /// What the token lets them send, which the voice server enforces.
+    pub speak: bool,
+    pub share_screen: bool,
 }
 
-/// Whether a server may take a new session at `now`: enabled, with room, and not silent for
-/// longer than `offer_silence`. A server that has never reported is taken to be idle.
 /// Whether a server is offered to a joiner: enabled, with room, and heard from within the
 /// silence limit. A server that has never reported is one that has not started, so it is not
 /// offered; a voice server reports its load the moment it starts.
@@ -292,9 +293,8 @@ pub async fn join_offer(
     if !matches!(ty, ChannelType::Voice) {
         return Err(app::Error::Validation(t!("voiceChannelOnly")));
     }
-    channel_access(state, conn.as_mut(), user, channel_id)
-        .await?
-        .require(Permissions::JOIN_VOICE)?;
+    let access = channel_access(state, conn.as_mut(), user, channel_id).await?;
+    access.require(Permissions::JOIN_VOICE)?;
     let voice = &state.config.voice;
     let now = Utc::now();
     let existing: Option<VoiceSession> = voice_session::table
@@ -341,18 +341,26 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
+    let (speak, share_screen) = (
+        access.has(Permissions::SPEAK),
+        access.has(Permissions::SHARE_SCREEN),
+    );
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,
         servers: candidates.iter().map(|server| server.id.0).collect(),
         expires_at: expires_at.timestamp(),
         nonce: Uuid::now_v7(),
+        speak,
+        share_screen,
     };
     Ok(JoinOffer {
         session,
         candidates,
         token: sign(&claims, voice.token_secret.as_bytes()),
         expires_at,
+        speak,
+        share_screen,
     })
 }
 

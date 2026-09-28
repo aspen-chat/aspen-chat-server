@@ -155,6 +155,38 @@ pub async fn sideload_communities(
             }
         },
     )?;
+    // What lists channels, or things in them, shows only the channels the caller may view.
+    let hides = [
+        CommunityInclude::Channels,
+        CommunityInclude::Voice,
+        CommunityInclude::ReadStates,
+        CommunityInclude::Mutes,
+    ];
+    let (channels, voice, read_states, mutes) = if hides.iter().any(|i| include.contains(*i)) {
+        let visibility = app::visibility::Visibility::load(state, caller, communities).await?;
+        let can_view = |channel| visibility.can_view(channel);
+        (
+            channels.map(|mut c| {
+                c.retain(|c| can_view(c.id));
+                c
+            }),
+            voice.map(|(mut sessions, mut participants)| {
+                sessions.retain(|s| can_view(s.channel));
+                participants.retain(|p| can_view(p.channel));
+                (sessions, participants)
+            }),
+            read_states.map(|mut r| {
+                r.retain(|r| can_view(r.channel));
+                r
+            }),
+            mutes.map(|mut m| {
+                m.retain(|m| can_view(m.channel));
+                m
+            }),
+        )
+    } else {
+        (channels, voice, read_states, mutes)
+    };
     let mut included = Included {
         channels: channels.map(|channels| {
             channels

@@ -124,6 +124,12 @@ pub struct VoiceJoinOffer {
     /// Presented to the voice server; good for every candidate until `expiresAt`.
     pub token: String,
     pub expires_at: DateTime<Utc>,
+    /// Whether the caller may send their microphone in this call (Speak). Without it they
+    /// join to listen; the voice server refuses a microphone producer.
+    pub speak: bool,
+    /// Whether they may share a screen or game (Share screen), which the voice server also
+    /// enforces.
+    pub share_screen: bool,
 }
 
 /// The call on a channel, if any, and who is in it.
@@ -183,6 +189,8 @@ pub async fn join_voice(
             .collect(),
         token: offer.token,
         expires_at: offer.expires_at,
+        speak: offer.speak,
+        share_screen: offer.share_screen,
     }))
 }
 

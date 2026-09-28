@@ -604,7 +604,10 @@ pub async fn channel_access(
                 thread,
             })
         }
-        ChannelHome::Community(community_id) => {
+        ChannelHome::Community {
+            community: community_id,
+            ..
+        } => {
             let access = community_access(conn, user, community_id)
                 .await?
                 .ok_or_else(not_found)?;

@@ -11,8 +11,9 @@
 //! - `aspen.events.u.{user}` for what is the user's alone: their preferences, and their own
 //!   membership changes, which are how their connection learns to change what it reads.
 //!
-//! The channel level is in the subject so that private channels, once permissions exist, can
-//! be routed by channel rather than by changing every publisher.
+//! Every event about a community channel, or happening in one, also carries the
+//! `Aspen-Channel` header naming the channel whose View channel permission decides who
+//! receives it (a thread's parent), which the event feed filters by.
 //!
 //! A DM or group DM belongs to no community: what happens in it, and the channel itself, is
 //! published to each recipient's user subject, so it reaches exactly its recipients with no
@@ -46,6 +47,9 @@ use uuid::Uuid;
 pub const SUBJECT_ROOT: &str = "aspen.events";
 /// The header every copy of an event carries, the same for all its copies.
 pub const EVENT_ID_HEADER: &str = "Aspen-Event-Id";
+/// The header naming the community channel an event is about or happens in: the channel whose
+/// View channel permission decides who receives it, which for a thread is its parent's.
+pub const CHANNEL_HEADER: &str = "Aspen-Channel";
 
 /// Whose an event is, as the publishing code knows it. The ids it does not have in hand are
 /// looked up on the caller's connection, so an event published inside a transaction can name
@@ -191,7 +195,12 @@ pub async fn memberships(
 /// thread belongs where its parent channel does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelHome {
-    Community(CommunityId),
+    /// A community channel, and the channel whose permissions govern it: itself, or a
+    /// thread's parent.
+    Community {
+        community: CommunityId,
+        governing: ChannelId,
+    },
     /// The DM or group DM, which is the channel itself or a thread's parent.
     Direct(ChannelId),
 }
@@ -230,7 +239,10 @@ pub async fn channel_home(
             .first(conn)
             .await?;
         let home = match (community, parent) {
-            (Some(community), _) => ChannelHome::Community(community),
+            (Some(community), parent) => ChannelHome::Community {
+                community,
+                governing: parent.unwrap_or(current),
+            },
             (None, Some(parent)) => {
                 current = parent;
                 continue;
@@ -278,8 +290,51 @@ async fn channel_subjects(
     channel_id: ChannelId,
 ) -> app::Result<Vec<String>> {
     Ok(match channel_home(state, conn, channel_id).await? {
-        ChannelHome::Community(community) => vec![channel_subject(community, channel_id)],
+        ChannelHome::Community { community, .. } => vec![channel_subject(community, channel_id)],
         ChannelHome::Direct(dm) => recipient_subjects(conn, dm, None).await?,
+    })
+}
+
+/// The scope with a message or call replaced by the channel it is in, which is what both its
+/// subjects and its governing channel are decided by.
+async fn to_channel(conn: &mut AsyncPgConnection, scope: EventScope) -> app::Result<EventScope> {
+    Ok(match scope {
+        EventScope::Message(message_id) => EventScope::Channel(
+            message::table
+                .select(message::channel)
+                .filter(message::id.eq(message_id))
+                .first(conn)
+                .await?,
+        ),
+        EventScope::Session(session_id) => EventScope::Channel(
+            voice_session::table
+                .select(voice_session::channel)
+                .filter(voice_session::id.eq(session_id))
+                .first(conn)
+                .await?,
+        ),
+        scope => scope,
+    })
+}
+
+/// The community channel whose View channel permission decides who receives an event with
+/// this scope, if it is about one.
+async fn governing_channel(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    scope: &EventScope,
+) -> app::Result<Option<ChannelId>> {
+    let (EventScope::Channel(channel_id)
+    | EventScope::ChannelDefinition {
+        channel: channel_id,
+        ..
+    }) = scope
+    else {
+        return Ok(None);
+    };
+    Ok(match channel_home(state, conn, *channel_id).await? {
+        ChannelHome::Community { governing, .. } => Some(governing),
+        ChannelHome::Direct(_) => None,
     })
 }
 
@@ -291,28 +346,17 @@ async fn subjects(
 ) -> app::Result<Vec<String>> {
     Ok(match scope {
         EventScope::Channel(channel_id) => channel_subjects(state, conn, channel_id).await?,
-        EventScope::Message(message_id) => {
-            let channel_id: ChannelId = message::table
-                .select(message::channel)
-                .filter(message::id.eq(message_id))
-                .first(conn)
-                .await?;
-            channel_subjects(state, conn, channel_id).await?
-        }
-        EventScope::Session(session_id) => {
-            let channel_id: ChannelId = voice_session::table
-                .select(voice_session::channel)
-                .filter(voice_session::id.eq(session_id))
-                .first(conn)
-                .await?;
-            channel_subjects(state, conn, channel_id).await?
+        EventScope::Message(_) | EventScope::Session(_) => {
+            return Err(app::Error::EventRouting(
+                "a message or call scope reached subjects unresolved".to_string(),
+            ));
         }
         EventScope::Community(community) => vec![community_subject(community)],
         EventScope::ChannelDefinition {
             channel: channel_id,
             departed,
         } => match channel_home(state, conn, channel_id).await? {
-            ChannelHome::Community(community) => vec![community_subject(community)],
+            ChannelHome::Community { community, .. } => vec![community_subject(community)],
             ChannelHome::Direct(dm) => recipient_subjects(conn, dm, departed).await?,
         },
         EventScope::CommunityOfCategory(category_id) => {
@@ -364,12 +408,17 @@ pub async fn publish_event(
             expected
         )));
     }
+    let scope = to_channel(conn, scope).await?;
+    let governing = governing_channel(state, conn, &scope).await?;
     let subjects = subjects(state, conn, scope).await?;
     let payload: bytes::Bytes = serde_json::to_string(event)?.into_bytes().into();
     let event_id = Uuid::now_v7().to_string();
     let publishes = subjects.into_iter().map(|subject| {
         let mut headers = async_nats::HeaderMap::new();
         headers.insert(EVENT_ID_HEADER, event_id.as_str());
+        if let Some(channel) = governing {
+            headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+        }
         let payload = payload.clone();
         async move {
             let started = std::time::Instant::now();
