@@ -36,23 +36,13 @@ const HTTP_ROUTES: [&str; 2] = [HEALTH, SIGNALLING];
 /// The `frames` entry that limits every frame.
 const ANY_FRAME: &str = "any";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 enum Dimension {
     Global,
     Ip,
     User,
     Channel,
-}
-
-impl Dimension {
-    fn name(self) -> &'static str {
-        match self {
-            Dimension::Global => "global",
-            Dimension::Ip => "ip",
-            Dimension::User => "user",
-            Dimension::Channel => "channel",
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -172,7 +162,7 @@ impl Limits {
                     Dimension::Channel => caller.channel?.to_string(),
                 };
                 Some((
-                    format!("{}:{}:{who}", rule.bucket, rule.dimension.name()),
+                    format!("{}:{}:{who}", rule.bucket, <&str>::from(rule.dimension)),
                     rule.rate,
                 ))
             })
@@ -252,10 +242,10 @@ fn compile(
             let place = format!("rate_limits.{section}.{name}.{dimension}");
             let parsed = dimensions
                 .iter()
-                .find(|known| known.name() == dimension)
+                .find(|known| <&str>::from(*known) == dimension)
                 .copied()
                 .ok_or_else(|| {
-                    let allowed: Vec<&str> = dimensions.iter().map(|d| d.name()).collect();
+                    let allowed: Vec<&str> = dimensions.iter().map(|d| <&str>::from(*d)).collect();
                     format!("{place}: not a dimension here ({})", allowed.join(", "))
                 })?;
             if let Some(limit) = setting.limit(&place)? {

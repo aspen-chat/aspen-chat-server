@@ -18,9 +18,9 @@ use std::time::Duration;
 pub enum LimitsCommand {
     /// Suspend rate limits until `--for` has passed. They come back by themselves.
     Suspend {
-        /// How long, as `90s`, `30m`, `2h`, or `1d`; at most `max_suspension_seconds`.
+        /// How long, as `90s`, `30m`, `2h`, `1d`, or `1h 30m`; at most `max_suspension_seconds`.
         #[clap(long = "for", default_value = "2h")]
-        duration: String,
+        duration: humantime::Duration,
         /// `networks`: requests from `--network` skip the limits that count by address, and
         /// every other limit stays. `all`: every limit is lifted for everyone.
         #[clap(long, value_enum, default_value_t = ScopeArg::Networks)]
@@ -60,26 +60,6 @@ pub enum BenchCommand {
 pub enum ScopeArg {
     Networks,
     All,
-}
-
-/// Parses `90s`, `30m`, `2h`, `1d`, or a bare number of seconds.
-pub fn parse_duration(text: &str) -> Result<Duration> {
-    let text = text.trim();
-    let (number, unit) = text.split_at(
-        text.find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(text.len()),
-    );
-    let value: u64 = number
-        .parse()
-        .map_err(|_| anyhow!("{text:?} is not a duration such as 90s, 30m, 2h, or 1d"))?;
-    let seconds = match unit {
-        "" | "s" => value,
-        "m" => value * 60,
-        "h" => value * 3600,
-        "d" => value * 86_400,
-        _ => bail!("{text:?} is not a duration such as 90s, 30m, 2h, or 1d"),
-    };
-    Ok(Duration::from_secs(seconds))
 }
 
 /// Who is running the command, for the servers' logs.
@@ -124,7 +104,7 @@ pub async fn limits(config: &AspenConfig, command: LimitsCommand) -> Result<()> 
             networks,
             reason,
         } => {
-            let duration = parse_duration(&duration)?;
+            let duration = Duration::from(duration);
             let started_at = suspension::now_ms();
             let record = Suspension {
                 started_at,
@@ -271,7 +251,7 @@ pub enum InvitesCommand {
         uses: i32,
         /// How long it lasts, as `90s`, `30m`, `2h`, or `7d`; for good when left out.
         #[clap(long)]
-        expires: Option<String>,
+        expires: Option<humantime::Duration>,
         /// What it is for, shown beside it in the dashboard.
         #[clap(long)]
         note: Option<String>,
@@ -446,10 +426,7 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             note,
         } => {
             let expires_in = expires
-                .as_deref()
-                .map(parse_duration)
-                .transpose()?
-                .map(|d| chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX));
+                .map(|d| chrono::Duration::from_std(d.into()).unwrap_or(chrono::Duration::MAX));
             let invite = registration_invite::create(&mut conn, None, uses, expires_in, note)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
@@ -492,21 +469,4 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_duration;
-    use std::time::Duration;
-
-    #[test]
-    fn durations_parse_with_units() {
-        assert_eq!(parse_duration("90s").unwrap(), Duration::from_secs(90));
-        assert_eq!(parse_duration("30m").unwrap(), Duration::from_secs(1800));
-        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86_400));
-        assert_eq!(parse_duration("45").unwrap(), Duration::from_secs(45));
-        assert!(parse_duration("2 hours").is_err());
-        assert!(parse_duration("h").is_err());
-    }
 }

@@ -32,8 +32,10 @@ pub fn message_to_api(
     app::message::record(&msg, attachments, link_previews)
 }
 
-fn with_relations_to_api(m: app::message::MessageWithRelations) -> Message {
-    message_to_api(m.message, m.attachments, m.link_previews)
+impl From<app::message::MessageWithRelations> for Message {
+    fn from(m: app::message::MessageWithRelations) -> Self {
+        message_to_api(m.message, m.attachments, m.link_previews)
+    }
 }
 
 /// Relationships a message read can sideload.
@@ -139,7 +141,7 @@ async fn sideload_messages(
                 let ids: Vec<MessageId> = messages.iter().filter_map(|m| m.echo_of).collect();
                 app::message::read_messages(state, caller, &ids)
                     .await
-                    .map(|rows| Some(rows.into_iter().map(with_relations_to_api).collect()))
+                    .map(|rows| Some(rows.into_iter().map(Message::from).collect()))
             } else {
                 Ok(None)
             }
@@ -149,7 +151,7 @@ async fn sideload_messages(
                 let ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
                 app::react::read_summaries(state, caller, &ids)
                     .await
-                    .map(|rows| Some(rows.into_iter().map(api::react::summary_to_api).collect()))
+                    .map(|rows| Some(rows.into_iter().map(Into::into).collect()))
             } else {
                 Ok(None)
             }
@@ -160,7 +162,7 @@ async fn sideload_messages(
         None => (None, None, None),
     };
     Ok(Included {
-        users: users.map(|users| users.into_iter().map(api::user::user_to_api).collect()),
+        users: users.map(|users| users.into_iter().map(Into::into).collect()),
         attachments: attachments.map(|rows| {
             rows.into_iter()
                 .map(|row| api::attachment::attachment_to_api(state, row))
@@ -288,7 +290,7 @@ pub async fn list_channel_messages(
         app::channel::read_channel_messages(&state, user.id, channel, window)
             .await?
             .into_iter()
-            .map(with_relations_to_api)
+            .map(Message::from)
             .collect();
     let included = sideload_messages(&state, user.id, &messages, &include).await?;
     Ok(Json(MessageList::new(messages, included)))
@@ -315,7 +317,7 @@ pub async fn get_message(
     Path(message): Path<MessageId>,
     Query(query): Query<MessageReadQuery>,
 ) -> ApiResult<Json<MessageRead>> {
-    let m = with_relations_to_api(app::message::read_message(&state, user.id, message).await?);
+    let m = Message::from(app::message::read_message(&state, user.id, message).await?);
     let included =
         sideload_messages(&state, user.id, std::slice::from_ref(&m), &query.include).await?;
     Ok(Json(MessageRead::new(m, included)))
@@ -343,7 +345,7 @@ pub async fn update_message(
     Json(request): Json<MessageUpdateRequest>,
 ) -> ApiResult<Json<Message>> {
     let m = app::message::update_message(&state, user.id, message, request).await?;
-    Ok(Json(with_relations_to_api(m)))
+    Ok(Json(Message::from(m)))
 }
 
 #[utoipa::path(

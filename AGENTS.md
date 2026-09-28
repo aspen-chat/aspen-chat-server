@@ -304,6 +304,14 @@ do it right the first time. You will always check your work by running `cargo cl
 
 When code would be simpler with a trait a type does not have, give the type the trait: derive it, implement it, or teach `message_gen` to derive it on what it generates. Do not clone field by field because a type is not `Clone`, sort by an inner field because an id is not `Ord`, round-trip through `serde_json` to parse a name because an enum is not `FromStr`, or keep a second table of names beside the serde attributes. For enums whose wire names are also their names in headers, the terminal, and errors, `app::wire_name_traits!` gives `Display` and `FromStr` through the serde names, so those stay the only list. The ID types (`id_type!`) are `Ord`, and `message_gen`'s records and server events are `Clone`.
 
+Crates that provide these traits are welcome, and the workspace uses several:
+- `bitflags` for sets of flags. `Permissions` and `DeploymentPermissions` are stored as `BIGINT` through `app::bigint_sql_traits!`.
+- `strum` for names and lists of variants that serde does not give (`IntoStaticStr`, `VariantNames`, `VariantArray`).
+- `smart-default` for config sections whose defaults are written on their fields, with `#[serde(default)]` so a missing key takes them.
+- `humantime` for durations typed at the terminal.
+
+A conversion that takes one value and nothing else is `impl From`, not a `*_to_api` function.
+
 ## Comments document the current code, not its history
 
 Every comment and docstring anywhere in this repository — Rust in `server/`, TypeScript in `client/`, SQL in `migrations/`, config in `docker-compose.yaml`, and any future language we add — must describe the code as it stands in the tree right now. Do not write comments that contrast the current implementation with an earlier one, explain why today's code is "better than" or "replaces" something that used to exist, or cite removed helpers / classes / functions / modules by name as parallels or fallbacks. A reader opening the file a year from now has no way to resolve references like "the previous threaded implementation", "the client used to scrape this itself", "the old command-response enums", or "`_coerce_overrides` used to need"; those references become dead weight the moment the commit that removed the original code lands, and they actively mislead anyone grepping for the named symbol.

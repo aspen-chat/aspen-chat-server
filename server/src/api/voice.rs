@@ -62,15 +62,17 @@ pub struct VoiceServer {
     pub last_report_at: Option<DateTime<Utc>>,
 }
 
-fn server_to_api(row: app::voice::VoiceServer) -> VoiceServer {
-    VoiceServer {
-        id: row.id,
-        name: row.name,
-        url: row.url,
-        capacity: row.capacity,
-        enabled: row.enabled,
-        participants: row.reported_participants,
-        last_report_at: row.last_report_at,
+impl From<app::voice::VoiceServer> for VoiceServer {
+    fn from(row: app::voice::VoiceServer) -> Self {
+        VoiceServer {
+            id: row.id,
+            name: row.name,
+            url: row.url,
+            capacity: row.capacity,
+            enabled: row.enabled,
+            participants: row.reported_participants,
+            last_report_at: row.last_report_at,
+        }
     }
 }
 
@@ -240,7 +242,7 @@ pub async fn list_voice_servers(
 ) -> ApiResult<Json<Vec<VoiceServer>>> {
     access.require(DeploymentPermission::ManageVoiceServers)?;
     let servers = app::voice::list_servers(&state).await?;
-    Ok(Json(servers.into_iter().map(server_to_api).collect()))
+    Ok(Json(servers.into_iter().map(VoiceServer::from).collect()))
 }
 
 #[utoipa::path(
@@ -267,7 +269,7 @@ pub async fn create_voice_server(
         app::voice::create_server(&state, request.name, request.url, request.capacity).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/voice-servers/{}", server.id.0),
-        server_to_api(server),
+        VoiceServer::from(server),
     ))
 }
 
@@ -305,7 +307,7 @@ pub async fn update_voice_server(
         },
     )
     .await?;
-    Ok(Json(server_to_api(updated)))
+    Ok(Json(VoiceServer::from(updated)))
 }
 
 /// Removes a server. Any call on it ends.

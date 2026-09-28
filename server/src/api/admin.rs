@@ -32,7 +32,7 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
         )
         .await?;
         let access = app::deployment::access_of(state, session.user.id).await?;
-        if access.permissions == DeploymentPermissions::NONE {
+        if access.permissions == DeploymentPermissions::empty() {
             Err(ApiError::new(ProblemCode::AdminRequired))
         } else {
             Ok(AdminUser(session, access))
@@ -451,17 +451,20 @@ pub struct RegistrationInvite {
     pub usable: bool,
 }
 
-fn invite_to_api(invite: app::registration_invite::RegistrationInvite) -> RegistrationInvite {
-    RegistrationInvite {
-        usable: invite.usable(Utc::now()),
-        code: invite.code,
-        created_by: invite.created_by,
-        created_at: invite.created_at,
-        expires_at: invite.expires_at,
-        max_uses: invite.max_uses,
-        uses: invite.uses,
-        revoked_at: invite.revoked_at,
-        note: invite.note,
+/// The wire record, with `usable` as of the moment it is made.
+impl From<app::registration_invite::RegistrationInvite> for RegistrationInvite {
+    fn from(invite: app::registration_invite::RegistrationInvite) -> Self {
+        RegistrationInvite {
+            usable: invite.usable(Utc::now()),
+            code: invite.code,
+            created_by: invite.created_by,
+            created_at: invite.created_at,
+            expires_at: invite.expires_at,
+            max_uses: invite.max_uses,
+            uses: invite.uses,
+            revoked_at: invite.revoked_at,
+            note: invite.note,
+        }
     }
 }
 
@@ -505,7 +508,9 @@ pub async fn list_registration_invites(
         .await
         .map_err(app::Error::from)?;
     let invites = app::registration_invite::list(conn.as_mut(), false).await?;
-    Ok(Json(invites.into_iter().map(invite_to_api).collect()))
+    Ok(Json(
+        invites.into_iter().map(RegistrationInvite::from).collect(),
+    ))
 }
 
 #[utoipa::path(
@@ -546,7 +551,7 @@ pub async fn create_registration_invite(
     tracing::info!(code = %invite.code, admin = %session.user.id.0, "made a registration invite");
     Ok(Created::new(
         format!("{API_PREFIX}/admin/registration-invites/{}", invite.code),
-        invite_to_api(invite),
+        RegistrationInvite::from(invite),
     ))
 }
 

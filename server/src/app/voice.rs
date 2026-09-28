@@ -98,12 +98,14 @@ struct VoiceServerFailure {
     reported_at: DateTime<Utc>,
 }
 
-fn session_record(row: &VoiceSession) -> message_enum::VoiceSession {
-    message_enum::VoiceSession {
-        id: row.id,
-        channel: row.channel,
-        voice_server: row.voice_server,
-        created_at: row.created_at,
+impl From<&VoiceSession> for message_enum::VoiceSession {
+    fn from(row: &VoiceSession) -> Self {
+        message_enum::VoiceSession {
+            id: row.id,
+            channel: row.channel,
+            voice_server: row.voice_server,
+            created_at: row.created_at,
+        }
     }
 }
 
@@ -322,7 +324,10 @@ pub async fn join_offer(
         None => None,
     };
     let (session, candidates) = match reachable {
-        Some((session, server)) => (Some(session_record(&session)), vec![server]),
+        Some((session, server)) => (
+            Some(message_enum::VoiceSession::from(&session)),
+            vec![server],
+        ),
         None => {
             let servers: Vec<VoiceServer> = voice_server::table
                 .select(VoiceServer::as_select())
@@ -484,7 +489,7 @@ pub async fn read_channel_voice(
         .load(conn.as_mut())
         .await?;
     Ok((
-        Some(session_record(&session)),
+        Some(message_enum::VoiceSession::from(&session)),
         participants
             .iter()
             .map(|row| participant_record(row, channel_id))
@@ -524,7 +529,13 @@ pub async fn read_communities_voice(
         .iter()
         .filter_map(|row| channel_of(row.session).map(|channel| participant_record(row, channel)))
         .collect();
-    Ok((sessions.iter().map(session_record).collect(), participants))
+    Ok((
+        sessions
+            .iter()
+            .map(message_enum::VoiceSession::from)
+            .collect(),
+        participants,
+    ))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -597,7 +608,7 @@ async fn command_participant(
         .client()
         .publish(command_subject(session.voice_server.0), payload.into())
         .await
-        .map_err(|e| app::Error::VoiceCommand(e.to_string()))?;
+        .map_err(app::Error::VoiceCommand)?;
     Ok(participant_record(&participant, channel))
 }
 
@@ -610,8 +621,7 @@ pub async fn spawn_report_listener(state: GlobalServerContext) -> app::Result<()
     let client = state.nats_context.client();
     let mut reports = client
         .queue_subscribe(REPORT_SUBJECT, REPORT_QUEUE_GROUP.to_string())
-        .await
-        .map_err(|e| app::Error::NatsSubscribe(e.to_string()))?;
+        .await?;
     tokio::spawn(async move {
         while let Some(message) = reports.next().await {
             let report: VoiceReport = match serde_json::from_slice(&message.payload) {
@@ -692,7 +702,7 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                                 conn.as_mut(),
                                 EventScope::Channel(row.channel),
                                 &ServerEvent::VoiceSession(VoiceSessionEvent::Create(
-                                    session_record(&row),
+                                    message_enum::VoiceSession::from(&row),
                                 )),
                             )
                             .await?;

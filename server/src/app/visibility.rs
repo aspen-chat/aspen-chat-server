@@ -195,7 +195,10 @@ impl CommunityModel {
                 permissions,
                 everyone,
             } => {
-                let entry = self.roles.entry(*id).or_insert((Permissions::NONE, false));
+                let entry = self
+                    .roles
+                    .entry(*id)
+                    .or_insert((Permissions::empty(), false));
                 if let Some(permissions) = permissions {
                     entry.0 = *permissions;
                 }
@@ -305,7 +308,7 @@ impl CommunityModel {
                 },
             );
         }
-        let roles: Vec<(CommunityId, RoleId, i64, bool)> = community_role::table
+        let roles: Vec<(CommunityId, RoleId, Permissions, bool)> = community_role::table
             .select((
                 community_role::community,
                 community_role::id,
@@ -317,7 +320,7 @@ impl CommunityModel {
             .await?;
         for (community, id, permissions, everyone) in roles {
             if let Some(model) = models.get_mut(&community) {
-                model.roles.insert(id, (Permissions(permissions), everyone));
+                model.roles.insert(id, (permissions, everyone));
             }
         }
         let channels: Vec<(ChannelId, Option<CommunityId>, Option<CategoryId>)> = channel::table
@@ -334,56 +337,51 @@ impl CommunityModel {
                 model.categories.insert(id, category);
             }
         }
-        let channel_overrides: Vec<(Option<CommunityId>, ChannelId, RoleId, i64, i64)> =
+        let channel_overrides: Vec<(Option<CommunityId>, ChannelId, Override)> =
             channel_override::table
                 .inner_join(channel::table)
                 .select((
                     channel::community,
                     channel_override::channel,
-                    channel_override::role,
-                    channel_override::allow,
-                    channel_override::deny,
+                    (
+                        channel_override::role,
+                        channel_override::allow,
+                        channel_override::deny,
+                    ),
                 ))
                 .filter(channel::community.eq_any(ids.iter().map(|c| Some(*c))))
                 .load(conn)
                 .await?;
-        for (community, channel, role, allow, deny) in channel_overrides {
+        for (community, channel, entry) in channel_overrides {
             if let Some(model) = community.and_then(|c| models.get_mut(&c)) {
                 model
                     .channel_overrides
                     .entry(channel)
                     .or_default()
-                    .push(Override {
-                        role,
-                        allow: Permissions(allow),
-                        deny: Permissions(deny),
-                    });
+                    .push(entry);
             }
         }
-        let category_overrides: Vec<(CommunityId, CategoryId, RoleId, i64, i64)> =
-            category_override::table
-                .inner_join(crate::database::schema::category::table)
-                .select((
-                    crate::database::schema::category::community,
-                    category_override::category,
+        let category_overrides: Vec<(CommunityId, CategoryId, Override)> = category_override::table
+            .inner_join(crate::database::schema::category::table)
+            .select((
+                crate::database::schema::category::community,
+                category_override::category,
+                (
                     category_override::role,
                     category_override::allow,
                     category_override::deny,
-                ))
-                .filter(crate::database::schema::category::community.eq_any(&ids))
-                .load(conn)
-                .await?;
-        for (community, category, role, allow, deny) in category_overrides {
+                ),
+            ))
+            .filter(crate::database::schema::category::community.eq_any(&ids))
+            .load(conn)
+            .await?;
+        for (community, category, entry) in category_overrides {
             if let Some(model) = models.get_mut(&community) {
                 model
                     .category_overrides
                     .entry(category)
                     .or_default()
-                    .push(Override {
-                        role,
-                        allow: Permissions(allow),
-                        deny: Permissions(deny),
-                    });
+                    .push(entry);
             }
         }
         Ok(models)
@@ -566,7 +564,7 @@ mod tests {
         });
         model.apply(&ModelChange::Role {
             id: moderator,
-            permissions: Some(Permissions::NONE),
+            permissions: Some(Permissions::empty()),
             everyone: Some(false),
         });
         model.apply(&ModelChange::ChannelCategory {
@@ -577,7 +575,7 @@ mod tests {
         let hidden = ModelChange::ChannelOverride {
             channel,
             role: everyone,
-            set: Some((Permissions::NONE, Permissions::VIEW_CHANNEL)),
+            set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
         };
         model.apply(&hidden);
         // Applying a change twice is applying it once.
@@ -588,7 +586,7 @@ mod tests {
         model.apply(&ModelChange::CategoryOverride {
             category,
             role: moderator,
-            set: Some((Permissions::VIEW_CHANNEL, Permissions::NONE)),
+            set: Some((Permissions::VIEW_CHANNEL, Permissions::empty())),
         });
         model.apply(&ModelChange::ChannelCategory {
             channel,
@@ -604,7 +602,7 @@ mod tests {
         model.apply(&ModelChange::CategoryOverride {
             category,
             role: everyone,
-            set: Some((Permissions::NONE, Permissions::VIEW_CHANNEL)),
+            set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
         });
         assert!(model.can_view(member, &[moderator], channel));
         model.apply(&ModelChange::RoleDeleted(moderator));

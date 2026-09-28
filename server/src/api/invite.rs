@@ -1,4 +1,3 @@
-use crate::api;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
@@ -12,13 +11,15 @@ use diesel::result::DatabaseErrorKind;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
-fn invite_to_api(invite: &app::invite::Invite) -> message_enum::Invite {
-    message_enum::Invite {
-        code: invite.code.clone(),
-        created_by: invite.created_by,
-        created_at: invite.created_at,
-        community: invite.community,
-        expires_at: invite.expires_at,
+impl From<&app::invite::Invite> for message_enum::Invite {
+    fn from(invite: &app::invite::Invite) -> Self {
+        message_enum::Invite {
+            code: invite.code.clone(),
+            created_by: invite.created_by,
+            created_at: invite.created_at,
+            community: invite.community,
+            expires_at: invite.expires_at,
+        }
     }
 }
 
@@ -70,7 +71,7 @@ pub async fn create_invite(
     })?;
     Ok(Created::new(
         format!("{API_PREFIX}/invites/{}", invite.code),
-        invite_to_api(&invite),
+        message_enum::Invite::from(&invite),
     ))
 }
 
@@ -94,7 +95,9 @@ pub async fn list_community_invites(
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<message_enum::Invite>>> {
     let invites = app::invite::read_community_invites(&state, user.id, community).await?;
-    Ok(Json(invites.iter().map(invite_to_api).collect()))
+    Ok(Json(
+        invites.iter().map(message_enum::Invite::from).collect(),
+    ))
 }
 
 /// Relationships an invite read can sideload.
@@ -145,9 +148,12 @@ pub async fn get_invite(
     let mut included = Included::default();
     if query.include.contains(InviteInclude::Community) {
         let community = app::community::read_invited_community(&state, invite.community).await?;
-        included.communities = Some(vec![api::community::community_to_api(community)]);
+        included.communities = Some(vec![community.into()]);
     }
-    Ok(Json(InviteRead::new(invite_to_api(&invite), included)))
+    Ok(Json(InviteRead::new(
+        message_enum::Invite::from(&invite),
+        included,
+    )))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -182,7 +188,7 @@ pub async fn update_invite(
     let invite = app::invite::update_invite(&state, user.id, code, request.expires_at)
         .await
         .map_err(membership_required)?;
-    Ok(Json(invite_to_api(&invite)))
+    Ok(Json(message_enum::Invite::from(&invite)))
 }
 
 #[utoipa::path(

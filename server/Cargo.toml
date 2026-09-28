@@ -75,6 +75,10 @@ aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"
 tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
 metrics = "0.24"
 aspen_bench_protocol = { version = "0.1.0", path = "../bench_protocol" }
+smart-default = "0.7.1"
+strum = { version = "0.28.0", features = ["derive"] }
+humantime = "2.4.0"
+bitflags = "2.13.2"
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

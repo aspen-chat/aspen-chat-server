@@ -32,3 +32,5 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 voice_protocol = { path = "../voice_protocol" }
+smart-default = "0.7.1"
+strum = { version = "0.28.0", features = ["derive"] }

@@ -72,6 +72,35 @@ macro_rules! wire_name_traits {
 }
 pub(crate) use wire_name_traits;
 
+/// Diesel's `FromSql` and `ToSql` for a `bitflags` set stored as a `BIGINT`, so rows load and
+/// store the set itself. Unknown bits are kept, as the database holds them.
+macro_rules! bigint_sql_traits {
+    ($type_name:ty) => {
+        impl diesel::deserialize::FromSql<diesel::sql_types::BigInt, diesel::pg::Pg>
+            for $type_name
+        {
+            fn from_sql(
+                bytes: diesel::pg::PgValue<'_>,
+            ) -> diesel::deserialize::Result<Self> {
+                <i64 as diesel::deserialize::FromSql<diesel::sql_types::BigInt, diesel::pg::Pg>>::from_sql(bytes)
+                    .map(Self::from_bits_retain)
+            }
+        }
+
+        impl diesel::serialize::ToSql<diesel::sql_types::BigInt, diesel::pg::Pg> for $type_name {
+            fn to_sql<'b>(
+                &'b self,
+                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+            ) -> diesel::serialize::Result {
+                use std::io::Write;
+                out.write_all(&self.bits().to_be_bytes())?;
+                Ok(diesel::serialize::IsNull::No)
+            }
+        }
+    };
+}
+pub(crate) use bigint_sql_traits;
+
 macro_rules! id_type {
     ($type_name:ident) => {
         #[derive(

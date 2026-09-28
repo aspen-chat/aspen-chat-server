@@ -1,5 +1,6 @@
 use aspen_limits::RuleTable;
 use serde::Deserialize;
+use smart_default::SmartDefault;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use uuid::Uuid;
@@ -36,30 +37,14 @@ pub struct VoiceServerConfig {
 }
 
 /// Prometheus metrics (`aspen_metrics::voice`), served on a listener of their own.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct MetricsConfig {
-    #[serde(default = "default_metrics_enabled")]
+    #[default = true]
     pub enabled: bool,
     /// Where `GET /metrics` is served; loopback by default.
-    #[serde(default = "default_metrics_listen_addr")]
+    #[default(SocketAddr::from(([127, 0, 0, 1], 9465)))]
     pub listen_addr: SocketAddr,
-}
-
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_metrics_enabled(),
-            listen_addr: default_metrics_listen_addr(),
-        }
-    }
-}
-
-fn default_metrics_enabled() -> bool {
-    true
-}
-
-fn default_metrics_listen_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 9465))
 }
 
 /// The limits in force (`limits.rs`); `limits.toml` documents each.
@@ -136,10 +121,11 @@ impl LimitSettings {
 }
 
 /// Where WebRTC media is received.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct RtcConfig {
-    /// The interface media is bound to.
-    #[serde(default = "default_rtc_ip")]
+    /// The interface media is bound to; every interface by default.
+    #[default(IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
     pub ip: IpAddr,
     /// The address clients are told to send media to. Required in effect when `ip` is
     /// unspecified (`0.0.0.0`), since a client cannot send to that; left unset, the host's
@@ -147,23 +133,11 @@ pub struct RtcConfig {
     /// with a public address on an interface. A server behind NAT sets its public address.
     /// It must never be a loopback address: Firefox does not pair its own host candidates
     /// with a loopback peer, so media never connects.
-    #[serde(default)]
     pub announced_address: Option<String>,
-    #[serde(default = "default_rtc_min_port")]
+    #[default = 40000]
     pub min_port: u16,
-    #[serde(default = "default_rtc_max_port")]
+    #[default = 40999]
     pub max_port: u16,
-}
-
-impl Default for RtcConfig {
-    fn default() -> Self {
-        Self {
-            ip: default_rtc_ip(),
-            announced_address: None,
-            min_port: default_rtc_min_port(),
-            max_port: default_rtc_max_port(),
-        }
-    }
 }
 
 fn default_workers() -> usize {
@@ -172,18 +146,6 @@ fn default_workers() -> usize {
 
 fn default_listen_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9001)
-}
-
-fn default_rtc_ip() -> IpAddr {
-    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-}
-
-fn default_rtc_min_port() -> u16 {
-    40000
-}
-
-fn default_rtc_max_port() -> u16 {
-    40999
 }
 
 impl RtcConfig {

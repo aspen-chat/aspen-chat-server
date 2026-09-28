@@ -66,12 +66,23 @@ pub struct ParticipantInfo {
 }
 
 /// Frames a client sends.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    strum::IntoStaticStr,
+    strum::VariantNames,
+)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
+#[strum(serialize_all = "camelCase")]
 pub enum ClientMessage {
     /// Must be the first frame: the join token from the API server.
     Identify {
@@ -125,36 +136,13 @@ pub enum ClientMessage {
 }
 
 impl ClientMessage {
-    /// Every frame type's name, its `type` on the wire.
-    pub const KINDS: [&'static str; 11] = [
-        "identify",
-        "setCapabilities",
-        "createTransport",
-        "connectTransport",
-        "produce",
-        "closeProducer",
-        "produceRtp",
-        "consumeRtp",
-        "resumeConsumer",
-        "setState",
-        "leave",
-    ];
+    /// Every frame type's name, its `type` on the wire. `strum` names them, and a test holds
+    /// its names to the ones `serde` gives.
+    pub const KINDS: &'static [&'static str] = <Self as strum::VariantNames>::VARIANTS;
 
     /// This frame's type, as on the wire.
     pub fn kind(&self) -> &'static str {
-        match self {
-            ClientMessage::Identify { .. } => "identify",
-            ClientMessage::SetCapabilities { .. } => "setCapabilities",
-            ClientMessage::CreateTransport { .. } => "createTransport",
-            ClientMessage::ConnectTransport { .. } => "connectTransport",
-            ClientMessage::Produce { .. } => "produce",
-            ClientMessage::CloseProducer { .. } => "closeProducer",
-            ClientMessage::ProduceRtp { .. } => "produceRtp",
-            ClientMessage::ConsumeRtp => "consumeRtp",
-            ClientMessage::ResumeConsumer { .. } => "resumeConsumer",
-            ClientMessage::SetState { .. } => "setState",
-            ClientMessage::Leave => "leave",
-        }
+        self.into()
     }
 }
 

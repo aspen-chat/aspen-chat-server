@@ -25,11 +25,13 @@ pub struct ReadState {
     pub last_message: Option<MessageId>,
 }
 
-pub fn read_state_to_api(state: app::read_state::ReadState) -> ReadState {
-    ReadState {
-        channel: state.channel,
-        last_read: state.last_read,
-        last_message: state.last_message,
+impl From<app::read_state::ReadState> for ReadState {
+    fn from(state: app::read_state::ReadState) -> Self {
+        ReadState {
+            channel: state.channel,
+            last_read: state.last_read,
+            last_message: state.last_message,
+        }
     }
 }
 
@@ -62,7 +64,7 @@ pub async fn get_read_state(
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<ReadState>> {
     let read = app::read_state::read_read_state(&state, user.id, channel).await?;
-    Ok(Json(read_state_to_api(read)))
+    Ok(Json(ReadState::from(read)))
 }
 
 /// Moves the caller's read position in a channel forward to a message they have seen. A

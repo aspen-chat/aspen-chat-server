@@ -73,19 +73,21 @@ impl PartialSchema for UserRef {
 
 impl ToSchema for UserRef {}
 
-pub fn user_to_api(user: app::user::User) -> User {
-    User {
-        id: user.user_pg.id,
-        name: user.user_pg.name,
-        icon: user.user_pg.icon.map(|i| *i.id()),
-        online_status: user.online_status,
-        display_name: user.user_pg.display_name,
-        pronouns: user.user_pg.pronouns,
-        bio: user.user_pg.bio,
-        status: user.user_pg.status_text.map(|text| CustomStatus {
-            text,
-            emoji: user.user_pg.status_emoji,
-        }),
+impl From<app::user::User> for User {
+    fn from(user: app::user::User) -> Self {
+        User {
+            id: user.user_pg.id,
+            name: user.user_pg.name,
+            icon: user.user_pg.icon.map(|i| *i.id()),
+            online_status: user.online_status,
+            display_name: user.user_pg.display_name,
+            pronouns: user.user_pg.pronouns,
+            bio: user.user_pg.bio,
+            status: user.user_pg.status_text.map(|text| CustomStatus {
+                text,
+                emoji: user.user_pg.status_emoji,
+            }),
+        }
     }
 }
 
@@ -154,7 +156,7 @@ pub async fn get_user(
     Path(user): Path<UserRef>,
 ) -> ApiResult<Json<User>> {
     let user = app::user::read_user(&state, user.resolve(&session)).await?;
-    Ok(Json(user_to_api(user)))
+    Ok(Json(User::from(user)))
 }
 
 /// Lists the communities the user belongs to, by name. Only the calling user's own list is
@@ -189,10 +191,7 @@ pub async fn list_user_communities(
     let included =
         api::community::sideload_communities(&state, user_id, &ids, &query.include).await?;
     Ok(Json(CommunityList::new(
-        communities
-            .into_iter()
-            .map(api::community::community_to_api)
-            .collect(),
+        communities.into_iter().map(Into::into).collect(),
         included,
     )))
 }
@@ -222,7 +221,7 @@ pub async fn update_user(
     let updated = app::user::update_user(state, session.user.id, user_id, request)
         .await
         .map_err(not_your_account)?;
-    Ok(Json(user_to_api(updated)))
+    Ok(Json(User::from(updated)))
 }
 
 #[utoipa::path(
@@ -342,10 +341,12 @@ pub struct UserPreferences {
 #[schema(value_type = HashMap<String, serde_json::Value>)]
 pub struct UserPreferencesPatch(pub serde_json::Map<String, serde_json::Value>);
 
-fn preferences_to_api(preferences: app::preferences::Preferences) -> UserPreferences {
-    UserPreferences {
-        values: preferences.values,
-        updated_at: preferences.updated_at,
+impl From<app::preferences::Preferences> for UserPreferences {
+    fn from(preferences: app::preferences::Preferences) -> Self {
+        UserPreferences {
+            values: preferences.values,
+            updated_at: preferences.updated_at,
+        }
     }
 }
 
@@ -372,7 +373,7 @@ pub async fn get_preferences(
     let preferences = app::preferences::read(&state, session.user.id, user_id)
         .await
         .map_err(not_your_account)?;
-    Ok(Json(preferences_to_api(preferences)))
+    Ok(Json(UserPreferences::from(preferences)))
 }
 
 #[utoipa::path(
@@ -400,7 +401,7 @@ pub async fn update_preferences(
     let preferences = app::preferences::merge(&state, session.user.id, user_id, patch.0)
         .await
         .map_err(not_your_account)?;
-    Ok(Json(preferences_to_api(preferences)))
+    Ok(Json(UserPreferences::from(preferences)))
 }
 
 /// The most users one statuses request may ask about.

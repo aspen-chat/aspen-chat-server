@@ -1245,7 +1245,7 @@ mod tests {
             },
             ModelChange::Role {
                 id: moderator,
-                permissions: Some(Permissions::NONE),
+                permissions: Some(Permissions::empty()),
                 everyone: Some(false),
             },
             ModelChange::ChannelCategory {
@@ -1259,12 +1259,12 @@ mod tests {
             ModelChange::ChannelOverride {
                 channel: hidden,
                 role: everyone,
-                set: Some((Permissions::NONE, Permissions::VIEW_CHANNEL)),
+                set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
             },
             ModelChange::ChannelOverride {
                 channel: hidden,
                 role: moderator,
-                set: Some((Permissions::VIEW_CHANNEL, Permissions::NONE)),
+                set: Some((Permissions::VIEW_CHANNEL, Permissions::empty())),
             },
         ] {
             model.apply(&change);

@@ -9,6 +9,7 @@ use aspen_bench_protocol::{CommunityPlan, SeedPlan};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
+use smart_default::SmartDefault;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -170,8 +171,8 @@ pub enum EventKind {
 }
 
 /// What counts as keeping up. Every figure is over the steady phase.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize, Deserialize, SmartDefault)]
+#[serde(default, deny_unknown_fields)]
 pub struct Slo {
     /// A message reaching the other people in its channel, sender to receivers.
     pub delivery_p99_ms: Option<f64>,
@@ -179,43 +180,21 @@ pub struct Slo {
     /// Any request but signing in (slow on purpose, and judged by `connect_p99_ms`), and
     /// particular routes (`"POST /channels/{channel}/messages" = 300`).
     pub request_p99_ms: Option<f64>,
-    #[serde(default)]
     pub route_p99_ms: BTreeMap<String, f64>,
     /// Signing in, starting up, and opening the event stream.
     pub connect_p99_ms: Option<f64>,
     /// From the server dropping an event stream to its resumption: outages, restarts.
     pub recovery_p99_ms: Option<f64>,
     /// Failed requests over all requests.
-    #[serde(default = "default_error_rate")]
+    #[default = 0.001]
     pub error_rate: f64,
     /// Voice: share of media packets lost, and jitter.
     pub voice_loss: Option<f64>,
     pub voice_jitter_ms: Option<f64>,
     /// The least share of the users meant to be online that must be connected in the steady
     /// phase: users who could not connect are failures, however quick everyone else was.
-    #[serde(default = "default_connected_share")]
+    #[default = 0.99]
     pub connected_share: f64,
-}
-
-fn default_connected_share() -> f64 {
-    0.99
-}
-
-impl Default for Slo {
-    fn default() -> Self {
-        Self {
-            delivery_p99_ms: None,
-            delivery_p50_ms: None,
-            request_p99_ms: None,
-            route_p99_ms: BTreeMap::new(),
-            connect_p99_ms: None,
-            recovery_p99_ms: None,
-            error_rate: default_error_rate(),
-            voice_loss: None,
-            voice_jitter_ms: None,
-            connected_share: default_connected_share(),
-        }
-    }
 }
 
 /// Suspending the deployment's rate limits for the run (`aspen_limits::suspension`).
@@ -245,26 +224,19 @@ pub enum SuspendScope {
 
 /// Capacity mode: the steady phase repeats with more users online each time until a service
 /// level breaks.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize, Deserialize, SmartDefault)]
+#[serde(default, deny_unknown_fields)]
 pub struct CapacityOptions {
     /// Online share of the first step, of each step's increase, and the most tried.
+    #[default = 0.1]
     pub start: f64,
+    #[default = 0.1]
     pub step: f64,
+    #[default = 1.0]
     pub max: f64,
     /// How long each step's steady phase lasts.
+    #[default = 120.0]
     pub step_seconds: f64,
-}
-
-impl Default for CapacityOptions {
-    fn default() -> Self {
-        Self {
-            start: 0.1,
-            step: 0.1,
-            max: 1.0,
-            step_seconds: 120.0,
-        }
-    }
 }
 
 fn default_smallest_community() -> u32 {
@@ -306,10 +278,6 @@ fn default_screen_bitrate() -> u32 {
 fn default_call_channels() -> u32 {
     1
 }
-fn default_error_rate() -> f64 {
-    0.001
-}
-
 impl Profile {
     pub fn from_toml(text: &str) -> Result<Self, String> {
         let profile: Profile = toml::from_str(text).map_err(|e| e.to_string())?;

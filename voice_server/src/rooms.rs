@@ -37,8 +37,14 @@ pub enum RoomError {
     UnknownConsumer,
     #[error("the participant is not in the call")]
     NotInCall,
+    #[error("mediasoup could not create the call's router: {0}")]
+    CreateRouter(#[from] mediasoup::worker::CreateRouterError),
     #[error("mediasoup refused: {0}")]
-    Media(String),
+    MediaRequest(#[from] mediasoup::worker::RequestError),
+    #[error("mediasoup refused the producer: {0}")]
+    Produce(#[from] ProduceError),
+    #[error("the plain transport has no SRTP parameters")]
+    NoSrtpParameters,
     #[error("{0}")]
     BadParameters(String),
     /// The join token does not grant sending from this source.
@@ -417,8 +423,7 @@ impl Rooms {
         let worker = &self.workers[index];
         let router = worker
             .create_router(RouterOptions::new(media_codecs()))
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+            .await?;
         let audio_observer = router
             .create_audio_level_observer({
                 let mut options = AudioLevelObserverOptions::default();
@@ -427,8 +432,7 @@ impl Rooms {
                 options.interval = SPEAKING_INTERVAL_MS;
                 options
             })
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+            .await?;
         let session = Uuid::now_v7();
         let room = Arc::new(Room {
             session,
@@ -563,11 +567,7 @@ impl Rooms {
         options.enable_udp = true;
         options.enable_tcp = true;
         options.prefer_udp = true;
-        let transport = room
-            .router
-            .create_webrtc_transport(options)
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+        let transport = room.router.create_webrtc_transport(options).await?;
         let message = ServerMessage::TransportCreated {
             direction,
             id: transport.id().to_string(),
@@ -625,8 +625,7 @@ impl Rooms {
         };
         transport
             .connect(WebRtcTransportRemoteParameters { dtls_parameters })
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+            .await?;
         let participants = room.participants.lock().expect("room lock");
         if let Some(participant) = participants.get(&user) {
             participant.send(ServerMessage::TransportConnected {
@@ -659,10 +658,7 @@ impl Rooms {
         };
         let mut options = ProducerOptions::new(media_kind(kind), rtp_parameters);
         options.paused = muted && source == MediaSource::Microphone;
-        let producer = transport
-            .produce(options)
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+        let producer = transport.produce(options).await?;
         Self::observe_audio(&room, &producer, user).await;
         let producer_id = producer.id();
         let state = {
@@ -781,10 +777,7 @@ impl Rooms {
             }
             consumer
         };
-        consumer
-            .resume()
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))
+        consumer.resume().await.map_err(RoomError::from)
     }
 
     /// Makes a producer fed by SRTP the client sends itself, on a plain transport that learns
@@ -834,14 +827,10 @@ impl Rooms {
         options.comedia = true;
         options.enable_srtp = true;
         options.srtp_crypto_suite = SrtpCryptoSuite::AesCm128HmacSha180;
-        let transport = room
-            .router
-            .create_plain_transport(options)
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+        let transport = room.router.create_plain_transport(options).await?;
         let srtp = transport
             .srtp_parameters()
-            .ok_or_else(|| RoomError::Media("no SRTP parameters".into()))?;
+            .ok_or(RoomError::NoSrtpParameters)?;
         transport
             .connect(PlainTransportRemoteParameters {
                 ip: None,
@@ -849,8 +838,7 @@ impl Rooms {
                 rtcp_port: None,
                 srtp_parameters: Some(srtp.clone()),
             })
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+            .await?;
         Ok((transport, srtp))
     }
 
@@ -963,8 +951,7 @@ impl Rooms {
         };
         let producer = transport
             .produce(ProducerOptions::new(kind, rtp_parameters))
-            .await
-            .map_err(|e| RoomError::Media(e.to_string()))?;
+            .await?;
         Self::observe_audio(&room, &producer, user).await;
         let (local_address, local_port) = local_tuple(&transport);
         let producer_id = producer.id();

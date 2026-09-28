@@ -8,12 +8,14 @@ use crate::app::{CategoryId, CommunityId};
 use crate::{api, app};
 use axum::extract::State;
 
-pub fn category_to_api(c: crate::app::category::Category) -> message_enum::Category {
-    message_enum::Category {
-        id: c.id,
-        name: c.name,
-        sort_index: c.sort_index,
-        community: *c.community.id(),
+impl From<crate::app::category::Category> for message_enum::Category {
+    fn from(c: crate::app::category::Category) -> Self {
+        message_enum::Category {
+            id: c.id,
+            name: c.name,
+            sort_index: c.sort_index,
+            community: *c.community.id(),
+        }
     }
 }
 
@@ -48,7 +50,7 @@ pub async fn create_category(
     .await?;
     Ok(Created::new(
         format!("{API_PREFIX}/categories/{}", c.id.0),
-        category_to_api(c),
+        message_enum::Category::from(c),
     ))
 }
 
@@ -72,7 +74,12 @@ pub async fn list_community_categories(
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<message_enum::Category>>> {
     let categories = app::category::read_community_categories(&state, user.id, community).await?;
-    Ok(Json(categories.into_iter().map(category_to_api).collect()))
+    Ok(Json(
+        categories
+            .into_iter()
+            .map(message_enum::Category::from)
+            .collect(),
+    ))
 }
 
 #[utoipa::path(
@@ -95,7 +102,7 @@ pub async fn get_category(
     Path(category): Path<CategoryId>,
 ) -> ApiResult<Json<message_enum::Category>> {
     let c = app::category::read_category(&state, user.id, category).await?;
-    Ok(Json(category_to_api(c)))
+    Ok(Json(message_enum::Category::from(c)))
 }
 
 /// Channels filed under the category, in sort order.
@@ -149,7 +156,7 @@ pub async fn update_category(
     Json(request): Json<CategoryUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Category>> {
     let c = app::category::update_category(&state, user.id, category, request).await?;
-    Ok(Json(category_to_api(c)))
+    Ok(Json(message_enum::Category::from(c)))
 }
 
 #[utoipa::path(

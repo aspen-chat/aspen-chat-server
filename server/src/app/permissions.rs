@@ -29,100 +29,87 @@ use crate::database::schema::{
     community_user, dm_recipient,
 };
 use diesel::prelude::*;
+use diesel::{AsExpression, FromSqlRow};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::ops::{BitAnd, BitOr, Not};
 use utoipa::ToSchema;
 
-/// A set of permissions, as the bits the database stores. The values are fixed: migrations
-/// write them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Permissions(pub i64);
+bitflags::bitflags! {
+    /// A set of permissions, as the bits the database stores. The values are fixed: migrations
+    /// write them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromSqlRow, AsExpression)]
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub struct Permissions: i64 {
+        // Across the community.
+        const MANAGE_COMMUNITY = 1 << 0;
+        const MANAGE_CHANNELS = 1 << 1;
+        const MANAGE_CATEGORIES = 1 << 2;
+        const CREATE_INVITES = 1 << 3;
+        const MANAGE_INVITES = 1 << 4;
+        const MANAGE_ROLES = 1 << 5;
+        const ASSIGN_ROLES = 1 << 6;
+        const REMOVE_MEMBERS = 1 << 7;
+        const MANAGE_MESSAGES = 1 << 8;
+        const PIN_MESSAGES = 1 << 9;
+        const MANAGE_CALLS = 1 << 10;
+
+        // In a channel, and adjustable per channel and category.
+        const VIEW_CHANNEL = 1 << 16;
+        const SEND_MESSAGES = 1 << 17;
+        const ATTACH_FILES = 1 << 18;
+        const ADD_REACTIONS = 1 << 19;
+        const START_THREADS = 1 << 20;
+        const SEND_IN_THREADS = 1 << 21;
+        const CREATE_POLLS = 1 << 22;
+        const JOIN_VOICE = 1 << 23;
+        const SPEAK = 1 << 24;
+        const SHARE_SCREEN = 1 << 25;
+    }
+}
+
+app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
-    pub const NONE: Permissions = Permissions(0);
-
-    // Across the community.
-    pub const MANAGE_COMMUNITY: Permissions = Permissions(1 << 0);
-    pub const MANAGE_CHANNELS: Permissions = Permissions(1 << 1);
-    pub const MANAGE_CATEGORIES: Permissions = Permissions(1 << 2);
-    pub const CREATE_INVITES: Permissions = Permissions(1 << 3);
-    pub const MANAGE_INVITES: Permissions = Permissions(1 << 4);
-    pub const MANAGE_ROLES: Permissions = Permissions(1 << 5);
-    pub const ASSIGN_ROLES: Permissions = Permissions(1 << 6);
-    pub const REMOVE_MEMBERS: Permissions = Permissions(1 << 7);
-    pub const MANAGE_MESSAGES: Permissions = Permissions(1 << 8);
-    pub const PIN_MESSAGES: Permissions = Permissions(1 << 9);
-    pub const MANAGE_CALLS: Permissions = Permissions(1 << 10);
-
-    // In a channel, and adjustable per channel and category.
-    pub const VIEW_CHANNEL: Permissions = Permissions(1 << 16);
-    pub const SEND_MESSAGES: Permissions = Permissions(1 << 17);
-    pub const ATTACH_FILES: Permissions = Permissions(1 << 18);
-    pub const ADD_REACTIONS: Permissions = Permissions(1 << 19);
-    pub const START_THREADS: Permissions = Permissions(1 << 20);
-    pub const SEND_IN_THREADS: Permissions = Permissions(1 << 21);
-    pub const CREATE_POLLS: Permissions = Permissions(1 << 22);
-    pub const JOIN_VOICE: Permissions = Permissions(1 << 23);
-    pub const SPEAK: Permissions = Permissions(1 << 24);
-    pub const SHARE_SCREEN: Permissions = Permissions(1 << 25);
-
     /// Every permission that holds across the community.
-    pub const COMMUNITY: Permissions = Permissions((1 << 11) - 1);
+    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 11) - 1);
     /// Every permission an override may adjust.
-    pub const CHANNEL: Permissions = Permissions(((1 << 26) - 1) & !((1 << 16) - 1));
-    pub const ALL: Permissions = Permissions(Self::COMMUNITY.0 | Self::CHANNEL.0);
+    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 26) - 1) & !((1 << 16) - 1));
 
     /// The everyone role of a new community: taking part, and inviting others.
-    pub const MEMBER_TEMPLATE: Permissions = Permissions(Self::CHANNEL.0 | Self::CREATE_INVITES.0);
+    pub const MEMBER_TEMPLATE: Self = Self::CHANNEL.union(Self::CREATE_INVITES);
     /// A new community's Moderator role.
-    pub const MODERATOR_TEMPLATE: Permissions = Permissions(
-        Self::MEMBER_TEMPLATE.0
-            | Self::MANAGE_INVITES.0
-            | Self::REMOVE_MEMBERS.0
-            | Self::MANAGE_MESSAGES.0
-            | Self::PIN_MESSAGES.0
-            | Self::MANAGE_CALLS.0,
-    );
+    pub const MODERATOR_TEMPLATE: Self = Self::MEMBER_TEMPLATE
+        .union(Self::MANAGE_INVITES)
+        .union(Self::REMOVE_MEMBERS)
+        .union(Self::MANAGE_MESSAGES)
+        .union(Self::PIN_MESSAGES)
+        .union(Self::MANAGE_CALLS);
     /// A new community's Admin role: everything but what only the owner may do.
-    pub const ADMIN_TEMPLATE: Permissions = Self::ALL;
-
-    pub fn contains(self, other: Permissions) -> bool {
-        self.0 & other.0 == other.0
-    }
+    pub const ADMIN_TEMPLATE: Self = Self::all();
 
     /// Every bit that names a permission, and no other.
-    pub fn valid(self) -> Permissions {
-        Permissions(self.0 & Self::ALL.0)
-    }
-}
-
-impl BitOr for Permissions {
-    type Output = Permissions;
-    fn bitor(self, other: Permissions) -> Permissions {
-        Permissions(self.0 | other.0)
-    }
-}
-
-impl BitAnd for Permissions {
-    type Output = Permissions;
-    fn bitand(self, other: Permissions) -> Permissions {
-        Permissions(self.0 & other.0)
-    }
-}
-
-impl Not for Permissions {
-    type Output = Permissions;
-    fn not(self) -> Permissions {
-        Permissions(!self.0)
+    pub fn valid(self) -> Self {
+        Self::from_bits_truncate(self.bits())
     }
 }
 
 /// Something a member may be allowed to do. The first group holds across the community; the
 /// second is what a channel or category override may allow or deny.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
     ManageCommunity,
@@ -149,29 +136,7 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Permission; 21] = [
-        Permission::ManageCommunity,
-        Permission::ManageChannels,
-        Permission::ManageCategories,
-        Permission::CreateInvites,
-        Permission::ManageInvites,
-        Permission::ManageRoles,
-        Permission::AssignRoles,
-        Permission::RemoveMembers,
-        Permission::ManageMessages,
-        Permission::PinMessages,
-        Permission::ManageCalls,
-        Permission::ViewChannel,
-        Permission::SendMessages,
-        Permission::AttachFiles,
-        Permission::AddReactions,
-        Permission::StartThreads,
-        Permission::SendInThreads,
-        Permission::CreatePolls,
-        Permission::JoinVoice,
-        Permission::Speak,
-        Permission::ShareScreen,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn bits(self) -> Permissions {
         match self {
@@ -205,16 +170,15 @@ app::wire_name_traits!(Permission);
 /// A set of permissions as the names the API uses, in their fixed order.
 pub fn to_names(permissions: Permissions) -> Vec<Permission> {
     Permission::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|p| permissions.contains(p.bits()))
         .collect()
 }
 
 /// The names the API uses as a set of permissions.
 pub fn from_names(names: &[Permission]) -> Permissions {
-    names
-        .iter()
-        .fold(Permissions::NONE, |set, p| set | p.bits())
+    names.iter().map(|p| p.bits()).collect()
 }
 
 /// A role as the resolver needs it.
@@ -227,7 +191,7 @@ pub struct RoleGrant {
 }
 
 /// One role's override in a channel or category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Queryable)]
 pub struct Override {
     pub role: RoleId,
     pub allow: Permissions,
@@ -261,9 +225,9 @@ pub const MODERATOR_RANK: i32 = i32::MAX - 1;
 /// that take things away (deleting messages, attachments, reactions, and write-ins, and removing
 /// members). Renaming and deleting channels and communities are checked by name where they are
 /// done.
-pub const MODERATION: Permissions = Permissions(
-    Permissions::VIEW_CHANNEL.0 | Permissions::MANAGE_MESSAGES.0 | Permissions::REMOVE_MEMBERS.0,
-);
+pub const MODERATION: Permissions = Permissions::VIEW_CHANNEL
+    .union(Permissions::MANAGE_MESSAGES)
+    .union(Permissions::REMOVE_MEMBERS);
 
 impl CommunityAccess {
     /// Resolves a member's permissions from the roles they hold.
@@ -274,11 +238,12 @@ impl CommunityAccess {
         roles: Vec<RoleGrant>,
     ) -> Self {
         let permissions = if owner {
-            Permissions::ALL
+            Permissions::all()
         } else {
             roles
                 .iter()
-                .fold(Permissions::NONE, |held, role| held | role.permissions)
+                .map(|role| role.permissions)
+                .collect::<Permissions>()
                 .valid()
         };
         CommunityAccess {
@@ -296,7 +261,7 @@ impl CommunityAccess {
     /// The same access with Moderate any community added.
     pub fn with_moderation(mut self) -> Self {
         self.moderator = true;
-        self.permissions = self.permissions | MODERATION;
+        self.permissions |= MODERATION;
         self
     }
 
@@ -362,7 +327,7 @@ impl CommunityAccess {
     /// channel's overrides.
     pub fn in_channel(&self, category: &[Override], channel: &[Override]) -> Permissions {
         if self.owner {
-            return Permissions::ALL;
+            return Permissions::all();
         }
         let mut permissions = self.permissions;
         for layer in [category, channel] {
@@ -370,7 +335,7 @@ impl CommunityAccess {
         }
         // No override hides a channel from a moderator.
         if self.moderator {
-            permissions = permissions | Permissions::VIEW_CHANNEL;
+            permissions |= Permissions::VIEW_CHANNEL;
         }
         permissions
     }
@@ -386,7 +351,7 @@ impl CommunityAccess {
             .iter()
             .filter(|o| Some(o.role) != everyone && self.roles.iter().any(|r| r.id == o.role))
             .fold(
-                (Permissions::NONE, Permissions::NONE),
+                (Permissions::empty(), Permissions::empty()),
                 |(deny, allow), o| (deny | o.deny, allow | o.allow),
             );
         (permissions & !(deny & Permissions::CHANNEL)) | (allow & Permissions::CHANNEL)
@@ -486,7 +451,7 @@ impl ChannelAccess {
 struct RoleRow {
     id: RoleId,
     position: i32,
-    permissions: i64,
+    permissions: Permissions,
     everyone: bool,
 }
 
@@ -495,7 +460,7 @@ impl From<RoleRow> for RoleGrant {
         RoleGrant {
             id: row.id,
             position: row.position,
-            permissions: Permissions(row.permissions),
+            permissions: row.permissions,
             everyone: row.everyone,
         }
     }
@@ -598,7 +563,7 @@ async fn overrides_of_channel(
     conn: &mut AsyncPgConnection,
     channel_id: ChannelId,
 ) -> app::Result<Vec<Override>> {
-    let rows: Vec<(RoleId, i64, i64)> = channel_override::table
+    Ok(channel_override::table
         .select((
             channel_override::role,
             channel_override::allow,
@@ -606,22 +571,14 @@ async fn overrides_of_channel(
         ))
         .filter(channel_override::channel.eq(channel_id))
         .load(conn)
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(role, allow, deny)| Override {
-            role,
-            allow: Permissions(allow),
-            deny: Permissions(deny),
-        })
-        .collect())
+        .await?)
 }
 
 async fn overrides_of_category(
     conn: &mut AsyncPgConnection,
     category_id: CategoryId,
 ) -> app::Result<Vec<Override>> {
-    let rows: Vec<(RoleId, i64, i64)> = category_override::table
+    Ok(category_override::table
         .select((
             category_override::role,
             category_override::allow,
@@ -629,15 +586,7 @@ async fn overrides_of_category(
         ))
         .filter(category_override::category.eq(category_id))
         .load(conn)
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(role, allow, deny)| Override {
-            role,
-            allow: Permissions(allow),
-            deny: Permissions(deny),
-        })
-        .collect())
+        .await?)
 }
 
 /// What `user` may do in `channel_id`. A channel they may not view, in a community they are
@@ -779,14 +728,14 @@ mod tests {
             UserId(Uuid::from_u128(100)),
             CommunityId(Uuid::from_u128(200)),
             true,
-            vec![role(EVERYONE, 0, Permissions::NONE, true)],
+            vec![role(EVERYONE, 0, Permissions::empty(), true)],
         );
         let deny_all = Override {
             role: RoleId(Uuid::from_u128(EVERYONE)),
-            allow: Permissions::NONE,
+            allow: Permissions::empty(),
             deny: Permissions::CHANNEL,
         };
-        assert_eq!(access.in_channel(&[], &[deny_all]), Permissions::ALL);
+        assert_eq!(access.in_channel(&[], &[deny_all]), Permissions::all());
         assert_eq!(access.rank(), OWNER_RANK);
     }
 
@@ -794,18 +743,18 @@ mod tests {
     fn a_role_allowance_wins_over_a_denial_for_everyone() {
         let access = member(vec![
             role(EVERYONE, 0, Permissions::MEMBER_TEMPLATE, true),
-            role(MODERATOR, 1, Permissions::NONE, false),
+            role(MODERATOR, 1, Permissions::empty(), false),
         ]);
         let hidden = [
             Override {
                 role: RoleId(Uuid::from_u128(EVERYONE)),
-                allow: Permissions::NONE,
+                allow: Permissions::empty(),
                 deny: Permissions::VIEW_CHANNEL,
             },
             Override {
                 role: RoleId(Uuid::from_u128(MODERATOR)),
                 allow: Permissions::VIEW_CHANNEL,
-                deny: Permissions::NONE,
+                deny: Permissions::empty(),
             },
         ];
         assert!(
@@ -827,13 +776,13 @@ mod tests {
         let everyone = RoleId(Uuid::from_u128(EVERYONE));
         let read_only_category = [Override {
             role: everyone,
-            allow: Permissions::NONE,
+            allow: Permissions::empty(),
             deny: Permissions::SEND_MESSAGES,
         }];
         let open_channel = [Override {
             role: everyone,
             allow: Permissions::SEND_MESSAGES,
-            deny: Permissions::NONE,
+            deny: Permissions::empty(),
         }];
         assert!(
             !access
@@ -874,7 +823,7 @@ mod tests {
 
     #[test]
     fn names_parse_back() {
-        for p in Permission::ALL {
+        for &p in Permission::ALL {
             assert_eq!(p.to_string().parse::<Permission>().unwrap(), p);
         }
         assert_eq!(Permission::ManageInvites.to_string(), "manageInvites");
@@ -883,18 +832,18 @@ mod tests {
 
     #[test]
     fn every_permission_has_one_name_and_back() {
-        assert_eq!(from_names(&Permission::ALL), Permissions::ALL);
-        assert_eq!(to_names(Permissions::ALL), Permission::ALL.to_vec());
+        assert_eq!(from_names(Permission::ALL), Permissions::all());
+        assert_eq!(to_names(Permissions::all()), Permission::ALL.to_vec());
         let distinct: std::collections::HashSet<i64> =
-            Permission::ALL.iter().map(|p| p.bits().0).collect();
+            Permission::ALL.iter().map(|p| p.bits().bits()).collect();
         assert_eq!(distinct.len(), Permission::ALL.len());
     }
 
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
-        assert_eq!(Permissions::MEMBER_TEMPLATE.0, 67_043_336);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.0, 67_045_272);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.0, 67_045_375);
+        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 67_043_336);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 67_045_272);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 67_045_375);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

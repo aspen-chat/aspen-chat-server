@@ -1,5 +1,6 @@
 pub use aspen_limits::{Limit, LimitSetting, RuleTable};
 use serde::Deserialize;
+use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -153,109 +154,63 @@ pub struct RateLimitGroup {
 }
 
 /// Prometheus metrics (`aspen_metrics`), served on a listener of their own.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct MetricsConfig {
-    #[serde(default = "default_metrics_enabled")]
+    #[default = true]
     pub enabled: bool,
     /// Where `GET /metrics` is served. Loopback by default: the figures describe the
     /// deployment's inside, so expose them only to whatever scrapes them.
-    #[serde(default = "default_metrics_listen_addr")]
+    #[default(std::net::SocketAddr::from(([127, 0, 0, 1], 9464)))]
     pub listen_addr: std::net::SocketAddr,
-}
-
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_metrics_enabled(),
-            listen_addr: default_metrics_listen_addr(),
-        }
-    }
-}
-
-fn default_metrics_enabled() -> bool {
-    true
-}
-
-fn default_metrics_listen_addr() -> std::net::SocketAddr {
-    std::net::SocketAddr::from(([127, 0, 0, 1], 9464))
 }
 
 /// Who may create an account (`app::registration_invite`).
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct RegistrationConfig {
     /// Whether creating an account takes an invite from the deployment's administrators. Off,
     /// anyone who reaches the server may register. On, the first account's invite is made
     /// from the terminal (`aspen-chat-server invites create`).
-    #[serde(default)]
     pub invite_required: bool,
 }
 
 /// Whether people show as online, away, or offline (`app::user_status`).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct PresenceConfig {
-    /// A connected user who has not used Aspen for this long shows as away. Clients report
-    /// activity at most once a minute, so values much under a few minutes make people flicker
-    /// between away and online.
-    #[serde(default = "default_presence_away_after_seconds")]
+    /// A connected user who has not used Aspen for this long shows as away; ten minutes by
+    /// default. Clients report activity at most once a minute, so values much under a few
+    /// minutes make people flicker between away and online.
+    #[default = 600]
     pub away_after_seconds: u64,
 }
 
-impl Default for PresenceConfig {
-    fn default() -> Self {
-        Self {
-            away_after_seconds: default_presence_away_after_seconds(),
-        }
-    }
-}
-
-/// Ten minutes.
-fn default_presence_away_after_seconds() -> u64 {
-    600
-}
-
 /// Sign-in: second factors, passkeys, and how recent a verification must be.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct AuthConfig {
     /// Every account must have a second factor. A session of an account without one can only
     /// add one (or sign out) until it does.
-    #[serde(default)]
     pub require_two_factor: bool,
     /// How the server names itself to authenticators: the label beside an authenticator app's
     /// codes and the name a passkey prompt shows.
-    #[serde(default = "default_auth_service_name")]
+    #[default = "Aspen"]
     pub service_name: String,
     /// A change to security settings needs the session to have proved who its user is within
-    /// this many seconds.
-    #[serde(default = "default_auth_reverify_seconds")]
+    /// this many seconds; ten minutes by default.
+    #[default = 600]
     pub reverify_seconds: u64,
     /// Passkeys are offered only when this is set.
-    #[serde(default)]
     pub passkeys: Option<PasskeyConfig>,
     /// Threads password hashing and checking may use at once, one per logical CPU by default.
     /// Each Argon2 hash holds 19 MiB while it runs.
-    #[serde(default = "crate::app::login::default_password_hashing_threads")]
+    #[default(crate::app::login::default_password_hashing_threads())]
     pub password_hashing_threads: usize,
     /// How long a sign-in or other password check waits for a thread before it is refused
     /// with `serverBusy`.
-    #[serde(default = "default_password_hashing_wait_seconds")]
+    #[default = 10]
     pub password_hashing_wait_seconds: u64,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            require_two_factor: false,
-            service_name: default_auth_service_name(),
-            reverify_seconds: default_auth_reverify_seconds(),
-            passkeys: None,
-            password_hashing_threads: crate::app::login::default_password_hashing_threads(),
-            password_hashing_wait_seconds: default_password_hashing_wait_seconds(),
-        }
-    }
-}
-
-fn default_password_hashing_wait_seconds() -> u64 {
-    10
 }
 
 /// WebAuthn relying party settings.
@@ -272,70 +227,50 @@ pub struct PasskeyConfig {
     pub origins: Vec<String>,
 }
 
-fn default_auth_service_name() -> String {
-    "Aspen".to_string()
-}
-
-/// Ten minutes.
-fn default_auth_reverify_seconds() -> u64 {
-    600
-}
-
 /// Ceilings that keep one user's footprint bounded.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct LimitsConfig {
     /// The most communities one user may belong to. It bounds how many subjects an event
     /// stream connection reads and how many copies of a profile change are published.
-    #[serde(default = "default_max_communities_per_user")]
+    #[default = 500]
     pub max_communities_per_user: u32,
-}
-
-impl Default for LimitsConfig {
-    fn default() -> Self {
-        Self {
-            max_communities_per_user: default_max_communities_per_user(),
-        }
-    }
-}
-
-fn default_max_communities_per_user() -> u32 {
-    500
 }
 
 /// Voice calls. The servers listed here are seeded into the `voice_server` table at startup,
 /// matched by name, and can then be managed through the `/voice-servers` endpoints.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct VoiceConfig {
     /// Shared with every voice server; signs the join tokens they verify.
-    #[serde(default = "default_voice_token_secret")]
+    #[default = "aspen_dev_voice_secret"]
     pub token_secret: String,
     /// Distinct users whose session creation failed within `failure_window_seconds` before a
     /// server is disabled.
-    #[serde(default = "default_voice_failure_threshold")]
+    #[default = 5]
     pub failure_threshold: u32,
-    #[serde(default = "default_voice_failure_window_seconds")]
+    #[default = 3600]
     pub failure_window_seconds: u64,
     /// How long a join token stays valid: long enough to try every candidate server.
-    #[serde(default = "default_voice_join_token_ttl_seconds")]
+    #[default = 60]
     pub join_token_ttl_seconds: u64,
     /// The most candidate servers one join offer names.
-    #[serde(default = "default_voice_candidate_limit")]
+    #[default = 10]
     pub candidate_limit: usize,
     /// A voice server silent for this long is not offered to anyone joining a call: it is
     /// probably down, and offering it would cost clients failed attempts and count against it.
-    #[serde(default = "default_voice_offer_silence_seconds")]
+    #[default = 60]
     pub offer_silence_seconds: u64,
-    /// A voice server silent for this long has its sessions ended, so a server that died
-    /// leaves no phantom calls. Long, because a call outliving a brief outage of the report
-    /// link is worth more than ending it early.
-    #[serde(default = "default_voice_session_silence_seconds")]
+    /// A voice server silent for this long (a day by default) has its sessions ended, so a
+    /// server that died leaves no phantom calls. Long, because a call outliving a brief outage
+    /// of the report link is worth more than ending it early.
+    #[default(24 * 60 * 60)]
     pub session_silence_seconds: u64,
-    /// A call that has gone this long without ever holding two people at once is ended and
-    /// its lone participant told why, so a forgotten client cannot hold a voice server slot
-    /// indefinitely.
-    #[serde(default = "default_voice_idle_session_seconds")]
+    /// A call that has gone this long (a day by default) without ever holding two people at
+    /// once is ended and its lone participant told why, so a forgotten client cannot hold a
+    /// voice server slot indefinitely.
+    #[default(24 * 60 * 60)]
     pub idle_session_seconds: u64,
-    #[serde(default)]
     pub servers: Vec<VoiceServerSeed>,
 }
 
@@ -348,56 +283,6 @@ pub struct VoiceServerSeed {
     pub capacity: u32,
 }
 
-impl Default for VoiceConfig {
-    fn default() -> Self {
-        Self {
-            token_secret: default_voice_token_secret(),
-            failure_threshold: default_voice_failure_threshold(),
-            failure_window_seconds: default_voice_failure_window_seconds(),
-            join_token_ttl_seconds: default_voice_join_token_ttl_seconds(),
-            candidate_limit: default_voice_candidate_limit(),
-            offer_silence_seconds: default_voice_offer_silence_seconds(),
-            session_silence_seconds: default_voice_session_silence_seconds(),
-            idle_session_seconds: default_voice_idle_session_seconds(),
-            servers: Vec::new(),
-        }
-    }
-}
-
-fn default_voice_token_secret() -> String {
-    "aspen_dev_voice_secret".to_string()
-}
-
-fn default_voice_failure_threshold() -> u32 {
-    5
-}
-
-fn default_voice_failure_window_seconds() -> u64 {
-    3600
-}
-
-fn default_voice_join_token_ttl_seconds() -> u64 {
-    60
-}
-
-fn default_voice_candidate_limit() -> usize {
-    10
-}
-
-fn default_voice_offer_silence_seconds() -> u64 {
-    60
-}
-
-/// A day.
-fn default_voice_session_silence_seconds() -> u64 {
-    24 * 60 * 60
-}
-
-/// A day.
-fn default_voice_idle_session_seconds() -> u64 {
-    24 * 60 * 60
-}
-
 /// Cross-Origin Resource Sharing.
 ///
 /// Browsers (including the Electron and Capacitor shells, which are browsers) refuse to read a
@@ -408,14 +293,14 @@ fn default_voice_idle_session_seconds() -> u64 {
 /// header rather than cookies. An empty list (the default) sends no CORS headers at all, which
 /// is correct when the API and the web client are served from the same origin.
 #[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default)]
 pub struct CorsConfig {
-    #[serde(default)]
     pub allowed_origins: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default)]
 pub struct MediaConfig {
-    #[serde(default)]
     pub s3: MediaS3Config,
 }
 
@@ -432,39 +317,30 @@ pub struct MediaConfig {
 /// `s3:GetObject` allow-all policy). The two URLs may point at completely
 /// different hosts; the public path does not need to be reachable from the
 /// server itself.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
 pub struct MediaS3Config {
-    #[serde(default = "default_media_s3_endpoint")]
+    #[default = "http://127.0.0.1:3900"]
     pub endpoint: String,
-    #[serde(default)]
     pub public_endpoint: Option<String>,
-    #[serde(default = "default_media_s3_region")]
+    #[default = "garage"]
     pub region: String,
-    #[serde(default = "default_media_s3_bucket")]
+    #[default = "aspen-media"]
     pub bucket: String,
-    #[serde(default = "default_media_s3_access_key")]
+    #[default = "aspen_dev_key"]
     pub access_key: String,
-    #[serde(default = "default_media_s3_secret_key")]
+    #[default = "aspen_dev_secret"]
     pub secret_key: String,
-    #[serde(default = "default_media_s3_public_base_url")]
+    /// By default the local Garage `s3_web` endpoint, exposed on port 3902 by
+    /// `docker-compose.yaml`. Operators deploying against AWS S3 should override this to a
+    /// CloudFront or custom-domain URL pointed at the public-read bucket.
+    #[default = "http://127.0.0.1:3902/aspen-media"]
     pub public_base_url: String,
-    #[serde(default = "default_media_s3_upload_url_ttl_seconds")]
+    /// Fifteen minutes by default: long enough for a multi-minute upload from a slow mobile
+    /// connection while keeping a stale URL useless to anyone who fishes it out of a log file
+    /// later.
+    #[default = 900]
     pub upload_url_ttl_seconds: u64,
-}
-
-impl Default for MediaS3Config {
-    fn default() -> Self {
-        Self {
-            endpoint: default_media_s3_endpoint(),
-            public_endpoint: None,
-            region: default_media_s3_region(),
-            bucket: default_media_s3_bucket(),
-            access_key: default_media_s3_access_key(),
-            secret_key: default_media_s3_secret_key(),
-            public_base_url: default_media_s3_public_base_url(),
-            upload_url_ttl_seconds: default_media_s3_upload_url_ttl_seconds(),
-        }
-    }
 }
 
 pub fn default_event_feed_shards() -> usize {
@@ -473,40 +349,6 @@ pub fn default_event_feed_shards() -> usize {
 
 pub fn default_event_queue_size() -> usize {
     512
-}
-
-fn default_media_s3_endpoint() -> String {
-    "http://127.0.0.1:3900".to_string()
-}
-
-fn default_media_s3_region() -> String {
-    "garage".to_string()
-}
-
-fn default_media_s3_bucket() -> String {
-    "aspen-media".to_string()
-}
-
-fn default_media_s3_access_key() -> String {
-    "aspen_dev_key".to_string()
-}
-
-fn default_media_s3_secret_key() -> String {
-    "aspen_dev_secret".to_string()
-}
-
-/// Local Garage `s3_web` endpoint, exposed on port 3902 by `docker-compose.yaml`.
-/// Operators deploying against AWS S3 should override this to a CloudFront /
-/// custom-domain URL pointed at the public-read bucket.
-fn default_media_s3_public_base_url() -> String {
-    "http://127.0.0.1:3902/aspen-media".to_string()
-}
-
-/// Fifteen minutes is long enough for a multi-minute upload from a slow
-/// mobile connection while keeping a stale URL useless to anyone who
-/// fishes it out of a log file later.
-fn default_media_s3_upload_url_ttl_seconds() -> u64 {
-    900
 }
 
 /// The built-in rate limits, beneath whatever `aspen.toml` sets.
@@ -532,4 +374,46 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     Ok(loaded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A section given in part keeps the defaults of what it leaves out, and a section left out
+    /// is all defaults.
+    #[test]
+    fn missing_settings_take_their_defaults() {
+        let config: AspenConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+                database_url = "postgres://x"
+                nats_url = "nats://x"
+                nats_auth_token = "t"
+                valkey_url = "redis://x"
+                [voice]
+                failure_threshold = 7
+                [media.s3]
+                bucket = "elsewhere"
+                "#,
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(config.voice.failure_threshold, 7);
+        assert_eq!(config.voice.idle_session_seconds, 24 * 60 * 60);
+        assert_eq!(config.media.s3.bucket, "elsewhere");
+        assert_eq!(config.media.s3.upload_url_ttl_seconds, 900);
+        assert_eq!(config.auth.service_name, "Aspen");
+        assert_eq!(config.presence.away_after_seconds, 600);
+        assert_eq!(config.limits.max_communities_per_user, 500);
+        assert!(config.metrics.enabled);
+        assert_eq!(config.event_queue_size, 512);
+        assert_eq!(
+            config.voice.token_secret,
+            VoiceConfig::default().token_secret
+        );
+    }
 }

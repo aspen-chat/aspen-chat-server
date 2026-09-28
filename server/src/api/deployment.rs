@@ -25,12 +25,14 @@ pub struct DeploymentRole {
     pub permissions: Vec<DeploymentPermission>,
 }
 
-fn role_to_api(row: DeploymentRoleRow) -> DeploymentRole {
-    DeploymentRole {
-        id: row.id,
-        name: row.name,
-        position: row.position,
-        permissions: to_names(app::deployment::DeploymentPermissions(row.permissions)),
+impl From<DeploymentRoleRow> for DeploymentRole {
+    fn from(row: DeploymentRoleRow) -> Self {
+        DeploymentRole {
+            id: row.id,
+            name: row.name,
+            position: row.position,
+            permissions: to_names(row.permissions),
+        }
     }
 }
 
@@ -55,7 +57,7 @@ pub async fn list_deployment_roles(
         app::deployment::read_roles(&state)
             .await?
             .into_iter()
-            .map(role_to_api)
+            .map(DeploymentRole::from)
             .collect(),
     ))
 }
@@ -97,7 +99,7 @@ pub async fn create_deployment_role(
     .await?;
     Ok(Created::new(
         format!("{API_PREFIX}/admin/roles/{}", role.id.0),
-        role_to_api(role),
+        DeploymentRole::from(role),
     ))
 }
 
@@ -140,7 +142,7 @@ pub async fn update_deployment_role(
         request.permissions.as_deref().map(from_names),
     )
     .await?;
-    Ok(Json(role_to_api(role)))
+    Ok(Json(DeploymentRole::from(role)))
 }
 
 /// Deletes a deployment role below the caller's highest; its holders lose what it allowed.
@@ -198,7 +200,7 @@ pub async fn reorder_deployment_roles(
         app::deployment::reorder_roles(&state, session.user.id, &request.roles)
             .await?
             .into_iter()
-            .map(role_to_api)
+            .map(DeploymentRole::from)
             .collect(),
     ))
 }

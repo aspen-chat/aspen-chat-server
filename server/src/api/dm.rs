@@ -116,7 +116,7 @@ pub async fn list_dms(
             app::user::read_users(&state, &ids)
                 .await?
                 .into_iter()
-                .map(crate::api::user::user_to_api)
+                .map(Into::into)
                 .collect(),
         )
     } else {
@@ -128,7 +128,7 @@ pub async fn list_dms(
             app::read_state::read_channels_read_states(&state, user.id, &ids)
                 .await?
                 .into_iter()
-                .map(crate::api::read_state::read_state_to_api)
+                .map(Into::into)
                 .collect(),
         )
     } else {
@@ -140,7 +140,7 @@ pub async fn list_dms(
             app::channel_mute::read_mutes(&state, user.id, &ids, &[])
                 .await?
                 .into_iter()
-                .map(crate::api::channel_mute::mute_to_api)
+                .map(Into::into)
                 .collect(),
         )
     } else {

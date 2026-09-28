@@ -22,50 +22,56 @@ use crate::app::{
 };
 use crate::database::schema::{deployment_role, moderation_log, user, user_deployment_role};
 use diesel::prelude::*;
+use diesel::{AsExpression, FromSqlRow};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ops::BitOr;
 use utoipa::ToSchema;
 
-/// A set of deployment permissions, as the bits the database stores. The values are fixed:
-/// migrations write them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct DeploymentPermissions(pub i64);
-
-impl DeploymentPermissions {
-    pub const NONE: Self = Self(0);
-    pub const VIEW_DASHBOARD: Self = Self(1 << 0);
-    pub const MANAGE_REGISTRATION_INVITES: Self = Self(1 << 1);
-    pub const MANAGE_VOICE_SERVERS: Self = Self(1 << 2);
-    pub const MANAGE_DEPLOYMENT_ROLES: Self = Self(1 << 3);
-    pub const MODERATE_COMMUNITIES: Self = Self(1 << 4);
-    pub const ALL: Self = Self((1 << 5) - 1);
-    /// What the terminal's `admin grant` gives: everything but moderation, which is given
-    /// deliberately.
-    pub const ADMINISTRATOR: Self = Self(Self::ALL.0 & !Self::MODERATE_COMMUNITIES.0);
-
-    pub fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    pub fn valid(self) -> Self {
-        Self(self.0 & Self::ALL.0)
+bitflags::bitflags! {
+    /// A set of deployment permissions, as the bits the database stores. The values are fixed:
+    /// migrations write them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromSqlRow, AsExpression)]
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub struct DeploymentPermissions: i64 {
+        const VIEW_DASHBOARD = 1 << 0;
+        const MANAGE_REGISTRATION_INVITES = 1 << 1;
+        const MANAGE_VOICE_SERVERS = 1 << 2;
+        const MANAGE_DEPLOYMENT_ROLES = 1 << 3;
+        const MODERATE_COMMUNITIES = 1 << 4;
     }
 }
 
-impl BitOr for DeploymentPermissions {
-    type Output = Self;
-    fn bitor(self, other: Self) -> Self {
-        Self(self.0 | other.0)
+app::bigint_sql_traits!(DeploymentPermissions);
+
+impl DeploymentPermissions {
+    /// What the terminal's `admin grant` gives: everything but moderation, which is given
+    /// deliberately.
+    pub const ADMINISTRATOR: Self = Self::all().difference(Self::MODERATE_COMMUNITIES);
+
+    /// Every bit that names a permission, and no other.
+    pub fn valid(self) -> Self {
+        Self::from_bits_truncate(self.bits())
     }
 }
 
 /// Something a deployment role may allow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum DeploymentPermission {
     ViewDashboard,
@@ -76,13 +82,7 @@ pub enum DeploymentPermission {
 }
 
 impl DeploymentPermission {
-    pub const ALL: [DeploymentPermission; 5] = [
-        DeploymentPermission::ViewDashboard,
-        DeploymentPermission::ManageRegistrationInvites,
-        DeploymentPermission::ManageVoiceServers,
-        DeploymentPermission::ManageDeploymentRoles,
-        DeploymentPermission::ModerateCommunities,
-    ];
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     pub fn bits(self) -> DeploymentPermissions {
         match self {
@@ -109,15 +109,14 @@ app::wire_name_traits!(DeploymentPermission);
 
 pub fn to_names(permissions: DeploymentPermissions) -> Vec<DeploymentPermission> {
     DeploymentPermission::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|p| permissions.contains(p.bits()))
         .collect()
 }
 
 pub fn from_names(names: &[DeploymentPermission]) -> DeploymentPermissions {
-    names
-        .iter()
-        .fold(DeploymentPermissions::NONE, |set, p| set | p.bits())
+    names.iter().map(|p| p.bits()).collect()
 }
 
 /// What someone may do across the deployment.
@@ -172,7 +171,7 @@ pub async fn deployment_access(
     conn: &mut AsyncPgConnection,
     user: UserId,
 ) -> app::Result<DeploymentAccess> {
-    let rows: Vec<(i32, i64)> = user_deployment_role::table
+    let rows: Vec<(i32, DeploymentPermissions)> = user_deployment_role::table
         .inner_join(deployment_role::table)
         .select((deployment_role::position, deployment_role::permissions))
         .filter(user_deployment_role::user.eq(user))
@@ -183,9 +182,8 @@ pub async fn deployment_access(
         positions: rows.iter().map(|(position, _)| *position).collect(),
         permissions: rows
             .iter()
-            .fold(DeploymentPermissions::NONE, |held, (_, p)| {
-                held | DeploymentPermissions(*p)
-            })
+            .map(|(_, p)| *p)
+            .collect::<DeploymentPermissions>()
             .valid(),
     })
 }
@@ -224,8 +222,9 @@ pub async fn is_moderator(conn: &mut AsyncPgConnection, user: UserId) -> app::Re
         .has(DeploymentPermission::ModerateCommunities))
 }
 
-/// One action for the moderation log.
-#[derive(Debug, Clone, Copy)]
+/// One action for the moderation log, named there as the client's `moderationActions` names it.
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr)]
+#[strum(serialize_all = "camelCase")]
 pub enum ModerationAction {
     ReadDm,
     DeleteMessage,
@@ -239,23 +238,6 @@ pub enum ModerationAction {
     RemoveWriteIn,
 }
 
-impl ModerationAction {
-    fn name(self) -> &'static str {
-        match self {
-            Self::ReadDm => "readDm",
-            Self::DeleteMessage => "deleteMessage",
-            Self::RemoveAttachment => "removeAttachment",
-            Self::RemoveReaction => "removeReaction",
-            Self::RemoveMember => "removeMember",
-            Self::RenameChannel => "renameChannel",
-            Self::DeleteChannel => "deleteChannel",
-            Self::RenameCommunity => "renameCommunity",
-            Self::DeleteCommunity => "deleteCommunity",
-            Self::RemoveWriteIn => "removeWriteIn",
-        }
-    }
-}
-
 /// Writes a use of Moderate any community to the moderation log, and to the server's own log.
 /// `subject` names what was acted on beyond the community and channel: a message, a user.
 pub async fn log_moderation(
@@ -266,9 +248,10 @@ pub async fn log_moderation(
     channel: Option<ChannelId>,
     subject: Option<String>,
 ) -> app::Result<()> {
+    let action: &'static str = action.into();
     tracing::info!(
         actor = %actor.0,
-        action = action.name(),
+        action,
         community = ?community.map(|c| c.0),
         channel = ?channel.map(|c| c.0),
         subject = ?subject,
@@ -278,7 +261,7 @@ pub async fn log_moderation(
         .values((
             moderation_log::id.eq(uuid::Uuid::now_v7()),
             moderation_log::actor.eq(Some(actor)),
-            moderation_log::action.eq(action.name()),
+            moderation_log::action.eq(action),
             moderation_log::community.eq(community),
             moderation_log::channel.eq(channel),
             moderation_log::subject.eq(subject),
@@ -336,7 +319,7 @@ pub struct DeploymentRoleRow {
     pub id: DeploymentRoleId,
     pub name: String,
     pub position: i32,
-    pub permissions: i64,
+    pub permissions: DeploymentPermissions,
 }
 
 /// The longest a deployment role's name may be, in characters.
@@ -456,7 +439,7 @@ pub async fn create_role(
                 id: DeploymentRoleId::new(),
                 name,
                 position: 1,
-                permissions: permissions.0,
+                permissions,
             };
             diesel::insert_into(deployment_role::table)
                 .values(&row)
@@ -493,8 +476,8 @@ pub async fn update_role(
                 .await?;
             access.require_above(role.position)?;
             if let Some(permissions) = permissions.map(DeploymentPermissions::valid) {
-                access.require_holds(DeploymentPermissions(permissions.0 ^ role.permissions))?;
-                role.permissions = permissions.0;
+                access.require_holds(permissions.symmetric_difference(role.permissions))?;
+                role.permissions = permissions;
             }
             if let Some(name) = name {
                 role.name = name;
@@ -668,7 +651,7 @@ pub async fn grant_top_role(conn: &mut AsyncPgConnection, target: UserId) -> app
                         id: DeploymentRoleId::new(),
                         name: t!("deploymentAdministratorRole").to_string(),
                         position: 1,
-                        permissions: DeploymentPermissions::ADMINISTRATOR.0,
+                        permissions: DeploymentPermissions::ADMINISTRATOR,
                     };
                     diesel::insert_into(deployment_role::table)
                         .values(&row)
@@ -704,9 +687,9 @@ pub async fn set_top_role_permission(
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     };
     let permissions = if allow {
-        top.permissions | permission.bits().0
+        top.permissions | permission.bits()
     } else {
-        top.permissions & !permission.bits().0
+        top.permissions.difference(permission.bits())
     };
     diesel::update(deployment_role::table.filter(deployment_role::id.eq(top.id)))
         .set(deployment_role::permissions.eq(permissions))
@@ -743,15 +726,15 @@ mod tests {
     #[test]
     fn every_deployment_permission_has_one_name_and_back() {
         assert_eq!(
-            from_names(&DeploymentPermission::ALL),
-            DeploymentPermissions::ALL
+            from_names(DeploymentPermission::ALL),
+            DeploymentPermissions::all()
         );
         assert_eq!(
-            to_names(DeploymentPermissions::ALL),
+            to_names(DeploymentPermissions::all()),
             DeploymentPermission::ALL.to_vec()
         );
         // The number the migration gives existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.0, 15);
+        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 15);
     }
 
     #[test]

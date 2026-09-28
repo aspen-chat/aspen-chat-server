@@ -37,18 +37,20 @@ pub struct RoleRow {
     pub community: CommunityId,
     pub name: String,
     pub position: i32,
-    pub permissions: i64,
+    pub permissions: Permissions,
     pub everyone: bool,
 }
 
-pub fn role_record(row: &RoleRow) -> message_enum::Role {
-    message_enum::Role {
-        id: row.id,
-        community: row.community,
-        name: row.name.clone(),
-        position: row.position,
-        permissions: to_names(Permissions(row.permissions)),
-        everyone: row.everyone,
+impl From<&RoleRow> for message_enum::Role {
+    fn from(row: &RoleRow) -> Self {
+        message_enum::Role {
+            id: row.id,
+            community: row.community,
+            name: row.name.clone(),
+            position: row.position,
+            permissions: to_names(row.permissions),
+            everyone: row.everyone,
+        }
     }
 }
 
@@ -75,7 +77,7 @@ pub async fn create_default_roles(
             community,
             name: name.to_string(),
             position,
-            permissions: permissions.0,
+            permissions,
             everyone,
         })
         .collect();
@@ -122,7 +124,7 @@ pub async fn read_communities_roles(
         ))
         .load(conn.as_mut())
         .await?;
-    Ok(rows.iter().map(role_record).collect())
+    Ok(rows.iter().map(message_enum::Role::from).collect())
 }
 
 /// A community's roles, lowest first, for a member of it.
@@ -136,7 +138,7 @@ pub async fn read_roles(
     Ok(load_roles(conn.as_mut(), community_id)
         .await?
         .iter()
-        .map(role_record)
+        .map(message_enum::Role::from)
         .collect())
 }
 
@@ -149,7 +151,7 @@ pub async fn read_communities_overrides(
     Vec<message_enum::CategoryOverride>,
 )> {
     let mut conn = state.connection_pool.get().await?;
-    let channels: Vec<(ChannelId, RoleId, i64, i64)> = channel_override::table
+    let channels: Vec<(ChannelId, RoleId, Permissions, Permissions)> = channel_override::table
         .inner_join(channel::table)
         .select((
             channel_override::channel,
@@ -161,7 +163,7 @@ pub async fn read_communities_overrides(
         .filter(channel::deleted_at.is_null())
         .load(conn.as_mut())
         .await?;
-    let categories: Vec<(CategoryId, RoleId, i64, i64)> = category_override::table
+    let categories: Vec<(CategoryId, RoleId, Permissions, Permissions)> = category_override::table
         .inner_join(category::table)
         .select((
             category_override::category,
@@ -180,8 +182,8 @@ pub async fn read_communities_overrides(
                 |(channel, role, allow, deny)| message_enum::ChannelOverride {
                     channel,
                     role,
-                    allow: to_names(Permissions(allow)),
-                    deny: to_names(Permissions(deny)),
+                    allow: to_names(allow),
+                    deny: to_names(deny),
                 },
             )
             .collect(),
@@ -191,8 +193,8 @@ pub async fn read_communities_overrides(
                 |(category, role, allow, deny)| message_enum::CategoryOverride {
                     category,
                     role,
-                    allow: to_names(Permissions(allow)),
-                    deny: to_names(Permissions(deny)),
+                    allow: to_names(allow),
+                    deny: to_names(deny),
                 },
             )
             .collect(),
@@ -294,14 +296,14 @@ pub async fn create_role(
                 community: community_id,
                 name,
                 position: 1,
-                permissions: permissions.0,
+                permissions,
                 everyone: false,
             };
             diesel::insert_into(community_role::table)
                 .values(&row)
                 .execute(conn.as_mut())
                 .await?;
-            let record = role_record(&row);
+            let record = message_enum::Role::from(&row);
             publish_event(
                 state,
                 conn.as_mut(),
@@ -345,8 +347,8 @@ pub async fn update_role(
             let permissions = permissions.map(Permissions::valid);
             if let Some(permissions) = permissions {
                 // What changes must be the caller's to give or take.
-                access.require_holds(Permissions(permissions.0 ^ role.permissions))?;
-                role.permissions = permissions.0;
+                access.require_holds(permissions.symmetric_difference(role.permissions))?;
+                role.permissions = permissions;
             }
             if let Some(name) = &name {
                 role.name = name.clone();
@@ -370,7 +372,7 @@ pub async fn update_role(
                 }),
             )
             .await?;
-            Ok(role_record(&role))
+            Ok(message_enum::Role::from(&role))
         }
         .scope_boxed()
     })
@@ -456,7 +458,7 @@ pub async fn reorder_roles(
             Ok(load_roles(conn.as_mut(), community_id)
                 .await?
                 .iter()
-                .map(role_record)
+                .map(message_enum::Role::from)
                 .collect())
         }
         .scope_boxed()
@@ -667,7 +669,7 @@ pub async fn set_override(
         if !Permissions::CHANNEL.contains(allow | deny) {
             return Err(app::Error::Validation(t!("overrideCommunityPermission")));
         }
-        if allow & deny != Permissions::NONE {
+        if allow & deny != Permissions::empty() {
             return Err(app::Error::Validation(t!("overrideConflict")));
         }
     }
@@ -706,7 +708,7 @@ pub async fn set_override(
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
             access.require_above(role.position)?;
-            let (allow, deny) = permissions.unwrap_or((Permissions::NONE, Permissions::NONE));
+            let (allow, deny) = permissions.unwrap_or((Permissions::empty(), Permissions::empty()));
             access.require_holds(allow | deny)?;
             let cleared = OverrideOutcome {
                 allow,
@@ -756,14 +758,14 @@ pub async fn set_override(
                         .values((
                             channel_override::channel.eq(channel_id),
                             channel_override::role.eq(role_id),
-                            channel_override::allow.eq(allow.0),
-                            channel_override::deny.eq(deny.0),
+                            channel_override::allow.eq(allow),
+                            channel_override::deny.eq(deny),
                         ))
                         .on_conflict((channel_override::channel, channel_override::role))
                         .do_update()
                         .set((
-                            channel_override::allow.eq(allow.0),
-                            channel_override::deny.eq(deny.0),
+                            channel_override::allow.eq(allow),
+                            channel_override::deny.eq(deny),
                         ))
                         .execute(conn.as_mut())
                         .await?;
@@ -836,14 +838,14 @@ pub async fn set_override(
                         .values((
                             category_override::category.eq(category_id),
                             category_override::role.eq(role_id),
-                            category_override::allow.eq(allow.0),
-                            category_override::deny.eq(deny.0),
+                            category_override::allow.eq(allow),
+                            category_override::deny.eq(deny),
                         ))
                         .on_conflict((category_override::category, category_override::role))
                         .do_update()
                         .set((
-                            category_override::allow.eq(allow.0),
-                            category_override::deny.eq(deny.0),
+                            category_override::allow.eq(allow),
+                            category_override::deny.eq(deny),
                         ))
                         .execute(conn.as_mut())
                         .await?;

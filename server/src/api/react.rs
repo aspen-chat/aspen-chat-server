@@ -36,13 +36,15 @@ pub struct ReactionSummary {
     pub users: Vec<UserId>,
 }
 
-pub fn summary_to_api(summary: app::react::ReactionSummary) -> ReactionSummary {
-    ReactionSummary {
-        message_id: summary.message,
-        emoji: summary.emoji,
-        count: summary.count,
-        me: summary.me,
-        users: summary.first,
+impl From<app::react::ReactionSummary> for ReactionSummary {
+    fn from(summary: app::react::ReactionSummary) -> Self {
+        ReactionSummary {
+            message_id: summary.message,
+            emoji: summary.emoji,
+            count: summary.count,
+            me: summary.me,
+            users: summary.first,
+        }
     }
 }
 
@@ -96,7 +98,7 @@ pub async fn list_reactors(
         .await?
         .into_iter()
         .map(|u| {
-            let record = crate::api::user::user_to_api(u);
+            let record = User::from(u);
             (record.id, record)
         })
         .collect();

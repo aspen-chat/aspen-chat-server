@@ -22,10 +22,12 @@ pub struct ChannelMute {
     pub until: Option<DateTime<Utc>>,
 }
 
-pub fn mute_to_api(mute: app::channel_mute::ChannelMute) -> ChannelMute {
-    ChannelMute {
-        channel: mute.channel,
-        until: mute.until,
+impl From<app::channel_mute::ChannelMute> for ChannelMute {
+    fn from(mute: app::channel_mute::ChannelMute) -> Self {
+        ChannelMute {
+            channel: mute.channel,
+            until: mute.until,
+        }
     }
 }
 
@@ -70,7 +72,7 @@ pub async fn mute_channel(
     } else {
         StatusCode::CREATED
     };
-    Ok((status, Json(mute_to_api(mute))))
+    Ok((status, Json(ChannelMute::from(mute))))
 }
 
 /// Lifts the caller's mute of a channel. Nothing to lift is not an error.

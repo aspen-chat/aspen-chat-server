@@ -27,9 +27,13 @@ pub enum Error {
     #[error("error while publishing to NATS event stream {0}")]
     NatsPublish(#[from] async_nats::jetstream::context::PublishError),
     #[error("error while subscribing to a NATS subject {0}")]
-    NatsSubscribe(String),
+    NatsSubscribe(#[from] async_nats::SubscribeError),
+    #[error("error while opening a NATS key-value bucket {0}")]
+    NatsKeyValue(#[from] async_nats::jetstream::context::CreateKeyValueError),
+    #[error("error while listing a NATS key-value bucket's keys {0}")]
+    NatsKeys(#[from] async_nats::jetstream::kv::WatchError),
     #[error("could not send a voice command: {0}")]
-    VoiceCommand(String),
+    VoiceCommand(#[source] async_nats::client::PublishError),
     #[error("event published with the wrong scope: {0}")]
     EventRouting(String),
     #[error("error serializing as YAML {0}")]

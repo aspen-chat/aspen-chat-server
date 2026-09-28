@@ -16,12 +16,14 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
 
-pub fn community_to_api(c: app::community::Community) -> message_enum::Community {
-    message_enum::Community {
-        id: c.id,
-        name: c.name,
-        icon: c.icon.map(|i| *i.id()),
-        owner: c.owner,
+impl From<app::community::Community> for message_enum::Community {
+    fn from(c: app::community::Community) -> Self {
+        message_enum::Community {
+            id: c.id,
+            name: c.name,
+            icon: c.icon.map(|i| *i.id()),
+            owner: c.owner,
+        }
     }
 }
 
@@ -194,24 +196,9 @@ pub async fn sideload_communities(
                 .map(api::channel::channel_to_api)
                 .collect()
         }),
-        categories: categories.map(|categories| {
-            categories
-                .into_iter()
-                .map(api::category::category_to_api)
-                .collect()
-        }),
-        read_states: read_states.map(|states| {
-            states
-                .into_iter()
-                .map(api::read_state::read_state_to_api)
-                .collect()
-        }),
-        channel_mutes: mutes.map(|mutes| {
-            mutes
-                .into_iter()
-                .map(api::channel_mute::mute_to_api)
-                .collect()
-        }),
+        categories: categories.map(|categories| categories.into_iter().map(Into::into).collect()),
+        read_states: read_states.map(|states| states.into_iter().map(Into::into).collect()),
+        channel_mutes: mutes.map(|mutes| mutes.into_iter().map(Into::into).collect()),
         category_collapses: collapses.map(|collapses| {
             collapses
                 .into_iter()
@@ -244,7 +231,7 @@ pub async fn sideload_communities(
                 roles: membership.roles,
             });
             if seen.insert(user_id) {
-                users.push(api::user::user_to_api(membership.user));
+                users.push(membership.user.into());
             }
         }
         included.users = Some(users);
@@ -275,7 +262,7 @@ pub async fn create_community(
     let c = app::community::create_community(state, user.id, &request).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/communities/{}", c.id.0),
-        community_to_api(c),
+        message_enum::Community::from(c),
     ))
 }
 
@@ -303,7 +290,10 @@ pub async fn get_community(
 ) -> ApiResult<Json<CommunityRead>> {
     let c = app::community::read_community(&state, user.id, community).await?;
     let included = sideload_communities(&state, user.id, &[c.id], &query.include).await?;
-    Ok(Json(Sideloaded::new(community_to_api(c), included)))
+    Ok(Json(Sideloaded::new(
+        message_enum::Community::from(c),
+        included,
+    )))
 }
 
 #[utoipa::path(
@@ -328,7 +318,7 @@ pub async fn update_community(
     Json(request): Json<CommunityUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Community>> {
     let c = app::community::update_community(&state, user.id, community, request).await?;
-    Ok(Json(community_to_api(c)))
+    Ok(Json(message_enum::Community::from(c)))
 }
 
 #[utoipa::path(
@@ -426,7 +416,7 @@ pub async fn list_community_members(
             sort_index: membership.sort_index,
             roles: membership.roles,
         });
-        users.push(api::user::user_to_api(membership.user));
+        users.push(membership.user.into());
     }
     Ok(Json(MemberList::new(
         users,

@@ -84,7 +84,7 @@ async fn bucket(context: &async_nats::jetstream::Context) -> app::Result<Store> 
             ..Default::default()
         })
         .await
-        .map_err(|e| app::Error::NatsSubscribe(format!("could not open {BUCKET}: {e}")))
+        .map_err(app::Error::from)
 }
 
 fn host_name() -> String {
@@ -160,10 +160,7 @@ pub fn spawn_heartbeat(state: GlobalServerContext) {
 /// Every API server that has written a heartbeat recently, by host.
 pub async fn read_api_servers(state: &GlobalServerContext) -> app::Result<Vec<ApiServerHeartbeat>> {
     let store = bucket(&state.nats_context).await?;
-    let mut keys = store
-        .keys()
-        .await
-        .map_err(|e| app::Error::NatsSubscribe(format!("could not list {BUCKET}: {e}")))?;
+    let mut keys = store.keys().await?;
     let mut servers = Vec::new();
     while let Some(key) = keys.next().await {
         let Ok(key) = key else { continue };
