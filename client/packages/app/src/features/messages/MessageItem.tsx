@@ -20,6 +20,7 @@ import {
 } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
@@ -182,6 +183,7 @@ export function MessageItem({
               </Button>
             </ProfilePopover>
           )}
+          {author?.bot === true && <BotBadge />}
           {message.kind === "threadEcho" && (
             <span className="flex items-center gap-1 text-xs whitespace-nowrap text-ink-muted">
               <ArrowBendDownRightIcon size={12} aria-hidden="true" />

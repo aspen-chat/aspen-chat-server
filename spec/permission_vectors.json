@@ -90,7 +90,8 @@
           "id": "00000000-0000-0000-0000-000000000003",
           "position": 1,
           "permissions": [
-            "manageCalls"
+            "manageCalls",
+            "addBots"
           ],
           "everyone": false
         }
@@ -107,6 +108,7 @@
         "manageMessages",
         "pinMessages",
         "manageCalls",
+        "addBots",
         "viewChannel",
         "sendMessages",
         "attachFiles",
@@ -123,6 +125,7 @@
         "manageMessages",
         "pinMessages",
         "manageCalls",
+        "addBots",
         "viewChannel",
         "sendMessages",
         "attachFiles",
@@ -173,6 +176,7 @@
             "manageMessages",
             "pinMessages",
             "manageCalls",
+            "addBots",
             "viewChannel",
             "sendMessages",
             "attachFiles",
@@ -288,6 +292,7 @@
         "manageMessages",
         "pinMessages",
         "manageCalls",
+        "addBots",
         "viewChannel",
         "sendMessages",
         "attachFiles",
@@ -311,6 +316,7 @@
         "manageMessages",
         "pinMessages",
         "manageCalls",
+        "addBots",
         "viewChannel",
         "sendMessages",
         "attachFiles",

@@ -41,7 +41,13 @@ import { Cell, Table, type Heading } from "@/features/admin/FleetHealth";
 import { count, day } from "@/features/admin/format";
 import { fieldClass, inputClass, labelClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
-import { optionClass, secondaryButtonClass, selectButtonClass } from "@/features/invites/dialog";
+import {
+  dangerButtonClass,
+  optionClass,
+  secondaryButtonClass,
+  selectButtonClass,
+} from "@/features/invites/dialog";
+import { BotBadge } from "@/features/users/BotBadge";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -63,14 +69,16 @@ interface Column<T, S extends string> {
 
 /**
  * The deployment's users, searched by username or display name and sortable, with the
- * deployment roles each holds. Those who may manage deployment roles change them here, and
- * moderators open someone's DMs.
+ * deployment roles each holds, and bots marked. Those who may manage deployment roles change
+ * them here, moderators open someone's DMs, and those who may manage bots delete a bot whose
+ * owner is gone.
  */
 export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
   const sync = useSync();
   const manage = useDeploymentCan("manageDeploymentRoles");
   const moderator = useDeploymentCan("moderateCommunities");
+  const manageBots = useDeploymentCan("manageBots");
   const load = useCallback((query: AdminListQuery<UserSort>) => sync.adminUsers(query), [sync]);
   return (
     <Directory<AdminUserEntry, UserSort>
@@ -89,6 +97,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5">
                   <span className="truncate font-medium">{user.displayName ?? user.name}</span>
+                  {user.bot && <BotBadge />}
                 </span>
                 <span className="block truncate text-xs text-ink-muted">{user.name}</span>
               </span>
@@ -108,16 +117,74 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
           heading: m.admin.rolesColumn,
           cell: (user) => <UserRoles user={user} roles={roles} manage={manage} />,
         },
-        ...(moderator
+        ...(moderator || manageBots
           ? [
               {
                 heading: m.admin.actions,
-                cell: (user: AdminUserEntry) => <UserDms user={user} />,
+                cell: (user: AdminUserEntry) => (
+                  <span className="flex flex-wrap items-center gap-2">
+                    {moderator && <UserDms user={user} />}
+                    {manageBots && user.bot && user.botOwner == null && (
+                      <DeleteOwnerlessBot user={user} />
+                    )}
+                  </span>
+                ),
               },
             ]
           : []),
       ]}
     />
+  );
+}
+
+/** Deletes a bot whose owner deleted their account, after a confirming second press. */
+function DeleteOwnerlessBot({ user }: { user: AdminUserEntry }) {
+  const m = useMessages();
+  const sync = useSync();
+  const [confirming, setConfirming] = useState(false);
+  const [state, setState] = useState<"idle" | "pending" | "deleted">("idle");
+  const [error, setError] = useState<string | null>(null);
+  if (state === "deleted") {
+    return <span className="text-xs text-ink-muted">{m.bots.deleted}</span>;
+  }
+  return (
+    <span className="flex flex-col gap-1">
+      <span className="text-xs text-ink-muted">{m.bots.ownerGone}</span>
+      <Button
+        onPress={() => {
+          if (!confirming) {
+            setConfirming(true);
+            return;
+          }
+          if (state === "pending") {
+            return;
+          }
+          setState("pending");
+          setError(null);
+          sync.deleteBot(user.id).then(
+            () => {
+              setState("deleted");
+            },
+            (e: unknown) => {
+              setError(e instanceof ApiProblemError ? e.message : String(e));
+              setState("idle");
+            },
+          );
+        }}
+        className={
+          (confirming ? dangerButtonClass : secondaryButtonClass + " text-danger") + " self-start"
+        }
+      >
+        {confirming
+          ? format(m.bots.deleteNamed, { name: user.displayName ?? user.name })
+          : m.bots.delete}
+      </Button>
+      {error !== null && (
+        <span role="alert" className="text-xs text-danger">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 

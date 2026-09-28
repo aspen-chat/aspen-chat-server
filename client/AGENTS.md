@@ -336,6 +336,22 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   one of the offered lengths or unmutes, showing when a mute ends; it opens on a right click on
   a text channel's or DM's row, or from the row's `ChannelMenuButton`, which keyboards and touch
   screens use, since a long press on a row starts dragging it.
+- Bots are users with `bot` set, marked by `BotBadge` wherever they are named (messages, the
+  member list, their card, which also says who made them, the admin users directory). Nothing
+  in the app signs in as a bot; bots use the API with their tokens. Developer mode is the
+  account preference `DEVELOPER_MODE`, turned on in Settings, which then offers `BotsDialog`
+  (`src/features/bots`): the caller's bots (`RecordStore.ownedBots`, topic `bots`, derived from
+  the cached users whose `botOwner` is the caller and filled by `AspenSync.loadBots`), making
+  one, whose token is shown once as it arrives, public or private, the link that adds it with
+  the permissions it suggests (`botAddLink`: the page's address on the web, the path in the
+  shells), a new token, handing it to someone (`PeoplePicker`), and deleting it. The writes are
+  `AspenSync.createBot`, `rotateBotToken`, `setBotPublic`, `transferBot`, and `deleteBot`,
+  applied from their answers, since a bot's own events reach only those who share a community
+  with it. The link opens `BotAddScreen` (`/bots/$botId/add?permissions=…`), which offers the
+  communities where the caller holds `addBots` and the suggested permissions the caller may
+  give (Manage roles and Assign roles, and each permission held), and calls `AspenSync.addBot`.
+  A role made for a bot says whose it is in the role editor and is offered for neither
+  deletion nor assigning. With `manageBots`, the admin users directory deletes ownerless bots.
 - Blocks are store state (`RecordStore.blocked`, topic `block:<userId>`, and `blockedUsers`,
   topic `blocks`; `useBlocked`, `useBlockedUsers`), read at bootstrap from `GET
   /users/@me/blocks` with the blocked users sideloaded and kept by `userBlockChanged` events.

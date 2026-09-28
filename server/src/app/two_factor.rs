@@ -59,6 +59,9 @@ pub struct Caller {
     /// When the sign-in last proved who its user is.
     pub verified_at: DateTime<Utc>,
     pub has_second_factor: bool,
+    /// Whether the caller is a bot, signed in with its token (`app::bot`). A bot has no
+    /// password or second factor, and changes no security settings.
+    pub bot: bool,
 }
 
 impl Caller {
@@ -67,7 +70,18 @@ impl Caller {
         self.verified_at + reverify_window(config)
     }
 
+    /// Refuses a bot what only a person's sign-in has: a password, second factors, and the
+    /// verifications they give.
+    pub fn ensure_person(&self) -> app::Result<()> {
+        if self.bot {
+            Err(app::Error::Forbidden(t!("botNoSignInSecurity")))
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn ensure_recently_verified(&self, config: &AuthConfig) -> app::Result<()> {
+        self.ensure_person()?;
         if Utc::now() < self.verified_until(config) {
             Ok(())
         } else {
@@ -78,7 +92,7 @@ impl Caller {
     /// Whether the server requires a second factor this account does not have yet. Such a
     /// session may only add one, or sign out.
     pub fn enrollment_required(&self, config: &AuthConfig) -> bool {
-        config.require_two_factor && !self.has_second_factor
+        config.require_two_factor && !self.bot && !self.has_second_factor
     }
 }
 
@@ -634,6 +648,7 @@ pub async fn reauthenticate(
     caller: &Caller,
     proof: Proof,
 ) -> app::Result<DateTime<Utc>> {
+    caller.ensure_person()?;
     let user_id = caller.user;
     let ok = match proof {
         Proof::SecondFactor(factor) => {

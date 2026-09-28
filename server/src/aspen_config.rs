@@ -24,6 +24,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub limits: LimitsConfig,
     #[serde(default)]
+    pub bots: BotsConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub presence: PresenceConfig,
@@ -237,6 +239,19 @@ pub struct LimitsConfig {
     pub max_communities_per_user: u32,
 }
 
+/// Bots: accounts that sign in only with a token, each made and managed by a person
+/// (`app::bot`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct BotsConfig {
+    /// Whether people may make bots at all. Bots already made keep working either way.
+    #[default = true]
+    pub enabled: bool,
+    /// The most bots one person may own.
+    #[default = 25]
+    pub max_per_user: u32,
+}
+
 /// Voice calls. The servers listed here are seeded into the `voice_server` table at startup,
 /// matched by name, and can then be managed through the `/voice-servers` endpoints.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
@@ -407,6 +422,8 @@ mod tests {
         assert_eq!(config.media.s3.bucket, "elsewhere");
         assert_eq!(config.media.s3.upload_url_ttl_seconds, 900);
         assert_eq!(config.auth.service_name, "Aspen");
+        assert!(config.bots.enabled);
+        assert_eq!(config.bots.max_per_user, 25);
         assert_eq!(config.presence.away_after_seconds, 600);
         assert_eq!(config.limits.max_communities_per_user, 500);
         assert!(config.metrics.enabled);

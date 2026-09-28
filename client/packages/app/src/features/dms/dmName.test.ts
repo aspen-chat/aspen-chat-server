@@ -6,6 +6,8 @@ const user = (id: string, name: string, displayName?: string): User => ({
   id,
   name,
   icon: null,
+  bot: false,
+  botPublic: false,
   onlineStatus: "offline",
   ...(displayName === undefined ? {} : { displayName }),
 });

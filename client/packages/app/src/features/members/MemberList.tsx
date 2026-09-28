@@ -3,6 +3,7 @@ import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
 import { useBlocked, useMembers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
+import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -74,7 +75,10 @@ function MemberRow({ user }: { user: User }) {
             <StatusDot status={user.onlineStatus} label={m.status[user.onlineStatus]} />
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-sm">{name}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm">{name}</span>
+              {user.bot && <BotBadge />}
+            </span>
             {user.status != null && (
               <span className="truncate text-xs text-ink-muted">{statusLine(user.status)}</span>
             )}

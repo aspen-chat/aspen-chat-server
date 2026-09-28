@@ -55,6 +55,7 @@ bitflags::bitflags! {
         const MANAGE_MESSAGES = 1 << 8;
         const PIN_MESSAGES = 1 << 9;
         const MANAGE_CALLS = 1 << 10;
+        const ADD_BOTS = 1 << 11;
 
         // In a channel, and adjustable per channel and category.
         const VIEW_CHANNEL = 1 << 16;
@@ -74,7 +75,7 @@ app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
     /// Every permission that holds across the community.
-    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 11) - 1);
+    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 12) - 1);
     /// Every permission an override may adjust.
     pub const CHANNEL: Self = Self::from_bits_retain(((1 << 26) - 1) & !((1 << 16) - 1));
 
@@ -86,7 +87,8 @@ impl Permissions {
         .union(Self::REMOVE_MEMBERS)
         .union(Self::MANAGE_MESSAGES)
         .union(Self::PIN_MESSAGES)
-        .union(Self::MANAGE_CALLS);
+        .union(Self::MANAGE_CALLS)
+        .union(Self::ADD_BOTS);
     /// A new community's Admin role: everything but what only the owner may do.
     pub const ADMIN_TEMPLATE: Self = Self::all();
 
@@ -124,6 +126,7 @@ pub enum Permission {
     ManageMessages,
     PinMessages,
     ManageCalls,
+    AddBots,
     ViewChannel,
     SendMessages,
     AttachFiles,
@@ -152,6 +155,7 @@ impl Permission {
             Permission::ManageMessages => Permissions::MANAGE_MESSAGES,
             Permission::PinMessages => Permissions::PIN_MESSAGES,
             Permission::ManageCalls => Permissions::MANAGE_CALLS,
+            Permission::AddBots => Permissions::ADD_BOTS,
             Permission::ViewChannel => Permissions::VIEW_CHANNEL,
             Permission::SendMessages => Permissions::SEND_MESSAGES,
             Permission::AttachFiles => Permissions::ATTACH_FILES,
@@ -378,6 +382,7 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
         Permissions::MANAGE_MESSAGES => "permissionManageMessages",
         Permissions::PIN_MESSAGES => "permissionPinMessages",
         Permissions::MANAGE_CALLS => "permissionManageCalls",
+        Permissions::ADD_BOTS => "permissionAddBots",
         Permissions::VIEW_CHANNEL => "permissionViewChannel",
         Permissions::SEND_MESSAGES => "permissionSendMessages",
         Permissions::ATTACH_FILES => "permissionAttachFiles",
@@ -892,8 +897,8 @@ mod tests {
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
         assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 67_043_336);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 67_045_272);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 67_045_375);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 67_047_320);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 67_047_423);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

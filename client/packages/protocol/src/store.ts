@@ -554,6 +554,25 @@ export class RecordStore {
     return other !== undefined && this.#blocked.has(other) ? other : null;
   }
 
+  /**
+   * Topic `bots`: the bots the caller owns, as far as the cache holds them, the oldest first.
+   * `AspenSync.loadBots` reads them all.
+   */
+  ownedBots(): readonly User[] {
+    return this.#memoized("bots", () =>
+      Array.from(this.#users.values())
+        .filter((user) => user.bot && user.botOwner != null && user.botOwner === this.#myUserId)
+        .sort((a, b) => (a.id < b.id ? -1 : 1)),
+    );
+  }
+
+  /** Forgets a user the caller deleted, such as their own bot, which no event may tell them of. */
+  forgetUser(userId: string): void {
+    this.#batch(() => {
+      this.#removeUser(userId);
+    });
+  }
+
   /** Topic `blocks`: everyone the caller has blocked. */
   blockedUsers(): readonly string[] {
     return this.#memoized("blocks", () => Array.from(this.#blocked));
@@ -1718,8 +1737,12 @@ export class RecordStore {
   }
 
   #putUser(user: User): void {
+    const previous = this.#users.get(user.id);
     this.#users.set(user.id, user);
     this.#touch(`user:${user.id}`);
+    if (user.bot || previous?.bot === true) {
+      this.#touch("bots");
+    }
     if (user.id === this.#myUserId) {
       this.#touch("me");
     }
@@ -1736,10 +1759,14 @@ export class RecordStore {
   }
 
   #removeUser(id: string): void {
+    const user = this.#users.get(id);
     if (!this.#users.delete(id)) {
       return;
     }
     this.#touch(`user:${id}`);
+    if (user?.bot === true) {
+      this.#touch("bots");
+    }
     for (const communityId of Array.from(this.#memberOf.get(id) ?? [])) {
       this.#removeMember(communityId, id);
     }

@@ -255,15 +255,7 @@ pub(crate) async fn join_community(
             if invite_community != community {
                 return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
             }
-            let held: i64 = community_user::table
-                .filter(community_user::user.eq(user))
-                .count()
-                .get_result(conn)
-                .await?;
-            let cap = state.config.limits.max_communities_per_user;
-            if held >= i64::from(cap) {
-                return Err(app::Error::Validation(t!("communityLimit", max = cap)));
-            }
+            ensure_room_for_another(state, conn, user).await?;
             add_member(state, conn, user, community, &[]).await
         }
         .scope_boxed()
@@ -273,7 +265,25 @@ pub(crate) async fn join_community(
 
 /// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
 /// and announces the membership.
-async fn add_member(
+/// Refuses `user` another community once they belong to as many as a user may.
+pub(crate) async fn ensure_room_for_another(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+) -> app::Result<()> {
+    let held: i64 = community_user::table
+        .filter(community_user::user.eq(user))
+        .count()
+        .get_result(conn)
+        .await?;
+    let cap = state.config.limits.max_communities_per_user;
+    if held >= i64::from(cap) {
+        return Err(app::Error::Validation(t!("communityLimit", max = cap)));
+    }
+    Ok(())
+}
+
+pub(crate) async fn add_member(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user: UserId,
@@ -421,7 +431,8 @@ pub(crate) async fn leave_community(
 }
 
 /// Ends `user`'s membership of `community`, and with it every role they held there, announcing
-/// it in the same transaction. Nothing happens when they are not a member.
+/// it in the same transaction; a bot's own role there goes too. Nothing happens when they are
+/// not a member.
 pub(crate) async fn end_membership(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -448,6 +459,7 @@ pub(crate) async fn end_membership(
                     &event,
                 )
                 .await?;
+                app::role::delete_bot_role(state, conn, community, user).await?;
             }
             Ok(())
         }
@@ -503,7 +515,8 @@ pub(crate) async fn read_community_members(
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
         SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
-               deleted_at, display_name, pronouns, bio, status_text, status_emoji
+               deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, bot_owner,
+               bot_public
         FROM (
             SELECT cu.community, cu.sort_index, u.*,
                    ROW_NUMBER() OVER (PARTITION BY cu.community ORDER BY u.last_seen_at DESC) AS recency_rank
@@ -610,7 +623,7 @@ pub(crate) async fn search_community_members(
         r#"
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
-               u.status_emoji
+               u.status_emoji, u.bot, u.bot_owner, u.bot_public
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL

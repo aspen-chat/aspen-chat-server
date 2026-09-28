@@ -7,6 +7,8 @@ const kate: User = {
   name: "kate1024",
   icon: null,
   onlineStatus: "online",
+  bot: false,
+  botPublic: false,
   displayName: "Kate",
   pronouns: "she/her",
   status: { text: "shipping", emoji: "🚀" },
@@ -37,7 +39,14 @@ describe("profiles", () => {
     expect(profilePatch(kate, { ...form, statusText: "lunch", statusEmoji: "🍕" })).toEqual({
       status: { text: "lunch", emoji: "🍕" },
     });
-    const plain: User = { id: "u2", name: "bob", icon: null, onlineStatus: "offline" };
+    const plain: User = {
+      id: "u2",
+      name: "bob",
+      icon: null,
+      onlineStatus: "offline",
+      bot: false,
+      botPublic: false,
+    };
     expect(profilePatch(plain, { ...profileForm(plain), statusEmoji: "🍕" })).toEqual({});
   });
 });

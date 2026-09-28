@@ -42,6 +42,7 @@ bitflags::bitflags! {
         const MANAGE_VOICE_SERVERS = 1 << 2;
         const MANAGE_DEPLOYMENT_ROLES = 1 << 3;
         const MODERATE_COMMUNITIES = 1 << 4;
+        const MANAGE_BOTS = 1 << 5;
     }
 }
 
@@ -79,6 +80,7 @@ pub enum DeploymentPermission {
     ManageVoiceServers,
     ManageDeploymentRoles,
     ModerateCommunities,
+    ManageBots,
 }
 
 impl DeploymentPermission {
@@ -91,6 +93,7 @@ impl DeploymentPermission {
             Self::ManageVoiceServers => DeploymentPermissions::MANAGE_VOICE_SERVERS,
             Self::ManageDeploymentRoles => DeploymentPermissions::MANAGE_DEPLOYMENT_ROLES,
             Self::ModerateCommunities => DeploymentPermissions::MODERATE_COMMUNITIES,
+            Self::ManageBots => DeploymentPermissions::MANAGE_BOTS,
         }
     }
 
@@ -101,6 +104,7 @@ impl DeploymentPermission {
             Self::ManageVoiceServers => t!("deploymentManageVoiceServers"),
             Self::ManageDeploymentRoles => t!("deploymentManageDeploymentRoles"),
             Self::ModerateCommunities => t!("deploymentModerateCommunities"),
+            Self::ManageBots => t!("deploymentManageBots"),
         }
     }
 }
@@ -751,7 +755,7 @@ mod tests {
             DeploymentPermission::ALL.to_vec()
         );
         // The number the migration gives existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 15);
+        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 47);
     }
 
     #[test]

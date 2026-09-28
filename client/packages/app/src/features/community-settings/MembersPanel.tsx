@@ -130,7 +130,7 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
               communityId={communityId}
               userId={member.id}
               name={name}
-              roles={roles.filter((r) => !r.everyone)}
+              roles={roles.filter((r) => !r.everyone && r.bot == null)}
               held={held ?? []}
               canGive={(role) => access.outranks(role.position)}
               onError={setError}

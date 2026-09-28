@@ -50,3 +50,4 @@ pub mod m20260928_052552_community_roles;
 pub mod m20260928_065931_deployment_roles;
 pub mod m20260928_070500_community_owners;
 pub mod m20260928_161434_user_block;
+pub mod m20260928_182041_bots;

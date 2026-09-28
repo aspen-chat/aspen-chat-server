@@ -193,8 +193,9 @@ pub fn message_enum_source(
                 })
                 .collect::<Vec<_>>();
             if commands && !other_fields.is_empty() {
+                // Every field is optional, so the default is a patch that changes nothing.
                 request_structs.push(quote! {
-                    #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                    #[derive(::serde::Deserialize, ::utoipa::ToSchema, Default)]
                     #[serde(rename_all = "camelCase")]
                     pub struct #update_request_ident {
                         #(#other_fields_attr #other_fields_serde pub #other_fields_ident: Option<#other_fields_ty>,)*

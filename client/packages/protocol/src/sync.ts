@@ -1384,6 +1384,95 @@ export class AspenSync {
     }
   }
 
+  /** Reads every bot the caller owns into the store (`RecordStore.ownedBots`). */
+  async loadBots(): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/bots");
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data });
+  }
+
+  /**
+   * Makes a bot the caller owns. Resolves to the bot and its token, which the server shows only
+   * this once.
+   */
+  async createBot(name: string, displayName: string | null): Promise<{ bot: User; token: string }> {
+    const result = await this.#client.api.POST("/api/v1/users/@me/bots", {
+      body: { name, displayName },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: [result.data.bot] });
+    return result.data;
+  }
+
+  /** Issues a new token for a bot the caller owns; the old one stops working. */
+  async rotateBotToken(botId: string): Promise<string> {
+    const result = await this.#client.api.POST("/api/v1/bots/{bot}/token", {
+      params: { path: { bot: botId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.data.token;
+  }
+
+  /** Makes a bot the caller owns public, so anyone allowed may add it, or private. */
+  async setBotPublic(botId: string, isPublic: boolean): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/bots/{bot}", {
+      params: { path: { bot: botId } },
+      body: { public: isPublic },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    // The bot's own update event reaches only those who share a community with it.
+    this.store.ingest({ users: [result.data] });
+  }
+
+  /** Hands a bot the caller owns to someone else; it leaves the caller's list. */
+  async transferBot(botId: string, ownerId: string): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/bots/{bot}/owner", {
+      params: { path: { bot: botId } },
+      body: { owner: ownerId },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: [result.data] });
+  }
+
+  /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
+  async deleteBot(botId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/bots/{bot}", {
+      params: { path: { bot: botId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.forgetUser(botId);
+  }
+
+  /**
+   * Adds a bot to a community, as its link offers, giving it `permissions` on a role of its
+   * own. The membership and the role arrive as the community's events.
+   */
+  async addBot(
+    communityId: string,
+    botId: string,
+    permissions: readonly Permission[],
+  ): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/communities/{community}/members/{user}", {
+      params: { path: { community: communityId, user: botId } },
+      body: { permissions: [...permissions] },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /**
    * Follows a block made or lifted, here or on another device. The call's gain changes at once;
    * what the server counts for the caller alone (unread, reaction summaries) is read again.

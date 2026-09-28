@@ -114,6 +114,17 @@ export function userVolume(userId: string): PreferenceDefinition<number> {
   };
 }
 
+/**
+ * Whether the user has opted into developer mode, which shows what developers need: making
+ * and managing bots. It follows the account, so it holds on every device they use.
+ */
+export const DEVELOPER_MODE: PreferenceDefinition<boolean> = {
+  key: "developer.mode",
+  scope: "account",
+  fallback: false,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
 /** Whether this user has silenced one other person for themself, keeping their volume for later. */
 export function userMuted(userId: string): PreferenceDefinition<boolean> {
   return {

@@ -28,7 +28,14 @@ test("community settings list the roles, highest first, and the members with the
   await expect(dialog.getByRole("checkbox", { name: /Manage messages/ })).toBeDisabled();
   await dialog.getByRole("tab", { name: "Members" }).click();
   await expect(dialog.getByText("Owner")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  // Only Helper, a bot ranked below them, may be removed; never the owner.
+  await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(1);
+  await expect(
+    dialog
+      .getByRole("listitem")
+      .filter({ hasText: "Helper" })
+      .getByRole("button", { name: "Remove" }),
+  ).toHaveCount(1);
   // They may assign roles, so they search every member, not only the sample.
   await dialog.getByRole("searchbox", { name: "Find a member" }).fill("kate");
   await expect(dialog.getByText("Search every member by name.")).toBeVisible();

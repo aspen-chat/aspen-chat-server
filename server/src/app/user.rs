@@ -9,12 +9,12 @@ use crate::app::login::{PASSWORD_MIN_LENGTH, hash_password};
 use crate::app::react::validate_emoji;
 use crate::app::registration_invite;
 use crate::app::{IconId, Loadable, MaybeLoaded, UserId, publish_event};
-use crate::database::schema::{self, refresh_token, session, user};
+use crate::database::schema::{self, bot_token, refresh_token, session, user};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::{BoolExpressionMethods, ExpressionMethods, Queryable, Selectable};
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::prelude::KeysInterface;
 use rust_i18n::t;
 
@@ -34,6 +34,12 @@ pub struct UserPg {
     pub bio: Option<String>,
     pub status_text: Option<String>,
     pub status_emoji: Option<String>,
+    /// Whether this is a bot, which signs in only with a token (`app::bot`).
+    pub bot: bool,
+    /// Who made the bot and manages it; `None` for a person, or a bot whose maker is gone.
+    pub bot_owner: Option<UserId>,
+    /// Whether anyone allowed to add bots to a community may add this one.
+    pub bot_public: bool,
 }
 
 pub struct User {
@@ -100,7 +106,7 @@ fn validate_profile_text(
 }
 
 /// Checks the profile fields of an update. Absent fields are unchanged and need no check.
-fn validate_profile(command: &UserUpdateRequest) -> Result<(), app::Error> {
+pub(crate) fn validate_profile(command: &UserUpdateRequest) -> Result<(), app::Error> {
     if let Some(display_name) = &command.display_name {
         validate_profile_text(
             display_name.as_deref(),
@@ -123,18 +129,25 @@ fn validate_profile(command: &UserUpdateRequest) -> Result<(), app::Error> {
     Ok(())
 }
 
-/// Rejects usernames that are blank, padded with whitespace, or too long, and passwords that
-/// fail the same length rule `try_change_password` enforces.
-fn validate_registration(command: &UserCreateRequest) -> Result<(), app::Error> {
-    if command.name.is_empty() || command.name.trim() != command.name {
+/// Rejects usernames that are blank, padded with whitespace, or too long; a bot's name follows
+/// the same rules.
+pub(crate) fn validate_username(name: &str) -> Result<(), app::Error> {
+    if name.is_empty() || name.trim() != name {
         return Err(app::Error::Validation(t!("usernameBlankOrPadded")));
     }
-    if command.name.chars().count() > USERNAME_MAX_LENGTH {
+    if name.chars().count() > USERNAME_MAX_LENGTH {
         return Err(app::Error::Validation(t!(
             "usernameTooLong",
             max = USERNAME_MAX_LENGTH
         )));
     }
+    Ok(())
+}
+
+/// Rejects a bad username, and passwords that fail the same length rule `try_change_password`
+/// enforces.
+fn validate_registration(command: &UserCreateRequest) -> Result<(), app::Error> {
+    validate_username(&command.name)?;
     if command.password.len() < PASSWORD_MIN_LENGTH {
         return Err(app::Error::PasswordRequirement(PasswordRequirement::Length));
     }
@@ -192,6 +205,9 @@ pub async fn create_user(
                     bio: command.bio.clone(),
                     status_text: command.status.as_ref().map(|s| s.text.clone()),
                     status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
+                    bot: false,
+                    bot_owner: None,
+                    bot_public: false,
                 })
                 .execute(conn.as_mut())
                 .await?;
@@ -273,11 +289,15 @@ pub(crate) async fn update_user(
     id: UserId,
     command: UserUpdateRequest,
 ) -> Result<User, app::Error> {
-    if requesting_user != id {
+    let mut conn = state.connection_pool.get().await?;
+    // A bot's profile is its owner's to change too.
+    if requesting_user != id && !app::bot::owns(conn.as_mut(), requesting_user, id).await? {
         return Err(app::Error::Unauthorized);
     }
     validate_profile(&command)?;
-    let mut conn = state.connection_pool.get().await?;
+    if let Some(name) = &command.name {
+        validate_username(name)?;
+    }
     conn.transaction(|conn| {
         async move {
             // A status is stored as its two columns; setting or clearing it writes both.
@@ -318,6 +338,8 @@ pub(crate) async fn update_user(
                     pronouns: command.pronouns,
                     bio: command.bio,
                     status: command.status,
+                    bot_owner: None,
+                    bot_public: None,
                 }),
             )
             .await?;
@@ -343,37 +365,49 @@ pub(crate) async fn delete_user(
     }
     caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let deleted = diesel::update(user::table)
-                .set(user::deleted_at.eq(diesel::dsl::now))
-                .filter(user::id.eq(id).and(user::deleted_at.is_null()))
-                .execute(conn.as_mut())
-                .await?;
-            if deleted == 0 {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            }
-            app::two_factor::remove_all(conn.as_mut(), id).await?;
-            publish_event(
-                &state,
-                conn.as_mut(),
-                app::EventScope::UserEverywhere(id),
-                &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
-            )
-            .await?;
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+    conn.transaction(|conn| retire(&state, conn.as_mut(), id).scope_boxed())
+        .await
 }
 
-/// Resolves a session token to its user and the sign-in it belongs to. `None` means the token
-/// is unknown, expired, or belongs to a deleted user.
+/// Deletes an account inside the caller's transaction: marks it deleted, takes its credentials
+/// and any bot token, leaves the bots it owned working but ownerless, and says it is gone.
+pub(crate) async fn retire(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    id: UserId,
+) -> Result<(), app::Error> {
+    let deleted = diesel::update(user::table)
+        .set(user::deleted_at.eq(diesel::dsl::now))
+        .filter(user::id.eq(id).and(user::deleted_at.is_null()))
+        .execute(conn)
+        .await?;
+    if deleted == 0 {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    }
+    app::two_factor::remove_all(conn, id).await?;
+    app::bot::orphan_bots_of(state, conn, id).await?;
+    diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        app::EventScope::UserEverywhere(id),
+        &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.
+/// `None` means the token is unknown, expired, or belongs to a deleted user.
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
 ) -> crate::app::Result<Option<(UserPg, app::two_factor::Caller)>> {
+    if app::bot::is_bot_token(token) {
+        return app::bot::user_for_token(state, token).await;
+    }
     let mut conn = state.connection_pool.get().await?;
     let now = Utc::now().naive_utc();
     let found = schema::user::table
@@ -402,6 +436,7 @@ pub async fn user_for_token(
                 refresh_token,
                 verified_at,
                 has_second_factor,
+                bot: false,
             };
             (user, caller)
         }),

@@ -9,7 +9,14 @@ export const PERMISSION_GROUPS = [
   { key: "community", permissions: ["manageCommunity", "manageChannels", "manageCategories"] },
   {
     key: "members",
-    permissions: ["createInvites", "manageInvites", "manageRoles", "assignRoles", "removeMembers"],
+    permissions: [
+      "createInvites",
+      "manageInvites",
+      "manageRoles",
+      "assignRoles",
+      "removeMembers",
+      "addBots",
+    ],
   },
   { key: "moderation", permissions: ["manageMessages", "pinMessages", "manageCalls"] },
   {

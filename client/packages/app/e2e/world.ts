@@ -15,6 +15,8 @@ import { signedIn, uuid } from "./stubs";
 export const me = uuid;
 export const bob = "0190f0a0-0000-7000-8000-000000000002";
 export const community = "0190f0a0-0000-7000-8000-000000000010";
+/** Kate's bot, a member of the community. */
+export const helper = "0190f0a0-0000-7000-8000-000000000003";
 const everyoneRole = "0190f0a0-0000-7000-8000-000000000040";
 const deploymentAdministrator = "0190f0a0-0000-7000-8000-000000000042";
 const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
@@ -55,6 +57,7 @@ const roles = [
       "removeMembers",
       "pinMessages",
       "manageCalls",
+      "addBots",
       ...channelPermissions,
     ],
     everyone: false,
@@ -82,9 +85,16 @@ const user = (id: string, name: string, displayName: string | null) => ({
   pronouns: null,
   bio: null,
   status: null,
+  bot: false,
+  botOwner: null as string | null,
+  botPublic: false,
 });
 
-const users = [user(me, "kate", "Kate"), user(bob, "bob", "Bob With A Rather Long Display Name")];
+const users = [
+  user(me, "kate", "Kate"),
+  user(bob, "bob", "Bob With A Rather Long Display Name"),
+  { ...user(helper, "helper", "Helper"), bot: true, botOwner: me },
+];
 
 const channel = (
   id: string,
@@ -594,6 +604,7 @@ async function answer(
           userCommunities: [
             { community, user: me, sortIndex: 0, roles: [organiserRole] },
             { community, user: bob, sortIndex: 1, roles: [] },
+            { community, user: helper, sortIndex: null, roles: [] },
           ],
           voiceSessions: [],
           voiceParticipants: [],
@@ -660,6 +671,40 @@ async function answer(
         publish({ serverEvent: "categoryCollapseChanged", category, collapsed: false });
         return reply(null, 204);
       },
+    ],
+    // Kate's bots: Helper, and whatever she makes, each answered as the server does. Nothing is
+    // kept between requests; the app takes its records from the answers.
+    ["GET", /^\/users\/@me\/bots$/, () => users.filter((u) => u.botOwner === me)],
+    [
+      "POST",
+      /^\/users\/@me\/bots$/,
+      () => {
+        const { name, displayName } = request.postDataJSON() as {
+          name: string;
+          displayName: string | null;
+        };
+        const bot = {
+          ...user(`0190f0a0-0000-7000-8000-${String(Date.now()).slice(-12)}`, name, displayName),
+          bot: true,
+          botOwner: me,
+        };
+        return reply({ bot, token: "aspenbot_example" }, 201);
+      },
+    ],
+    ["POST", /^\/bots\/[^/]+\/token$/, () => ({ token: "aspenbot_another" })],
+    [
+      "PATCH",
+      /^\/bots\/[^/]+$/,
+      () => {
+        const bot = users.find((u) => u.id === path.split("/")[2]);
+        const { public: botPublic } = request.postDataJSON() as { public: boolean };
+        return bot === undefined ? undefined : { ...bot, botPublic };
+      },
+    ],
+    [
+      "PUT",
+      new RegExp(`^/communities/${community}/members/[^/@][^/]*$`),
+      () => reply({ community, user: path.split("/").pop(), sortIndex: null, roles: [] }, 201),
     ],
     // Blocking answers as the server does, and tells the caller's devices by event.
     [
@@ -778,6 +823,11 @@ async function answer(
     ["GET", /^\/admin\/fleet$/, admin.fleet],
     ["GET", /^\/admin\/growth$/, () => admin.growth(url)],
     ["GET", /^\/users\/@me\/preferences$/, () => ({ values: {}, updatedAt: minutesAgo(600) })],
+    [
+      "PATCH",
+      /^\/users\/@me\/preferences$/,
+      () => ({ values: request.postDataJSON() as unknown, updatedAt: minutesAgo(0) }),
+    ],
     ["GET", /^\/users\/statuses$/, () => users.map((u) => ({ id: u.id, onlineStatus: "online" }))],
     [
       "GET",

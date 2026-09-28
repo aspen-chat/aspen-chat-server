@@ -35,6 +35,18 @@ enum MessageEnumSource {
         pronouns: Option<String>,
         bio: Option<String>,
         status: Option<CustomStatus>,
+        // A bot signs in only with a token and is labelled as one wherever it is named; see
+        // `app::bot`.
+        #[message_gen(server_authoritative)]
+        bot: bool,
+        // Who made the bot and manages it: `None` for a person, and for a bot whose maker
+        // deleted their account. Handing the bot on changes it.
+        #[message_gen(server_authoritative = "mutable")]
+        bot_owner: Option<UserId>,
+        // Whether anyone allowed to add bots to a community may add this one; a private bot
+        // is added only by its owner.
+        #[message_gen(server_authoritative = "mutable")]
+        bot_public: bool,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.
@@ -225,6 +237,10 @@ enum MessageEnumSource {
         permissions: Vec<Permission>,
         #[message_gen(server_authoritative)]
         everyone: bool,
+        // The bot the role was made for when it was added: it is that bot's alone, cannot be
+        // given to anyone else or deleted, and goes when the bot leaves.
+        #[message_gen(server_authoritative)]
+        bot: Option<UserId>,
     },
     // One role's channel permissions allowed or denied in one channel, over what the role
     // grants across the community.

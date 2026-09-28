@@ -10,6 +10,7 @@ export const DEPLOYMENT_PERMISSIONS: readonly DeploymentPermission[] = [
   "manageVoiceServers",
   "manageDeploymentRoles",
   "moderateCommunities",
+  "manageBots",
 ];
 
 /** The deployment's roles and the caller's standing among them, read together. */

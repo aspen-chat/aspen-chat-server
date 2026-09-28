@@ -3,9 +3,10 @@ import { ChatCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useState, type ReactNode, type RefObject } from "react";
 import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useBlocked, useChannel, useMe, useSync } from "@/api/hooks";
+import { useBlocked, useChannel, useMe, useSync, useUser } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import { BotBadge } from "@/features/users/BotBadge";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -29,7 +30,10 @@ export function ProfileCard({ user }: { user: User }) {
       <div className="flex items-center gap-3">
         <Avatar name={name} iconId={user.icon} size="lg" />
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold">{name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-base font-semibold">{name}</span>
+            {user.bot && <BotBadge />}
+          </div>
           <div className="truncate text-sm text-ink-muted">
             @{user.name}
             {user.pronouns != null && <span> · {user.pronouns}</span>}
@@ -42,6 +46,7 @@ export function ProfileCard({ user }: { user: User }) {
           )}
         </div>
       </div>
+      {user.bot && <BotMaker ownerId={user.botOwner ?? null} />}
       {user.status != null && (
         <p className="text-sm break-words" aria-label={m.profile.statusLabel}>
           {statusLine(user.status)}
@@ -135,6 +140,21 @@ function BlockControl({
         </p>
       )}
     </div>
+  );
+}
+
+/** Who made a bot, or that its owner is gone. */
+function BotMaker({ ownerId }: { ownerId: string | null }) {
+  const m = useMessages();
+  const owner = useUser(ownerId ?? undefined);
+  return (
+    <p className="text-xs text-ink-muted">
+      {ownerId === null
+        ? m.bots.ownerGone
+        : format(m.bots.madeBy, {
+            name: owner === undefined ? m.unknownUser : displayNameOf(owner),
+          })}
+    </p>
   );
 }
 

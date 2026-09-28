@@ -8,7 +8,7 @@ import {
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button, GridList, GridListItem, Input, Label, TextField } from "react-aria-components";
-import { useAccess, useRoles, useSync } from "@/api/hooks";
+import { useAccess, useRoles, useSync, useUser } from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
@@ -20,6 +20,7 @@ import {
 import { PermissionChecklist } from "@/features/community-settings/PermissionChecklist";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -251,6 +252,7 @@ function RoleEditor({
       }}
       className="flex min-w-0 flex-1 flex-col gap-4"
     >
+      {role.bot != null && <BotRoleNote botId={role.bot} />}
       {role.everyone ? (
         <p className={hintClass}>{m.roles.everyoneHint}</p>
       ) : (
@@ -300,7 +302,7 @@ function RoleEditor({
             {saving ? m.roles.saving : m.roles.save}
           </Button>
           {dirty && <span className="text-sm text-ink-muted">{m.roles.unsaved}</span>}
-          {!role.everyone && (
+          {!role.everyone && role.bot == null && (
             <span className="ml-auto flex items-center gap-2">
               {confirmingDelete ? (
                 <>
@@ -331,5 +333,18 @@ function RoleEditor({
         </div>
       )}
     </form>
+  );
+}
+
+/** Says whose a bot's role is: it cannot be given to anyone else, and goes when the bot does. */
+function BotRoleNote({ botId }: { botId: string }) {
+  const m = useMessages();
+  const bot = useUser(botId);
+  return (
+    <p className={hintClass}>
+      {format(m.bots.roleOfBot, {
+        name: bot === undefined ? m.unknownUser : displayNameOf(bot),
+      })}
+    </p>
   );
 }

@@ -15,6 +15,7 @@ import { InviteScreen } from "@/features/invites/InviteScreen";
 import { RootLayout } from "@/features/layout/RootLayout";
 import { ChannelScreen } from "@/features/messages/ChannelScreen";
 import { NotFound } from "@/features/layout/NotFound";
+import { BotAddScreen } from "@/features/bots/BotAddScreen";
 
 /**
  * URL scheme, shared by every shell so a link copied from one opens in another:
@@ -33,6 +34,8 @@ import { NotFound } from "@/features/layout/NotFound";
  *   /register?invite={code}                             create an account with a registration
  *                                                       invite; signed in, the home screen
  *   /admin                                              the Administration Dashboard
+ *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
+ *                                                       community, with the permissions named
  *
  * The web build uses real paths. Electron loads the bundle from `file://` and Capacitor from
  * an app-local origin, where the server cannot rewrite deep links to `index.html`, so those
@@ -69,6 +72,18 @@ export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: AdminDashboard,
+});
+
+export const botAddRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/bots/$botId/add",
+  validateSearch: (search: Record<string, unknown>): { permissions?: string } =>
+    typeof search.permissions === "string" ? { permissions: search.permissions } : {},
+  component: function BotAdd() {
+    const { botId } = botAddRoute.useParams();
+    const { permissions } = botAddRoute.useSearch();
+    return <BotAddScreen botId={botId} permissions={permissions} />;
+  },
 });
 
 export const communityRoute = createRoute({
@@ -136,6 +151,7 @@ const routeTree = rootRoute.addChildren([
   inviteRoute,
   registerRoute,
   adminRoute,
+  botAddRoute,
   communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),
   dmsRoute.addChildren([dmsIndexRoute, dmRoute, dmMessageRoute, dmThreadRoute]),
 ]);

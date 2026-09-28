@@ -44,6 +44,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    bot_token (bot) {
+        bot -> Uuid,
+        digest -> Bytea,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     category (id) {
         id -> Uuid,
         community -> Uuid,
@@ -132,6 +140,7 @@ diesel::table! {
         position -> Int4,
         permissions -> Int8,
         everyone -> Bool,
+        bot -> Nullable<Uuid>,
     }
 }
 
@@ -384,6 +393,9 @@ diesel::table! {
         status_text -> Nullable<Text>,
         status_emoji -> Nullable<Text>,
         registered_with -> Nullable<Text>,
+        bot -> Bool,
+        bot_owner -> Nullable<Uuid>,
+        bot_public -> Bool,
     }
 }
 
@@ -456,6 +468,7 @@ diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
 diesel::joinable!(benchmark_user -> user (user));
+diesel::joinable!(bot_token -> user (bot));
 diesel::joinable!(category -> community (community));
 diesel::joinable!(category_collapse -> category (category));
 diesel::joinable!(category_collapse -> user (user));
@@ -470,6 +483,7 @@ diesel::joinable!(channel_override -> community_role (role));
 diesel::joinable!(community -> user (owner));
 diesel::joinable!(community_member_role -> community_role (role));
 diesel::joinable!(community_role -> community (community));
+diesel::joinable!(community_role -> user (bot));
 diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
 diesel::joinable!(dm_recipient -> channel (channel));
@@ -516,6 +530,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_community,
     benchmark_run,
     benchmark_user,
+    bot_token,
     category,
     category_collapse,
     category_override,

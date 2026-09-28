@@ -39,6 +39,8 @@ pub struct RoleRow {
     pub position: i32,
     pub permissions: Permissions,
     pub everyone: bool,
+    /// The bot this role was made for when it was added, whose alone it is.
+    pub bot: Option<UserId>,
 }
 
 impl From<&RoleRow> for message_enum::Role {
@@ -50,6 +52,7 @@ impl From<&RoleRow> for message_enum::Role {
             position: row.position,
             permissions: to_names(row.permissions),
             everyone: row.everyone,
+            bot: row.bot,
         }
     }
 }
@@ -79,6 +82,7 @@ pub async fn create_default_roles(
             position,
             permissions,
             everyone,
+            bot: None,
         })
         .collect();
     diesel::insert_into(community_role::table)
@@ -290,38 +294,86 @@ pub async fn create_role(
             access.require(Permissions::MANAGE_ROLES)?;
             let permissions = permissions.valid();
             access.require_holds(permissions)?;
-            let mut roles = load_roles(conn.as_mut(), community_id).await?;
-            let row = RoleRow {
-                id: RoleId::new(),
-                community: community_id,
-                name,
-                position: 1,
-                permissions,
-                everyone: false,
-            };
-            diesel::insert_into(community_role::table)
-                .values(&row)
-                .execute(conn.as_mut())
-                .await?;
-            let record = message_enum::Role::from(&row);
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Community(community_id),
-                &ServerEvent::Role(RoleEvent::Create(record.clone())),
-            )
-            .await?;
-            // Everyone's first, then the new role, then the rest as they were.
-            let rest = roles.split_off(1.min(roles.len()));
-            let mut order = roles;
-            order.push(row);
-            order.extend(rest);
-            renumber(state, conn.as_mut(), community_id, &order).await?;
-            Ok(record)
+            insert_role(state, conn.as_mut(), community_id, name, permissions, None).await
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Makes a role just above everyone's, inside the caller's transaction, and announces it; the
+/// caller has checked who may. `bot` names the bot it is made for, whose alone it then is.
+pub(crate) async fn insert_role(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    community_id: CommunityId,
+    name: String,
+    permissions: Permissions,
+    bot: Option<UserId>,
+) -> app::Result<message_enum::Role> {
+    let mut roles = load_roles(conn, community_id).await?;
+    let row = RoleRow {
+        id: RoleId::new(),
+        community: community_id,
+        name,
+        position: 1,
+        permissions,
+        everyone: false,
+        bot,
+    };
+    diesel::insert_into(community_role::table)
+        .values(&row)
+        .execute(conn)
+        .await?;
+    let record = message_enum::Role::from(&row);
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(community_id),
+        &ServerEvent::Role(RoleEvent::Create(record.clone())),
+    )
+    .await?;
+    // Everyone's first, then the new role, then the rest as they were.
+    let rest = roles.split_off(1.min(roles.len()));
+    let mut order = roles;
+    order.push(row);
+    order.extend(rest);
+    renumber(state, conn, community_id, &order).await?;
+    Ok(record)
+}
+
+/// Deletes the role a bot was given when it was added to `community_id`, as the bot leaves,
+/// inside the caller's transaction.
+pub(crate) async fn delete_bot_role(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    community_id: CommunityId,
+    bot: UserId,
+) -> app::Result<()> {
+    let deleted: Vec<RoleId> = diesel::delete(
+        community_role::table.filter(
+            community_role::community
+                .eq(community_id)
+                .and(community_role::bot.eq(bot)),
+        ),
+    )
+    .returning(community_role::id)
+    .get_results(conn)
+    .await?;
+    for id in &deleted {
+        publish_event(
+            state,
+            conn,
+            EventScope::Community(community_id),
+            &ServerEvent::Role(RoleEvent::Delete { id: *id }),
+        )
+        .await?;
+    }
+    if !deleted.is_empty() {
+        let order = load_roles(conn, community_id).await?;
+        renumber(state, conn, community_id, &order).await?;
+    }
+    Ok(())
 }
 
 /// Renames a role or changes its permissions. The role must rank below the caller, and any
@@ -391,6 +443,9 @@ pub async fn delete_role(
             let role = load_role(conn.as_mut(), role_id).await?;
             if role.everyone {
                 return Err(app::Error::Validation(t!("everyoneRoleFixed")));
+            }
+            if role.bot.is_some() {
+                return Err(app::Error::Validation(t!("botRoleFixed")));
             }
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
@@ -530,6 +585,9 @@ pub async fn set_member_role(
             let role = load_role(conn.as_mut(), role_id).await?;
             if role.community != community_id || role.everyone {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            if role.bot.is_some() {
+                return Err(app::Error::Validation(t!("botRoleFixed")));
             }
             access.require_above(role.position)?;
             member_below(conn.as_mut(), &access, member).await?;

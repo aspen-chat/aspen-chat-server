@@ -199,6 +199,10 @@ pub struct AdminUserEntry {
     pub roles: Vec<DeploymentRoleId>,
     /// The registration invite the account was made with, if one was.
     pub registered_with: Option<String>,
+    /// Whether this is a bot, and who owns it: `null` for a bot whose owner deleted their
+    /// account, which a holder of Manage bots may delete.
+    pub bot: bool,
+    pub bot_owner: Option<UserId>,
 }
 
 /// A page of the deployment's users, searched by name and sorted.
@@ -265,6 +269,8 @@ pub async fn list_users(
                 icon: u.icon,
                 created_at: u.created_at,
                 registered_with: u.registered_with,
+                bot: u.bot,
+                bot_owner: u.bot_owner,
             })
             .collect(),
     ))

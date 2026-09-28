@@ -116,6 +116,10 @@ pub struct UserEntry {
     /// The registration invite the account was made with, if one was.
     #[diesel(sql_type = Nullable<Text>)]
     pub registered_with: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    pub bot: bool,
+    #[diesel(sql_type = Nullable<PgUuid>)]
+    pub bot_owner: Option<UserId>,
 }
 
 /// One page of the users whose username or display name contains `search`, in `sort` order:
@@ -134,7 +138,7 @@ pub async fn search_users(
     };
     Ok(diesel::sql_query(format!(
         r#"
-        SELECT id, name, display_name, icon, created_at, registered_with
+        SELECT id, name, display_name, icon, created_at, registered_with, bot, bot_owner
         FROM "user"
         WHERE deleted_at IS NULL
           AND ($1::text IS NULL OR lower(name) LIKE $1 OR lower(display_name) LIKE $1)

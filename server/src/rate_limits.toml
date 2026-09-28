@@ -217,6 +217,26 @@ user = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."DELETE /categories/{category}/collapses/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Making a bot makes an account, and issuing a token is something to do rarely.
+[rate_limits.endpoints."POST /users/@me/bots"]
+user = { requests = 10, per_seconds = 3600, burst = 3 }
+
+[rate_limits.endpoints."POST /bots/{bot}/token"]
+user = { requests = 10, per_seconds = 600, burst = 3 }
+
+[rate_limits.endpoints."PUT /bots/{bot}/owner"]
+user = { requests = 10, per_seconds = 600, burst = 3 }
+
+[rate_limits.endpoints."PATCH /bots/{bot}"]
+user = { requests = 30, per_seconds = 600, burst = 10 }
+
+# Adding a bot adds a member, and may make a role.
+[rate_limits.endpoints."PUT /communities/{community}/members/{user}"]
+user = { requests = 30, per_seconds = 600, burst = 10 }
+
+[rate_limits.endpoints."DELETE /bots/{bot}"]
+user = { requests = 30, per_seconds = 600, burst = 10 }
+
 # Blocking is the caller's own setting, but each change is published.
 [rate_limits.endpoints."PUT /users/@me/blocks/{user}"]
 user = { requests = 30, per_seconds = 60, burst = 10 }

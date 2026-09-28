@@ -265,6 +265,11 @@ export function useBlockedDmPeer(channelId: string): string | null {
   return useTopic(`channelAccess:${channelId}`, (s) => s.blockedDmPeer(channelId));
 }
 
+/** The bots the caller owns, as far as the cache holds them (`AspenSync.loadBots`). */
+export function useOwnedBots(): readonly User[] {
+  return useTopic("bots", (s) => s.ownedBots());
+}
+
 /** Everyone the caller has blocked. */
 export function useBlockedUsers(): readonly string[] {
   return useTopic("blocks", (s) => s.blockedUsers());

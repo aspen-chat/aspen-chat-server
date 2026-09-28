@@ -87,6 +87,9 @@ impl From<app::user::User> for User {
                 text,
                 emoji: user.user_pg.status_emoji,
             }),
+            bot: user.user_pg.bot,
+            bot_owner: user.user_pg.bot_owner,
+            bot_public: user.user_pg.bot_public,
         }
     }
 }
@@ -132,6 +135,9 @@ pub async fn create_user(
             pronouns: request.pronouns,
             bio: request.bio,
             status: request.status,
+            bot: false,
+            bot_owner: None,
+            bot_public: false,
         },
     ))
 }

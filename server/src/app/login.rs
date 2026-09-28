@@ -168,7 +168,8 @@ pub async fn try_login(
         .first(conn)
         .await
         .optional()?;
-    let Some(u) = user_entry else {
+    // A bot has no password; it signs in only with its token.
+    let Some(u) = user_entry.filter(|u| !u.bot) else {
         return Ok(LoginOutcome::InvalidCredentials);
     };
     if !check_password(password.to_string(), u.password_hash).await? {
@@ -384,6 +385,7 @@ pub async fn try_change_password(
     old_password: &str,
     new_password: &str,
 ) -> Result<ChangePasswordOutcome, app::Error> {
+    caller.ensure_person()?;
     if caller.has_second_factor {
         caller.ensure_recently_verified(config)?;
     }

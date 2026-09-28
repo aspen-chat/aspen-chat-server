@@ -16,6 +16,7 @@ pub(crate) mod admin;
 pub(crate) mod attachment;
 pub(crate) mod auth;
 pub(crate) mod block;
+pub(crate) mod bot;
 pub(crate) mod category;
 pub(crate) mod category_collapse;
 pub(crate) mod channel;
@@ -238,7 +239,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(role::update_role, role::delete_role))
         .routes(routes!(role::reorder_roles))
         .routes(routes!(role::add_member_role, role::remove_member_role))
-        .routes(routes!(role::remove_member))
+        .routes(routes!(role::remove_member, bot::add_bot))
         .routes(routes!(role::transfer_ownership))
         .routes(routes!(
             role::set_channel_override,
@@ -332,6 +333,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             channel_mute::unmute_channel
         ))
         .routes(routes!(block::list_blocks))
+        .routes(routes!(bot::list_bots, bot::create_bot))
+        .routes(routes!(bot::rotate_bot_token))
+        .routes(routes!(bot::transfer_bot))
+        .routes(routes!(bot::update_bot, bot::delete_bot))
         .routes(routes!(block::block_user, block::unblock_user))
         .routes(routes!(
             category_collapse::collapse_category,

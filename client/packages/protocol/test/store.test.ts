@@ -18,8 +18,22 @@ function id(n: number): string {
   return `0190f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
 }
 
-const me: User = { id: id(1), name: "kate", icon: null, onlineStatus: "online" };
-const bob: User = { id: id(2), name: "bob", icon: null, onlineStatus: "offline" };
+const me: User = {
+  id: id(1),
+  name: "kate",
+  icon: null,
+  onlineStatus: "online",
+  bot: false,
+  botPublic: false,
+};
+const bob: User = {
+  id: id(2),
+  name: "bob",
+  icon: null,
+  onlineStatus: "offline",
+  bot: false,
+  botPublic: false,
+};
 const aspen: Community = { id: id(10), name: "Aspen", icon: null };
 const birch: Community = { id: id(11), name: "Birch", icon: null };
 const general: Channel = {
@@ -206,6 +220,8 @@ describe("RecordStore events", () => {
       name: "eve",
       icon: null,
       onlineStatus: "online",
+      bot: false,
+      botPublic: false,
     });
     expect(onMembers).toHaveBeenCalledTimes(1);
   });
