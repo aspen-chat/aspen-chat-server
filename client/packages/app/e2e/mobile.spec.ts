@@ -233,6 +233,9 @@ test.describe("on a phone", () => {
     await expectTouchable(page.getByRole("button", { name: "Settings", exact: true }));
     await expectTouchable(page.getByRole("button", { name: "Edit profile" }));
     await expectTouchable(page.getByRole("button", { name: "Add a channel to Planning" }));
+    // The sidebar header's icon buttons sit side by side, drawn big enough on their own.
+    await expectTouchable(page.getByRole("button", { name: "Community settings" }));
+    await expectTouchable(page.getByRole("button", { name: "Invite people" }));
     // Always shown on a touch screen, where there is no right click or hover.
     await expectTouchable(page.getByRole("button", { name: "Options for roadmap" }));
     await openChannel(page, "general");

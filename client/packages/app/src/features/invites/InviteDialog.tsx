@@ -16,6 +16,7 @@ import {
 } from "react-aria-components";
 import { useCan, useInvites, useMe, useSync } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
+import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   dialogClass,
@@ -40,17 +41,13 @@ type ExpiryOption = keyof typeof EXPIRY_OPTIONS;
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-const inviteButtonClass =
-  "rounded-md border border-line p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-  "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
-
 /** The invite control in a community's sidebar and the dialog that manages its invites. */
 export function InviteDialog({ community }: { community: Community }) {
   const m = useMessages();
   return (
     <DialogTrigger>
       <Tooltip text={m.invitePeople}>
-        <Button aria-label={m.invitePeople} className={inviteButtonClass}>
+        <Button aria-label={m.invitePeople} className={headerIconButtonClass}>
           <UserPlusIcon size={18} aria-hidden="true" />
         </Button>
       </Tooltip>

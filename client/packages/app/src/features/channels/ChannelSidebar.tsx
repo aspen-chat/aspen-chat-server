@@ -40,6 +40,7 @@ import { AccessDialog } from "@/features/community-settings/AccessDialog";
 import { CommunitySettingsDialog } from "@/features/community-settings/CommunitySettingsDialog";
 import { InviteDialog } from "@/features/invites/InviteDialog";
 import { insertIds, reorderIds } from "@/features/layout/reorder";
+import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
@@ -69,7 +70,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
     <div className="flex h-full flex-col border-r border-line bg-surface-raised">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 className="min-w-0 flex-1 truncate font-semibold">{community.name}</h1>
-        <CommunitySettingsDialog community={community} triggerClassName={headerButtonClass} />
+        <CommunitySettingsDialog community={community} triggerClassName={headerIconButtonClass} />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
       </div>
       {moderating && (
@@ -333,10 +334,6 @@ function ChannelGroup({
     </GridList>
   );
 }
-
-const headerButtonClass =
-  "rounded-md border border-line p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-  "pressed:bg-surface-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
  * How an unread channel or DM is marked in its list: brighter, inside a rounded accent outline
