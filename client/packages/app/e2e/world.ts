@@ -91,6 +91,9 @@ const user = (id: string, name: string, displayName: string | null) => ({
   botPublic: false,
 });
 
+/** A member of the community beyond its member sample, whom only a search finds. */
+const farMember = user("0190f0a0-0000-7000-8000-000000000004", "dana", "Dana From Far Away");
+
 const users = [
   user(me, "kate", "Kate"),
   user(bob, "bob", "Bob With A Rather Long Display Name"),
@@ -636,13 +639,14 @@ async function answer(
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
     ["GET", /^\/channels\/[^/]+\/pins$/, () => []],
-    // A member search: everyone in the world whose name holds what was typed.
+    // A member search: everyone in the world whose name holds what was typed, Dana included,
+    // though she is not in the member sample.
     [
       "GET",
       new RegExp(`^/communities/${community}/members$`),
       () => {
         const name = (url.searchParams.get("filter[name]") ?? "").toLowerCase();
-        const found = users.filter((u) =>
+        const found = [...users, farMember].filter((u) =>
           [u.name, u.displayName ?? ""].some((n) => n.toLowerCase().includes(name)),
         );
         return {

@@ -118,3 +118,16 @@ test("a screen reader user tags someone from the keyboard alone", async ({ page 
     sent.getByRole("button", { name: "Show profile of Bob With A Rather Long Display Name" }),
   ).toHaveText("@Bob With A Rather Long Display Name");
 });
+
+test("someone beyond the member sample is found to tag by searching", async ({ page }) => {
+  await page.getByText("general", { exact: true }).click();
+  const box = page.getByRole("textbox", { name: "Message" });
+  await box.focus();
+  await page.keyboard.type("@dan");
+  const dana = page
+    .getByRole("listbox", { name: "People and roles to tag" })
+    .getByRole("option", { name: "Dana From Far Away, @dana" });
+  await expect(dana).toBeVisible();
+  await dana.click();
+  await expect(box).toHaveValue("@dana ");
+});

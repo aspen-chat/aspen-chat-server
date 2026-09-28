@@ -342,7 +342,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   leaves it. A message that tags the reader (`RecordStore.mentionsMe`: by name, a role they
   hold, or everyone) is marked (`data-mentions-me`). In a message box, `useTagging`
   (`src/features/mentions`) offers people, roles, and everyone as `@` is typed, each only with
-  its permission in the channel, from the keyboard (arrows, Enter or Tab, Escape) with
+  its permission in the channel (people from the member sample and, for those the server lets
+  search a large community, `useMemberSearch`), from the keyboard (arrows, Enter or Tab, Escape) with
   `aria-activedescendant` and a polite status, since React Aria's ComboBox cannot complete at a
   `TextArea`'s caret. A pick shows as `@username` or `@Role` and is sent as its tag
   (`encodeTags`); editing reads tags back (`decodeTags`). Each read state's `mentions` is the

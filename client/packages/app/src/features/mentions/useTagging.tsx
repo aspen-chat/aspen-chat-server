@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useChannel, useChannelAccess, useMe, useMembers, useRoles, useUsers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
+import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { encodeTags, tagQueryAt, type PickedTag } from "@/features/mentions/tags";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -32,10 +33,13 @@ interface Suggestion {
 }
 
 /**
- * Tagging in a message box. Typing `@` offers the people of the channel's community (the
- * members the client holds) or DM, its roles, and `@everyone`, each only with the permission
+ * Tagging in a message box. Typing `@` offers the people of the channel's community or DM, its
+ * roles, and `@everyone`, each only with the permission
  * to tag it in this channel; the arrow keys choose, Enter or Tab picks, and Escape dismisses.
  * A picked tag shows as `@username` or `@Role`, and `encode` turns the text into what is sent.
+ * People come from the member sample, joined as the caller types by a search of every member
+ * where the server lets them search (`useMemberSearch`), so a large community's members can be
+ * tagged by name though the sample holds only the most recently seen.
  *
  * React Aria's ComboBox needs an `Input` of its own and completes the whole field, so it
  * cannot offer completions at the caret of a multi-line `TextArea`; this follows its pattern
@@ -63,7 +67,7 @@ export function useTagging({
   const parent = useChannel(channel?.parentChannel ?? "");
   const home = channel?.parentChannel != null ? parent : channel;
   const access = useChannelAccess(channelId);
-  const members = useMembers(home?.community ?? "");
+  const sample = useMembers(home?.community ?? "");
   const recipients = useUsers(home?.community == null ? (home?.recipients ?? []) : []);
   const roles = useRoles(home?.community ?? "");
   const [caret, setCaret] = useState(0);
@@ -75,8 +79,11 @@ export function useTagging({
 
   const typing = tagQueryAt(draft, caret);
   const query = typing?.query.toLowerCase() ?? "";
+  const search = useMemberSearch(home?.community ?? "", typing === null ? "" : query);
   const people: readonly User[] =
-    home?.community == null ? recipients.filter((u): u is User => u !== undefined) : members;
+    home?.community == null
+      ? recipients.filter((u): u is User => u !== undefined)
+      : [...search.members, ...sample.filter((u) => !search.members.some((f) => f.id === u.id))];
   const suggestions: Suggestion[] = [];
   if (typing !== null && typing.start !== dismissedAt) {
     if (access.has("mentionMembers")) {
