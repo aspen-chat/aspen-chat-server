@@ -30,6 +30,7 @@ pub mod icon;
 pub mod invite;
 pub mod link_preview;
 pub mod login;
+pub mod markdown;
 pub mod media_store;
 pub mod mention;
 pub mod message;

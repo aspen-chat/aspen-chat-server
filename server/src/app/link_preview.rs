@@ -54,7 +54,7 @@ use html5ever::tokenizer::{
     BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
 };
 use lru::LruCache;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Tag, TagEnd};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -200,16 +200,11 @@ struct NewLinkPreviewRow<'a> {
 /// - URLs inside `Event::Code` or fenced code blocks are skipped so pasted
 ///   example snippets don't generate spurious cards.
 pub fn extract_preview_urls(content: &str) -> Vec<Url> {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_GFM);
-
     let mut urls: Vec<Url> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut code_block_depth: u32 = 0;
 
-    for event in Parser::new_ext(content, options) {
+    for event in crate::app::markdown::parser(content) {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code_block_depth += 1,
             Event::End(TagEnd::CodeBlock) => {

@@ -1,5 +1,6 @@
 //! Tagging people in messages. A message's text tags a member as `<@user-id>`, a role as
-//! `<@&role-id>`, and everyone who can see the channel as `@everyone`, outside code. Each kind
+//! `<@&role-id>`, and everyone who can see the channel as `@everyone`, wherever it renders as
+//! text and not code (`app::markdown`). Each kind
 //! takes a channel permission (Mention members, Mention roles, Mention everyone); a tag its
 //! author may not make, or that names no member or role here, is left as plain text and counts
 //! for no one. What does count is kept on the message as its record carries it
@@ -18,6 +19,7 @@ use diesel::prelude::*;
 use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::sql_types::Jsonb;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use pulldown_cmark::{Event, Tag, TagEnd};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -85,72 +87,29 @@ pub struct Requested {
     pub everyone: bool,
 }
 
-/// Finds the tags in `content`, skipping fenced code blocks and inline code spans, each kept
-/// once in the order first written, at most [`MAX_TAGS`] people and roles together.
+/// Finds the tags in `content` wherever it is text as a message renders it (`app::markdown`),
+/// never in code of any kind, each kept once in the order first written, at most [`MAX_TAGS`]
+/// people and roles together.
 pub fn parse(content: &str) -> Requested {
     let mut found = Requested::default();
-    let mut fence: Option<&str> = None;
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        let marker = ["```", "~~~"]
-            .into_iter()
-            .find(|marker| trimmed.starts_with(marker));
-        match (fence, marker) {
-            (None, Some(marker)) => {
-                fence = Some(marker);
-                continue;
+    // A run of text may come as several events; it is read whole, up to the next markup.
+    let mut run = String::new();
+    let mut code_depth = 0u32;
+    for event in crate::app::markdown::parser(content) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                scan_line(&std::mem::take(&mut run), &mut found);
+                code_depth += 1;
             }
-            (Some(open), Some(marker)) if open == marker => {
-                fence = None;
-                continue;
-            }
-            (Some(_), _) => continue,
-            (None, None) => {}
+            Event::End(TagEnd::CodeBlock) => code_depth = code_depth.saturating_sub(1),
+            _ if code_depth > 0 => {}
+            Event::Text(text) => run.push_str(&text),
+            Event::SoftBreak | Event::HardBreak => run.push('\n'),
+            _ => scan_line(&std::mem::take(&mut run), &mut found),
         }
-        scan_line(&without_code_spans(line), &mut found);
     }
+    scan_line(&run, &mut found);
     found
-}
-
-/// `line` with each inline code span, a run of backticks to the next run of the same length,
-/// blanked out; an unclosed run is ordinary text.
-fn without_code_spans(line: &str) -> String {
-    let chars: Vec<char> = line.chars().collect();
-    let mut out = String::with_capacity(line.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] != '`' {
-            out.push(chars[i]);
-            i += 1;
-            continue;
-        }
-        let run = chars[i..].iter().take_while(|c| **c == '`').count();
-        let mut j = i + run;
-        let mut close = None;
-        while j < chars.len() {
-            if chars[j] == '`' {
-                let other = chars[j..].iter().take_while(|c| **c == '`').count();
-                if other == run {
-                    close = Some(j + other);
-                    break;
-                }
-                j += other;
-            } else {
-                j += 1;
-            }
-        }
-        match close {
-            Some(end) => {
-                out.push(' ');
-                i = end;
-            }
-            None => {
-                out.extend(&chars[i..i + run]);
-                i += run;
-            }
-        }
-    }
-    out
 }
 
 fn scan_line(line: &str, found: &mut Requested) {
@@ -162,8 +121,8 @@ fn scan_line(line: &str, found: &mut Requested) {
         {
             if found.users.len() + found.roles.len() < MAX_TAGS {
                 match tag {
-                    Tag::User(id) if !found.users.contains(&id) => found.users.push(id),
-                    Tag::Role(id) if !found.roles.contains(&id) => found.roles.push(id),
+                    Found::User(id) if !found.users.contains(&id) => found.users.push(id),
+                    Found::Role(id) if !found.roles.contains(&id) => found.roles.push(id),
                     _ => {}
                 }
             }
@@ -190,13 +149,13 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-enum Tag {
+enum Found {
     User(Uuid),
     Role(Uuid),
 }
 
 /// The tag `<@id>` or `<@&id>` at the start of `text`, and its length in bytes.
-fn tag_at(text: &str) -> Option<(Tag, usize)> {
+fn tag_at(text: &str) -> Option<(Found, usize)> {
     let (role, body) = if let Some(body) = text.strip_prefix("<@&") {
         (true, body)
     } else {
@@ -205,7 +164,7 @@ fn tag_at(text: &str) -> Option<(Tag, usize)> {
     let end = body.find('>')?;
     let id = Uuid::parse_str(body.get(..end)?).ok()?;
     let len = text.len() - body.len() + end + 1;
-    Some((if role { Tag::Role(id) } else { Tag::User(id) }, len))
+    Some((if role { Found::Role(id) } else { Found::User(id) }, len))
 }
 
 /// The tags among `requested` that count in `channel`, posted by someone with `access`
@@ -348,6 +307,24 @@ mod tests {
         assert_eq!(found.users, vec![id(B)]);
         assert!(found.roles.is_empty());
         assert!(!found.everyone);
+    }
+
+    #[test]
+    fn no_kind_of_code_is_tagging() {
+        let found = parse(&format!(
+            "    <@{A}> indented\n\n````\n```\n<@{B}>\n```\n````\n\n- item `<@&{A}>`\n\n> ```\n> @everyone\n> ```"
+        ));
+        assert_eq!(found, Requested::default());
+    }
+
+    #[test]
+    fn tags_in_markup_count() {
+        let found = parse(&format!(
+            "**<@{A}>** _@everyone_ [see <@&{B}>](https://example.com)"
+        ));
+        assert_eq!(found.users, vec![id(A)]);
+        assert_eq!(found.roles, vec![id(B)]);
+        assert!(found.everyone);
     }
 
     #[test]
