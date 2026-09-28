@@ -4,7 +4,8 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock } from "@/features/messages/CodeBlock";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
-import { Mention, MentionContext } from "@/features/messages/Mention";
+import { Mention } from "@/features/messages/Mention";
+import { MentionContext } from "@/features/messages/mentionContext";
 import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
@@ -33,11 +34,12 @@ const components: Components = {
     }
     const attributes = props as Record<string, unknown>;
     const kind = attributes["data-mention"];
+    const id = attributes["data-id"];
     if (kind === "user" || kind === "role" || kind === "everyone") {
       return (
         <Mention
           kind={kind}
-          id={String(attributes["data-id"] ?? "")}
+          id={typeof id === "string" ? id : ""}
           text={typeof children === "string" ? children : ""}
         />
       );

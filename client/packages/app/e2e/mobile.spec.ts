@@ -303,25 +303,59 @@ test.describe("on a phone", () => {
     expect((button?.y ?? Infinity) + (button?.height ?? 0)).toBeLessThanOrEqual(fit.bottom);
   });
 
-  test("the reaction picker fits on the screen", async ({ page }) => {
+  /** Opens the reaction picker on the caller's own message and measures how it sits. */
+  async function openReactionPicker(page: Page) {
     await openChannel(page, "general");
     const own = messageWith(page, ownText);
     await own.locator(".message-body").tap();
     await own.getByRole("button", { name: "Add a reaction" }).tap();
     const picker = page.locator(".emoji-picker");
     await expect(picker).toBeVisible();
-    const fit = await picker.evaluate((element) => {
+    // Measured the moment its first emoji show: the library places them before it has measured
+    // one, and they must fit then too.
+    await expect(picker.locator(".epr-emoji-category-content > *").first()).toBeVisible();
+    return picker.evaluate((element) => {
       const box = element.getBoundingClientRect();
-      const list = element.querySelector(".epr-body");
+      const list = element.querySelector<HTMLElement>(".epr-body");
+      const firstRow = Array.from(
+        element.querySelectorAll<HTMLElement>(".epr-emoji-category-content > *"),
+      )
+        .map((emoji) => emoji.getBoundingClientRect())
+        .filter((rect, _, all) => rect.width > 0 && rect.top === all[0]?.top);
+      const inner = list?.getBoundingClientRect();
       return {
         left: box.left,
         right: box.right,
         screen: window.innerWidth,
         listOverflow: list === null ? 0 : list.scrollWidth - list.clientWidth,
+        perRow: firstRow.length,
+        before:
+          inner === undefined || firstRow[0] === undefined ? 0 : firstRow[0].left - inner.left,
+        after:
+          inner === undefined || list === null || firstRow.length === 0
+            ? 0
+            : inner.left + list.clientWidth - (firstRow.at(-1)?.right ?? 0),
       };
     });
+  }
+
+  test("the reaction picker fits on the screen", async ({ page }) => {
+    const fit = await openReactionPicker(page);
     expect(fit.left).toBeGreaterThanOrEqual(0);
     expect(fit.right).toBeLessThanOrEqual(fit.screen);
     expect(fit.listOverflow).toBeLessThanOrEqual(0);
+    // A whole row of emoji, as far from each side.
+    expect(fit.perRow).toBe(8);
+    expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
+  });
+
+  test("on the narrowest phones the reaction picker takes a row of seven", async ({ page }) => {
+    await page.setViewportSize({ width: 340, height: 700 });
+    const fit = await openReactionPicker(page);
+    expect(fit.left).toBeGreaterThanOrEqual(0);
+    expect(fit.right).toBeLessThanOrEqual(fit.screen);
+    expect(fit.listOverflow).toBeLessThanOrEqual(0);
+    expect(fit.perRow).toBe(7);
+    expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
   });
 });

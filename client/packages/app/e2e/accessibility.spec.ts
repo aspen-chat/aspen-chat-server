@@ -134,6 +134,20 @@ for (const { palette, scheme } of combinations) {
         .click();
       await expect(page.getByRole("heading", { name: "Administration", level: 1 })).toBeVisible();
       await expect(page.getByRole("region", { name: "Users" }).getByText("1–15")).toBeVisible();
+      // Every table has loaded and faded back in: a table fades while its page loads.
+      await expect
+        .poll(() =>
+          page
+            .locator("table")
+            .evaluateAll((tables) =>
+              tables.every(
+                (table) =>
+                  table.parentElement !== null &&
+                  getComputedStyle(table.parentElement).opacity === "1",
+              ),
+            ),
+        )
+        .toBe(true);
       await expectAccessible(page, "administration");
       await page.goto(`/bots/${helper}/add?permissions=sendMessages`);
       await expect(page.getByRole("heading", { name: "Add Helper to a community" })).toBeVisible();

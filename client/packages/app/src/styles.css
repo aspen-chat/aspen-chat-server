@@ -323,8 +323,6 @@ body {
   --epr-picker-border-color: transparent;
   --epr-category-icon-active-color: var(--color-accent);
   --epr-skin-tone-picker-menu-color: var(--color-surface-raised);
-  /* Eight 38px cells and the list's own padding fit the 320px picker; the library's 40px
-     cells do not, and its last column would be cut off. */
-  --epr-emoji-padding: 4px;
+  /* The emoji keep the library's 40px size, which `EmojiPicker.tsx` sizes the picker for. */
   border: 0;
 }

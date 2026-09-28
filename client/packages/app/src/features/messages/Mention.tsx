@@ -1,18 +1,12 @@
-import type { Mentions } from "@aspen/protocol";
-import { createContext, useContext } from "react";
+import { useContext } from "react";
 import { Button } from "react-aria-components";
 import { useRoles, useUser } from "@/api/hooks";
+import { MentionContext } from "@/features/messages/mentionContext";
 import type { MentionKind } from "@/features/messages/remarkMentions";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-
-/** The message a body belongs to, for its tags: which count, and where to find role names. */
-export const MentionContext = createContext<{
-  mentions: Mentions;
-  communityId: string | null;
-} | null>(null);
 
 const chipClass =
   "rounded bg-accent-soft px-0.5 font-medium text-accent-strong outline-none " +
