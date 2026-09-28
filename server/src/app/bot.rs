@@ -70,6 +70,8 @@ pub async fn user_for_token(
             verified_at: chrono::DateTime::<Utc>::MIN_UTC,
             has_second_factor: false,
             bot: true,
+            method: app::login::SignInMethod::Token,
+            foreign: false,
         };
         (bot, caller)
     }))
@@ -105,13 +107,17 @@ async fn ensure_may_own(
     owner: UserId,
     at_limit: impl FnOnce(u32) -> app::Error,
 ) -> app::Result<()> {
-    let is_bot: bool = user::table
-        .select(user::bot)
+    let (is_bot, foreign): (bool, bool) = user::table
+        .select((user::bot, user::home_domain.is_not_null()))
         .filter(user::id.eq(owner).and(user::deleted_at.is_null()))
         .first(conn)
         .await?;
     if is_bot {
         return Err(app::Error::Validation(t!("botOwnerMustBePerson")));
+    }
+    // A bot belongs to its owner's home, where the owner manages it.
+    if foreign {
+        return Err(app::Error::Validation(t!("botOwnerMustBeLocal")));
     }
     let max = state.config.bots.max_per_user;
     if owned_count(conn, owner).await? >= i64::from(max) {
@@ -159,13 +165,16 @@ pub async fn create(
         ..Default::default()
     })?;
     let mut conn = state.connection_pool.get().await?;
-    let is_bot: bool = user::table
-        .select(user::bot)
+    let (is_bot, foreign): (bool, bool) = user::table
+        .select((user::bot, user::home_domain.is_not_null()))
         .filter(user::id.eq(owner))
         .first(conn.as_mut())
         .await?;
     if is_bot {
         return Err(app::Error::Forbidden(t!("botsMakeNoBots")));
+    }
+    if foreign {
+        return Err(app::Error::Forbidden(t!("foreignMakeNoBots")));
     }
     let token = new_token();
     let token_digest = digest(&token);
@@ -203,6 +212,9 @@ pub async fn create(
                         bot: true,
                         bot_owner: Some(owner),
                         bot_public: false,
+                        home_domain: None,
+                        home_id: None,
+                        home_icon: None,
                     })
                     .returning(UserPg::as_returning())
                     .get_result(conn.as_mut())

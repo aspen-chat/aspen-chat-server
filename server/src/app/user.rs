@@ -40,6 +40,19 @@ pub struct UserPg {
     pub bot_owner: Option<UserId>,
     /// Whether anyone allowed to add bots to a community may add this one.
     pub bot_public: bool,
+    /// For a foreign user, their home deployment and their id there; `None` for this
+    /// deployment's own users (`app::federation::abroad`).
+    pub home_domain: Option<crate::app::federation::Domain>,
+    pub home_id: Option<uuid::Uuid>,
+    /// For a foreign user, the home's id of the avatar `icon` is this deployment's copy of.
+    pub home_icon: Option<uuid::Uuid>,
+}
+
+impl UserPg {
+    /// Whether this is a user of another deployment.
+    pub fn foreign(&self) -> bool {
+        self.home_domain.is_some()
+    }
 }
 
 pub struct User {
@@ -208,6 +221,9 @@ pub async fn create_user(
                     bot: false,
                     bot_owner: None,
                     bot_public: false,
+                    home_domain: None,
+                    home_id: None,
+                    home_icon: None,
                 })
                 .execute(conn.as_mut())
                 .await?;
@@ -295,6 +311,22 @@ pub(crate) async fn update_user(
         return Err(app::Error::Unauthorized);
     }
     validate_profile(&command)?;
+    // A foreign user's profile is their home's, written from each sign-in; only their status
+    // is this deployment's.
+    let foreign: bool = user::table
+        .select(user::home_domain.is_not_null())
+        .filter(user::id.eq(id))
+        .first(conn.as_mut())
+        .await?;
+    if foreign
+        && (command.name.is_some()
+            || command.icon.is_some()
+            || command.display_name.is_some()
+            || command.pronouns.is_some()
+            || command.bio.is_some())
+    {
+        return Err(app::Error::Forbidden(t!("foreignProfileAtHome")));
+    }
     if let Some(name) = &command.name {
         validate_username(name)?;
     }
@@ -416,6 +448,7 @@ pub async fn user_for_token(
             UserPg::as_select(),
             refresh_token::token,
             refresh_token::verified_at,
+            refresh_token::method,
             diesel::dsl::sql::<diesel::sql_types::Bool>(app::two_factor::HAS_SECOND_FACTOR_SQL),
         ))
         .filter(
@@ -425,22 +458,31 @@ pub async fn user_for_token(
                 .and(refresh_token::dsl::expires.ge(now))
                 .and(schema::user::deleted_at.is_null()),
         )
-        .first::<(UserPg, String, chrono::DateTime<Utc>, bool)>(conn.as_mut())
+        .first::<(
+            UserPg,
+            String,
+            chrono::DateTime<Utc>,
+            app::login::SignInMethod,
+            bool,
+        )>(conn.as_mut())
         .await
         .optional()?;
-    Ok(
-        found.map(|(user, refresh_token, verified_at, has_second_factor)| {
+    Ok(found.map(
+        |(user, refresh_token, verified_at, method, has_second_factor)| {
             let caller = app::two_factor::Caller {
                 user: user.id,
                 session_token: token.to_string(),
                 refresh_token,
                 verified_at,
                 has_second_factor,
-                bot: false,
+                // A bot holds a session only abroad, from its home's assertion.
+                bot: user.bot,
+                method,
+                foreign: user.foreign(),
             };
             (user, caller)
-        }),
-    )
+        },
+    ))
 }
 
 pub async fn user_online_status(

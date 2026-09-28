@@ -47,6 +47,10 @@ enum MessageEnumSource {
         // is added only by its owner.
         #[message_gen(server_authoritative = "mutable")]
         bot_public: bool,
+        // For a user of another deployment, that deployment's domain, which clients show beside
+        // their name; `None` for this deployment's own users. See `app::federation::abroad`.
+        #[message_gen(server_authoritative)]
+        home_domain: Option<String>,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.

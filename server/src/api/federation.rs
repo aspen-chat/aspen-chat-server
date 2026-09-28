@@ -1,16 +1,22 @@
-//! Federation over HTTP: this deployment's published document at `/.well-known/aspen`, and
-//! the Administration Dashboard's directory of other deployments under `/admin/federation`,
-//! which takes Manage federation (`app::federation`).
+//! Federation over HTTP: this deployment's published document at `/.well-known/aspen`, the
+//! Administration Dashboard's directory of other deployments under `/admin/federation`, which
+//! takes Manage federation, and signing in abroad: assertions for this deployment's users, the
+//! sign-in of other deployments' users here, and the avatars other deployments copy
+//! (`app::federation`).
 
 use crate::api::admin::AdminUser;
+use crate::api::auth::{LoginResponse, SessionUser};
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_ADMIN, double_option};
+use crate::api::{
+    API_PREFIX, GlobalServerContext, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS, double_option,
+};
+use crate::app::federation::abroad::{self, ForeignDeployment, Issued};
 use crate::app::federation::{
     self, ContactOutcome, DeploymentDocument, Direction, Domain, FederationList, Gates, Origin,
     Subject,
 };
-use crate::app::{self, UserId, deployment::DeploymentPermission};
+use crate::app::{self, IconId, UserId, deployment::DeploymentPermission};
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -575,4 +581,135 @@ pub async fn remove_from_list(
         tracing::info!(%domain, %list, admin = %session.user.id.0, "took a deployment off a list");
     }
     Ok(NoContent)
+}
+
+/// Where to sign in abroad.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssertionRequest {
+    /// The deployment to sign in at: its domain, with `:port` when it is not served on 443.
+    pub audience: String,
+}
+
+/// Signs an assertion that the caller is who they are, for one other deployment, where
+/// `POST /auth/federated-sign-in` exchanges it for a session within two minutes. How the
+/// caller signed in here goes with it, and so does their profile.
+#[utoipa::path(
+    post,
+    path = "/auth/assertions",
+    tag = TAG_AUTH,
+    request_body = AssertionRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Issued),
+        (status = BAD_REQUEST, description = "`validation`: not a domain, or this deployment's own", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`federationRefused`: this deployment takes no part in federation, its emigration gate is closed to that deployment, or the caller's account is another deployment's", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn issue_assertion(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, caller }: SessionUser,
+    Json(request): Json<AssertionRequest>,
+) -> ApiResult<Json<Issued>> {
+    let audience = Domain::parse(&request.audience).map_err(|_| {
+        ApiError::new(ProblemCode::Validation).with_detail(rust_i18n::t!("federationNotADomain"))
+    })?;
+    Ok(Json(
+        abroad::issue(&state, &caller, &user, &audience).await?,
+    ))
+}
+
+/// An assertion to sign in with.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedSignInRequest {
+    /// From the home deployment's `POST /auth/assertions`.
+    pub assertion: String,
+    /// A registration invite, which a first arrival needs where this deployment requires one
+    /// of accounts from elsewhere.
+    #[serde(default)]
+    pub invite_code: Option<String>,
+}
+
+/// Signs in a user of another deployment with an assertion from their home, making their
+/// account here the first time. The session is an ordinary one; the account's profile and
+/// sign-in security are their home's.
+#[utoipa::path(
+    post,
+    path = "/auth/federated-sign-in",
+    tag = TAG_AUTH,
+    request_body = FederatedSignInRequest,
+    responses(
+        (status = OK, body = LoginResponse),
+        (status = UNAUTHORIZED, description = "`assertionInvalid`", body = Problem),
+        (status = FORBIDDEN, description = "`federationRefused`: this deployment's immigration gate is closed to the home, or it takes no part in federation; `strongerSignInRequired`; `registrationInviteRequired` or `registrationInviteInvalid` on a first arrival that needs an invite", body = Problem),
+        (status = BAD_GATEWAY, description = "`deploymentUnreachable`: the home could not be reached to read its key", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn federated_sign_in(
+    State(state): State<GlobalServerContext>,
+    Json(request): Json<FederatedSignInRequest>,
+) -> ApiResult<Json<LoginResponse>> {
+    let session =
+        abroad::sign_in(&state, &request.assertion, request.invite_code.as_deref()).await?;
+    Ok(Json(session.into()))
+}
+
+/// The other deployments the caller has signed in to from here, the most recently used first,
+/// so each of their devices can find them.
+#[utoipa::path(
+    get,
+    path = "/users/@me/foreign-deployments",
+    tag = TAG_USERS,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<ForeignDeployment>),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_foreign_deployments(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+) -> ApiResult<Json<Vec<ForeignDeployment>>> {
+    Ok(Json(abroad::foreign_deployments(&state, user.id).await?))
+}
+
+/// The avatar of one of this deployment's users, for the other deployments they sign in to,
+/// which keep a copy of it. Nothing but those avatars is served here.
+#[utoipa::path(
+    get,
+    path = "/federation/icons/{icon}",
+    tag = TAG_ICONS,
+    params(("icon" = IconId, Path)),
+    responses(
+        (status = OK, description = "The image", content_type = "image/*", body = Vec<u8>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn home_avatar(
+    State(state): State<GlobalServerContext>,
+    Path(icon): Path<IconId>,
+) -> ApiResult<Response> {
+    let (bytes, mime_type) = abroad::home_avatar(&state, icon).await?;
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_str(&mime_type)
+                    .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+            ),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=3600"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }

@@ -516,7 +516,7 @@ pub(crate) async fn read_community_members(
         r#"
         SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
                deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, bot_owner,
-               bot_public
+               bot_public, home_domain, home_id, home_icon
         FROM (
             SELECT cu.community, cu.sort_index, u.*,
                    ROW_NUMBER() OVER (PARTITION BY cu.community ORDER BY u.last_seen_at DESC) AS recency_rank
@@ -623,7 +623,8 @@ pub(crate) async fn search_community_members(
         r#"
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
-               u.status_emoji, u.bot, u.bot_owner, u.bot_public
+               u.status_emoji, u.bot, u.bot_owner, u.bot_public, u.home_domain, u.home_id,
+               u.home_icon
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL

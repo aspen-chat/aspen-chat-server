@@ -304,6 +304,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::revoke_registration_invite))
         .routes(routes!(admin::get_fleet))
         .routes(routes!(admin::get_growth))
+        .routes(routes!(federation::issue_assertion))
+        .routes(routes!(federation::federated_sign_in))
+        .routes(routes!(federation::list_foreign_deployments))
+        .routes(routes!(federation::home_avatar))
         .routes(routes!(federation::get_federation))
         .routes(routes!(
             federation::list_deployments,

@@ -770,6 +770,8 @@ export const en = {
     outcome: {
       pinned: "Pinned {domain}'s key.",
       confirmed: "{domain} presented its pinned key.",
+      handedOver:
+        "{domain} replaced its key, vouched for by the one you pinned. The new key is pinned.",
       keyChanged: "{domain} presented a different key. It is refused until you accept it.",
     },
     lists: "Lists",

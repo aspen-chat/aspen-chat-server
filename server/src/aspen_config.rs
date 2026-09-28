@@ -273,6 +273,10 @@ pub struct MigrationRules {
     /// Both directions read one list instead of a list each. Both gates must then use a list,
     /// and the same kind of list.
     pub shared_list: bool,
+    /// Whether an account of another deployment arriving here for the first time needs a
+    /// registration invite (`app::registration_invite`), as `[registration] invite_required`
+    /// asks of accounts made here.
+    pub immigration_invite_required: bool,
 }
 
 /// One direction's gate.

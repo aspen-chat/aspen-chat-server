@@ -50,6 +50,7 @@ endpoints = [
   "GET /auth/passkey",
   "POST /auth/login",
   "POST /auth/login/second-factor",
+  "POST /auth/federated-sign-in",
   "POST /auth/passkey-ceremonies",
   "GET /auth/passkey-ceremonies/{ceremony}",
   "POST /auth/passkey-ceremonies/{ceremony}/credential",
@@ -166,6 +167,14 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 # Other deployments read it when they meet this one and now and then after; each API server of
 # theirs reads it on its own.
 ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."POST /auth/assertions"]
+# A client asks for one each time it signs in somewhere; people have a handful of deployments.
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."GET /federation/icons/{icon}"]
+# Other deployments copy an avatar when it changes; each of their servers may ask on its own.
+ip = { requests = 120, per_seconds = 60, burst = 60 }
 
 [rate_limits.endpoints."POST /admin/federation/deployments/{domain}/contact"]
 # Each makes a call to another deployment.

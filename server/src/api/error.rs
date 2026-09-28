@@ -87,6 +87,16 @@ pub enum ProblemCode {
     /// Another deployment could not be reached, or did not answer as a deployment does.
     /// `detail` says which.
     DeploymentUnreachable,
+    /// Federation does not allow this crossing: a gate is closed to that deployment, this
+    /// deployment takes no part in federation, or the account cannot travel. `detail` says
+    /// which.
+    FederationRefused,
+    /// Signing in abroad: the assertion is malformed, forged, expired, already used, or not for
+    /// this deployment. Ask the home deployment for a fresh one.
+    AssertionInvalid,
+    /// Signing in abroad: this deployment requires two factors, and the sign-in at home used a
+    /// password alone. Sign in at home with a second factor or a passkey first.
+    StrongerSignInRequired,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -121,6 +131,10 @@ impl ProblemCode {
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
             ProblemCode::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
             ProblemCode::DeploymentUnreachable => StatusCode::BAD_GATEWAY,
+            ProblemCode::FederationRefused | ProblemCode::StrongerSignInRequired => {
+                StatusCode::FORBIDDEN
+            }
+            ProblemCode::AssertionInvalid => StatusCode::UNAUTHORIZED,
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -154,6 +168,9 @@ impl ProblemCode {
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
             ProblemCode::DeploymentUnreachable => t!("problemDeploymentUnreachable"),
+            ProblemCode::FederationRefused => t!("problemFederationRefused"),
+            ProblemCode::AssertionInvalid => t!("problemAssertionInvalid"),
+            ProblemCode::StrongerSignInRequired => t!("problemStrongerSignInRequired"),
             ProblemCode::Internal => t!("tryAgainLater"),
         }
     }
@@ -273,6 +290,11 @@ impl From<app::Error> for ApiError {
             app::Error::DeploymentUnreachable(detail) => {
                 Self::new(ProblemCode::DeploymentUnreachable).with_detail(detail)
             }
+            app::Error::FederationRefused(detail) => {
+                Self::new(ProblemCode::FederationRefused).with_detail(detail)
+            }
+            app::Error::AssertionInvalid => Self::new(ProblemCode::AssertionInvalid),
+            app::Error::StrongerSignInRequired => Self::new(ProblemCode::StrongerSignInRequired),
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }

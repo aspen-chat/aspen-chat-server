@@ -13,23 +13,27 @@
 //! key found there the first time; a different key later is refused, and waits as the
 //! deployment's offered key until an administrator accepts it ([`accept_key`]).
 
+pub mod abroad;
+pub mod contact;
 pub mod fetch;
+pub mod jws;
+pub mod keys;
 
-use crate::api::GlobalServerContext;
-use crate::app::{self, FederationKeyId, UserId};
+pub use contact::{ContactOutcome, contact, fetch_document, record_contact};
+pub use keys::{
+    DeploymentDocument, Gates, Rotation, current_key, document, ensure_key, fingerprint, rotate_key,
+};
+
+use crate::app::{self, UserId};
 use crate::aspen_config::{FederationConfig, Gate, MigrationRules};
-use crate::database::schema::{federated_deployment, federation_key, federation_list_entry};
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
+use crate::database::schema::{federated_deployment, federation_list_entry};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
-use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -321,177 +325,6 @@ pub fn admits(
     }
 }
 
-// ---------------------------------------------------------------------------
-// This deployment's keys
-// ---------------------------------------------------------------------------
-
-/// The public half of one of this deployment's keys.
-#[derive(Debug, Clone, Queryable, Selectable)]
-#[diesel(table_name = federation_key)]
-#[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct PublicKey {
-    pub id: FederationKeyId,
-    pub public_key: Vec<u8>,
-    pub created_at: DateTime<Utc>,
-}
-
-/// A key's fingerprint as people compare them: `SHA256:` and the digest of its 32 bytes in
-/// base64, as SSH shows keys.
-pub fn fingerprint(public_key: &[u8]) -> String {
-    format!(
-        "SHA256:{}",
-        STANDARD_NO_PAD.encode(Sha256::digest(public_key))
-    )
-}
-
-fn new_key_row() -> app::Result<(FederationKeyId, Vec<u8>, Vec<u8>)> {
-    let pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519)
-        .map_err(|e| app::Error::Config(config::ConfigError::Message(e.to_string())))?;
-    Ok((
-        FederationKeyId::new(),
-        pair.serialize_der(),
-        pair.public_key_raw().to_vec(),
-    ))
-}
-
-/// Makes this deployment's key when it has none, as its first server starts. Servers starting
-/// together make one: the current key is unique.
-pub async fn ensure_key(conn: &mut AsyncPgConnection) -> app::Result<()> {
-    let has_key = diesel::select(diesel::dsl::exists(
-        federation_key::table.filter(federation_key::retired_at.is_null()),
-    ))
-    .get_result::<bool>(conn)
-    .await?;
-    if has_key {
-        return Ok(());
-    }
-    let (id, private_key, public_key) = new_key_row()?;
-    diesel::insert_into(federation_key::table)
-        .values((
-            federation_key::id.eq(id),
-            federation_key::private_key.eq(private_key),
-            federation_key::public_key.eq(public_key),
-        ))
-        .on_conflict_do_nothing()
-        .execute(conn)
-        .await?;
-    Ok(())
-}
-
-/// This deployment's current key.
-pub async fn current_key(conn: &mut AsyncPgConnection) -> app::Result<Option<PublicKey>> {
-    Ok(federation_key::table
-        .select(PublicKey::as_select())
-        .filter(federation_key::retired_at.is_null())
-        .first(conn)
-        .await
-        .optional()?)
-}
-
-/// Retires the current key and makes another. Every deployment that pinned the old one refuses
-/// the new one until its administrators accept it, so this is for a key that has leaked.
-pub async fn rotate_key(conn: &mut AsyncPgConnection) -> app::Result<PublicKey> {
-    let (id, private_key, public_key) = new_key_row()?;
-    conn.transaction(|conn| {
-        async move {
-            diesel::update(federation_key::table.filter(federation_key::retired_at.is_null()))
-                .set(federation_key::retired_at.eq(diesel::dsl::now))
-                .execute(conn)
-                .await?;
-            Ok(diesel::insert_into(federation_key::table)
-                .values((
-                    federation_key::id.eq(id),
-                    federation_key::private_key.eq(private_key),
-                    federation_key::public_key.eq(public_key),
-                ))
-                .returning(PublicKey::as_returning())
-                .get_result(conn)
-                .await?)
-        }
-        .scope_boxed()
-    })
-    .await
-}
-
-// ---------------------------------------------------------------------------
-// The published document
-// ---------------------------------------------------------------------------
-
-/// What a deployment publishes at [`WELL_KNOWN_PATH`]: its name, its key, and its gates.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DeploymentDocument {
-    pub domain: Domain,
-    /// Its signing keys, the current one first.
-    pub keys: Vec<DocumentKey>,
-    pub users: Gates,
-    pub bots: Gates,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentKey {
-    pub id: FederationKeyId,
-    pub algorithm: KeyAlgorithm,
-    /// The public key's bytes in unpadded base64url.
-    pub public_key: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum KeyAlgorithm {
-    Ed25519,
-}
-
-/// One kind of account's gates, as a deployment publishes them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Gates {
-    pub emigration: Gate,
-    pub immigration: Gate,
-}
-
-impl From<&MigrationRules> for Gates {
-    fn from(rules: &MigrationRules) -> Self {
-        Gates {
-            emigration: rules.emigration,
-            immigration: rules.immigration,
-        }
-    }
-}
-
-/// This deployment's document; `None` when it has no domain, and so takes no part in
-/// federation.
-pub async fn document(state: &GlobalServerContext) -> app::Result<Option<DeploymentDocument>> {
-    let config = &state.config.federation;
-    let Some(domain) = config.domain.as_deref() else {
-        return Ok(None);
-    };
-    let domain = Domain::parse(domain).map_err(|_| {
-        app::Error::Config(config::ConfigError::Message(
-            "federation.domain is not a domain".into(),
-        ))
-    })?;
-    let mut conn = state.connection_pool.get().await?;
-    let keys = current_key(&mut conn)
-        .await?
-        .map(|key| DocumentKey {
-            id: key.id,
-            algorithm: KeyAlgorithm::Ed25519,
-            public_key: URL_SAFE_NO_PAD.encode(&key.public_key),
-            created_at: key.created_at,
-        })
-        .into_iter()
-        .collect();
-    Ok(Some(DeploymentDocument {
-        domain,
-        keys,
-        users: (&config.users).into(),
-        bots: (&config.bots).into(),
-    }))
-}
-
 /// This deployment's own domain, if it has one.
 pub fn own_domain(config: &FederationConfig) -> Option<Domain> {
     config.domain.as_deref().and_then(|d| Domain::parse(d).ok())
@@ -559,7 +392,7 @@ fn clean_note(note: Option<String>) -> app::Result<Option<String>> {
     Ok(note)
 }
 
-async fn lists_of(
+pub(crate) async fn lists_of(
     conn: &mut AsyncPgConnection,
     domains: &[Domain],
 ) -> app::Result<HashMap<Domain, Vec<FederationList>>> {
@@ -776,144 +609,6 @@ pub async fn accept_key(
     get(conn, domain).await
 }
 
-// ---------------------------------------------------------------------------
-// Contact
-// ---------------------------------------------------------------------------
-
-/// What contacting a deployment found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum ContactOutcome {
-    /// It had no pinned key, and the one it presented is now pinned.
-    Pinned,
-    /// It presented its pinned key.
-    Confirmed,
-    /// It presented a different key, which is refused and kept as its offered key until an
-    /// administrator accepts it.
-    KeyChanged,
-}
-
-/// Reads `domain`'s document and checks its key against the one pinned, pinning it when none
-/// is. A deployment not yet known is recorded as first contacted, so callers decide whether
-/// policy admits it before contacting it.
-pub async fn contact(
-    state: &GlobalServerContext,
-    domain: &Domain,
-) -> app::Result<(Listed, ContactOutcome)> {
-    let presented = fetch_key(&state.config.federation, &state.federation_client, domain).await?;
-    // The connection is taken once the other deployment has answered, not held while it might.
-    record_contact(
-        state.connection_pool.get().await?.as_mut(),
-        domain,
-        presented,
-    )
-    .await
-}
-
-/// The key `domain` presents in its document now.
-pub async fn fetch_key(
-    config: &FederationConfig,
-    client: &reqwest::Client,
-    domain: &Domain,
-) -> app::Result<Vec<u8>> {
-    if own_domain(config).as_ref() == Some(domain) {
-        return Err(app::Error::Validation(t!("federationOwnDomain")));
-    }
-    let document = fetch::document(client, domain).await?;
-    presented_key(domain, &document)
-}
-
-/// Checks the key `domain` presented against the one pinned, as [`contact`] describes.
-pub async fn record_contact(
-    conn: &mut AsyncPgConnection,
-    domain: &Domain,
-    presented: Vec<u8>,
-) -> app::Result<(Listed, ContactOutcome)> {
-    let domain = domain.clone();
-    let outcome = conn
-        .transaction(|conn| {
-            async move {
-                diesel::insert_into(federated_deployment::table)
-                    .values((
-                        federated_deployment::domain.eq(&domain),
-                        federated_deployment::origin.eq(Origin::FirstContact),
-                    ))
-                    .on_conflict_do_nothing()
-                    .execute(conn)
-                    .await?;
-                let pinned: (Option<Vec<u8>>, Option<Vec<u8>>) = federated_deployment::table
-                    .find(&domain)
-                    .select((
-                        federated_deployment::public_key,
-                        federated_deployment::offered_key,
-                    ))
-                    .for_update()
-                    .first(conn)
-                    .await?;
-                let row = federated_deployment::table.find(&domain);
-                let outcome = match pinned {
-                    (None, _) => {
-                        diesel::update(row)
-                            .set((
-                                federated_deployment::public_key.eq(&presented),
-                                federated_deployment::first_contact_at.eq(diesel::dsl::now),
-                                federated_deployment::last_contact_at.eq(diesel::dsl::now),
-                            ))
-                            .execute(conn)
-                            .await?;
-                        ContactOutcome::Pinned
-                    }
-                    (Some(pinned), _) if pinned == presented => {
-                        diesel::update(row)
-                            .set((
-                                federated_deployment::last_contact_at.eq(diesel::dsl::now),
-                                federated_deployment::offered_key.eq(None::<Vec<u8>>),
-                                federated_deployment::offered_key_at.eq(None::<DateTime<Utc>>),
-                            ))
-                            .execute(conn)
-                            .await?;
-                        ContactOutcome::Confirmed
-                    }
-                    (Some(_), offered) => {
-                        // The time a key was first offered is kept while the same key is.
-                        if offered.as_deref() != Some(presented.as_slice()) {
-                            diesel::update(row)
-                                .set((
-                                    federated_deployment::offered_key.eq(&presented),
-                                    federated_deployment::offered_key_at.eq(diesel::dsl::now),
-                                ))
-                                .execute(conn)
-                                .await?;
-                        }
-                        tracing::warn!(%domain, "a deployment presented a key other than the one pinned");
-                        ContactOutcome::KeyChanged
-                    }
-                };
-                Ok::<_, app::Error>((get(conn, &domain).await?, outcome))
-            }
-            .scope_boxed()
-        })
-        .await?;
-    Ok(outcome)
-}
-
-/// The key a document presents for `domain`: its first, which must be Ed25519, from a document
-/// that names `domain` itself.
-fn presented_key(domain: &Domain, document: &DeploymentDocument) -> app::Result<Vec<u8>> {
-    if document.domain != *domain {
-        return Err(app::Error::DeploymentUnreachable(t!(
-            "federationDocumentOtherDomain",
-            domain = document.domain.as_str()
-        )));
-    }
-    // Called as a slice method: diesel's query traits in scope also have a `first`.
-    let key = <[DocumentKey]>::first(&document.keys)
-        .and_then(|key| URL_SAFE_NO_PAD.decode(&key.public_key).ok())
-        .filter(|key| key.len() == 32)
-        .ok_or_else(|| app::Error::DeploymentUnreachable(t!("federationDocumentInvalid")))?;
-    Ok(key)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -970,6 +665,7 @@ mod tests {
             emigration,
             immigration,
             shared_list,
+            immigration_invite_required: false,
         }
     }
 
@@ -1016,42 +712,5 @@ mod tests {
             &[L::UsersImmigrationAllow]
         ));
         assert!(FederationList::all_in_force(&open).is_empty());
-    }
-
-    #[test]
-    fn a_document_must_name_its_own_domain_and_an_ed25519_key() {
-        let domain = Domain::parse("b.example").unwrap();
-        let document = |named: &str, key: &str| DeploymentDocument {
-            domain: Domain::parse(named).unwrap(),
-            keys: vec![DocumentKey {
-                id: FederationKeyId::new(),
-                algorithm: KeyAlgorithm::Ed25519,
-                public_key: key.to_string(),
-                created_at: Utc::now(),
-            }],
-            users: Gates {
-                emigration: Gate::Open,
-                immigration: Gate::Open,
-            },
-            bots: Gates {
-                emigration: Gate::Closed,
-                immigration: Gate::Closed,
-            },
-        };
-        let key = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        assert_eq!(
-            presented_key(&domain, &document("b.example", &key)).unwrap(),
-            vec![7u8; 32]
-        );
-        assert!(presented_key(&domain, &document("c.example", &key)).is_err());
-        let short = URL_SAFE_NO_PAD.encode([7u8; 31]);
-        assert!(presented_key(&domain, &document("b.example", &short)).is_err());
-    }
-
-    #[test]
-    fn fingerprints_look_like_ssh_ones() {
-        let print = fingerprint(&[0u8; 32]);
-        assert!(print.starts_with("SHA256:"));
-        assert_eq!(print.len(), "SHA256:".len() + 43);
     }
 }

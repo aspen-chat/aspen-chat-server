@@ -14,6 +14,7 @@ diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2",
 directories-next = "2.0.0"
 futures-util = "0.3.31"
 rcgen = "0.14.7"
+ring = "0.17.14"
 rustls = "0.23.26"
 rustls-pemfile = "2.2.0"
 serde = { version = "1.0.219", features = ["derive"] }

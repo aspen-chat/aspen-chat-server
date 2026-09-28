@@ -67,6 +67,10 @@ pub enum Error {
         #[from]
         Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::delete_object::DeleteObjectError>>,
     ),
+    #[error("error reading object from media store {0}")]
+    S3GetObject(
+        #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>,
+    ),
     #[error("error inspecting object in media store {0}")]
     S3HeadObject(
         #[from]
@@ -109,6 +113,16 @@ pub enum Error {
     /// reason is localized for the administrator who asked.
     #[error("another deployment could not be reached: {0}")]
     DeploymentUnreachable(Cow<'static, str>),
+    /// Federation refuses the crossing; the reason is localized for the person refused.
+    #[error("federation refused: {0}")]
+    FederationRefused(Cow<'static, str>),
+    /// An assertion from another deployment is malformed, forged, expired, used, or not for
+    /// this deployment; the server's log says which.
+    #[error("the assertion is not valid")]
+    AssertionInvalid,
+    /// This deployment requires two factors, and the sign-in at home proved only a password.
+    #[error("a sign-in stronger than a password is required")]
+    StrongerSignInRequired,
     #[error("the server's event feed has stopped")]
     EventFeedStopped,
     #[error("tokio join error {0}")]

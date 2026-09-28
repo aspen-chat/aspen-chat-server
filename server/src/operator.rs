@@ -308,12 +308,20 @@ pub enum FederationCommand {
         domain: crate::app::federation::Domain,
         list: crate::app::federation::FederationList,
     },
-    /// Replace this deployment's key. Every deployment that pinned the old one refuses the new
-    /// one until its administrators accept it, so this is for a key that has leaked.
+    /// Replace this deployment's key, as planned or because it may have leaked.
     RotateKey {
-        /// Confirms the replacement.
+        /// The old key signs a handover to the new one, which the deployments that pinned it
+        /// accept on their own.
+        #[clap(
+            long,
+            conflicts_with = "compromised",
+            required_unless_present = "compromised"
+        )]
+        planned: bool,
+        /// The old key may be in someone else's hands and vouches for nothing: every deployment
+        /// that pinned it refuses the new one until its administrators accept it.
         #[clap(long)]
-        yes: bool,
+        compromised: bool,
     },
 }
 
@@ -331,9 +339,12 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
     use diesel_async::RunQueryDsl;
     let mut conn = database(config).await?;
     let find = |username: String| {
-        user::table
-            .select(user::id)
-            .filter(user::name.eq(username).and(user::deleted_at.is_null()))
+        user::table.select(user::id).filter(
+            user::name
+                .eq(username)
+                .and(user::home_domain.is_null())
+                .and(user::deleted_at.is_null()),
+        )
     };
     match command {
         AdminCommand::Grant { username } => {
@@ -420,6 +431,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                     community_user::community
                         .eq(id)
                         .and(user::name.eq(&username))
+                        .and(user::home_domain.is_null())
                         .and(user::deleted_at.is_null()),
                 )
                 .first(&mut conn)
@@ -576,16 +588,19 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                          domain: &federation::Domain|
            -> Result<()> {
         let client = federation::fetch::client(&config.federation).map_err(fail)?;
-        let key = federation::fetch_key(&config.federation, &client, domain)
+        let document = federation::fetch_document(&config.federation, &client, domain)
             .await
             .map_err(fail)?;
-        let (listed, outcome) = federation::record_contact(conn, domain, key)
+        let (listed, outcome) = federation::record_contact(conn, domain, &document)
             .await
             .map_err(fail)?;
         tracing::info!(%domain, ?outcome, operator = operator(), "contacted a deployment");
         match outcome {
             ContactOutcome::Pinned => println!("pinned {domain}'s key"),
             ContactOutcome::Confirmed => println!("{domain} presented its pinned key"),
+            ContactOutcome::HandedOver => {
+                println!("{domain} handed over to a new key, which is now pinned")
+            }
             ContactOutcome::KeyChanged => {
                 println!("{domain} presented a different key, which is refused until accepted")
             }
@@ -703,18 +718,27 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 &federation::get(&mut conn, &domain).await.map_err(fail)?,
             );
         }
-        FederationCommand::RotateKey { yes } => {
-            if !yes {
-                bail!(
-                    "every deployment that pinned this deployment's key will refuse the new one \
-                     until its administrators accept it; pass --yes to replace it"
-                );
-            }
-            let key = federation::rotate_key(&mut conn).await.map_err(fail)?;
+        FederationCommand::RotateKey { planned, .. } => {
+            let rotation = if planned {
+                federation::Rotation::Planned
+            } else {
+                federation::Rotation::Compromised
+            };
+            let domain = federation::own_domain(&config.federation);
+            let key = federation::rotate_key(&mut conn, domain.as_ref(), rotation)
+                .await
+                .map_err(fail)?;
             tracing::warn!(
+                ?rotation,
                 operator = operator(),
                 "replaced this deployment's federation key"
             );
+            if rotation == federation::Rotation::Compromised {
+                eprintln!(
+                    "every deployment that pinned the old key will refuse this one until its \
+                     administrators accept it; tell them its fingerprint"
+                );
+            }
             println!("new key: {}", federation::fingerprint(&key.public_key));
         }
     }

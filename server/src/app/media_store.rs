@@ -166,6 +166,28 @@ impl MediaStore {
         }
     }
 
+    /// Reads the object at `key` and its content type, as the server serves a copy of it
+    /// itself (`app::federation::abroad`).
+    pub async fn get_bytes(&self, key: &str) -> app::error::Result<(Vec<u8>, Option<String>)> {
+        let object = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(Box::new)?;
+        let content_type = object.content_type().map(str::to_string);
+        let bytes = object
+            .body
+            .collect()
+            .await
+            .map_err(std::io::Error::other)?
+            .into_bytes()
+            .to_vec();
+        Ok((bytes, content_type))
+    }
+
     pub async fn delete(&self, key: &str) -> app::error::Result<()> {
         self.client
             .delete_object()

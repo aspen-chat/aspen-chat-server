@@ -59,9 +59,14 @@ pub struct Caller {
     /// When the sign-in last proved who its user is.
     pub verified_at: DateTime<Utc>,
     pub has_second_factor: bool,
-    /// Whether the caller is a bot, signed in with its token (`app::bot`). A bot has no
-    /// password or second factor, and changes no security settings.
+    /// Whether the caller is a bot (`app::bot`). A bot has no password or second factor, and
+    /// changes no security settings.
     pub bot: bool,
+    /// How the sign-in proved who its user is.
+    pub method: app::login::SignInMethod,
+    /// Whether the caller is a user of another deployment, whose sign-in and its security are
+    /// their home's (`app::federation::abroad`).
+    pub foreign: bool,
 }
 
 impl Caller {
@@ -75,6 +80,8 @@ impl Caller {
     pub fn ensure_person(&self) -> app::Result<()> {
         if self.bot {
             Err(app::Error::Forbidden(t!("botNoSignInSecurity")))
+        } else if self.foreign {
+            Err(app::Error::Forbidden(t!("foreignNoSignInSecurity")))
         } else {
             Ok(())
         }
@@ -92,7 +99,7 @@ impl Caller {
     /// Whether the server requires a second factor this account does not have yet. Such a
     /// session may only add one, or sign out.
     pub fn enrollment_required(&self, config: &AuthConfig) -> bool {
-        config.require_two_factor && !self.bot && !self.has_second_factor
+        config.require_two_factor && !self.bot && !self.foreign && !self.has_second_factor
     }
 }
 

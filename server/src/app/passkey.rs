@@ -551,7 +551,8 @@ async fn resolve(state: &GlobalServerContext, outcome: Outcome) -> app::Result<C
                 .ok_or(app::Error::InvalidTicket)?,
             None => {
                 let mut conn = state.connection_pool.get().await?;
-                login::issue_session(state, &mut conn, user, true).await?
+                login::issue_session(state, &mut conn, user, login::SignInMethod::Passkey, false)
+                    .await?
             }
         }),
         Outcome::PasskeyAdded {

@@ -192,6 +192,7 @@ diesel::table! {
         public_key -> Bytea,
         created_at -> Timestamptz,
         retired_at -> Nullable<Timestamptz>,
+        handover -> Nullable<Text>,
     }
 }
 
@@ -380,6 +381,7 @@ diesel::table! {
         expires -> Timestamp,
         user -> Uuid,
         verified_at -> Timestamptz,
+        method -> Text,
     }
 }
 
@@ -433,6 +435,9 @@ diesel::table! {
         bot -> Bool,
         bot_owner -> Nullable<Uuid>,
         bot_public -> Bool,
+        home_domain -> Nullable<Text>,
+        home_id -> Nullable<Uuid>,
+        home_icon -> Nullable<Uuid>,
     }
 }
 
@@ -448,6 +453,15 @@ diesel::table! {
     user_deployment_role (user, role) {
         user -> Uuid,
         role -> Uuid,
+    }
+}
+
+diesel::table! {
+    user_foreign_deployment (user, domain) {
+        user -> Uuid,
+        domain -> Text,
+        first_used_at -> Timestamptz,
+        last_used_at -> Timestamptz,
     }
 }
 
@@ -560,6 +574,7 @@ diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
 diesel::joinable!(user_deployment_role -> deployment_role (role));
 diesel::joinable!(user_deployment_role -> user (user));
+diesel::joinable!(user_foreign_deployment -> user (user));
 diesel::joinable!(user_preferences -> user (user));
 diesel::joinable!(voice_participant -> user (user));
 diesel::joinable!(voice_participant -> voice_session (session));
@@ -611,6 +626,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user,
     user_block,
     user_deployment_role,
+    user_foreign_deployment,
     user_preferences,
     voice_participant,
     voice_server,

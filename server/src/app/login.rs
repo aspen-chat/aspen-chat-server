@@ -23,6 +23,44 @@ const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
 pub const PASSWORD_MIN_LENGTH: usize = 8;
 
+/// How a sign-in proved who its user is. A foreign user's sign-in records what their home
+/// deployment said of theirs (`app::federation::abroad`).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+    diesel::FromSqlRow,
+    diesel::AsExpression,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = diesel::sql_types::Text)]
+pub enum SignInMethod {
+    /// A password alone.
+    Password,
+    /// A password and a second factor.
+    SecondFactor,
+    /// A passkey, which proves possession and the person's presence on its own.
+    Passkey,
+    /// A bot's token.
+    Token,
+}
+
+app::wire_name_traits!(SignInMethod);
+app::text_sql_traits!(SignInMethod);
+
+impl SignInMethod {
+    /// Whether it proved more than a password does, as a deployment that requires two factors
+    /// asks of everyone.
+    pub fn strong(self) -> bool {
+        matches!(self, Self::SecondFactor | Self::Passkey)
+    }
+}
+
 /// Credentials issued by a completed sign-in.
 pub struct Session {
     pub user_id: UserId,
@@ -163,6 +201,7 @@ pub async fn try_login(
     let user_entry: Option<UserPg> = user
         .select(UserPg::as_select())
         .filter(name.eq(username))
+        .filter(home_domain.is_null())
         .filter(deleted_at.is_null())
         .first(conn)
         .await
@@ -188,16 +227,19 @@ pub async fn try_login(
         return Ok(LoginOutcome::SecondFactorRequired { ticket, methods });
     }
     Ok(LoginOutcome::SignedIn(
-        issue_session(state, conn, u.id, false).await?,
+        issue_session(state, conn, u.id, SignInMethod::Password, false).await?,
     ))
 }
 
-/// Starts a sign-in for `user_id`: a refresh token, verified now, and its first session token.
+/// Starts a sign-in for `user_id`, made by `method`: a refresh token, verified now, and its first
+/// session token. A `foreign` user's sign-in abroad owes this deployment no second factor: it
+/// was admitted only if it proved enough at home.
 pub async fn issue_session(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    has_second_factor: bool,
+    method: SignInMethod,
+    foreign: bool,
 ) -> app::Result<Session> {
     use crate::database::schema::{refresh_token, session};
     let session_token = make_token();
@@ -213,6 +255,7 @@ pub async fn issue_session(
                     refresh_token::dsl::user.eq(user_id),
                     refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
                     refresh_token::dsl::verified_at.eq(now),
+                    refresh_token::dsl::method.eq(method),
                 ))
                 .execute(conn)
                 .await?;
@@ -234,7 +277,9 @@ pub async fn issue_session(
         refresh_token,
         session_token,
         session_token_expires,
-        enrollment_required: state.config.auth.require_two_factor && !has_second_factor,
+        enrollment_required: state.config.auth.require_two_factor
+            && method == SignInMethod::Password
+            && !foreign,
     })
 }
 
@@ -296,7 +341,14 @@ pub async fn finish_ticket(
     }
     let mut conn = state.connection_pool.get().await?;
     Ok(Some(
-        issue_session(state, &mut conn, waiting.user, true).await?,
+        issue_session(
+            state,
+            &mut conn,
+            waiting.user,
+            SignInMethod::SecondFactor,
+            false,
+        )
+        .await?,
     ))
 }
 
