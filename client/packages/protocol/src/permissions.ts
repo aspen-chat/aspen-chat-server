@@ -54,6 +54,14 @@ const CHANNEL_SET: ReadonlySet<Permission> = new Set(CHANNEL_PERMISSIONS);
 
 /** The rank of a community's owner, above every role's position. */
 export const OWNER_RANK = 2147483647;
+/** A deployment moderator's rank in every community: above every role, below the owner. */
+export const MODERATOR_RANK = OWNER_RANK - 1;
+
+/**
+ * What Moderate any community gives in every community, as the server's `MODERATION`: seeing
+ * everything, and taking things away (messages, attachments, reactions, write-ins, members).
+ */
+export const MODERATION: readonly Permission[] = ["viewChannel", "manageMessages", "removeMembers"];
 
 /** A set of permissions. */
 export type PermissionSet = ReadonlySet<Permission>;
@@ -76,25 +84,41 @@ export const TEMPLATES = {
 /** An override as the resolver reads it: a role, and what it allows and denies. */
 export type OverrideGrant = Pick<ChannelOverride | CategoryOverride, "role" | "allow" | "deny">;
 
-/** What one member may do across one community. */
+/** What one member, or a deployment moderator, may do across one community. */
 export class CommunityPermissions {
   readonly owner: boolean;
+  /** Whether they hold Moderate any community, which reaches every community. */
+  readonly moderator: boolean;
   /** Every role they hold, everyone's included. */
   readonly roles: readonly Role[];
   readonly held: PermissionSet;
+  /** What their roles alone allow. */
+  readonly memberHeld: PermissionSet;
 
-  constructor(owner: boolean, roles: readonly Role[]) {
+  constructor(owner: boolean, roles: readonly Role[], moderator = false) {
     this.owner = owner;
+    this.moderator = moderator;
     this.roles = roles;
-    this.held = new Set(owner ? ALL_PERMISSIONS : roles.flatMap((r) => r.permissions));
+    this.memberHeld = new Set(owner ? ALL_PERMISSIONS : roles.flatMap((r) => r.permissions));
+    this.held = moderator ? new Set([...this.memberHeld, ...MODERATION]) : this.memberHeld;
+  }
+
+  /** Whether doing what `permission` allows would be moderation, allowed by nothing else. */
+  moderating(permission: Permission): boolean {
+    return this.moderator && !this.memberHeld.has(permission);
   }
 
   has(permission: Permission): boolean {
     return this.held.has(permission);
   }
 
-  /** Their highest role's position, or `OWNER_RANK` for the owner. */
+  /** Their highest role's position, `MODERATOR_RANK` for a moderator, `OWNER_RANK` for the owner. */
   get rank(): number {
+    return this.moderator && !this.owner ? MODERATOR_RANK : this.roleRank;
+  }
+
+  /** Their rank from the community alone, which is what others act on them by. */
+  get roleRank(): number {
     return this.owner ? OWNER_RANK : Math.max(0, ...this.roles.map((r) => r.position));
   }
 
@@ -126,6 +150,10 @@ export class CommunityPermissions {
         others.flatMap((o) => o.deny),
       );
     }
+    // No override hides a channel from a moderator.
+    if (this.moderator) {
+      permissions.add("viewChannel");
+    }
     return permissions;
   }
 }
@@ -154,13 +182,16 @@ function applyOverride(
  */
 export function resolveCommunity(
   roles: readonly Role[],
-  holds: readonly string[],
+  holds: readonly string[] | null,
   owner: boolean,
+  moderator = false,
 ): CommunityPermissions {
-  const held = new Set(holds);
+  // `null` holds says they are not a member, so not even everyone's role is theirs.
+  const held = holds === null ? null : new Set(holds);
   return new CommunityPermissions(
     owner,
-    roles.filter((r) => r.everyone || held.has(r.id)),
+    held === null ? [] : roles.filter((r) => r.everyone || held.has(r.id)),
+    moderator,
   );
 }
 
@@ -173,6 +204,7 @@ export const DM_PERMISSIONS: PermissionSet = new Set<Permission>([
 /** Why a member may or may not do something in a channel, as `explain` finds it. */
 export type AccessReason =
   | { readonly kind: "owner" }
+  | { readonly kind: "moderator" }
   | { readonly kind: "roles"; readonly roles: readonly string[] }
   | { readonly kind: "none" }
   | {
@@ -205,8 +237,12 @@ export function explain(
     granting.length > 0
       ? { allowed: true, reason: { kind: "roles", roles: granting } }
       : { allowed: false, reason: { kind: "none" } };
+  const moderated = (d: AccessDecision): AccessDecision =>
+    !d.allowed && access.moderator && MODERATION.includes(permission)
+      ? { allowed: true, reason: { kind: "moderator" } }
+      : d;
   if (!CHANNEL_SET.has(permission)) {
-    return decision;
+    return moderated(decision);
   }
   const everyone = access.roles.find((r) => r.everyone)?.id;
   const mine = new Set(access.roles.map((r) => r.id));
@@ -236,5 +272,5 @@ export function explain(
       decision = decide(allowing, true);
     }
   }
-  return decision;
+  return moderated(decision);
 }

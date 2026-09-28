@@ -1,5 +1,6 @@
 import {
   ApiProblemError,
+  type Channel,
   type AdminCommunityEntry,
   type AdminListQuery,
   type AdminUserEntry,
@@ -10,11 +11,18 @@ import {
   CaretDownIcon,
   CaretUpDownIcon,
   CaretUpIcon,
+  CheckIcon,
   MagnifyingGlassIcon,
+  PencilSimpleIcon,
 } from "@phosphor-icons/react";
+import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Button,
+  CheckboxButton,
+  CheckboxField,
+  Dialog,
+  DialogTrigger,
   Input,
   Label,
   ListBox,
@@ -24,7 +32,10 @@ import {
   Select,
   SelectValue,
 } from "react-aria-components";
-import { useSync } from "@/api/hooks";
+import { useDeploymentCan, useMe, useSync } from "@/api/hooks";
+import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoles";
+import { useDmTitle } from "@/features/dms/useDmTitle";
+import { markClass } from "@/features/layout/choices";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table, type Heading } from "@/features/admin/FleetHealth";
 import { count, day } from "@/features/admin/format";
@@ -50,10 +61,16 @@ interface Column<T, S extends string> {
   cell: (item: T) => ReactNode;
 }
 
-/** The deployment's users, searched by username or display name and sortable. */
-export function UserDirectory() {
+/**
+ * The deployment's users, searched by username or display name and sortable, with the
+ * deployment roles each holds. Those who may manage deployment roles change them here, and
+ * moderators open someone's DMs.
+ */
+export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
   const sync = useSync();
+  const manage = useDeploymentCan("manageDeploymentRoles");
+  const moderator = useDeploymentCan("moderateCommunities");
   const load = useCallback((query: AdminListQuery<UserSort>) => sync.adminUsers(query), [sync]);
   return (
     <Directory<AdminUserEntry, UserSort>
@@ -72,11 +89,6 @@ export function UserDirectory() {
               <span className="min-w-0">
                 <span className="flex items-center gap-1.5">
                   <span className="truncate font-medium">{user.displayName ?? user.name}</span>
-                  {user.admin && (
-                    <span className="rounded bg-accent-soft px-1.5 text-xs text-accent-strong">
-                      {m.admin.adminBadge}
-                    </span>
-                  )}
                 </span>
                 <span className="block truncate text-xs text-ink-muted">{user.name}</span>
               </span>
@@ -92,15 +104,175 @@ export function UserDirectory() {
           heading: m.admin.invite,
           cell: (user) => <code className="font-mono text-xs">{user.registeredWith ?? ""}</code>,
         },
+        {
+          heading: m.admin.rolesColumn,
+          cell: (user) => <UserRoles user={user} roles={roles} manage={manage} />,
+        },
+        ...(moderator
+          ? [
+              {
+                heading: m.admin.actions,
+                cell: (user: AdminUserEntry) => <UserDms user={user} />,
+              },
+            ]
+          : []),
       ]}
     />
   );
 }
 
-/** The deployment's communities, searched by name and sortable. */
+/**
+ * The deployment roles someone holds, and, for those who may manage deployment roles, a picker
+ * of the roles below the caller's highest to give or take.
+ */
+function UserRoles({
+  user,
+  roles,
+  manage,
+}: {
+  user: AdminUserEntry;
+  roles: DeploymentRoles | undefined;
+  manage: boolean;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const [held, setHeld] = useState<readonly string[]>(user.roles);
+  const [error, setError] = useState<string | null>(null);
+  const all = roles?.roles ?? [];
+  const rank = roles === undefined ? 0 : rankOf(roles);
+  const theirRank = Math.max(0, ...all.filter((r) => held.includes(r.id)).map((r) => r.position));
+  const me = useMe();
+  // Anyone may change their own roles below their highest; others must rank below them.
+  const mayChange = manage && (me?.id === user.id || theirRank < rank);
+  const name = user.displayName ?? user.name;
+  const label = format(m.admin.deploymentRoleOf, { name });
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {all
+        .filter((r) => held.includes(r.id))
+        .reverse()
+        .map((r) => (
+          <span key={r.id} className="rounded-full border border-line px-2 py-0.5 text-xs">
+            {r.name}
+          </span>
+        ))}
+      {mayChange && (
+        <DialogTrigger>
+          <Button aria-label={label} className={secondaryButtonClass + " py-0.5 text-xs"}>
+            <PencilSimpleIcon size={12} aria-hidden="true" />
+          </Button>
+          <Popover
+            placement="bottom end"
+            className="w-64 rounded-md border border-line bg-surface-raised p-2 shadow-lg"
+          >
+            <Dialog aria-label={label} className="flex flex-col gap-1 outline-none">
+              {[...all].reverse().map((role) => (
+                <CheckboxField
+                  key={role.id}
+                  isSelected={held.includes(role.id)}
+                  isDisabled={role.position >= rank}
+                  onChange={(selected) => {
+                    setError(null);
+                    sync.setUserDeploymentRole(user.id, role.id, selected).then(
+                      () => {
+                        setHeld((now) =>
+                          selected ? [...now, role.id] : now.filter((id) => id !== role.id),
+                        );
+                      },
+                      (e: unknown) => {
+                        setError(e instanceof ApiProblemError ? e.message : String(e));
+                      },
+                    );
+                  }}
+                >
+                  <CheckboxButton className="group flex items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <span className={markClass + " mt-0"}>
+                      <CheckIcon
+                        size={12}
+                        weight="bold"
+                        aria-hidden="true"
+                        className="hidden group-selected:block"
+                      />
+                    </span>
+                    <span className="truncate">{role.name}</span>
+                  </CheckboxButton>
+                </CheckboxField>
+              ))}
+              {error !== null && (
+                <p role="alert" className="text-xs text-danger">
+                  {error}
+                </p>
+              )}
+            </Dialog>
+          </Popover>
+        </DialogTrigger>
+      )}
+    </span>
+  );
+}
+
+/** For a moderator: someone's DMs, each a link to read it, which the server logs. */
+function UserDms({ user }: { user: AdminUserEntry }) {
+  const m = useMessages();
+  const sync = useSync();
+  const [dms, setDms] = useState<readonly Channel[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const name = user.displayName ?? user.name;
+  return (
+    <DialogTrigger
+      onOpenChange={(open) => {
+        if (open) {
+          setError(null);
+          sync.userDms(user.id).then(setDms, (e: unknown) => {
+            setError(e instanceof ApiProblemError ? e.message : String(e));
+          });
+        }
+      }}
+    >
+      <Button className={secondaryButtonClass + " py-0.5 text-xs"}>{m.admin.userDms}</Button>
+      <Popover
+        placement="bottom end"
+        className="max-h-80 w-72 overflow-y-auto rounded-md border border-line bg-surface-raised p-2 shadow-lg"
+      >
+        <Dialog
+          aria-label={format(m.admin.userDmsHeading, { name })}
+          className="flex flex-col gap-1 outline-none"
+        >
+          <h3 className="px-1 text-sm font-semibold">{format(m.admin.userDmsHeading, { name })}</h3>
+          <p className="px-1 text-xs text-ink-muted">{m.admin.userDmsHint}</p>
+          {error !== null && <p className="px-1 text-xs text-danger">{error}</p>}
+          {dms !== null && dms.length === 0 && (
+            <p className="px-1 text-sm text-ink-muted">{m.admin.noDms}</p>
+          )}
+          {dms?.map((dm) => (
+            <DmLink key={dm.id} dm={dm} />
+          ))}
+        </Dialog>
+      </Popover>
+    </DialogTrigger>
+  );
+}
+
+function DmLink({ dm }: { dm: Channel }) {
+  const title = useDmTitle(dm);
+  return (
+    <Link
+      to="/dms/$channelId"
+      params={{ channelId: dm.id }}
+      className="truncate rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+    >
+      {title}
+    </Link>
+  );
+}
+
+/**
+ * The deployment's communities, searched by name and sortable. A moderator opens any of them.
+ */
 export function CommunityDirectory() {
   const m = useMessages();
   const sync = useSync();
+  const moderator = useDeploymentCan("moderateCommunities");
   const load = useCallback(
     (query: AdminListQuery<CommunitySort>) => sync.adminCommunities(query),
     [sync],
@@ -134,6 +306,23 @@ export function CommunityDirectory() {
           sort: { ascending: "createdAt", descending: "-createdAt", first: "descending" },
           cell: (community) => day(community.createdAt),
         },
+        ...(moderator
+          ? [
+              {
+                heading: m.admin.actions,
+                cell: (community: AdminCommunityEntry) => (
+                  <Link
+                    to="/communities/$communityId"
+                    params={{ communityId: community.id }}
+                    aria-label={format(m.admin.openCommunityLabel, { community: community.name })}
+                    className={secondaryButtonClass + " inline-block py-0.5 text-xs"}
+                  >
+                    {m.admin.openCommunity}
+                  </Link>
+                ),
+              },
+            ]
+          : []),
       ]}
     />
   );

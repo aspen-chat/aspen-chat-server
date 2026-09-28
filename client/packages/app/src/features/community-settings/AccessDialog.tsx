@@ -481,6 +481,8 @@ function CheckAccess({ target }: { target: AccessTarget }) {
     switch (reason.kind) {
       case "owner":
         return m.access.reasons.owner;
+      case "moderator":
+        return m.access.reasons.moderator;
       case "roles":
         return format(m.access.reasons.roles, { roles: reason.roles.map(roleName).join(", ") });
       case "none":

@@ -7,16 +7,18 @@ use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_ADMIN};
-use crate::app::{self, CommunityId, IconId, UserId, VoiceServerId};
+use crate::app::deployment::{DeploymentAccess, DeploymentPermission, DeploymentPermissions};
+use crate::app::{self, CommunityId, DeploymentRoleId, IconId, UserId, VoiceServerId};
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-/// A caller who may use the Administration Dashboard; anyone else is refused with
-/// `adminRequired`.
-pub struct AdminUser(pub SessionUser);
+/// A caller who holds some deployment permission, with what they may do; anyone else is
+/// refused with `adminRequired`. Each handler requires the permission it needs, refusing with
+/// `forbidden` without it.
+pub struct AdminUser(pub SessionUser, pub DeploymentAccess);
 
 impl FromRequestParts<GlobalServerContext> for AdminUser {
     type Rejection = ApiError;
@@ -29,23 +31,26 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
             parts, state,
         )
         .await?;
-        if app::admin::is_admin(state, session.user.id).await? {
-            Ok(AdminUser(session))
-        } else {
+        let access = app::deployment::access_of(state, session.user.id).await?;
+        if access.permissions == DeploymentPermissions::NONE {
             Err(ApiError::new(ProblemCode::AdminRequired))
+        } else {
+            Ok(AdminUser(session, access))
         }
     }
 }
 
-/// Whether the caller may open the Administration Dashboard.
+/// What the caller may do across the deployment.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminAccess {
-    pub admin: bool,
+    pub permissions: Vec<DeploymentPermission>,
+    /// The deployment roles they hold, lowest first.
+    pub roles: Vec<DeploymentRoleId>,
 }
 
-/// Whether the caller may open the Administration Dashboard, so a client knows whether to
-/// offer it. It says nothing about anyone else.
+/// What the caller may do across the deployment, so a client knows what to offer, such as the
+/// Administration Dashboard. It says nothing about anyone else.
 #[utoipa::path(
     get,
     path = "/users/@me/admin",
@@ -61,8 +66,10 @@ pub async fn get_admin_access(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
 ) -> ApiResult<Json<AdminAccess>> {
+    let (access, roles) = app::deployment::access_and_roles(&state, user.id).await?;
     Ok(Json(AdminAccess {
-        admin: app::admin::is_admin(&state, user.id).await?,
+        permissions: app::deployment::to_names(access.permissions),
+        roles,
     }))
 }
 
@@ -87,14 +94,15 @@ pub struct AdminOverview {
     responses(
         (status = OK, body = AdminOverview),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn get_overview(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<AdminOverview>> {
+    access.require(DeploymentPermission::ViewDashboard)?;
     let overview = app::admin::overview(&state).await?;
     Ok(Json(AdminOverview {
         users: overview.users,
@@ -187,7 +195,8 @@ pub struct AdminUserEntry {
     pub display_name: Option<String>,
     pub icon: Option<IconId>,
     pub created_at: DateTime<Utc>,
-    pub admin: bool,
+    /// The deployment roles they hold, lowest first.
+    pub roles: Vec<DeploymentRoleId>,
     /// The registration invite the account was made with, if one was.
     pub registered_with: Option<String>,
 }
@@ -203,15 +212,19 @@ pub struct AdminUserEntry {
         (status = OK, body = Vec<AdminUserEntry>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_users(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Query(query): Query<UserListQuery>,
 ) -> ApiResult<Json<Vec<AdminUserEntry>>> {
+    // Moderators browse the directories to find what to look at.
+    if !access.has(DeploymentPermission::ModerateCommunities) {
+        access.require(DeploymentPermission::ViewDashboard)?;
+    }
     use app::admin::{Sort, UserColumn};
     let sort = match query.sort {
         UserSort::Name => Sort {
@@ -239,16 +252,18 @@ pub async fn list_users(
         query.limit.unwrap_or(DEFAULT_PAGE),
     )
     .await?;
+    let mut roles =
+        app::deployment::roles_of(&state, &users.iter().map(|u| u.id).collect::<Vec<_>>()).await?;
     Ok(Json(
         users
             .into_iter()
             .map(|u| AdminUserEntry {
+                roles: roles.remove(&u.id).unwrap_or_default(),
                 id: u.id,
                 name: u.name,
                 display_name: u.display_name,
                 icon: u.icon,
                 created_at: u.created_at,
-                admin: u.admin,
                 registered_with: u.registered_with,
             })
             .collect(),
@@ -277,15 +292,19 @@ pub struct AdminCommunityEntry {
         (status = OK, body = Vec<AdminCommunityEntry>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_communities(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Query(query): Query<CommunityListQuery>,
 ) -> ApiResult<Json<Vec<AdminCommunityEntry>>> {
+    // Moderators browse the directories to find what to look at.
+    if !access.has(DeploymentPermission::ModerateCommunities) {
+        access.require(DeploymentPermission::ViewDashboard)?;
+    }
     use app::admin::{CommunityColumn, Sort};
     let sort = |column, descending| Sort { column, descending };
     let sort = match query.sort {
@@ -379,15 +398,16 @@ pub struct Growth {
         (status = OK, body = Growth),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn get_growth(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Query(query): Query<GrowthQuery>,
 ) -> ApiResult<Json<Growth>> {
+    access.require(DeploymentPermission::ViewDashboard)?;
     use app::admin::GrowthRange as Range;
     let range = match query.range {
         GrowthRange::ThreeMonths => Range::ThreeMonths,
@@ -470,14 +490,15 @@ pub struct RegistrationInviteRequest {
     responses(
         (status = OK, body = Vec<RegistrationInvite>),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_registration_invites(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<Vec<RegistrationInvite>>> {
+    access.require(DeploymentPermission::ManageRegistrationInvites)?;
     let mut conn = state
         .connection_pool
         .get()
@@ -497,15 +518,16 @@ pub async fn list_registration_invites(
         (status = CREATED, body = RegistrationInvite, headers(("Location" = String, description = "URL of the new invite"))),
         (status = BAD_REQUEST, description = "`validation`: uses, expiry, or note out of bounds", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn create_registration_invite(
     State(state): State<GlobalServerContext>,
-    AdminUser(session): AdminUser,
+    AdminUser(session, access): AdminUser,
     Json(request): Json<RegistrationInviteRequest>,
 ) -> ApiResult<Created<RegistrationInvite>> {
+    access.require(DeploymentPermission::ManageRegistrationInvites)?;
     let mut conn = state
         .connection_pool
         .get()
@@ -539,16 +561,17 @@ pub async fn create_registration_invite(
     responses(
         (status = NO_CONTENT, description = "Revoked"),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn revoke_registration_invite(
     State(state): State<GlobalServerContext>,
-    AdminUser(session): AdminUser,
+    AdminUser(session, access): AdminUser,
     Path(code): Path<String>,
 ) -> ApiResult<NoContent> {
+    access.require(DeploymentPermission::ManageRegistrationInvites)?;
     let mut conn = state
         .connection_pool
         .get()
@@ -609,14 +632,15 @@ pub struct Fleet {
     responses(
         (status = OK, body = Fleet),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn get_fleet(
     State(state): State<GlobalServerContext>,
-    _admin: AdminUser,
+    AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<Fleet>> {
+    access.require(DeploymentPermission::ViewDashboard)?;
     let (api_servers, voice_servers) = tokio::try_join!(
         app::fleet::read_api_servers(&state),
         app::fleet::read_voice_servers(&state),

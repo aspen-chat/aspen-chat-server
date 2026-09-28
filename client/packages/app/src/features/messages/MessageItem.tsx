@@ -271,6 +271,13 @@ export function MessageItem({
           attachmentIds={message.attachments}
           linkedImages={linkedImages}
           previewImages={previewImages}
+          {...(own || permissions.has("manageMessages")
+            ? {
+                onRemove: (attachmentId: string) => {
+                  void sync.removeAttachment(id, attachmentId).catch(() => undefined);
+                },
+              }
+            : {})}
         />
         {cards.map((preview) => (
           <LinkPreviewCard key={preview.url} preview={preview} />

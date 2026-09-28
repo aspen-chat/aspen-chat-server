@@ -1,8 +1,9 @@
 import type { Attachment } from "@aspen/protocol";
-import { PaperclipIcon } from "@phosphor-icons/react";
+import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useAttachments } from "@/api/hooks";
+import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
 import { isImageType, splitInline, type Picture } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
@@ -16,17 +17,21 @@ const imageClass =
  * images and as download chips otherwise, then links in the text that point straight at an
  * image, then links the server found to be images. Up to three pictures show inline; with
  * more, a button in their place opens the whole set in a gallery, and so does any picture.
+ * With `onRemove`, each attachment shown carries a control that takes it off the message.
  */
 export function MessageMedia({
   attachmentIds,
   linkedImages,
   previewImages,
+  onRemove,
 }: {
   attachmentIds: readonly string[];
   /** Links in the text that point straight at an image, from `imageUrls`. */
   linkedImages: readonly string[];
   /** Pictures the server found behind links, as `{ src, name }` with the link as the name. */
   previewImages: readonly Picture[];
+  /** Takes an attachment off the message, for its author and those who manage messages. */
+  onRemove?: (attachmentId: string) => void;
 }) {
   const m = useMessages();
   const attachments = useAttachments(attachmentIds);
@@ -41,7 +46,11 @@ export function MessageMedia({
     if (attachment === undefined) {
       unavailable.push(attachmentIds[i] ?? "");
     } else if (isImageType(attachment.mimeType)) {
-      pictures.push({ src: attachment.downloadUrl, name: attachment.fileName });
+      pictures.push({
+        src: attachment.downloadUrl,
+        name: attachment.fileName,
+        attachmentId: attachment.id,
+      });
     } else {
       files.push(attachment);
     }
@@ -59,18 +68,42 @@ export function MessageMedia({
         </li>
       ))}
       {files.map((attachment) => (
-        <li key={attachment.id} data-attachment-id={attachment.id}>
+        <li
+          key={attachment.id}
+          data-attachment-id={attachment.id}
+          className="flex items-center gap-1"
+        >
           <FileChip attachment={attachment} />
+          {onRemove !== undefined && (
+            <RemoveButton
+              name={attachment.fileName}
+              onPress={() => {
+                onRemove(attachment.id);
+              }}
+            />
+          )}
         </li>
       ))}
       {shown.map((picture, i) => (
-        <li key={picture.src + String(i)}>
+        <li key={picture.src + String(i)} className="relative">
           <InlineImage
             picture={picture}
             onOpen={() => {
               setGallery(i);
             }}
           />
+          {onRemove !== undefined && picture.attachmentId !== undefined && (
+            <span className="absolute top-1 right-1">
+              <RemoveButton
+                name={picture.name}
+                onPress={() => {
+                  if (picture.attachmentId !== undefined) {
+                    onRemove(picture.attachmentId);
+                  }
+                }}
+              />
+            </span>
+          )}
         </li>
       ))}
       {hidden > 0 && (
@@ -130,5 +163,22 @@ function FileChip({ attachment }: { attachment: Attachment }) {
       <PaperclipIcon size={16} aria-hidden="true" />
       <span>{attachment.fileName}</span>
     </a>
+  );
+}
+
+/** The control that takes one attachment off a message. */
+function RemoveButton({ name, onPress }: { name: string; onPress: () => void }) {
+  const m = useMessages();
+  const label = format(m.removeSentAttachment, { name });
+  return (
+    <Tooltip text={label}>
+      <Button
+        aria-label={label}
+        onPress={onPress}
+        className="tap-target rounded-full border border-line bg-surface-raised p-1 text-ink-muted shadow-sm outline-none hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <XIcon size={12} aria-hidden="true" />
+      </Button>
+    </Tooltip>
   );
 }

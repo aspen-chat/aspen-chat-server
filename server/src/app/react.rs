@@ -79,6 +79,43 @@ pub async fn create_react(
     Ok(react)
 }
 
+/// Takes someone else's reaction off a message, which takes Manage messages where the message
+/// is (or moderating the deployment, which is logged).
+pub async fn remove_others_react(
+    state: &GlobalServerContext,
+    caller: UserId,
+    message_id: MessageId,
+    emoji: String,
+    author: UserId,
+) -> app::error::Result<()> {
+    if author != caller {
+        let mut conn = state.connection_pool.get().await?;
+        let channel: crate::app::ChannelId = crate::database::schema::message::table
+            .select(crate::database::schema::message::channel)
+            .filter(crate::database::schema::message::id.eq(message_id))
+            .first(conn.as_mut())
+            .await?;
+        let access =
+            crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
+        let manage = crate::app::permissions::Permissions::MANAGE_MESSAGES;
+        if !access.community_has(manage) {
+            return Err(crate::app::permissions::missing(manage));
+        }
+        if access.moderating(manage) {
+            crate::app::message::note_moderation(
+                conn.as_mut(),
+                caller,
+                &access,
+                crate::app::deployment::ModerationAction::RemoveReaction,
+                Some(format!("{}/{emoji}/{}", message_id.0, author.0)),
+            )
+            .await?;
+        }
+    }
+    delete_react(state, author, message_id, emoji).await
+}
+
+/// Takes `author`'s reaction off a message.
 pub async fn delete_react(
     state: &GlobalServerContext,
     author: UserId,

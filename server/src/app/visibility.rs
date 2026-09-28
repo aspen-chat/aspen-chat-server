@@ -410,6 +410,8 @@ pub async fn member_roles(
 /// several kinds of thing in them.
 pub struct Visibility {
     user: UserId,
+    /// Whether the user moderates the deployment, and so views every channel.
+    moderator: bool,
     models: HashMap<CommunityId, CommunityModel>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
     /// Each listed channel's community.
@@ -425,12 +427,14 @@ impl Visibility {
         let mut conn = state.connection_pool.get().await?;
         let models = CommunityModel::load(conn.as_mut(), communities).await?;
         let roles = member_roles(conn.as_mut(), user, communities).await?;
+        let moderator = app::deployment::is_moderator(conn.as_mut(), user).await?;
         let communities = models
             .iter()
             .flat_map(|(community, model)| model.categories.keys().map(|c| (*c, *community)))
             .collect();
         Ok(Visibility {
             user,
+            moderator,
             models,
             roles,
             communities,
@@ -444,6 +448,9 @@ impl Visibility {
         let Some(community) = self.communities.get(&channel) else {
             return true;
         };
+        if self.moderator {
+            return true;
+        }
         let none = Vec::new();
         self.models.get(community).is_some_and(|model| {
             model.can_view(

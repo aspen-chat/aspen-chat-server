@@ -10,6 +10,7 @@ import type {
   CategoryOverride,
   ChannelOverride,
   CommunityPermissions,
+  DeploymentPermission,
   Permission,
   PermissionSet,
   Pin,
@@ -202,8 +203,19 @@ export function useReadState(channelId: string): ReadState | undefined {
 }
 
 /** Whether the caller may open the Administration Dashboard. */
+/** What the caller may do across the deployment. */
+export function useDeploymentPermissions(): ReadonlySet<DeploymentPermission> {
+  return useTopic("admin", (s) => s.deploymentPermissions());
+}
+
+/** Whether the caller may do something across the deployment. */
+export function useDeploymentCan(permission: DeploymentPermission): boolean {
+  return useDeploymentPermissions().has(permission);
+}
+
+/** Whether the caller holds any deployment permission, and so has the dashboard to open. */
 export function useIsAdmin(): boolean {
-  return useTopic("admin", (s) => s.admin());
+  return useDeploymentPermissions().size > 0;
 }
 
 /** Whether the caller has a category collapsed in their channel list. */

@@ -16,6 +16,7 @@ import {
   DM_PERMISSIONS,
   resolveCommunity,
   type CommunityPermissions,
+  type Permission,
   type PermissionSet,
 } from "./permissions";
 import type {
@@ -24,6 +25,7 @@ import type {
   Channel,
   ChannelOverride,
   Community,
+  DeploymentPermission,
   Invite,
   Message,
   Poll,
@@ -149,6 +151,7 @@ export const REACTION_SUMMARY_USERS = 4;
 
 const EMPTY_IDS: readonly string[] = [];
 const NO_PERMISSIONS: PermissionSet = new Set();
+const DM_MODERATION: PermissionSet = new Set<Permission>(["viewChannel", "manageMessages"]);
 const EMPTY_OVERRIDES: readonly never[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
@@ -230,7 +233,8 @@ export class RecordStore {
   readonly #pins = new Map<string, Map<string, Pin>>();
   /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
   readonly #memberRoles = new Map<string, readonly string[]>();
-  #admin = false;
+  /** What the caller may do across the deployment. */
+  #deployment: ReadonlySet<DeploymentPermission> = new Set();
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
@@ -383,10 +387,17 @@ export class RecordStore {
       }
       const holds = this.#memberRoles.get(`${communityId}/${user}`);
       const owner = community.owner === user;
-      if (holds === undefined && !owner) {
+      // Only the caller's moderation is known; anyone else is resolved as a member.
+      const moderator = user === this.#myUserId && this.moderator;
+      if (holds === undefined && !owner && !moderator) {
         return null;
       }
-      return resolveCommunity(this.roles(communityId), holds ?? [], owner);
+      return resolveCommunity(
+        this.roles(communityId),
+        holds ?? (owner ? [] : null),
+        owner,
+        moderator,
+      );
     };
     if (userId !== undefined && userId !== this.#myUserId) {
       return compute(userId);
@@ -424,7 +435,12 @@ export class RecordStore {
         return NO_PERMISSIONS;
       }
       if (channel.community == null) {
-        return DM_PERMISSIONS;
+        // A moderator reading a DM they are not in may only look, and take things away.
+        const parent =
+          channel.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+        const recipient =
+          this.#myUserId !== null && (parent?.recipients ?? []).includes(this.#myUserId);
+        return recipient || !this.moderator ? DM_PERMISSIONS : DM_MODERATION;
       }
       const access = this.access(channel.community);
       return access === null ? NO_PERMISSIONS : this.permissionsIn(channelId, access);
@@ -493,17 +509,32 @@ export class RecordStore {
     return this.#mutes.get(channelId);
   }
 
-  /** Topic `admin`: whether the caller may open the Administration Dashboard. */
-  admin(): boolean {
-    return this.#admin;
+  /** Topic `admin`: what the caller may do across the deployment. */
+  deploymentPermissions(): ReadonlySet<DeploymentPermission> {
+    return this.#deployment;
   }
 
-  /** Records whether the caller may open the Administration Dashboard, as the server says. */
-  setAdmin(admin: boolean): void {
+  /** Whether the caller moderates the deployment, and so reaches every community and DM. */
+  get moderator(): boolean {
+    return this.#deployment.has("moderateCommunities");
+  }
+
+  /**
+   * Records what the caller may do across the deployment, as the server says. Moderating it
+   * changes what they may do everywhere.
+   */
+  setDeploymentPermissions(permissions: readonly DeploymentPermission[]): void {
     this.#batch(() => {
-      if (this.#admin !== admin) {
-        this.#admin = admin;
-        this.#touch("admin");
+      const wasModerator = this.moderator;
+      this.#deployment = new Set(permissions);
+      this.#touch("admin");
+      if (wasModerator !== this.moderator) {
+        for (const id of this.#communities.keys()) {
+          this.#accessChanged(id);
+        }
+        for (const channel of this.#channels.values()) {
+          this.#touch(`channelAccess:${channel.id}`);
+        }
       }
     });
   }
@@ -1234,7 +1265,7 @@ export class RecordStore {
       this.#channelOverrides.clear();
       this.#categoryOverrides.clear();
       this.#memberRoles.clear();
-      this.#admin = false;
+      this.#deployment = new Set();
       this.#windows.clear();
       this.#invites.clear();
       this.#myCommunities.clear();
@@ -1452,6 +1483,9 @@ export class RecordStore {
           } else {
             this.#removeVoiceParticipant(event.session, event.user);
           }
+          break;
+        case "deploymentAccessChanged":
+          this.setDeploymentPermissions(event.permissions);
           break;
         case "categoryCollapseChanged":
           this.#setCollapsed(event.category, event.collapsed);
@@ -1798,7 +1832,7 @@ export class RecordStore {
     }
     // Until both the community's roles and the caller's own are known, nothing is decided.
     const known =
-      this.#memberRoles.has(`${communityId}/${this.#myUserId ?? ""}`) &&
+      (this.moderator || this.#memberRoles.has(`${communityId}/${this.#myUserId ?? ""}`)) &&
       this.roles(communityId).some((r) => r.everyone);
     if (known) {
       for (const channel of channels) {

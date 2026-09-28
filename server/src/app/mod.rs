@@ -19,6 +19,7 @@ pub mod category_collapse;
 pub mod channel;
 pub mod channel_mute;
 pub mod community;
+pub mod deployment;
 pub mod dm;
 mod error;
 pub mod event_feed;
@@ -128,6 +129,7 @@ id_type!(LinkPreviewImageId);
 
 id_type!(PasskeyId);
 id_type!(RoleId);
+id_type!(DeploymentRoleId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

@@ -4,6 +4,7 @@ use crate::api::message_enum::server_event::{MessageEvent, PinEvent, ServerEvent
 use crate::api::{ChannelType, GlobalServerContext, MessageKind, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
+use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
 use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::user::User;
@@ -220,7 +221,17 @@ pub async fn read_message(
         )
         .first(conn.as_mut())
         .await?;
-    channel_access(state, conn.as_mut(), caller, *msg.channel.id()).await?;
+    let access = channel_access(state, conn.as_mut(), caller, *msg.channel.id()).await?;
+    if access.dm_moderator {
+        note_moderation(
+            conn.as_mut(),
+            caller,
+            &access,
+            ModerationAction::ReadDm,
+            Some(id.0.to_string()),
+        )
+        .await?;
+    }
     let attachments: Vec<AttachmentId> = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.eq(id))
@@ -447,6 +458,16 @@ pub async fn delete_message(
     if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
         return Err(missing(Permissions::MANAGE_MESSAGES));
     }
+    if author != caller && access.moderating(Permissions::MANAGE_MESSAGES) {
+        note_moderation(
+            conn.as_mut(),
+            caller,
+            &access,
+            ModerationAction::DeleteMessage,
+            Some(id.0.to_string()),
+        )
+        .await?;
+    }
     conn.transaction(|conn| {
         async move {
             // Drop link-preview image objects from S3 first — the FK cascade
@@ -589,6 +610,94 @@ pub async fn set_pinned(
             )
             .await?;
             Ok((Some(row), true))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Writes a moderator's action in a channel to the moderation log, with the channel's community
+/// when it has one.
+pub async fn note_moderation(
+    conn: &mut AsyncPgConnection,
+    actor: UserId,
+    access: &crate::app::permissions::ChannelAccess,
+    action: ModerationAction,
+    subject: Option<String>,
+) -> app::Result<()> {
+    log_moderation(
+        conn,
+        actor,
+        action,
+        access.community.as_ref().map(|c| c.community),
+        Some(access.channel),
+        subject,
+    )
+    .await
+}
+
+/// Takes one attachment off a message, which its author may do and anyone with Manage messages
+/// (a deployment moderator's use is logged). The message's update names what is left.
+pub async fn remove_attachment(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: MessageId,
+    attachment_id: AttachmentId,
+) -> Result<(), app::Error> {
+    let mut conn = state.connection_pool.get().await?;
+    let (channel_id, author): (ChannelId, UserId) = message::table
+        .select((message::channel, message::author))
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
+    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
+        return Err(missing(Permissions::MANAGE_MESSAGES));
+    }
+    conn.transaction(|conn| {
+        async move {
+            let removed = diesel::delete(
+                message_attachment::table.filter(
+                    message_attachment::message_id
+                        .eq(id)
+                        .and(message_attachment::attachment_id.eq(attachment_id)),
+                ),
+            )
+            .execute(conn.as_mut())
+            .await?;
+            if removed == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            if author != caller && access.moderating(Permissions::MANAGE_MESSAGES) {
+                note_moderation(
+                    conn.as_mut(),
+                    caller,
+                    &access,
+                    ModerationAction::RemoveAttachment,
+                    Some(format!("{}/{}", id.0, attachment_id.0)),
+                )
+                .await?;
+            }
+            let attachments: Vec<AttachmentId> = message_attachment::table
+                .select(message_attachment::attachment_id)
+                .filter(message_attachment::message_id.eq(id))
+                .load(conn.as_mut())
+                .await?;
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Message(id),
+                &ServerEvent::Message(MessageEvent::Update {
+                    id,
+                    content: None,
+                    attachments: Some(attachments),
+                    edited_at: None,
+                    link_previews: None,
+                    thread: None,
+                }),
+            )
+            .await?;
+            Ok(())
         }
         .scope_boxed()
     })

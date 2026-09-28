@@ -4,6 +4,8 @@ import { linkify } from "@/features/messages/linkify";
 export interface Picture {
   src: string;
   name: string;
+  /** The attachment it is, when it is one rather than a link. */
+  attachmentId?: string;
 }
 
 /** How many of a message's pictures show inline; the rest are behind the gallery button. */

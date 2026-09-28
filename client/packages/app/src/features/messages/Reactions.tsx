@@ -4,7 +4,7 @@ import {
   type EmojiReactions,
   type Reactions,
 } from "@aspen/protocol";
-import { SmileyIcon, UsersIcon } from "@phosphor-icons/react";
+import { SmileyIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -19,7 +19,15 @@ import {
   Tabs,
   ToggleButton,
 } from "react-aria-components";
-import { useReactions, useSync, useUser, useUsers } from "@/api/hooks";
+import {
+  useChannelCan,
+  useMe,
+  useMessage,
+  useReactions,
+  useSync,
+  useUser,
+  useUsers,
+} from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import {
   dialogClass,
@@ -309,7 +317,15 @@ function ReactorList({ messageId, emoji }: { messageId: string; emoji: string })
     <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
       <ul aria-label={format(m.reactedWithLabel, { emoji })} className="flex flex-col gap-1">
         {ids.map((id) => (
-          <Reactor key={id} userId={id} />
+          <Reactor
+            key={id}
+            userId={id}
+            messageId={messageId}
+            emoji={emoji}
+            onRemoved={() => {
+              setIds((held) => held.filter((other) => other !== id));
+            }}
+          />
         ))}
       </ul>
       {loading && <p className="px-1 text-sm text-ink-muted">{m.loading}</p>}
@@ -327,14 +343,46 @@ function ReactorList({ messageId, emoji }: { messageId: string; emoji: string })
   );
 }
 
-function Reactor({ userId }: { userId: string }) {
+/**
+ * One person who reacted, with, for those who may manage messages where it is, a control that
+ * takes their reaction off.
+ */
+function Reactor({
+  userId,
+  messageId,
+  emoji,
+  onRemoved,
+}: {
+  userId: string;
+  messageId: string;
+  emoji: string;
+  onRemoved: () => void;
+}) {
   const m = useMessages();
+  const sync = useSync();
   const user = useUser(userId);
+  const me = useMe();
+  const channelId = useMessage(messageId)?.channelId ?? "";
+  const moderate = useChannelCan(channelId, "manageMessages") && me?.id !== userId;
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  const label = format(m.removeReactor, { name });
   return (
     <li className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">
       <Avatar name={name} iconId={user?.icon} size="sm" />
-      <span className="truncate">{name}</span>
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {moderate && (
+        <Tooltip text={label}>
+          <Button
+            aria-label={label}
+            onPress={() => {
+              sync.removeUsersReaction(messageId, emoji, userId).then(onRemoved, () => undefined);
+            }}
+            className="tap-target rounded p-1 text-ink-muted outline-none hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <XIcon size={14} aria-hidden="true" />
+          </Button>
+        </Tooltip>
+      )}
     </li>
   );
 }

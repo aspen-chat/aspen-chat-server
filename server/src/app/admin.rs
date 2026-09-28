@@ -2,16 +2,16 @@
 //! growth, and searchable, sortable lists of its users and communities. Registration invites are
 //! `app::registration_invite`, and fleet health `app::fleet`.
 //!
-//! Who is an administrator is decided only from the terminal (`aspen-chat-server admin`), and
-//! community roles never reach it, since a dashboard anyone could open would let anyone mint
-//! the invites an invite-only deployment is closed by.
+//! Who may read them is a deployment permission (`app::deployment`), which community roles
+//! never reach, since a dashboard anyone could open would let anyone mint the invites an
+//! invite-only deployment is closed by.
 
 use crate::api::GlobalServerContext;
 use crate::app::{self, CommunityId, IconId, UserId};
 use crate::database::schema::{community, user};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel::sql_types::{BigInt, Bool, Nullable, Text, Timestamptz, Uuid as PgUuid};
+use diesel::sql_types::{BigInt, Nullable, Text, Timestamptz, Uuid as PgUuid};
 use diesel_async::RunQueryDsl;
 
 /// The most rows one page of a list returns.
@@ -47,18 +47,6 @@ pub enum CommunityColumn {
 fn order_by(column: &str, descending: bool, id: &str) -> String {
     let direction = if descending { "DESC" } else { "ASC" };
     format!("{column} {direction}, {id} {direction}")
-}
-
-/// Whether `user` may open the Administration Dashboard.
-pub async fn is_admin(state: &GlobalServerContext, user: UserId) -> app::Result<bool> {
-    let mut conn = state.connection_pool.get().await?;
-    Ok(user::table
-        .select(user::admin)
-        .filter(user::id.eq(user).and(user::deleted_at.is_null()))
-        .first(conn.as_mut())
-        .await
-        .optional()?
-        .unwrap_or(false))
 }
 
 /// The deployment's totals.
@@ -125,8 +113,6 @@ pub struct UserEntry {
     pub icon: Option<IconId>,
     #[diesel(sql_type = Timestamptz)]
     pub created_at: DateTime<Utc>,
-    #[diesel(sql_type = Bool)]
-    pub admin: bool,
     /// The registration invite the account was made with, if one was.
     #[diesel(sql_type = Nullable<Text>)]
     pub registered_with: Option<String>,
@@ -148,7 +134,7 @@ pub async fn search_users(
     };
     Ok(diesel::sql_query(format!(
         r#"
-        SELECT id, name, display_name, icon, created_at, admin, registered_with
+        SELECT id, name, display_name, icon, created_at, registered_with
         FROM "user"
         WHERE deleted_at IS NULL
           AND ($1::text IS NULL OR lower(name) LIKE $1 OR lower(display_name) LIKE $1)

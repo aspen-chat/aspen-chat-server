@@ -726,11 +726,20 @@ pub async fn remove_write_in(
                 })?;
             // Its writer and the poll's creator may take a write-in down, and so may anyone
             // who may manage messages here.
-            if writer.flatten() != Some(user)
-                && row.created_by != user
-                && !access.community_has(Permissions::MANAGE_MESSAGES)
-            {
-                return Err(missing(Permissions::MANAGE_MESSAGES));
+            if writer.flatten() != Some(user) && row.created_by != user {
+                if !access.community_has(Permissions::MANAGE_MESSAGES) {
+                    return Err(missing(Permissions::MANAGE_MESSAGES));
+                }
+                if access.moderating(Permissions::MANAGE_MESSAGES) {
+                    app::message::note_moderation(
+                        conn.as_mut(),
+                        user,
+                        &access,
+                        app::deployment::ModerationAction::RemoveWriteIn,
+                        Some(format!("{}/{option}", id.0)),
+                    )
+                    .await?;
+                }
             }
             let removed = diesel::update(poll_option::table)
                 .filter(

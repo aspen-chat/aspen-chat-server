@@ -20,6 +20,7 @@ pub(crate) mod category_collapse;
 pub(crate) mod channel;
 pub(crate) mod channel_mute;
 pub(crate) mod community;
+pub(crate) mod deployment;
 pub(crate) mod dm;
 pub(crate) mod error;
 mod event_stream;
@@ -282,11 +283,13 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(message::open_thread))
         .routes(routes!(message::pin_message, message::unpin_message))
+        .routes(routes!(message::remove_attachment))
         .routes(routes!(dm::open_dm, dm::list_dms))
         .routes(routes!(dm::add_recipient))
         .routes(routes!(dm::leave_dm))
         .routes(routes!(react::add_reaction, react::remove_reaction))
         .routes(routes!(react::list_reactors))
+        .routes(routes!(react::remove_users_reaction))
         .routes(routes!(admin::get_admin_access))
         .routes(routes!(admin::get_overview))
         .routes(routes!(admin::list_users))
@@ -298,6 +301,21 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::revoke_registration_invite))
         .routes(routes!(admin::get_fleet))
         .routes(routes!(admin::get_growth))
+        .routes(routes!(
+            deployment::list_deployment_roles,
+            deployment::create_deployment_role
+        ))
+        .routes(routes!(
+            deployment::update_deployment_role,
+            deployment::delete_deployment_role
+        ))
+        .routes(routes!(deployment::reorder_deployment_roles))
+        .routes(routes!(
+            deployment::add_user_deployment_role,
+            deployment::remove_user_deployment_role
+        ))
+        .routes(routes!(deployment::read_moderation_log))
+        .routes(routes!(deployment::list_user_dms))
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))
         .routes(routes!(poll::add_vote, poll::remove_vote))

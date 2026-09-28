@@ -13,7 +13,8 @@ interface Case {
   name: string;
   roles: { id: string; position: number; permissions: Permission[]; everyone: boolean }[];
   owner: boolean;
-  holds: string[];
+  moderator: boolean;
+  holds: string[] | null;
   categoryOverrides: OverrideGrant[];
   channelOverrides: OverrideGrant[];
   community: Permission[];
@@ -38,7 +39,7 @@ describe("the shared permission vectors", () => {
   for (const c of vectors.cases) {
     it(c.name, () => {
       const roles: Role[] = c.roles.map((r) => ({ ...r, community: "c", name: r.id }));
-      const access = resolveCommunity(roles, c.holds, c.owner);
+      const access = resolveCommunity(roles, c.holds, c.owner, c.moderator);
       expect(listed(access.held)).toEqual(c.community);
       expect(listed(access.inChannel(c.categoryOverrides, c.channelOverrides))).toEqual(c.channel);
       expect(access.rank).toBe(c.rank);

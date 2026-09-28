@@ -92,6 +92,9 @@ pub struct FeedEvent {
     membership: Option<(CommunityId, bool)>,
     /// On a user's own subject, the roles they now hold in a community besides everyone's.
     roles: Option<(CommunityId, Vec<RoleId>)>,
+    /// On a user's own subject, whether they now moderate the deployment, and so view every
+    /// channel of the communities they read.
+    moderator: Option<bool>,
     /// The community channel whose View channel permission decides who receives the event.
     channel: Option<ChannelId>,
     /// On a community's subject, the change the event makes to who may view what.
@@ -145,6 +148,7 @@ struct Register {
     user: UserId,
     communities: Vec<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
+    moderator: bool,
     /// Models of the communities, as the database had them, for those the dispatcher lacks.
     models: HashMap<CommunityId, CommunityModel>,
     resume_after: Option<u64>,
@@ -192,6 +196,7 @@ pub async fn subscribe(
     let communities = memberships(conn.as_mut(), user).await?;
     let roles = member_roles(conn.as_mut(), user, &communities).await?;
     let mut models = CommunityModel::load(conn.as_mut(), &communities).await?;
+    let moderator = app::deployment::is_moderator(conn.as_mut(), user).await?;
     let feed = &state.event_feed;
     let id = feed.next_id.fetch_add(1, Ordering::Relaxed);
     let (deliveries_tx, deliveries) = mpsc::channel(feed.queue_size);
@@ -203,6 +208,7 @@ pub async fn subscribe(
                 user,
                 communities: communities.clone(),
                 roles: roles.clone(),
+                moderator,
                 models: std::mem::take(&mut models),
                 resume_after,
                 deliveries: deliveries_tx.clone(),
@@ -268,6 +274,24 @@ fn own_membership(
     (membership, glance.roles.map(|roles| (community, roles)))
 }
 
+/// Whether an event on a user's own subject says they now moderate the deployment, or no
+/// longer do, read without parsing anything else.
+fn moderation_change(payload: &str) -> Option<bool> {
+    if !payload.contains(r#""serverEvent":"deploymentAccessChanged""#) {
+        return None;
+    }
+    #[derive(Deserialize)]
+    struct Glance {
+        permissions: Vec<crate::app::deployment::DeploymentPermission>,
+    }
+    let glance: Glance = serde_json::from_str(payload).ok()?;
+    Some(
+        glance
+            .permissions
+            .contains(&crate::app::deployment::DeploymentPermission::ModerateCommunities),
+    )
+}
+
 /// Whether `event`, of a community's, may reach `user` holding `roles` there: it names no
 /// channel, or `model` lets them view the one it names. With no model it reaches no one.
 fn may_read(
@@ -275,10 +299,14 @@ fn may_read(
     model: Option<&CommunityModel>,
     user: UserId,
     roles: Option<&Vec<RoleId>>,
+    moderator: bool,
 ) -> bool {
     let Some(channel) = event.channel else {
         return true;
     };
+    if moderator {
+        return true;
+    }
     let none = Vec::new();
     model.is_some_and(|model| model.can_view(user, roles.unwrap_or(&none), channel))
 }
@@ -373,17 +401,20 @@ impl Retained {
         user: UserId,
         communities: Vec<CommunityId>,
         mut roles: HashMap<CommunityId, Vec<RoleId>>,
+        mut moderator: bool,
         after: u64,
         models: &HashMap<CommunityId, Arc<CommunityModel>>,
     ) -> (
         Vec<Arc<FeedEvent>>,
         HashSet<CommunityId>,
         HashMap<CommunityId, Vec<RoleId>>,
+        bool,
     ) {
         let own = SubjectOwner::User(user);
         let mut reading: HashSet<CommunityId> = communities.into_iter().collect();
         for e in self.since(own, 0).take_while(|e| e.sequence <= after) {
             apply_membership(&mut reading, &mut roles, e);
+            moderator = e.moderator.unwrap_or(moderator);
         }
         let mut owners = reading.clone();
         owners.extend(
@@ -403,6 +434,7 @@ impl Retained {
         events.retain(|e| match e.owner {
             SubjectOwner::User(_) => {
                 apply_membership(&mut reading, &mut roles, e);
+                moderator = e.moderator.unwrap_or(moderator);
                 true
             }
             SubjectOwner::Community(community) => {
@@ -414,10 +446,11 @@ impl Retained {
                             .or_else(|| models.get(&community).map(Arc::as_ref)),
                         user,
                         roles.get(&community),
+                        moderator,
                     )
             }
         });
-        (events, reading, roles)
+        (events, reading, roles, moderator)
     }
 }
 
@@ -447,6 +480,8 @@ struct Connection {
     communities: HashSet<CommunityId>,
     /// The roles the user holds in each community besides everyone's.
     roles: HashMap<CommunityId, Vec<RoleId>>,
+    /// Whether the user moderates the deployment.
+    moderator: bool,
     deliveries: mpsc::Sender<Delivery>,
 }
 
@@ -516,12 +551,12 @@ impl Routes {
                 let model = event.access.as_deref();
                 let roles = connection.roles.get(&community);
                 let key = (
-                    model.is_some_and(|m| m.is_owner(connection.user)),
+                    connection.moderator || model.is_some_and(|m| m.is_owner(connection.user)),
                     roles.cloned().unwrap_or_default(),
                 );
-                let visible = *decided
-                    .entry(key)
-                    .or_insert_with(|| may_read(event, model, connection.user, roles));
+                let visible = *decided.entry(key).or_insert_with(|| {
+                    may_read(event, model, connection.user, roles, connection.moderator)
+                });
                 if !visible {
                     continue;
                 }
@@ -551,6 +586,9 @@ impl Routes {
                     }
                     if let Some((community, held)) = &event.roles {
                         connection.roles.insert(*community, held.clone());
+                    }
+                    if let Some(moderator) = event.moderator {
+                        connection.moderator = moderator;
                     }
                 }
             }
@@ -682,12 +720,12 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             return None;
         }
     };
-    let (membership, roles, change) = match owner {
+    let (membership, roles, moderator, change) = match owner {
         SubjectOwner::User(user) => {
             let (membership, roles) = own_membership(payload.get(), user);
-            (membership, roles, None)
+            (membership, roles, moderation_change(payload.get()), None)
         }
-        SubjectOwner::Community(_) => (None, None, ModelChange::read(payload.get())),
+        SubjectOwner::Community(_) => (None, None, None, ModelChange::read(payload.get())),
     };
     let channel = message
         .headers
@@ -715,6 +753,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             owner,
             membership,
             roles,
+            moderator,
             channel,
             change,
             access: None,
@@ -918,10 +957,11 @@ async fn dispatch(
                     models.adopt(&retained, community, snapshot);
                 }
                 let (after, resumed) = retained.start_after(registration.resume_after);
-                let (missed, communities, roles) = retained.catch_up(
+                let (missed, communities, roles, moderator) = retained.catch_up(
                     registration.user,
                     registration.communities,
                     registration.roles,
+                    registration.moderator,
                     after,
                     &models.models,
                 );
@@ -950,6 +990,7 @@ async fn dispatch(
                     user: registration.user,
                     communities,
                     roles,
+                    moderator,
                     deliveries: registration.deliveries,
                 };
                 tell(shard(registration.id), ShardCommand::Add(registration.id, connection)).await;
@@ -985,6 +1026,7 @@ mod tests {
             owner,
             membership,
             roles: None,
+            moderator: None,
             channel: None,
             change: None,
             access: None,
@@ -1026,6 +1068,16 @@ mod tests {
         );
         assert_eq!(own_membership(&join, UserId::new()), (None, None));
         assert_eq!(
+            moderation_change(
+                r#"{"serverEvent":"deploymentAccessChanged","permissions":["viewDashboard","moderateCommunities"]}"#
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            moderation_change(r#"{"serverEvent":"deploymentAccessChanged","permissions":[]}"#),
+            Some(false)
+        );
+        assert_eq!(
             own_membership(r#"{"serverEvent":"message","type":"create"}"#, user),
             (None, None)
         );
@@ -1066,14 +1118,14 @@ mod tests {
         }
         // The database, read at connect, still showed `left` and did not yet show `joined`.
         let none = HashMap::new();
-        let (missed, reading, _) =
-            retained.catch_up(user, vec![kept, left], HashMap::new(), 0, &none);
+        let (missed, reading, _, _) =
+            retained.catch_up(user, vec![kept, left], HashMap::new(), false, 0, &none);
         assert_eq!(sequences(&missed), vec![2, 3, 4, 5, 6]);
         assert_eq!(reading, HashSet::from([kept, joined]));
         // Resuming after the join, with a database read from before it was committed, still
         // reads the community joined.
-        let (missed, reading, _) =
-            retained.catch_up(user, vec![kept, left], HashMap::new(), 4, &none);
+        let (missed, reading, _, _) =
+            retained.catch_up(user, vec![kept, left], HashMap::new(), false, 4, &none);
         assert_eq!(sequences(&missed), vec![5, 6]);
         assert_eq!(reading, HashSet::from([kept, joined]));
     }
@@ -1109,6 +1161,7 @@ mod tests {
                 user,
                 communities: HashSet::new(),
                 roles: HashMap::new(),
+                moderator: false,
                 deliveries: tx,
             },
         );
@@ -1187,6 +1240,7 @@ mod tests {
                 user: member,
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
+                moderator: false,
                 deliveries: member_tx,
             },
         );
@@ -1196,6 +1250,7 @@ mod tests {
                 user: moderator_user,
                 communities: HashSet::from([community]),
                 roles: HashMap::from([(community, vec![moderator])]),
+                moderator: false,
                 deliveries: moderator_tx,
             },
         );
@@ -1217,6 +1272,14 @@ mod tests {
         routes.route(&Arc::new(demoted));
         routes.route(&in_channel(4, community, hidden, &model));
         assert_eq!(received(&mut moderator_rx), vec![3]);
+        // Moderating the deployment, by their own event, shows every channel whatever the
+        // roles.
+        let mut promoted =
+            Arc::into_inner(event(5, SubjectOwner::User(moderator_user), None)).expect("fresh");
+        promoted.moderator = Some(true);
+        routes.route(&Arc::new(promoted));
+        routes.route(&in_channel(6, community, hidden, &model));
+        assert_eq!(received(&mut moderator_rx), vec![5, 6]);
     }
 
     #[test]

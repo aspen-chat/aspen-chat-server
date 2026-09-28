@@ -9,7 +9,10 @@
 
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::{self, server_event::*};
-use crate::app::permissions::{CommunityAccess, Permissions, missing, require_member, to_names};
+use crate::app::deployment::{ModerationAction, log_moderation};
+use crate::app::permissions::{
+    CommunityAccess, Permissions, missing, require_actual_member, require_member, to_names,
+};
 use crate::app::{
     self, CategoryId, ChannelId, CommunityId, EventScope, RoleId, UserId, publish_event,
 };
@@ -490,21 +493,22 @@ async fn announce_member_roles(
     Ok(roles)
 }
 
-/// What the caller may do to `member`: act on them only when they rank below the caller, or
-/// are the caller themself.
+/// Whether the caller may act on `member`: only when they are a member who ranks below the
+/// caller, or the caller themself; never the owner. Returns their rank in the community.
 async fn member_below(
     conn: &mut AsyncPgConnection,
     access: &CommunityAccess,
     member: UserId,
-) -> app::Result<()> {
+) -> app::Result<i32> {
+    let target = require_actual_member(conn, member, access.community).await?;
     if member == access.user {
-        return Ok(());
+        return Ok(target.role_rank());
     }
-    let target = require_member(conn, member, access.community).await?;
     if target.owner {
         return Err(app::Error::Forbidden(t!("permissionRank")));
     }
-    access.require_above(target.rank())
+    access.require_above(target.role_rank())?;
+    Ok(target.role_rank())
 }
 
 /// Gives `member` a role, or takes it away. Returns whether anything changed.
@@ -572,7 +576,24 @@ pub async fn remove_member(
         if member == caller {
             return Err(app::Error::Validation(t!("removeSelf")));
         }
-        member_below(conn.as_mut(), &access, member).await?;
+        let their_rank = member_below(conn.as_mut(), &access, member).await?;
+        // Moderation when the community's own permissions would not have allowed it.
+        if access.moderator
+            && !(access
+                .member_permissions
+                .contains(Permissions::REMOVE_MEMBERS)
+                && their_rank < access.role_rank())
+        {
+            log_moderation(
+                conn.as_mut(),
+                caller,
+                ModerationAction::RemoveMember,
+                Some(community_id),
+                None,
+                Some(member.0.to_string()),
+            )
+            .await?;
+        }
     }
     app::community::end_membership(state, conn.as_mut(), member, community_id).await
 }
@@ -591,7 +612,7 @@ pub async fn transfer_ownership(
             if !access.owner {
                 return Err(app::Error::Forbidden(t!("permissionOwnerOnly")));
             }
-            require_member(conn.as_mut(), new_owner, community_id).await?;
+            require_actual_member(conn.as_mut(), new_owner, community_id).await?;
             diesel::update(community::table.filter(community::id.eq(community_id)))
                 .set(community::owner.eq(Some(new_owner)))
                 .execute(conn.as_mut())

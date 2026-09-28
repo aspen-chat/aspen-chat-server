@@ -4,9 +4,10 @@ use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::category::Category;
 use crate::app::community::Community;
+use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::load_previews;
 use crate::app::message::{Message, MessageWithRelations};
-use crate::app::permissions::{Permissions, require_member};
+use crate::app::permissions::{Permissions, missing, require_member};
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
     UserId, publish_event,
@@ -225,7 +226,18 @@ pub(crate) async fn read_channel_messages(
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
+    let access = crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
+    // Reading a DM one is not in is moderation, and every such reading is logged.
+    if access.dm_moderator {
+        app::message::note_moderation(
+            conn.as_mut(),
+            caller,
+            &access,
+            app::deployment::ModerationAction::ReadDm,
+            None,
+        )
+        .await?;
+    }
     let query = message::table
         .select(Message::as_select())
         .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
@@ -355,13 +367,13 @@ pub struct ChannelChangeset {
     pub sort_index: Option<i32>,
 }
 
-/// The community channel `id` and what the caller may do across its community, refusing
-/// unless they hold Manage channels there. DMs and threads are not managed this way.
+/// The community of the community channel `id` and what the caller may do across it. DMs and
+/// threads are not managed this way.
 async fn managed_channel(
     conn: &mut AsyncPgConnection,
     caller: UserId,
     id: ChannelId,
-) -> app::Result<CommunityId> {
+) -> app::Result<(CommunityId, crate::app::permissions::CommunityAccess)> {
     let (community, parent): (Option<CommunityId>, Option<ChannelId>) = channel::table
         .select((channel::community, channel::parent_channel))
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
@@ -370,14 +382,13 @@ async fn managed_channel(
     let (Some(community), None) = (community, parent) else {
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     };
-    require_member(conn, caller, community)
-        .await?
-        .require(Permissions::MANAGE_CHANNELS)?;
-    Ok(community)
+    let access = require_member(conn, caller, community).await?;
+    Ok((community, access))
 }
 
-/// Renames or moves a community channel, which takes Manage channels. A channel stays in its
-/// community, and a category it moves into must be one of that community's.
+/// Renames or moves a community channel, which takes Manage channels; a deployment moderator
+/// may rename one. A channel stays in its community, and a category it moves into must be one
+/// of that community's.
 pub(crate) async fn update_channel(
     state: &GlobalServerContext,
     caller: UserId,
@@ -387,7 +398,25 @@ pub(crate) async fn update_channel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let community = managed_channel(conn.as_mut(), caller, id).await?;
+            let (community, access) = managed_channel(conn.as_mut(), caller, id).await?;
+            // A deployment moderator may rename a channel, and do nothing else to it here.
+            let rename_only = command.parent_category.is_none()
+                && command.community.is_none()
+                && command.sort_index.is_none();
+            if !access.has(Permissions::MANAGE_CHANNELS) {
+                if !(access.moderator && rename_only) {
+                    return Err(missing(Permissions::MANAGE_CHANNELS));
+                }
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::RenameChannel,
+                    Some(community),
+                    Some(id),
+                    command.name.clone(),
+                )
+                .await?;
+            }
             if command.community.is_some_and(|c| c != Some(community)) {
                 return Err(app::Error::Validation(t!("channelCommunityFixed")));
             }
@@ -434,7 +463,7 @@ pub(crate) async fn update_channel(
     .await
 }
 
-/// Deletes a community channel, which takes Manage channels.
+/// Deletes a community channel, which takes Manage channels or moderating the deployment.
 pub(crate) async fn delete_channel(
     state: &GlobalServerContext,
     caller: UserId,
@@ -443,7 +472,21 @@ pub(crate) async fn delete_channel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            managed_channel(conn.as_mut(), caller, id).await?;
+            let (community, access) = managed_channel(conn.as_mut(), caller, id).await?;
+            if !access.has(Permissions::MANAGE_CHANNELS) {
+                if !access.moderator {
+                    return Err(missing(Permissions::MANAGE_CHANNELS));
+                }
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::DeleteChannel,
+                    Some(community),
+                    Some(id),
+                    None,
+                )
+                .await?;
+            }
             let deleted = diesel::update(channel::table)
                 .set(channel::deleted_at.eq(diesel::dsl::now))
                 .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))

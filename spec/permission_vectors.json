@@ -1,5 +1,5 @@
 {
-  "description": "Permission resolution cases that the server (app::permissions) and the client (packages/protocol/src/permissions.ts) both test against, so the two resolvers cannot drift apart. `holds` lists the roles the member holds besides everyone's; `community` is what they may do across the community, `channel` what they may do in a channel with the given overrides, and `rank` their highest role's position (2147483647 for the owner).",
+  "description": "Permission resolution cases that the server (app::permissions) and the client (packages/protocol/src/permissions.ts) both test against, so the two resolvers cannot drift apart. `holds` lists the roles the member holds besides everyone's, or is `null` for someone who is not a member; `moderator` says they hold Moderate any community; `community` is what they may do across the community, `channel` what they may do in a channel with the given overrides, and `rank` their highest role's position (2147483647 for the owner).",
   "cases": [
     {
       "name": "everyone's role alone",
@@ -53,7 +53,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 0
+      "rank": 0,
+      "moderator": false
     },
     {
       "name": "roles are united and rank is the highest",
@@ -133,7 +134,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 2
+      "rank": 2,
+      "moderator": false
     },
     {
       "name": "a role not held grants nothing",
@@ -223,7 +225,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 0
+      "rank": 0,
+      "moderator": false
     },
     {
       "name": "the owner holds everything whatever the overrides",
@@ -319,7 +322,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 2147483647
+      "rank": 2147483647,
+      "moderator": false
     },
     {
       "name": "a role's allowance beats a denial for everyone",
@@ -396,7 +400,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 1
+      "rank": 1,
+      "moderator": false
     },
     {
       "name": "without the role the denial stands",
@@ -470,7 +475,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 0
+      "rank": 0,
+      "moderator": false
     },
     {
       "name": "a role's denial beats an allowance for everyone",
@@ -544,7 +550,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 1
+      "rank": 1,
+      "moderator": false
     },
     {
       "name": "between the member's roles, allowance beats denial",
@@ -628,7 +635,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 2
+      "rank": 2,
+      "moderator": false
     },
     {
       "name": "the channel's overrides come after its category's",
@@ -698,7 +706,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 0
+      "rank": 0,
+      "moderator": false
     },
     {
       "name": "a category's role allowance does not lift the channel's denial for everyone",
@@ -775,7 +784,8 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 1
+      "rank": 1,
+      "moderator": false
     },
     {
       "name": "overrides never touch community permissions",
@@ -849,7 +859,122 @@
         "speak",
         "shareScreen"
       ],
-      "rank": 0
+      "rank": 0,
+      "moderator": false
+    },
+    {
+      "name": "a moderator who is not a member sees everything and may take things away",
+      "roles": [
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "position": 0,
+          "permissions": [
+            "createInvites",
+            "viewChannel",
+            "sendMessages",
+            "attachFiles",
+            "addReactions",
+            "startThreads",
+            "sendInThreads",
+            "createPolls",
+            "joinVoice",
+            "speak",
+            "shareScreen"
+          ],
+          "everyone": true
+        }
+      ],
+      "owner": false,
+      "moderator": true,
+      "holds": null,
+      "categoryOverrides": [],
+      "channelOverrides": [
+        {
+          "role": "00000000-0000-0000-0000-000000000001",
+          "allow": [],
+          "deny": [
+            "viewChannel"
+          ]
+        }
+      ],
+      "community": [
+        "removeMembers",
+        "manageMessages",
+        "viewChannel"
+      ],
+      "channel": [
+        "removeMembers",
+        "manageMessages",
+        "viewChannel"
+      ],
+      "rank": 2147483646
+    },
+    {
+      "name": "a moderator who is a member keeps their roles and sees hidden channels",
+      "roles": [
+        {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "position": 0,
+          "permissions": [
+            "createInvites",
+            "viewChannel",
+            "sendMessages",
+            "attachFiles",
+            "addReactions",
+            "startThreads",
+            "sendInThreads",
+            "createPolls",
+            "joinVoice",
+            "speak",
+            "shareScreen"
+          ],
+          "everyone": true
+        }
+      ],
+      "owner": false,
+      "moderator": true,
+      "holds": [],
+      "categoryOverrides": [
+        {
+          "role": "00000000-0000-0000-0000-000000000001",
+          "allow": [],
+          "deny": [
+            "viewChannel",
+            "sendMessages"
+          ]
+        }
+      ],
+      "channelOverrides": [],
+      "community": [
+        "createInvites",
+        "removeMembers",
+        "manageMessages",
+        "viewChannel",
+        "sendMessages",
+        "attachFiles",
+        "addReactions",
+        "startThreads",
+        "sendInThreads",
+        "createPolls",
+        "joinVoice",
+        "speak",
+        "shareScreen"
+      ],
+      "channel": [
+        "createInvites",
+        "removeMembers",
+        "manageMessages",
+        "viewChannel",
+        "attachFiles",
+        "addReactions",
+        "startThreads",
+        "sendInThreads",
+        "createPolls",
+        "joinVoice",
+        "speak",
+        "shareScreen"
+      ],
+      "rank": 2147483646
     }
   ]
 }

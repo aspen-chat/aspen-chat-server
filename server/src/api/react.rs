@@ -167,3 +167,32 @@ pub async fn remove_reaction(
     app::react::delete_react(&state, user.id, message, emoji).await?;
     Ok(NoContent)
 }
+
+/// Takes someone's reaction off a message. Taking another person's takes Manage messages.
+#[utoipa::path(
+    delete,
+    path = "/messages/{message}/reactions/{emoji}/{user}",
+    tag = TAG_REACTIONS,
+    params(
+        ("message" = MessageId, Path),
+        ("emoji" = String, Path, description = "A single Unicode emoji, percent-encoded"),
+        ("user" = UserId, Path, description = "Whose reaction"),
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage messages", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn remove_users_reaction(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((message, emoji, author)): Path<(MessageId, String, UserId)>,
+) -> ApiResult<NoContent> {
+    app::react::remove_others_react(&state, user.id, message, emoji, author).await?;
+    Ok(NoContent)
+}

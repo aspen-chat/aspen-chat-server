@@ -42,7 +42,8 @@ const headerClass = "px-2 pt-1 pb-0.5 text-xs font-semibold text-ink-faint";
 /**
  * What the user can do to a channel or DM, opened by right-clicking its row or by its options
  * button: for a text channel or DM, mute it for a while or until they unmute it, or, while it
- * is muted, see until when and unmute it; and, with `onAccess`, set who can use it.
+ * is muted, see until when and unmute it; with `onAccess`, set who can use it; and with
+ * `onRename` and `onDelete`, rename or delete it.
  */
 export function ChannelMenu({
   channelId,
@@ -52,6 +53,8 @@ export function ChannelMenu({
   onOpenChange,
   mutable = true,
   onAccess,
+  onRename,
+  onDelete,
 }: {
   channelId: string;
   name: string;
@@ -62,6 +65,9 @@ export function ChannelMenu({
   mutable?: boolean;
   /** Opens the channel's access settings, for those who may manage channels. */
   onAccess?: () => void;
+  /** Renaming and deleting it, for those who may manage channels or moderate the server. */
+  onRename?: () => void;
+  onDelete?: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -83,6 +89,14 @@ export function ChannelMenu({
             onOpenChange(false);
             if (key === "access") {
               onAccess?.();
+              return;
+            }
+            if (key === "rename") {
+              onRename?.();
+              return;
+            }
+            if (key === "delete") {
+              onDelete?.();
               return;
             }
             if (key === "unmute") {
@@ -118,11 +132,23 @@ export function ChannelMenu({
               </MenuItem>
             </MenuSection>
           )}
-          {onAccess !== undefined && (
+          {(onAccess !== undefined || onRename !== undefined || onDelete !== undefined) && (
             <MenuSection>
-              <MenuItem id="access" className={itemClass}>
-                {m.access.open}
-              </MenuItem>
+              {onAccess !== undefined && (
+                <MenuItem id="access" className={itemClass}>
+                  {m.access.open}
+                </MenuItem>
+              )}
+              {onRename !== undefined && (
+                <MenuItem id="rename" className={itemClass}>
+                  {m.channelActions.rename}
+                </MenuItem>
+              )}
+              {onDelete !== undefined && (
+                <MenuItem id="delete" className={itemClass + " text-danger"}>
+                  {m.channelActions.delete}
+                </MenuItem>
+              )}
             </MenuSection>
           )}
         </Menu>

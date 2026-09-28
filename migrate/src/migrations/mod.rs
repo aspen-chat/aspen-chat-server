@@ -47,3 +47,5 @@ pub mod m20260928_040739_administration;
 pub mod m20260928_041109_community_user_by_community;
 pub mod m20260928_043652_registration_invite_used_up_at;
 pub mod m20260928_052552_community_roles;
+pub mod m20260928_065931_deployment_roles;
+pub mod m20260928_070500_community_owners;

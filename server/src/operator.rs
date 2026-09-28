@@ -221,18 +221,31 @@ pub async fn bench(config: &AspenConfig, command: BenchCommand) -> Result<()> {
 
 #[derive(Subcommand, Debug)]
 pub enum AdminCommand {
-    /// Let a user open the Administration Dashboard.
+    /// Give a user the deployment's top role, making an Administrator role first when there is
+    /// none.
     Grant {
         /// Their username.
         username: String,
     },
-    /// Stop a user opening the Administration Dashboard.
+    /// Take every deployment role from a user.
     Revoke {
         /// Their username.
         username: String,
     },
-    /// List the deployment's administrators.
+    /// List who holds which deployment roles.
     List,
+    /// Let the deployment's top role do something more, such as `moderateCommunities`, which
+    /// its holders may then give to the roles below it.
+    Allow {
+        /// A deployment permission's name: `viewDashboard`, `manageRegistrationInvites`,
+        /// `manageVoiceServers`, `manageDeploymentRoles`, or `moderateCommunities`.
+        permission: String,
+    },
+    /// Stop the deployment's top role doing something.
+    Deny {
+        /// A deployment permission's name, as for `allow`.
+        permission: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -280,44 +293,84 @@ async fn database(config: &AspenConfig) -> Result<diesel_async::AsyncPgConnectio
 }
 
 pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
+    use crate::app::deployment;
     use crate::database::schema::user;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     let mut conn = database(config).await?;
-    let set = |username: String, admin: bool| {
-        diesel::update(user::table.filter(user::name.eq(username).and(user::deleted_at.is_null())))
-            .set(user::admin.eq(admin))
+    let find = |username: String| {
+        user::table
+            .select(user::id)
+            .filter(user::name.eq(username).and(user::deleted_at.is_null()))
     };
     match command {
         AdminCommand::Grant { username } => {
-            if set(username.clone(), true).execute(&mut conn).await? == 0 {
+            let Some(id) = find(username.clone())
+                .first::<crate::app::UserId>(&mut conn)
+                .await
+                .optional()?
+            else {
                 bail!("no user is named {username:?}");
-            }
-            tracing::info!(%username, operator = operator(), "granted administration");
-            println!("{username} may now open the Administration Dashboard");
+            };
+            let role = deployment::grant_top_role(&mut conn, id)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            tracing::info!(%username, %role, operator = operator(), "granted the top deployment role");
+            println!("{username} now holds {role}, the deployment's top role");
         }
         AdminCommand::Revoke { username } => {
-            if set(username.clone(), false).execute(&mut conn).await? == 0 {
+            let Some(id) = find(username.clone())
+                .first::<crate::app::UserId>(&mut conn)
+                .await
+                .optional()?
+            else {
                 bail!("no user is named {username:?}");
-            }
-            tracing::info!(%username, operator = operator(), "revoked administration");
-            println!("{username} may no longer open the Administration Dashboard");
+            };
+            let taken = deployment::revoke_all(&mut conn, id)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            tracing::info!(%username, taken, operator = operator(), "revoked deployment roles");
+            println!("{username} no longer holds any deployment role");
         }
+        AdminCommand::Allow { permission } => top_role(&mut conn, &permission, true).await?,
+        AdminCommand::Deny { permission } => top_role(&mut conn, &permission, false).await?,
         AdminCommand::List => {
-            let names: Vec<String> = user::table
-                .select(user::name)
-                .filter(user::admin.eq(true).and(user::deleted_at.is_null()))
-                .order(user::name)
-                .load(&mut conn)
-                .await?;
-            if names.is_empty() {
-                println!("no administrators; grant one with `admin grant <username>`");
+            let holders = deployment::holders(&mut conn)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            if holders.is_empty() {
+                println!("nobody holds a deployment role; grant one with `admin grant <username>`");
             }
-            for name in names {
-                println!("{name}");
+            for (name, role) in holders {
+                println!("{name}  {role}");
             }
         }
     }
+    Ok(())
+}
+
+/// Allows `permission` to the deployment's top role, or denies it.
+async fn top_role(
+    conn: &mut diesel_async::AsyncPgConnection,
+    permission: &str,
+    allow: bool,
+) -> Result<()> {
+    use crate::app::deployment;
+    let parsed: deployment::DeploymentPermission =
+        serde_json::from_value(serde_json::Value::String(permission.to_string()))
+            .map_err(|_| anyhow!("{permission:?} is not a deployment permission"))?;
+    let role = deployment::set_top_role_permission(conn, parsed, allow)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+    tracing::info!(%permission, allow, %role, operator = operator(), "changed the top deployment role");
+    println!(
+        "{role} {} {permission}; its holders see the change when their clients next load",
+        if allow {
+            "now allows"
+        } else {
+            "no longer allows"
+        }
+    );
     Ok(())
 }
 

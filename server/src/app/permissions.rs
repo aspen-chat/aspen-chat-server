@@ -15,6 +15,11 @@
 //!
 //! In a DM or group DM every recipient holds every channel permission; a thread takes its
 //! parent channel's. Someone who may not view a channel is answered as though it did not exist.
+//!
+//! A deployment moderator (Moderate any community, `app::deployment`) reaches every community
+//! and DM without belonging to it: they view every channel whatever the overrides, hold
+//! `MODERATION` everywhere, and rank above every role but below the owner. `moderating` says
+//! when an action was allowed by that alone, which the caller then logs.
 
 use crate::api::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
@@ -227,19 +232,36 @@ pub struct Override {
     pub deny: Permissions,
 }
 
-/// What a member may do across a community.
+/// What a member, or a deployment moderator, may do across a community.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommunityAccess {
     pub user: UserId,
     pub community: CommunityId,
     pub owner: bool,
+    /// Whether they belong to the community; a deployment moderator need not.
+    pub member: bool,
+    /// Whether they hold Moderate any community (`app::deployment`).
+    pub moderator: bool,
     /// Every role they hold, everyone's included.
     pub roles: Vec<RoleGrant>,
+    /// What they may do, moderation included.
     pub permissions: Permissions,
+    /// What their roles alone allow, which says whether an action is moderation.
+    pub member_permissions: Permissions,
 }
 
 /// The rank that decides whom a member may act on: the owner's is above every role's.
 pub const OWNER_RANK: i32 = i32::MAX;
+/// A deployment moderator's rank: above every role, below only the owner.
+pub const MODERATOR_RANK: i32 = i32::MAX - 1;
+
+/// What Moderate any community gives in every community: seeing everything, and the powers
+/// that take things away (deleting messages, attachments, reactions, and write-ins, and removing
+/// members). Renaming and deleting channels and communities are checked by name where they are
+/// done.
+pub const MODERATION: Permissions = Permissions(
+    Permissions::VIEW_CHANNEL.0 | Permissions::MANAGE_MESSAGES.0 | Permissions::REMOVE_MEMBERS.0,
+);
 
 impl CommunityAccess {
     /// Resolves a member's permissions from the roles they hold.
@@ -261,13 +283,40 @@ impl CommunityAccess {
             user,
             community,
             owner,
+            member: true,
+            moderator: false,
             roles,
             permissions,
+            member_permissions: permissions,
         }
+    }
+
+    /// The same access with Moderate any community added.
+    pub fn with_moderation(mut self) -> Self {
+        self.moderator = true;
+        self.permissions = self.permissions | MODERATION;
+        self
+    }
+
+    /// Whether doing what `permission` allows is moderation: allowed only by Moderate any
+    /// community, and so to be logged.
+    pub fn moderating(&self, permission: Permissions) -> bool {
+        self.moderator && !self.member_permissions.contains(permission)
     }
 
     /// Their highest role's position, or `OWNER_RANK` for the owner.
     pub fn rank(&self) -> i32 {
+        if self.moderator && !self.owner {
+            MODERATOR_RANK
+        } else {
+            self.role_rank()
+        }
+    }
+
+    /// Their rank from what they are in the community alone: their highest role's position, or
+    /// `OWNER_RANK` for the owner. Moderating the deployment does not make anyone harder to act
+    /// on in a community.
+    pub fn role_rank(&self) -> i32 {
         if self.owner {
             OWNER_RANK
         } else {
@@ -316,6 +365,10 @@ impl CommunityAccess {
         let mut permissions = self.permissions;
         for layer in [category, channel] {
             permissions = self.apply(permissions, layer);
+        }
+        // No override hides a channel from a moderator.
+        if self.moderator {
+            permissions = permissions | Permissions::VIEW_CHANNEL;
         }
         permissions
     }
@@ -381,6 +434,8 @@ pub struct ChannelAccess {
     pub permissions: Permissions,
     /// Whether the channel is a thread, whose posting takes `SEND_IN_THREADS`.
     pub thread: bool,
+    /// Whether the caller reads a DM they are not in, by Moderate any community.
+    pub dm_moderator: bool,
 }
 
 impl ChannelAccess {
@@ -410,6 +465,16 @@ impl ChannelAccess {
     /// permission, such as deleting their message.
     pub fn community_has(&self, permission: Permissions) -> bool {
         self.community.as_ref().is_some_and(|c| c.has(permission))
+            || (self.dm_moderator && MODERATION.contains(permission))
+    }
+
+    /// Whether acting with `permission` here is moderation, to be logged.
+    pub fn moderating(&self, permission: Permissions) -> bool {
+        self.dm_moderator
+            || self
+                .community
+                .as_ref()
+                .is_some_and(|c| c.moderating(permission))
     }
 }
 
@@ -434,7 +499,8 @@ impl From<RoleRow> for RoleGrant {
     }
 }
 
-/// What `user` may do across `community`; `None` when they are not a member.
+/// What `user` may do across `community`; `None` when they are neither a member nor a deployment
+/// moderator.
 pub async fn community_access(
     conn: &mut AsyncPgConnection,
     user: UserId,
@@ -449,7 +515,8 @@ pub async fn community_access(
     ))
     .get_result(conn)
     .await?;
-    if !member {
+    let moderator = app::deployment::is_moderator(conn, user).await?;
+    if !member && !moderator {
         return Ok(None);
     }
     let owner: Option<Option<UserId>> = community::table
@@ -465,32 +532,56 @@ pub async fn community_access(
     let Some(owner) = owner else {
         return Ok(None);
     };
-    let held = community_member_role::table
-        .filter(
-            community_member_role::user
-                .eq(user)
-                .and(community_member_role::community.eq(community_id)),
-        )
-        .select(community_member_role::role);
-    let roles: Vec<RoleRow> = community_role::table
-        .select(RoleRow::as_select())
-        .filter(community_role::community.eq(community_id))
-        .filter(
-            community_role::everyone
-                .eq(true)
-                .or(community_role::id.eq_any(held)),
-        )
-        .load(conn)
-        .await?;
-    Ok(Some(CommunityAccess::resolve(
+    let roles: Vec<RoleRow> = if member {
+        let held = community_member_role::table
+            .filter(
+                community_member_role::user
+                    .eq(user)
+                    .and(community_member_role::community.eq(community_id)),
+            )
+            .select(community_member_role::role);
+        community_role::table
+            .select(RoleRow::as_select())
+            .filter(community_role::community.eq(community_id))
+            .filter(
+                community_role::everyone
+                    .eq(true)
+                    .or(community_role::id.eq_any(held)),
+            )
+            .load(conn)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let mut access = CommunityAccess::resolve(
         user,
         community_id,
         owner == Some(user),
         roles.into_iter().map(RoleGrant::from).collect(),
-    )))
+    );
+    access.member = member;
+    Ok(Some(if moderator {
+        access.with_moderation()
+    } else {
+        access
+    }))
 }
 
-/// What `user` may do across `community`, refusing as not found when they are not a member.
+/// What a member of `community` may do there, refusing as not found anyone who is not one,
+/// deployment moderators included: for the people an action is done to.
+pub async fn require_actual_member(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    community_id: CommunityId,
+) -> app::Result<CommunityAccess> {
+    match community_access(conn, user, community_id).await? {
+        Some(access) if access.member => Ok(access),
+        _ => Err(app::Error::Diesel(diesel::result::Error::NotFound)),
+    }
+}
+
+/// What `user` may do across `community`, refusing as not found when they are neither a member
+/// nor a deployment moderator.
 pub async fn require_member(
     conn: &mut AsyncPgConnection,
     user: UserId,
@@ -595,6 +686,16 @@ pub async fn channel_access(
             .get_result(conn)
             .await?;
             if !recipient {
+                // A deployment moderator reads any DM, and may take things out of it.
+                if app::deployment::is_moderator(conn, user).await? {
+                    return Ok(ChannelAccess {
+                        channel: channel_id,
+                        community: None,
+                        permissions: Permissions::VIEW_CHANNEL,
+                        thread,
+                        dm_moderator: true,
+                    });
+                }
                 return Err(not_found());
             }
             Ok(ChannelAccess {
@@ -602,6 +703,7 @@ pub async fn channel_access(
                 community: None,
                 permissions: Permissions::CHANNEL,
                 thread,
+                dm_moderator: false,
             })
         }
         ChannelHome::Community {
@@ -625,6 +727,7 @@ pub async fn channel_access(
                 community: Some(access),
                 permissions,
                 thread,
+                dm_moderator: false,
             })
         }
     }
@@ -796,7 +899,8 @@ mod tests {
             name: String,
             roles: Vec<VectorRole>,
             owner: bool,
-            holds: Vec<Uuid>,
+            moderator: bool,
+            holds: Option<Vec<Uuid>>,
             category_overrides: Vec<VectorOverride>,
             channel_overrides: Vec<VectorOverride>,
             community: Vec<Permission>,
@@ -830,18 +934,27 @@ mod tests {
                 .expect("the vectors parse");
         assert!(!vectors.cases.is_empty());
         for case in vectors.cases {
-            let roles = case
-                .roles
-                .iter()
-                .filter(|r| r.everyone || case.holds.contains(&r.id))
-                .map(|r| role_grant(r.id, r.position, &r.permissions, r.everyone))
-                .collect();
+            // Someone who is not a member holds no role, not even everyone's.
+            let roles = match &case.holds {
+                None => Vec::new(),
+                Some(holds) => case
+                    .roles
+                    .iter()
+                    .filter(|r| r.everyone || holds.contains(&r.id))
+                    .map(|r| role_grant(r.id, r.position, &r.permissions, r.everyone))
+                    .collect(),
+            };
             let access = CommunityAccess::resolve(
                 UserId(Uuid::from_u128(100)),
                 CommunityId(Uuid::from_u128(200)),
                 case.owner,
                 roles,
             );
+            let access = if case.moderator {
+                access.with_moderation()
+            } else {
+                access
+            };
             assert_eq!(
                 to_names(access.permissions),
                 case.community,

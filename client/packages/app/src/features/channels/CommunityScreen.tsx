@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useParams } from "@tanstack/react-router";
-import { useState } from "react";
-import { useChannels, useCommunity } from "@/api/hooks";
+import { useEffect, useState } from "react";
+import { useChannels, useCommunity, useDeploymentCan, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelSidebar } from "@/features/channels/ChannelSidebar";
 import { MemberList } from "@/features/members/MemberList";
 import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
@@ -12,18 +12,32 @@ import { communityRoute } from "@/router";
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
  * list on the right. On narrow screens only one of the sidebar and the content is shown: the
  * sidebar at the community index, the content once a channel is chosen. The member list is
- * hidden below the large breakpoint and can be toggled from a channel's header.
+ * hidden below the large breakpoint and can be toggled from a channel's header. A moderator of
+ * the server may open a community they are not in, which is read here on arrival.
  */
 export function ChannelSidebarLayout() {
   const m = useMessages();
   const { communityId } = useParams({ from: communityRoute.id });
   const { channelId } = useParams({ strict: false });
   const community = useCommunity(communityId);
+  const sync = useSync();
+  const live = useSyncStatus() === "live";
+  const moderator = useDeploymentCan("moderateCommunities");
   const [membersOpen, setMembersOpen] = useState(true);
+  const [missingId, setMissingId] = useState<string | null>(null);
+  const held = community !== undefined;
+  useEffect(() => {
+    if (!live || held || !moderator) {
+      return;
+    }
+    sync.loadCommunity(communityId).catch(() => {
+      setMissingId(communityId);
+    });
+  }, [sync, communityId, live, held, moderator]);
   if (community === undefined) {
     return (
       <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">
-        {m.communityNotFound}
+        {moderator && missingId !== communityId ? m.loading : m.communityNotFound}
       </main>
     );
   }

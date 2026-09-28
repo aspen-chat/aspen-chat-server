@@ -467,3 +467,29 @@ pub async fn unpin_message(
     app::message::set_pinned(&state, user.id, message, false).await?;
     Ok(NoContent)
 }
+
+/// Takes one attachment off a message: its author may, and anyone with Manage messages. The
+/// message's update names the attachments left.
+#[utoipa::path(
+    delete,
+    path = "/messages/{message}/attachments/{attachment}",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path), ("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage messages", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn remove_attachment(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((message, attachment)): Path<(MessageId, AttachmentId)>,
+) -> ApiResult<NoContent> {
+    app::message::remove_attachment(&state, user.id, message, attachment).await?;
+    Ok(NoContent)
+}

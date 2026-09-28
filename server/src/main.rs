@@ -101,7 +101,7 @@ enum Command {
         #[clap(subcommand)]
         action: operator::BenchCommand,
     },
-    /// Operator commands for who may open the Administration Dashboard.
+    /// Operator commands for deployment roles: the first administrator, and the top role.
     Admin {
         #[clap(subcommand)]
         action: operator::AdminCommand,

@@ -136,7 +136,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         ServerEvent::UserPreferencesChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
-        | ServerEvent::CategoryCollapseChanged { .. } => ScopeKind::User,
+        | ServerEvent::CategoryCollapseChanged { .. }
+        | ServerEvent::DeploymentAccessChanged { .. } => ScopeKind::User,
         ServerEvent::User(_) => ScopeKind::UserEverywhere,
     }
 }

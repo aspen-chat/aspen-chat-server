@@ -3,6 +3,7 @@ use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
 use crate::api::user::{CustomStatus, UserOnlineStatus};
 use crate::api::voice::VoiceSessionEndReason;
 use crate::api::{ChannelType, MessageKind};
+use crate::app::deployment::DeploymentPermission;
 use crate::app::permissions::Permission;
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, PollId, RoleId, UserId,
@@ -49,6 +50,12 @@ enum MessageEnumSource {
     ChannelRead {
         channel: ChannelId,
         last_read: MessageId,
+    },
+    // What the user may do across the deployment changed: a deployment role of theirs was
+    // given, taken, changed, or deleted. See `app::deployment`.
+    #[message_gen(custom_event)]
+    DeploymentAccessChanged {
+        permissions: Vec<DeploymentPermission>,
     },
     // The user collapsed or expanded a category in their channel list, on one of their
     // devices; the others follow. See `app::category_collapse`.

@@ -22,7 +22,7 @@ import {
   Tabs,
   TextField,
 } from "react-aria-components";
-import { useAccess, useMe, useMembers, useSync, useUser } from "@/api/hooks";
+import { useAccess, useMe, useMemberRoles, useMembers, useSync, useUser } from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
@@ -124,9 +124,15 @@ function Overview({ community }: { community: Community }) {
   const m = useMessages();
   const access = useAccess(community.id);
   const owner = useUser(community.owner ?? undefined);
+  const me = useMe();
+  const member = useMemberRoles(community.id, me?.id ?? "") !== undefined;
+  const manage = access?.has("manageCommunity") === true;
+  // A moderator of the server may rename and delete any community, and nothing else here.
+  const moderator = access?.moderator === true;
   return (
     <div className="flex flex-col gap-6">
-      {access?.has("manageCommunity") === true && <Rename community={community} />}
+      {moderator && !member && <p className={hintClass}>{m.communitySettings.moderatorNote}</p>}
+      {(manage || moderator) && <Rename community={community} icon={manage} />}
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold text-ink-muted">{m.communitySettings.ownerHeading}</h3>
         <p className={hintClass}>
@@ -136,13 +142,14 @@ function Overview({ community }: { community: Community }) {
         </p>
         {access?.owner === true && <Transfer community={community} />}
       </section>
-      {access?.owner === true ? <Delete community={community} /> : <Leave community={community} />}
+      {access?.owner === true || moderator ? <Delete community={community} /> : null}
+      {access?.owner !== true && member && <Leave community={community} />}
     </div>
   );
 }
 
-/** The community's icon, and its name. */
-function Rename({ community }: { community: Community }) {
+/** The community's name, and, with `icon`, its icon. */
+function Rename({ community, icon }: { community: Community; icon: boolean }) {
   const m = useMessages();
   const sync = useSync();
   const [name, setName] = useState(community.name);
@@ -166,23 +173,25 @@ function Rename({ community }: { community: Community }) {
       }}
       className="flex flex-col gap-2"
     >
-      <div className="flex items-center gap-3">
-        <Avatar name={community.name} iconId={community.icon} />
-        <IconPicker
-          onIcon={async (iconId) => {
-            setIconError(null);
-            await sync.updateCommunity(community.id, { icon: iconId }).catch((e: unknown) => {
-              setIconError(problemText(e));
-            });
-          }}
-        >
-          {(open, uploading) => (
-            <Button onPress={open} isDisabled={uploading} className={secondaryButtonClass}>
-              {m.changeCommunityIcon}
-            </Button>
-          )}
-        </IconPicker>
-      </div>
+      {icon && (
+        <div className="flex items-center gap-3">
+          <Avatar name={community.name} iconId={community.icon} />
+          <IconPicker
+            onIcon={async (iconId) => {
+              setIconError(null);
+              await sync.updateCommunity(community.id, { icon: iconId }).catch((e: unknown) => {
+                setIconError(problemText(e));
+              });
+            }}
+          >
+            {(open, uploading) => (
+              <Button onPress={open} isDisabled={uploading} className={secondaryButtonClass}>
+                {m.changeCommunityIcon}
+              </Button>
+            )}
+          </IconPicker>
+        </div>
+      )}
       {iconError !== null && (
         <p role="alert" className={alertClass}>
           {iconError}
@@ -285,7 +294,8 @@ function Transfer({ community }: { community: Community }) {
   );
 }
 
-/** Deleting the community, which only its owner may, confirmed by typing its name. */
+/** Deleting the community, which its owner may and a moderator of the server, confirmed by
+ * typing its name. */
 function Delete({ community }: { community: Community }) {
   const m = useMessages();
   const sync = useSync();

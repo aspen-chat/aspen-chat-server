@@ -1098,3 +1098,39 @@ describe("RecordStore roles and access", () => {
     expect(store.access(aspen.id)?.has("manageRoles")).toBe(true);
   });
 });
+
+describe("RecordStore deployment moderation", () => {
+  const everyone = {
+    id: id(40),
+    community: aspen.id,
+    name: "everyone",
+    position: 0,
+    permissions: [...TEMPLATES.member],
+    everyone: true,
+  };
+
+  it("lets a moderator see a hidden channel and take messages down, by their own event", () => {
+    const store = bootstrapped();
+    store.ingest({
+      roles: [everyone],
+      channelOverrides: [
+        { channel: general.id, role: everyone.id, allow: [], deny: ["viewChannel"] },
+      ],
+      categoryOverrides: [],
+    });
+    expect(store.channel(general.id)).toBeUndefined();
+    store.ingest({ channels: [general] });
+    store.applyEvent({
+      serverEvent: "deploymentAccessChanged",
+      permissions: ["viewDashboard", "moderateCommunities"],
+    });
+    expect(store.moderator).toBe(true);
+    expect(store.channelAccess(general.id).has("viewChannel")).toBe(true);
+    expect(store.access(aspen.id)?.has("manageMessages")).toBe(true);
+    expect(store.access(aspen.id)?.moderating("manageMessages")).toBe(true);
+    expect(store.access(aspen.id)?.moderating("sendMessages")).toBe(false);
+    // Losing it lets the hidden channel go again.
+    store.applyEvent({ serverEvent: "deploymentAccessChanged", permissions: [] });
+    expect(store.channel(general.id)).toBeUndefined();
+  });
+});

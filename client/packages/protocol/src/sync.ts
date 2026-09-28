@@ -57,6 +57,9 @@ export type CommunitySort = NonNullable<
   NonNullable<paths["/api/v1/admin/communities"]["get"]["parameters"]["query"]>["sort"]
 >;
 export type Growth = components["schemas"]["Growth"];
+export type DeploymentRole = components["schemas"]["DeploymentRole"];
+export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
+export type ModerationEntry = components["schemas"]["ModerationEntry"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
 
 /** A page of one of the dashboard's lists. */
@@ -612,6 +615,14 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+    if (!this.#readsEventsOf(communityId)) {
+      this.store.applyEvent({
+        serverEvent: "community",
+        type: "update",
+        id: communityId,
+        ...patch,
+      });
+    }
     return result.data;
   }
 
@@ -1053,6 +1064,164 @@ export class AspenSync {
     return this.#adminRead(await this.#client.api.GET("/api/v1/admin/fleet"));
   }
 
+  /** What the caller may do across the deployment, and the roles that give it. */
+  async deploymentAccess(): Promise<{ permissions: DeploymentPermission[]; roles: string[] }> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/users/@me/admin"));
+  }
+
+  /** The deployment's roles, lowest first, as a query of the moment. */
+  async deploymentRoles(): Promise<DeploymentRole[]> {
+    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/roles"));
+  }
+
+  async createDeploymentRole(
+    name: string,
+    permissions: readonly DeploymentPermission[],
+  ): Promise<DeploymentRole> {
+    return this.#adminRead(
+      await this.#client.api.POST("/api/v1/admin/roles", {
+        body: { name, permissions: [...permissions] },
+      }),
+    );
+  }
+
+  async updateDeploymentRole(
+    roleId: string,
+    patch: { name?: string; permissions?: readonly DeploymentPermission[] },
+  ): Promise<DeploymentRole> {
+    return this.#adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/roles/{role}", {
+        params: { path: { role: roleId } },
+        body: {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.permissions !== undefined ? { permissions: [...patch.permissions] } : {}),
+        },
+      }),
+    );
+  }
+
+  async deleteDeploymentRole(roleId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/roles/{role}", {
+      params: { path: { role: roleId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Orders the deployment roles below the caller's highest, lowest first. */
+  async reorderDeploymentRoles(roleIds: readonly string[]): Promise<DeploymentRole[]> {
+    return this.#adminRead(
+      await this.#client.api.PUT("/api/v1/admin/role-order", { body: { roles: [...roleIds] } }),
+    );
+  }
+
+  /** Gives someone a deployment role, or takes it away. */
+  async setUserDeploymentRole(userId: string, roleId: string, held: boolean): Promise<void> {
+    const params = { params: { path: { user: userId, role: roleId } } };
+    const result = held
+      ? await this.#client.api.PUT("/api/v1/admin/users/{user}/roles/{role}", params)
+      : await this.#client.api.DELETE("/api/v1/admin/users/{user}/roles/{role}", params);
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** A page of the moderation log, newest first. */
+  async moderationLog(before?: string): Promise<ModerationEntry[]> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/moderation-log", {
+        params: { query: before === undefined ? {} : { before } },
+      }),
+    );
+  }
+
+  /**
+   * Someone's DMs, for a deployment moderator to open; they are put in the store so the DM
+   * screen can show one, and reading any is logged by the server.
+   */
+  async userDms(userId: string): Promise<Channel[]> {
+    const dms = this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/users/{user}/dms", {
+        params: { path: { user: userId } },
+      }),
+    );
+    this.store.ingest({ channels: dms });
+    for (const dm of dms) {
+      for (const recipient of dm.recipients) {
+        this.ensureUser(recipient);
+      }
+    }
+    return dms;
+  }
+
+  /** Takes someone else's reaction off a message; see `#readsEventsOf` for the cache. */
+  async removeUsersReaction(messageId: string, emoji: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/messages/{message}/reactions/{emoji}/{user}",
+      { params: { path: { message: messageId, emoji, user: userId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const channel = this.store.message(messageId)?.channelId;
+    if (!this.#readsEventsOf(this.store.channel(channel ?? "")?.community ?? null)) {
+      this.store.applyEvent({ serverEvent: "react", type: "delete", messageId, emoji, userId });
+    }
+  }
+
+  /** Takes an attachment off a message, and reads the message again for what is left. */
+  async removeAttachment(messageId: string, attachmentId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/messages/{message}/attachments/{attachment}",
+      { params: { path: { message: messageId, attachment: attachmentId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    await this.loadMessage(messageId);
+  }
+
+  /** Renames a channel; see `#readsEventsOf` for the cache. */
+  async renameChannel(channelId: string, name: string): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/channels/{channel}", {
+      params: { path: { channel: channelId } },
+      body: { name },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (!this.#readsEventsOf(this.store.channel(channelId)?.community ?? null)) {
+      this.store.applyEvent({ serverEvent: "channel", type: "update", id: channelId, name });
+    }
+  }
+
+  /** Deletes a channel; see `#readsEventsOf` for the cache. */
+  async deleteChannel(channelId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/channels/{channel}", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (!this.#readsEventsOf(this.store.channel(channelId)?.community ?? null)) {
+      this.store.applyEvent({ serverEvent: "channel", type: "delete", id: channelId });
+    }
+  }
+
+  /**
+   * Whether the event stream brings what happens in a community: it does for one the caller
+   * belongs to, where a write's own event updates the cache. A moderator acting in one they are
+   * not in, or in a DM (`null`) they are not in, reads no events of it, so such a write applies
+   * its change to the cache itself.
+   */
+  #readsEventsOf(communityId: string | null): boolean {
+    if (communityId === null) {
+      return false;
+    }
+    return this.store.communities().some((c) => c.id === communityId);
+  }
+
   #adminRead<T>(result: { data?: T; error?: unknown; response: Response }): T {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -1322,13 +1491,16 @@ export class AspenSync {
     }
   }
 
-  /** Deletes a community; only its owner may. */
+  /** Deletes a community, which its owner or a deployment moderator may; see `#readsEventsOf`. */
   async deleteCommunity(communityId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/communities/{community}", {
       params: { path: { community: communityId } },
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (!this.#readsEventsOf(communityId)) {
+      this.store.applyEvent({ serverEvent: "community", type: "delete", id: communityId });
     }
   }
 
@@ -1631,7 +1803,7 @@ export class AspenSync {
         ...(dms.data.included.channelMutes ?? []),
       ]);
       this.#scheduleMuteEnd();
-      this.store.setAdmin(admin.data?.admin ?? false);
+      this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );

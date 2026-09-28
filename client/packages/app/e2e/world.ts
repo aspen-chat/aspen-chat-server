@@ -16,6 +16,7 @@ export const me = uuid;
 export const bob = "0190f0a0-0000-7000-8000-000000000002";
 export const community = "0190f0a0-0000-7000-8000-000000000010";
 const everyoneRole = "0190f0a0-0000-7000-8000-000000000040";
+const deploymentAdministrator = "0190f0a0-0000-7000-8000-000000000042";
 const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
 const channelPermissions = [
   "viewChannel",
@@ -302,7 +303,7 @@ function administration() {
       displayName: "Bob With A Rather Long Display Name",
       icon: null,
       createdAt: minutesAgo(900),
-      admin: false,
+      roles: [] as string[],
       registeredWith: standingInvite,
     },
     {
@@ -311,7 +312,7 @@ function administration() {
       displayName: "Kate",
       icon: null,
       createdAt: minutesAgo(1200),
-      admin: true,
+      roles: [deploymentAdministrator],
       registeredWith: null,
     },
   ];
@@ -323,7 +324,7 @@ function administration() {
       displayName: `Member ${String(i).padStart(2, "0")}`,
       icon: null,
       createdAt: minutesAgo(1440 * i + 1500),
-      admin: false,
+      roles: [] as string[],
       registeredWith: standingInvite,
     });
   }
@@ -677,7 +678,37 @@ async function answer(
         },
       ],
     ],
-    ["GET", /^\/users\/@me\/admin$/, () => ({ admin: true })],
+    [
+      "GET",
+      /^\/users\/@me\/admin$/,
+      () => ({
+        permissions: [
+          "viewDashboard",
+          "manageRegistrationInvites",
+          "manageVoiceServers",
+          "manageDeploymentRoles",
+        ],
+        roles: [deploymentAdministrator],
+      }),
+    ],
+    [
+      "GET",
+      /^\/admin\/roles$/,
+      () => [
+        {
+          id: deploymentAdministrator,
+          name: "Administrator",
+          position: 1,
+          permissions: [
+            "viewDashboard",
+            "manageRegistrationInvites",
+            "manageVoiceServers",
+            "manageDeploymentRoles",
+          ],
+        },
+      ],
+    ],
+    ["GET", /^\/admin\/moderation-log$/, () => []],
     ["GET", /^\/admin\/overview$/, admin.overview],
     ["GET", /^\/admin\/users$/, () => admin.users(url)],
     ["GET", /^\/admin\/communities$/, () => admin.communities(url)],

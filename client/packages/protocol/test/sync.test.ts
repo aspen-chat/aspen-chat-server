@@ -61,7 +61,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
-    "/api/v1/users/@me/admin": () => json({ admin: false }),
+    "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [] }),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -814,18 +814,18 @@ describe("AspenSync", () => {
     expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([]);
   });
 
-  it("learns at bootstrap whether the caller administers the server, and searches its users", async () => {
+  it("learns at bootstrap what the caller may do across the deployment, and searches its users", async () => {
     const searches: string[] = [];
     const { sync } = makeSync({
       ...bootstrapResponses(),
-      "/api/v1/users/@me/admin": () => json({ admin: true }),
+      "/api/v1/users/@me/admin": () => json({ permissions: ["viewDashboard"], roles: [] }),
       "/api/v1/admin/users": (url) => {
         searches.push(url.search);
         return json([]);
       },
     });
     await goLive(sync);
-    expect(sync.store.admin()).toBe(true);
+    expect(Array.from(sync.store.deploymentPermissions())).toEqual(["viewDashboard"]);
     await sync.adminUsers({ name: "  kate " });
     await sync.adminUsers({ name: " ", sort: "-name", offset: 30, limit: 15 });
     expect(searches.map((s) => new URLSearchParams(s))).toEqual([
@@ -833,7 +833,7 @@ describe("AspenSync", () => {
       new URLSearchParams({ sort: "-name", offset: "30", limit: "15" }),
     ]);
     sync.stop();
-    expect(sync.store.admin()).toBe(false);
+    expect(sync.store.deploymentPermissions().size).toBe(0);
   });
 
   it("reports reading once for everything read meanwhile, and never backwards", async () => {

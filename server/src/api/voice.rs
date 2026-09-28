@@ -9,6 +9,7 @@ use crate::api::extract::{Created, Json, NoContent, Path};
 use crate::api::message_enum::{VoiceParticipant, VoiceSession};
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_VOICE};
 use crate::app;
+use crate::app::deployment::DeploymentPermission;
 use crate::app::{ChannelId, UserId, VoiceServerId};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -229,14 +230,15 @@ pub async fn get_channel_voice(
     responses(
         (status = OK, body = Vec<VoiceServer>),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
+        (status = FORBIDDEN, description = "Without Manage voice servers", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_voice_servers(
     State(state): State<GlobalServerContext>,
-    _: AdminUser,
+    AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<Vec<VoiceServer>>> {
+    access.require(DeploymentPermission::ManageVoiceServers)?;
     let servers = app::voice::list_servers(&state).await?;
     Ok(Json(servers.into_iter().map(server_to_api).collect()))
 }
@@ -250,16 +252,17 @@ pub async fn list_voice_servers(
         (status = CREATED, body = VoiceServer, headers(("Location" = String, description = "URL of the new server"))),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
+        (status = FORBIDDEN, description = "Without Manage voice servers", body = Problem),
         (status = CONFLICT, description = "A server with that name exists", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn create_voice_server(
     State(state): State<GlobalServerContext>,
-    _: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Json(request): Json<VoiceServerCreateRequest>,
 ) -> ApiResult<Created<VoiceServer>> {
+    access.require(DeploymentPermission::ManageVoiceServers)?;
     let server =
         app::voice::create_server(&state, request.name, request.url, request.capacity).await?;
     Ok(Created::new(
@@ -279,17 +282,18 @@ pub async fn create_voice_server(
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
-        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
+        (status = FORBIDDEN, description = "Without Manage voice servers", body = Problem),
         (status = CONFLICT, description = "A server with that name exists", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn update_voice_server(
     State(state): State<GlobalServerContext>,
-    _: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Path(server): Path<VoiceServerId>,
     Json(request): Json<VoiceServerUpdateRequest>,
 ) -> ApiResult<Json<VoiceServer>> {
+    access.require(DeploymentPermission::ManageVoiceServers)?;
     let updated = app::voice::update_server(
         &state,
         server,
@@ -315,16 +319,17 @@ pub async fn update_voice_server(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
+        (status = FORBIDDEN, description = "Without Manage voice servers", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_voice_server(
     State(state): State<GlobalServerContext>,
-    _: AdminUser,
+    AdminUser(_session, access): AdminUser,
     Path(server): Path<VoiceServerId>,
 ) -> ApiResult<NoContent> {
+    access.require(DeploymentPermission::ManageVoiceServers)?;
     app::voice::delete_server(&state, server).await?;
     Ok(NoContent)
 }

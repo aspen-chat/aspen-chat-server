@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { useCallback } from "react";
-import { useIsAdmin, useSync } from "@/api/hooks";
+import { useDeploymentPermissions, useIsAdmin, useSync } from "@/api/hooks";
+import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
+import { useDeploymentRoles } from "@/features/admin/deploymentRoles";
+import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { linkButtonClass } from "@/features/auth/styles";
 import { CommunityDirectory, UserDirectory } from "@/features/admin/Directories";
@@ -14,8 +17,9 @@ import { format } from "@/i18n/messages";
 
 /**
  * The Administration Dashboard, `/admin`: the deployment's totals, the health of its servers,
- * registration invites, and searchable lists of its users and communities. Only the server's
- * administrators may open it; the server refuses everyone else whatever this page shows.
+ * registration invites, its roles, searchable lists of its users and communities, and the
+ * moderation log. Each part shows only to those with the deployment permission it needs; the
+ * server refuses everyone else whatever this page shows.
  */
 export function AdminDashboard() {
   const m = useMessages();
@@ -30,21 +34,54 @@ export function AdminDashboard() {
   );
 }
 
-/** The dashboard's sections, which share one read of the deployment's totals. */
+/** The dashboard's sections the caller may see. */
 function Sections() {
-  const sync = useSync();
-  const load = useCallback(() => sync.adminOverview(), [sync]);
-  const overview = useAdminRead(load);
+  const permissions = useDeploymentPermissions();
+  const view = permissions.has("viewDashboard");
+  const moderate = permissions.has("moderateCommunities");
+  const roles = useDeploymentRoles();
+  return (
+    <>
+      {view && <Totals />}
+      {permissions.has("manageRegistrationInvites") && <Invites view={view} />}
+      <DeploymentRolesSection read={roles} />
+      {(view || moderate) && (
+        <>
+          <UserDirectory roles={roles.data} />
+          <CommunityDirectory />
+        </>
+      )}
+      {view && <ModerationLog />}
+    </>
+  );
+}
+
+/** The totals, their growth, and the servers' health, which share one read. */
+function Totals() {
+  const overview = useOverview();
   return (
     <>
       <Overview read={overview} />
       <Growth />
       <FleetHealth />
-      <RegistrationInvites inviteRequired={overview.data?.registrationInviteRequired} />
-      <UserDirectory />
-      <CommunityDirectory />
     </>
   );
+}
+
+/** Registration invites, whose hint says whether the server requires them when that is known. */
+function Invites({ view }: { view: boolean }) {
+  return view ? <InvitesWithTotals /> : <RegistrationInvites inviteRequired={undefined} />;
+}
+
+function InvitesWithTotals() {
+  const overview = useOverview();
+  return <RegistrationInvites inviteRequired={overview.data?.registrationInviteRequired} />;
+}
+
+function useOverview() {
+  const sync = useSync();
+  const load = useCallback(() => sync.adminOverview(), [sync]);
+  return useAdminRead(load);
 }
 
 /** A section of the dashboard: a heading, an optional line under it, and its content. */

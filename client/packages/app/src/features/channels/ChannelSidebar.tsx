@@ -19,8 +19,12 @@ import {
   type DropItem,
 } from "react-aria-components";
 import {
+  useAccess,
   useCan,
+  useDeploymentCan,
   useCategories,
+  useMe,
+  useMemberRoles,
   useChannels,
   useCollapsed,
   useMute,
@@ -28,6 +32,7 @@ import {
   useSync,
   useUnread,
 } from "@/api/hooks";
+import { DeleteChannelDialog, RenameChannelDialog } from "@/features/channels/ChannelDialogs";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { AddDialog } from "@/features/channels/AddDialog";
 import { AddToCategoryDialog } from "@/features/channels/AddToCategoryDialog";
@@ -53,6 +58,11 @@ export function ChannelSidebar({ community }: { community: Community }) {
   const channels = useChannels(community.id);
   const categories = useCategories(community.id);
   const createInvites = useCan(community.id, "createInvites");
+  const me = useMe();
+  // Someone here only by moderating the server holds no roles in it, not even everyone's.
+  const held = useMemberRoles(community.id, me?.id ?? "");
+  const access = useAccess(community.id);
+  const moderating = held === undefined && (access?.moderator ?? false);
   const manageInvites = useCan(community.id, "manageInvites");
   const { topLevel, byCategory } = groupChannels(channels, categories);
   return (
@@ -62,6 +72,11 @@ export function ChannelSidebar({ community }: { community: Community }) {
         <CommunitySettingsDialog community={community} triggerClassName={headerButtonClass} />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
       </div>
+      {moderating && (
+        <p className="border-b border-line bg-accent-soft px-4 py-2 text-xs text-accent-strong">
+          {m.communitySettings.moderatorNote}
+        </p>
+      )}
       <nav aria-label={m.channelsLabel} className="flex-1 overflow-y-auto px-2 py-2">
         <ChannelGroup
           communityId={community.id}
@@ -343,11 +358,18 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   const unread = useUnread(channel.id);
   const muted = useMute(channel.id) !== undefined;
   const manage = useCan(channel.community, "manageChannels");
+  // A moderator of the server may rename and delete any channel, and nothing else here.
+  const moderator = useDeploymentCan("moderateCommunities");
   const label = useRef<HTMLSpanElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [accessOpen, setAccessOpen] = useState(false);
+  const [dialog, setDialog] = useState<"access" | "rename" | "delete" | null>(null);
   const marked = unread && !muted && !current;
-  const hasMenu = channel.ty === "text" || manage;
+  const hasMenu = channel.ty === "text" || manage || moderator;
+  const close = (open: boolean) => {
+    if (!open) {
+      setDialog(null);
+    }
+  };
   const accessibleName = muted
     ? format(m.mutedLabel, { name: channel.name })
     : unread
@@ -404,7 +426,17 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             {...(manage
               ? {
                   onAccess: () => {
-                    setAccessOpen(true);
+                    setDialog("access");
+                  },
+                }
+              : {})}
+            {...(manage || moderator
+              ? {
+                  onRename: () => {
+                    setDialog("rename");
+                  },
+                  onDelete: () => {
+                    setDialog("delete");
                   },
                 }
               : {})}
@@ -419,9 +451,23 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             name: channel.name,
             communityId: channel.community,
           }}
-          isOpen={accessOpen}
-          onOpenChange={setAccessOpen}
+          isOpen={dialog === "access"}
+          onOpenChange={close}
         />
+      )}
+      {(manage || moderator) && (
+        <>
+          <RenameChannelDialog
+            channel={channel}
+            isOpen={dialog === "rename"}
+            onOpenChange={close}
+          />
+          <DeleteChannelDialog
+            channel={channel}
+            isOpen={dialog === "delete"}
+            onOpenChange={close}
+          />
+        </>
       )}
     </span>
   );

@@ -127,3 +127,18 @@ test("nothing on the dashboard makes the screen scroll sideways", async ({ page 
   }));
   expect(widths.page).toBeLessThanOrEqual(widths.screen);
 });
+
+test("deployment roles list, and the caller's own top role is theirs but not theirs to change", async ({
+  page,
+}) => {
+  const roles = section(page, "Deployment roles");
+  await expect(roles.getByRole("row", { name: "Administrator" })).toBeVisible();
+  await expect(roles.getByText("This role is at or above your highest role")).toBeVisible();
+  // Moderation is not the Administrator's, so it cannot be given from here.
+  await expect(roles.getByRole("checkbox", { name: /Moderate any community/ })).not.toBeChecked();
+  const users = section(page, "Users");
+  await expect(
+    users.getByRole("row").filter({ hasText: "Kate" }).getByText("Administrator"),
+  ).toBeVisible();
+  await expect(section(page, "Moderation log").getByText("Nothing yet.")).toBeVisible();
+});

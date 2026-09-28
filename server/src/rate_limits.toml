@@ -88,6 +88,15 @@ endpoints = [
   "DELETE /admin/registration-invites/{code}",
   "GET /admin/fleet",
   "GET /admin/growth",
+  "GET /admin/roles",
+  "POST /admin/roles",
+  "PATCH /admin/roles/{role}",
+  "DELETE /admin/roles/{role}",
+  "PUT /admin/role-order",
+  "PUT /admin/users/{user}/roles/{role}",
+  "DELETE /admin/users/{user}/roles/{role}",
+  "GET /admin/moderation-log",
+  "GET /admin/users/{user}/dms",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -124,6 +133,8 @@ endpoints = [
   "DELETE /categories/{category}/overrides/{role}",
   "PUT /messages/{message}/pin",
   "DELETE /messages/{message}/pin",
+  "DELETE /messages/{message}/reactions/{emoji}/{user}",
+  "DELETE /messages/{message}/attachments/{attachment}",
 ]
 limits = { user = { requests = 60, per_seconds = 60, burst = 20, bucket = "manage" } }
 

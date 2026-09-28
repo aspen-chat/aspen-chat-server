@@ -2,8 +2,9 @@ use crate::api::message_enum::request::{CommunityCreateRequest, CommunityUpdateR
 use crate::api::message_enum::server_event::{CommunityEvent, ServerEvent, UserCommunityEvent};
 use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::icon::Icon;
-use crate::app::permissions::{Permissions, community_access, require_member};
+use crate::app::permissions::{Permissions, community_access, missing, require_member};
 use crate::app::{
     CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId, publish_event,
 };
@@ -126,9 +127,22 @@ pub(crate) async fn update_community(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            require_member(conn.as_mut(), caller, id)
-                .await?
-                .require(Permissions::MANAGE_COMMUNITY)?;
+            let access = require_member(conn.as_mut(), caller, id).await?;
+            // A deployment moderator may rename a community, and do nothing else to it here.
+            if !access.has(Permissions::MANAGE_COMMUNITY) {
+                if !(access.moderator && command.icon.is_none()) {
+                    return Err(missing(Permissions::MANAGE_COMMUNITY));
+                }
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::RenameCommunity,
+                    Some(id),
+                    None,
+                    command.name.clone(),
+                )
+                .await?;
+            }
             let Some(community) = diesel::update(community::table)
                 .set(CommunityChangeset {
                     name: command.name.clone(),
@@ -180,7 +194,7 @@ pub(crate) async fn read_invited_community(
     Community::load_from_db(state, id).await
 }
 
-/// Deletes a community. Only its owner may.
+/// Deletes a community. Only its owner may, or a deployment moderator.
 pub(crate) async fn delete_community(
     state: &GlobalServerContext,
     caller: UserId,
@@ -189,8 +203,20 @@ pub(crate) async fn delete_community(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            if !require_member(conn.as_mut(), caller, id).await?.owner {
-                return Err(app::Error::Forbidden(t!("permissionOwnerOnly")));
+            let access = require_member(conn.as_mut(), caller, id).await?;
+            if !access.owner {
+                if !access.moderator {
+                    return Err(app::Error::Forbidden(t!("permissionOwnerOnly")));
+                }
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::DeleteCommunity,
+                    Some(id),
+                    None,
+                    None,
+                )
+                .await?;
             }
             let deleted = diesel::update(community::table)
                 .set(community::deleted_at.eq(diesel::dsl::now))

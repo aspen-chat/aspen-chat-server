@@ -145,6 +145,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    deployment_role (id) {
+        id -> Uuid,
+        name -> Text,
+        position -> Int4,
+        permissions -> Int8,
+    }
+}
+
+diesel::table! {
     dm_recipient (channel, user) {
         channel -> Uuid,
         user -> Uuid,
@@ -213,6 +222,18 @@ diesel::table! {
         video_src -> Nullable<Text>,
         video_width -> Nullable<Int4>,
         video_height -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
+    moderation_log (id) {
+        id -> Uuid,
+        actor -> Nullable<Uuid>,
+        action -> Text,
+        community -> Nullable<Uuid>,
+        channel -> Nullable<Uuid>,
+        subject -> Nullable<Text>,
+        at -> Timestamptz,
     }
 }
 
@@ -362,8 +383,14 @@ diesel::table! {
         bio -> Nullable<Text>,
         status_text -> Nullable<Text>,
         status_emoji -> Nullable<Text>,
-        admin -> Bool,
         registered_with -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    user_deployment_role (user, role) {
+        user -> Uuid,
+        role -> Uuid,
     }
 }
 
@@ -446,6 +473,9 @@ diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
 diesel::joinable!(message_link_preview -> message (message_id));
+diesel::joinable!(moderation_log -> channel (channel));
+diesel::joinable!(moderation_log -> community (community));
+diesel::joinable!(moderation_log -> user (actor));
 diesel::joinable!(other_server_auth_token -> user (user));
 diesel::joinable!(passkey -> user (user));
 diesel::joinable!(pin -> channel (channel));
@@ -463,6 +493,8 @@ diesel::joinable!(recovery_code -> user (user));
 diesel::joinable!(refresh_token -> user (user));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
+diesel::joinable!(user_deployment_role -> deployment_role (role));
+diesel::joinable!(user_deployment_role -> user (user));
 diesel::joinable!(user_preferences -> user (user));
 diesel::joinable!(voice_participant -> user (user));
 diesel::joinable!(voice_participant -> voice_session (session));
@@ -486,12 +518,14 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_member_role,
     community_role,
     community_user,
+    deployment_role,
     dm_recipient,
     icon,
     invite,
     message,
     message_attachment,
     message_link_preview,
+    moderation_log,
     other_server_auth_token,
     passkey,
     pin,
@@ -506,6 +540,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     session,
     totp_secret,
     user,
+    user_deployment_role,
     user_preferences,
     voice_participant,
     voice_server,
