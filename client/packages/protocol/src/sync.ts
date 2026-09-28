@@ -186,6 +186,9 @@ export interface AspenSyncOptions {
 
 export type SyncListener = () => void;
 
+/** How many members one page of a member search holds. */
+export const MEMBER_SEARCH_PAGE = 20;
+
 /** How long a read after a change to the caller's access may wait, at most. */
 export const ACCESS_RELOAD_SPREAD_MS = 2000;
 
@@ -1449,6 +1452,26 @@ export class AspenSync {
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+  }
+
+  /**
+   * A page of a community's members whose name contains `name`, sorted by name. Only those who
+   * act on members may search a community larger than its member sample; the server refuses
+   * anyone else. The members are cached, their roles too, but not added to the sample.
+   */
+  async searchMembers(communityId: string, name: string, offset = 0): Promise<User[]> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
+      params: {
+        path: { community: communityId },
+        query: { "filter[name]": name, offset, limit: MEMBER_SEARCH_PAGE },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data.data });
+    this.store.noteMemberRoles(result.data.included.userCommunities ?? []);
+    return result.data.data;
   }
 
   /** Leaves a community, which drops it from the caller's list at once. */

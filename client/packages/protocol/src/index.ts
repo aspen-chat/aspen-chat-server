@@ -134,7 +134,13 @@ export type {
   VoiceSessionEndReason,
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
-export { PRESENCE_BATCH, PRESENCE_POLL_MS, READ_REPORT_MS, REACTORS_PAGE } from "./sync";
+export {
+  MEMBER_SEARCH_PAGE,
+  PRESENCE_BATCH,
+  PRESENCE_POLL_MS,
+  READ_REPORT_MS,
+  REACTORS_PAGE,
+} from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
   MicrophoneError,

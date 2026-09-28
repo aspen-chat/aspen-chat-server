@@ -32,12 +32,12 @@ import {
   useCategoryOverrides,
   useChannel,
   useChannelOverrides,
-  useMembers,
   useRoles,
   useStore,
   useSync,
 } from "@/api/hooks";
 import { alertClass, fieldClass, hintClass, labelClass } from "@/features/auth/styles";
+import { MemberPicker } from "@/features/community-settings/MemberPicker";
 import { CHANNEL_GROUPS } from "@/features/community-settings/permissionGroups";
 import {
   dialogClass,
@@ -49,7 +49,6 @@ import {
 } from "@/features/invites/dialog";
 import { RadioMark, choiceClass, markClass } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
-import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -462,7 +461,6 @@ function Advanced({
 function CheckAccess({ target }: { target: AccessTarget }) {
   const m = useMessages();
   const store = useStore();
-  const members = useMembers(target.communityId);
   const roles = useRoles(target.communityId);
   const [userId, setUserId] = useState<string | null>(null);
   const channel = useChannel(target.kind === "channel" ? target.id : "");
@@ -500,28 +498,13 @@ function CheckAccess({ target }: { target: AccessTarget }) {
   return (
     <div className="flex flex-col gap-3 pt-2">
       <p className={hintClass}>{m.access.checkHint}</p>
-      <Select
-        value={userId}
-        onChange={(key) => {
-          setUserId(key === null ? null : String(key));
+      <MemberPicker
+        communityId={target.communityId}
+        label={m.access.memberLabel}
+        onChange={(user) => {
+          setUserId(user?.id ?? null);
         }}
-        className={fieldClass}
-      >
-        <Label className={labelClass}>{m.access.memberLabel}</Label>
-        <Button className={selectButtonClass}>
-          <SelectValue />
-          <CaretDownIcon size={14} aria-hidden="true" />
-        </Button>
-        <Popover className="max-h-72 min-w-(--trigger-width) overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg">
-          <ListBox items={members} className="outline-none">
-            {(user) => (
-              <ListBoxItem id={user.id} textValue={displayNameOf(user)} className={optionClass}>
-                {displayNameOf(user)}
-              </ListBoxItem>
-            )}
-          </ListBox>
-        </Popover>
-      </Select>
+      />
       {access !== null && (
         <table className="w-full text-sm">
           <tbody>

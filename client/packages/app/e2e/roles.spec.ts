@@ -29,6 +29,10 @@ test("community settings list the roles, highest first, and the members with the
   await dialog.getByRole("tab", { name: "Members" }).click();
   await expect(dialog.getByText("Owner")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Remove" })).toHaveCount(0);
+  // They may assign roles, so they search every member, not only the sample.
+  await dialog.getByRole("searchbox", { name: "Find a member" }).fill("kate");
+  await expect(dialog.getByText("Search every member by name.")).toBeVisible();
+  await expect(dialog.getByRole("listitem")).toHaveCount(1);
 });
 
 test("a channel's access starts open to everyone and explains what a member can do", async ({
@@ -46,7 +50,7 @@ test("a channel's access starts open to everyone and explains what a member can 
   await expect(dialog.getByRole("heading", { name: "Who can use #general" })).toBeVisible();
   await expect(dialog.getByRole("radio", { name: /^Everyone Every member/ })).toBeChecked();
   await dialog.getByText("Check access").click();
-  await dialog.getByRole("button", { name: /Member/ }).click();
+  await dialog.getByRole("combobox", { name: "Member" }).click();
   await page.getByRole("option").first().click();
   await expect(dialog.getByRole("row", { name: /View channels/ })).toContainText("Yes");
 });

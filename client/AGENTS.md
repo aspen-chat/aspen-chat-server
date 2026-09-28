@@ -408,7 +408,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   members, with their roles and Remove), and `AccessDialog`, opened from a channel's menu or a
   category's lock, which leads with three presets (everyone, only some roles, read-only) and
   keeps per-role allow, default, and deny under Advanced and a per-member explanation
-  (`explain`) under Check access. A preset lets its roles in before shutting everyone else out,
+  (`explain`) under Check access. Wherever a member is chosen (the Members tab, handing over
+  ownership, Check access), `useMemberSearch` shows the member sample until something is typed,
+  and then, for those the server lets search every member (the same rule, mirrored so the field
+  is not offered to anyone refused), searches with `AspenSync.searchMembers`, which caches the
+  people found and their roles without adding them to the sample; `MemberPicker` is the
+  combobox the dialogs share. A preset lets its roles in before shutting everyone else out,
   so their members never lose the channel in between. Pins are store state per channel (topic
   `pins:<channelId>`, `usePins`, read once on first use and kept by `pin` events), shown by
   `PinsButton` in the channel and DM headers.

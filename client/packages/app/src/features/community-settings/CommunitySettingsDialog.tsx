@@ -1,5 +1,5 @@
-import { ApiProblemError, type Community } from "@aspen/protocol";
-import { CaretDownIcon, GearSixIcon } from "@phosphor-icons/react";
+import { ApiProblemError, type Community, type User } from "@aspen/protocol";
+import { GearSixIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -9,20 +9,15 @@ import {
   Form,
   Input,
   Label,
-  ListBox,
-  ListBoxItem,
   Modal,
   ModalOverlay,
-  Popover,
-  Select,
-  SelectValue,
   Tab,
   TabList,
   TabPanel,
   Tabs,
   TextField,
 } from "react-aria-components";
-import { useAccess, useMe, useMemberRoles, useMembers, useSync, useUser } from "@/api/hooks";
+import { useAccess, useMe, useMemberRoles, useSync, useUser } from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
@@ -33,15 +28,14 @@ import {
 } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
 import { IconPicker } from "@/features/media/IconPicker";
+import { MemberPicker } from "@/features/community-settings/MemberPicker";
 import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
 import {
   dangerButtonClass,
   dialogClass,
-  optionClass,
   overlayClass,
   secondaryButtonClass,
-  selectButtonClass,
   wideModalClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -222,37 +216,21 @@ function Transfer({ community }: { community: Community }) {
   const m = useMessages();
   const sync = useSync();
   const me = useMe();
-  const members = useMembers(community.id).filter((u) => u.id !== me?.id);
-  const [to, setTo] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<User | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const chosen = members.find((u) => u.id === to);
   return (
     <div className="flex flex-col gap-2">
-      <Select
-        value={to}
-        onChange={(key) => {
-          setTo(key === null ? null : String(key));
+      <MemberPicker
+        communityId={community.id}
+        label={m.communitySettings.transferLabel}
+        exclude={me === null ? [] : [me.id]}
+        onChange={(user) => {
+          setChosen(user);
           setConfirming(false);
         }}
-        className={fieldClass}
-      >
-        <Label className={labelClass}>{m.communitySettings.transferLabel}</Label>
-        <Button className={selectButtonClass}>
-          <SelectValue />
-          <CaretDownIcon size={14} aria-hidden="true" />
-        </Button>
-        <Popover className="max-h-72 min-w-(--trigger-width) overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg">
-          <ListBox items={members} className="outline-none">
-            {(user) => (
-              <ListBoxItem id={user.id} textValue={displayNameOf(user)} className={optionClass}>
-                {displayNameOf(user)}
-              </ListBoxItem>
-            )}
-          </ListBox>
-        </Popover>
-      </Select>
-      {chosen !== undefined && confirming && (
+      />
+      {chosen !== null && confirming && (
         <p className="text-sm">
           {format(m.communitySettings.transferConfirm, {
             community: community.name,
@@ -266,9 +244,9 @@ function Transfer({ community }: { community: Community }) {
         </p>
       )}
       <Button
-        isDisabled={chosen === undefined}
+        isDisabled={chosen === null}
         onPress={() => {
-          if (chosen === undefined) {
+          if (chosen === null) {
             return;
           }
           if (!confirming) {
@@ -279,7 +257,6 @@ function Transfer({ community }: { community: Community }) {
           sync.transferOwnership(community.id, chosen.id).then(
             () => {
               setConfirming(false);
-              setTo(null);
             },
             (e: unknown) => {
               setError(problemText(e));

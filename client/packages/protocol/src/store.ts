@@ -447,6 +447,18 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Records the roles of members a search found, without making them part of the community's
+   * member sample, which stays what the community read gave.
+   */
+  noteMemberRoles(memberships: readonly UserCommunity[]): void {
+    this.#batch(() => {
+      for (const membership of memberships) {
+        this.#setMemberRoles(membership.community, membership.user, membership.roles);
+      }
+    });
+  }
+
   /** Topic `pins:<channelId>`: the channel's pins in their order, or `undefined` until loaded. */
   pins(channelId: string): readonly Pin[] | undefined {
     return this.#memoized(`pins:${channelId}`, () => {

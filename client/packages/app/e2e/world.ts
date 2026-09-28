@@ -613,6 +613,28 @@ async function answer(
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
     ["GET", /^\/channels\/[^/]+\/pins$/, () => []],
+    // A member search: everyone in the world whose name holds what was typed.
+    [
+      "GET",
+      new RegExp(`^/communities/${community}/members$`),
+      () => {
+        const name = (url.searchParams.get("filter[name]") ?? "").toLowerCase();
+        const found = users.filter((u) =>
+          [u.name, u.displayName ?? ""].some((n) => n.toLowerCase().includes(name)),
+        );
+        return {
+          data: found,
+          included: {
+            userCommunities: found.map((u) => ({
+              community,
+              user: u.id,
+              sortIndex: 0,
+              roles: u.id === me ? [organiserRole] : [],
+            })),
+          },
+        };
+      },
+    ],
     // Everyone who reacted with an emoji, in one page.
     [
       "GET",

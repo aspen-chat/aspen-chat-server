@@ -85,7 +85,7 @@ pub async fn overview(state: &GlobalServerContext) -> app::Result<Overview> {
 
 /// `text` as a case-insensitive `LIKE` pattern matching any name containing it, with the
 /// pattern's own special characters escaped; `None` for an empty search.
-fn contains_pattern(text: Option<&str>) -> Option<String> {
+pub(crate) fn contains_pattern(text: Option<&str>) -> Option<String> {
     let text = text?.trim().to_lowercase();
     if text.is_empty() {
         return None;

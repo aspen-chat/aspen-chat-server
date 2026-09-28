@@ -3,6 +3,7 @@ import {
   AspenClient,
   AspenSync,
   type AspenSyncOptions,
+  MEMBER_SEARCH_PAGE,
   MESSAGE_AROUND_RADIUS,
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
@@ -812,6 +813,32 @@ describe("AspenSync", () => {
 
     await sync.removeWriteIn(lunch.id, 2);
     expect(Array.from(sync.store.myWriteIns(lunch.id))).toEqual([]);
+  });
+
+  it("searches a community's members without making them its member sample", async () => {
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/communities/${aspen.id}/members`]: (url) => {
+        queries.push(url.searchParams);
+        return json({
+          data: [bob],
+          included: {
+            userCommunities: [{ community: aspen.id, user: bob.id, sortIndex: 0, roles: [id(41)] }],
+          },
+        });
+      },
+    });
+    await goLive(sync);
+    const found = await sync.searchMembers(aspen.id, "bo");
+    expect(found.map((u) => u.id)).toEqual([bob.id]);
+    expect(queries[0]?.get("filter[name]")).toBe("bo");
+    expect(queries[0]?.get("limit")).toBe(String(MEMBER_SEARCH_PAGE));
+    expect(sync.store.user(bob.id)).toEqual(bob);
+    expect(sync.store.memberRoles(aspen.id, bob.id)).toEqual([id(41)]);
+    // The sample is still the community read's.
+    expect(sync.store.members(aspen.id).map((u) => u.id)).toEqual([me.id]);
+    sync.stop();
   });
 
   it("learns at bootstrap what the caller may do across the deployment, and searches its users", async () => {

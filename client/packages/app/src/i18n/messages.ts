@@ -772,6 +772,9 @@ export const en = {
     removeConfirm: "Remove {name} from {community}? They can come back with an invite.",
     removing: "Removing…",
     sampleNote: "The members seen most recently are listed.",
+    searchLabel: "Find a member",
+    searchHint: "Search every member by name.",
+    noneFound: "No members match.",
     you: "you",
   },
   access: {

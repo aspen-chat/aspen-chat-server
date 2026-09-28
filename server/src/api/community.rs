@@ -355,17 +355,44 @@ pub async fn delete_community(
     Ok(NoContent)
 }
 
-/// Members of the community, most recently seen first. Capped at 100 entries.
+/// Body of a member read: the members, with their memberships (their roles among them) as
+/// `included.userCommunities`.
+pub type MemberList = SideloadedList<User>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct MemberListQuery {
+    /// Search: members whose username or display name contains this, ignoring case.
+    #[serde(rename = "filter[name]")]
+    #[param(rename = "filter[name]")]
+    pub name: Option<String>,
+    /// Where a search's page starts, at most 10000.
+    pub offset: Option<i64>,
+    /// How many a search returns, at most 50; 20 when absent.
+    pub limit: Option<i64>,
+}
+
+/// How many members a search page holds when no `limit` is given.
+const DEFAULT_MEMBER_PAGE: i64 = 20;
+
+/// The community's members. Without parameters, the sample every member reads: the 100 most
+/// recently seen, the caller always among them. With `filter[name]`, `offset`, or `limit`, a
+/// search of every member by name, sorted by name, a page at a time. In a community of more than
+/// 100 members only those who act on members may search it (its owner, a deployment moderator,
+/// and holders of Assign roles, Remove members, Manage channels, or Manage categories); anyone
+/// else is refused with `forbidden`, so no ordinary member can list a large community whole.
 #[utoipa::path(
     get,
     path = "/communities/{community}/members",
     tag = TAG_COMMUNITIES,
-    params(("community" = CommunityId, Path)),
+    params(("community" = CommunityId, Path), MemberListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<User>),
+        (status = OK, body = MemberList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: searching a large community without acting on members", body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -374,11 +401,40 @@ pub async fn list_community_members(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<User>>> {
-    let users = app::community::read_community_users(&state, user.id, community).await?;
-    Ok(Json(
-        users.into_iter().map(api::user::user_to_api).collect(),
-    ))
+    Query(query): Query<MemberListQuery>,
+) -> ApiResult<Json<MemberList>> {
+    let searching = query.name.is_some() || query.offset.is_some() || query.limit.is_some();
+    let members = if searching {
+        app::community::search_community_members(
+            &state,
+            user.id,
+            community,
+            query.name.as_deref(),
+            query.offset.unwrap_or(0),
+            query.limit.unwrap_or(DEFAULT_MEMBER_PAGE),
+        )
+        .await?
+    } else {
+        app::community::read_community_sample(&state, user.id, community).await?
+    };
+    let mut users = Vec::with_capacity(members.len());
+    let mut memberships = Vec::with_capacity(members.len());
+    for membership in members {
+        memberships.push(UserCommunity {
+            community: membership.community,
+            user: membership.user.user_pg.id,
+            sort_index: membership.sort_index,
+            roles: membership.roles,
+        });
+        users.push(api::user::user_to_api(membership.user));
+    }
+    Ok(Json(MemberList::new(
+        users,
+        Included {
+            user_communities: Some(memberships),
+            ..Included::default()
+        },
+    )))
 }
 
 /// Top-level channels of the community (those not filed under a category), in sort order.

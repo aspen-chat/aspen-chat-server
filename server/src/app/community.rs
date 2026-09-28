@@ -519,6 +519,15 @@ pub(crate) async fn read_community_members(
     .bind::<Uuid, _>(caller.0)
     .load(conn.as_mut())
     .await?;
+    memberships_of(state, conn.as_mut(), rows).await
+}
+
+/// Member rows as memberships, with the roles each holds and their online status.
+async fn memberships_of(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    rows: Vec<CommunityMember>,
+) -> app::Result<Vec<Membership>> {
     let mut communities = Vec::with_capacity(rows.len());
     let mut sort_indexes = Vec::with_capacity(rows.len());
     let mut users = Vec::with_capacity(rows.len());
@@ -532,7 +541,7 @@ pub(crate) async fn read_community_members(
         .zip(&users)
         .map(|(community, user)| (*community, user.id))
         .collect();
-    let mut roles = app::role::roles_of_members(conn.as_mut(), &keys).await?;
+    let mut roles = app::role::roles_of_members(conn, &keys).await?;
     let users = app::user::with_online_status(state, users).await?;
     Ok(communities
         .into_iter()
@@ -549,22 +558,86 @@ pub(crate) async fn read_community_members(
         .collect())
 }
 
-pub(crate) async fn read_community_users(
+/// The most results one page of a member search holds.
+pub const MAX_MEMBER_PAGE: i64 = 50;
+/// The furthest into a member search a page may start.
+pub const MAX_MEMBER_OFFSET: i64 = 10_000;
+
+/// One page of `community`'s members whose username or display name contains `search`, by name:
+/// `limit` of them from `offset`.
+///
+/// In a community no bigger than the member sample (`MEMBERS_PER_COMMUNITY`), which every
+/// member already reads whole, anyone in it may search. In a larger one only those who act on
+/// members may: its owner, a deployment moderator, and holders of Assign roles, Remove members,
+/// Manage channels, or Manage categories (whose access settings name members). Everyone else
+/// sees the sample and no more, so a large community's full membership cannot be listed by any
+/// member, a page or a search at a time.
+pub(crate) async fn search_community_members(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
-) -> app::error::Result<Vec<app::user::User>> {
+    search: Option<&str>,
+    offset: i64,
+    limit: i64,
+) -> app::Result<Vec<Membership>> {
+    use diesel::sql_types::{BigInt, Nullable, Text, Uuid};
+    let mut conn = state.connection_pool.get().await?;
+    let access = require_member(conn.as_mut(), caller, community).await?;
+    let privileged = access.owner
+        || access.moderator
+        || [
+            Permissions::ASSIGN_ROLES,
+            Permissions::REMOVE_MEMBERS,
+            Permissions::MANAGE_CHANNELS,
+            Permissions::MANAGE_CATEGORIES,
+        ]
+        .into_iter()
+        .any(|p| access.has(p));
+    if !privileged {
+        let members: i64 = community_user::table
+            .filter(community_user::community.eq(community))
+            .count()
+            .get_result(conn.as_mut())
+            .await?;
+        if members > MEMBERS_PER_COMMUNITY {
+            return Err(app::Error::Forbidden(t!("memberSearchRefused")));
+        }
+    }
+    let rows: Vec<CommunityMember> = diesel::sql_query(
+        r#"
+        SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
+               u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
+               u.status_emoji
+        FROM community_user cu
+        JOIN "user" u ON u.id = cu."user"
+        WHERE cu.community = $1 AND u.deleted_at IS NULL
+          AND ($2::text IS NULL OR lower(u.name) LIKE $2 OR lower(u.display_name) LIKE $2)
+        ORDER BY lower(COALESCE(u.display_name, u.name)), u.id
+        OFFSET $3 LIMIT $4
+        "#,
+    )
+    .bind::<Uuid, _>(community.0)
+    .bind::<Nullable<Text>, _>(app::admin::contains_pattern(search))
+    .bind::<BigInt, _>(offset.clamp(0, MAX_MEMBER_OFFSET))
+    .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
+    .load(conn.as_mut())
+    .await?;
+    memberships_of(state, conn.as_mut(), rows).await
+}
+
+/// The member sample of one community, for a member of it (or a deployment moderator).
+pub(crate) async fn read_community_sample(
+    state: &GlobalServerContext,
+    caller: UserId,
+    community: CommunityId,
+) -> app::error::Result<Vec<Membership>> {
     require_member(
         state.connection_pool.get().await?.as_mut(),
         caller,
         community,
     )
     .await?;
-    Ok(read_community_members(state, caller, &[community])
-        .await?
-        .into_iter()
-        .map(|membership| membership.user)
-        .collect())
+    read_community_members(state, caller, &[community]).await
 }
 
 /// Every live channel of each of `communities`, including those filed under a category, ordered

@@ -7,19 +7,22 @@ import {
   CheckboxField,
   Dialog,
   DialogTrigger,
+  Input,
+  Label,
   Popover,
+  SearchField,
 } from "react-aria-components";
 import {
   useAccess,
   useCommunity,
   useMe,
   useMemberRoles,
-  useMembers,
   useRoles,
   useStore,
   useSync,
 } from "@/api/hooks";
-import { alertClass, hintClass } from "@/features/auth/styles";
+import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/features/auth/styles";
+import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { markClass } from "@/features/layout/choices";
@@ -32,16 +35,33 @@ function problemText(e: unknown): string {
 }
 
 /**
- * The community's members as far as the member sample goes, each with their roles. Those who
+ * The community's members, each with their roles: the member sample, or, for those who may search
+ * every member, whoever the search finds. Those who
  * may assign roles change a member's roles below their own highest; those who may remove
  * members remove anyone ranked below them, never the owner.
  */
 export function MembersPanel({ communityId }: { communityId: string }) {
   const m = useMessages();
-  const members = useMembers(communityId);
+  const [query, setQuery] = useState("");
+  const { members, searching, error, canSearch } = useMemberSearch(communityId, query);
   return (
     <div className="flex flex-col gap-2">
-      <p className={hintClass}>{m.members.sampleNote}</p>
+      {canSearch && (
+        <SearchField value={query} onChange={setQuery} className={fieldClass + " max-w-sm"}>
+          <Label className={labelClass}>{m.members.searchLabel}</Label>
+          <Input className={inputClass} />
+        </SearchField>
+      )}
+      <p className={hintClass}>
+        {query.trim() !== "" && canSearch ? m.members.searchHint : m.members.sampleNote}
+      </p>
+      {error !== null && (
+        <p role="alert" className={alertClass}>
+          {error}
+        </p>
+      )}
+      {searching && <p className={hintClass}>{m.loading}</p>}
+      {!searching && members.length === 0 && <p className={hintClass}>{m.members.noneFound}</p>}
       <ul aria-label={m.members.listLabel} className="flex flex-col gap-1">
         {members.map((member) => (
           <MemberRow key={member.id} communityId={communityId} member={member} />
