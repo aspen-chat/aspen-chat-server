@@ -36,9 +36,12 @@ test("unread channels, communities, and DMs are marked until they are read", asy
   await expect(
     rail(page).getByRole("link", { name: "Direct messages", exact: true }),
   ).toBeVisible();
+  // The row is a link, or a button to Bob's card while his DM is open beside the list.
+  const list = page.getByRole("navigation", { name: "Direct messages" });
   await expect(
-    page.getByRole("link", { name: "Bob With A Rather Long Display Name", exact: true }),
+    list.getByText("Bob With A Rather Long Display Name", { exact: true }),
   ).toBeVisible();
+  await expect(list.getByText(/, unread$/)).toHaveCount(0);
 });
 
 test("the New Messages line sits under the last message read, and stays while reading", async ({

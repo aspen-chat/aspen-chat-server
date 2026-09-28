@@ -13,6 +13,7 @@ import { useDmTitle } from "@/features/dms/useDmTitle";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { unreadMarkClass } from "@/features/channels/ChannelSidebar";
+import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -83,7 +84,9 @@ function DmSidebar({ current }: { current: string | undefined }) {
 /**
  * One DM in the list, marked while it holds something the caller has not read, or dimmed with a
  * muted bell while they have muted it. Its menu opens on a right click or from its options
- * button, which sits over the row's right end, in room the link leaves for it.
+ * button, which sits over the row's right end, in room the link leaves for it. The row of the
+ * one-to-one DM already open opens the other person's card instead, beside the row, so an
+ * unwanted conversation is a press away from a block.
  */
 function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
   const m = useMessages();
@@ -99,6 +102,36 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
     : unread
       ? format(m.unreadLabel, { name: title })
       : null;
+  const rowClass =
+    "flex w-full items-center gap-2 rounded-md text-left text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+    (current
+      ? "bg-surface-hover py-1.5 pr-8 pl-2 font-medium text-ink"
+      : unread && !muted
+        ? // The border and this padding make up the usual padding, so nothing moves.
+          "py-[5px] pr-[31px] pl-[7px] " + unreadMarkClass
+        : "py-1.5 pr-8 pl-2 " + (muted ? "text-ink-faint" : "text-ink-muted"));
+  const content = (
+    <>
+      {dm.ty === "groupDm" ? (
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-ink-muted">
+          <UsersThreeIcon size={16} aria-hidden="true" />
+        </span>
+      ) : (
+        <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
+      )}
+      {accessibleName === null ? (
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+      ) : (
+        <>
+          <span aria-hidden="true" className="min-w-0 flex-1 truncate">
+            {title}
+          </span>
+          <span className="sr-only">{accessibleName}</span>
+        </>
+      )}
+      {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
+    </>
+  );
   return (
     <div
       ref={row}
@@ -108,39 +141,26 @@ function DmRow({ dm, current }: { dm: Channel; current: boolean }) {
       }}
       className="group relative"
     >
-      <Link
-        to="/dms/$channelId"
-        params={{ channelId: dm.id }}
-        aria-current={current ? "page" : undefined}
-        className={
-          "flex items-center gap-2 rounded-md text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
-          (current
-            ? "bg-surface-hover py-1.5 pr-8 pl-2 font-medium text-ink"
-            : unread && !muted
-              ? // The border and this padding make up the usual padding, so nothing moves.
-                "py-[5px] pr-[31px] pl-[7px] " + unreadMarkClass
-              : "py-1.5 pr-8 pl-2 " + (muted ? "text-ink-faint" : "text-ink-muted"))
-        }
-      >
-        {dm.ty === "groupDm" ? (
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-ink-muted">
-            <UsersThreeIcon size={16} aria-hidden="true" />
-          </span>
-        ) : (
-          <Avatar name={first === undefined ? title : displayNameOf(first)} iconId={first?.icon} />
-        )}
-        {accessibleName === null ? (
-          <span className="min-w-0 flex-1 truncate">{title}</span>
-        ) : (
-          <>
-            <span aria-hidden="true" className="min-w-0 flex-1 truncate">
-              {title}
-            </span>
-            <span className="sr-only">{accessibleName}</span>
-          </>
-        )}
-        {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
-      </Link>
+      {current && dm.ty === "dm" && first !== undefined ? (
+        <ProfilePopover user={first} placement="end" anchorRef={row}>
+          <Button
+            aria-current="page"
+            aria-label={format(m.profile.show, { name: accessibleName ?? title })}
+            className={rowClass}
+          >
+            {content}
+          </Button>
+        </ProfilePopover>
+      ) : (
+        <Link
+          to="/dms/$channelId"
+          params={{ channelId: dm.id }}
+          aria-current={current ? "page" : undefined}
+          className={rowClass}
+        >
+          {content}
+        </Link>
+      )}
       {/* Placed by a wrapper, since the button's own touch area keeps it `relative`. */}
       <span className="absolute top-1/2 right-2 flex -translate-y-1/2">
         <ChannelMenuButton

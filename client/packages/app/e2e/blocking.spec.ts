@@ -85,3 +85,50 @@ test("a DM with someone blocked offers to unblock, as the settings do", async ({
   await page.keyboard.press("Escape");
   await expect(note).toHaveCount(0);
 });
+
+/** Opens the DM with Bob from the DM list. */
+async function openBobsDm(page: Page) {
+  await page
+    .getByRole("navigation", { name: "Communities" })
+    .getByRole("link", { name: /^Direct messages/ })
+    .click();
+  await page
+    .getByRole("link", { name: new RegExp(`^${bob}`) })
+    .first()
+    .click();
+  await expect(page.getByText("Did you get the photos?")).toBeVisible();
+}
+
+/** Blocks from the card that is open, and checks the DM then offers to unblock. */
+async function blockFromOpenCard(page: Page) {
+  const card = page.getByRole("dialog", { name: new RegExp(bob) });
+  await card.getByRole("button", { name: "Block" }).click();
+  await card.getByRole("button", { name: "Block" }).click();
+  await expect(card.getByText("Blocked", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByText(`You blocked ${bob}. Unblock them to message each other again.`),
+  ).toBeVisible();
+}
+
+test("the name in a DM's header opens that person's card", async ({ page }) => {
+  await openBobsDm(page);
+  await page
+    .getByRole("heading", { name: new RegExp(bob) })
+    .getByRole("button", { name: `Show profile of ${bob}` })
+    .click();
+  await blockFromOpenCard(page);
+});
+
+test("pressing the open DM in the list opens the other person's card", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("phone"), "a phone shows the list or the DM");
+  await openBobsDm(page);
+  const row = page
+    .getByRole("navigation", { name: "Direct messages" })
+    .getByRole("button", { name: new RegExp(`^Show profile of ${bob}`) });
+  await expect(row).toHaveAttribute("aria-current", "page");
+  await row.click();
+  await blockFromOpenCard(page);
+});

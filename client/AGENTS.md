@@ -307,8 +307,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   route's content, with "New message" opening `PeoplePicker`, which lists `RecordStore.people()`
   (everyone in the caller's communities' member lists, since a DM needs a shared community).
   A profile card's Message button opens the one-to-one DM (`AspenSync.openDm`). `DmHeader`
-  titles a DM with the other people's names (`useDmTitle`) and, for a group, offers
-  `addDmRecipient` and `leaveDm`. `ChannelScreen` serves DMs and community channels alike.
+  titles a DM with the other people's names, each a button that opens that person's card, and,
+  for a group, offers `addDmRecipient` and `leaveDm`. The list row of the one-to-one DM already
+  open is a button to the other person's card, beside the row, rather than a link to where the
+  reader already is; either way an unwanted conversation is a press away from a block. `ChannelScreen` serves DMs and community channels alike.
 - Unread is `RecordStore` state from the `readStates` sideload of the community list and the
   DM list, one `ReadState` per channel (topic `read:<channelId>`; `useReadState`, `useUnread`),
   kept current by events: someone else's new message moves `lastMessage`, the caller's own
