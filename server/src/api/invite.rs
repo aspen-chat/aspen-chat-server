@@ -41,7 +41,9 @@ pub struct InviteCreateRequest {
         (status = CREATED, body = message_enum::Invite, headers(("Location" = String, description = "URL of the new invite"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (bad custom code, not a member)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = CONFLICT, description = "`inviteCodeTaken`", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -82,15 +84,16 @@ pub async fn create_invite(
         (status = OK, body = Vec<message_enum::Invite>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_community_invites(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<message_enum::Invite>>> {
-    let invites = app::invite::read_community_invites(&state, community).await?;
+    let invites = app::invite::read_community_invites(&state, user.id, community).await?;
     Ok(Json(invites.iter().map(invite_to_api).collect()))
 }
 
@@ -141,7 +144,7 @@ pub async fn get_invite(
     let invite = app::invite::read_invite(&state, &code).await?;
     let mut included = Included::default();
     if query.include.contains(InviteInclude::Community) {
-        let community = app::community::read_community(&state, invite.community).await?;
+        let community = app::community::read_invited_community(&state, invite.community).await?;
         included.communities = Some(vec![api::community::community_to_api(community)]);
     }
     Ok(Json(InviteRead::new(invite_to_api(&invite), included)))

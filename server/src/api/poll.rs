@@ -116,6 +116,7 @@ pub struct PollReadQuery {
         (status = CREATED, body = Poll, headers(("Location" = String, description = "URL of the new poll"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (question, options, or duration out of bounds)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -283,8 +284,8 @@ pub async fn add_write_in(
 }
 
 /// Removes a written-in answer and every vote for it. Its index stays empty (`null` in
-/// `writeIns`), so no other answer's index changes. Offered to the answer's writer and the
-/// poll's creator; under the Insanity anyone may.
+/// `writeIns`), so no other answer's index changes. Its writer and the poll's creator may, and
+/// so may anyone with Manage messages.
 #[utoipa::path(
     delete,
     path = "/polls/{poll}/write-ins/{option}",
@@ -298,6 +299,7 @@ pub async fn add_write_in(
         (status = NO_CONTENT, description = "Removed"),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, description = "No such standing write-in", body = Problem),
         (status = CONFLICT, description = "`pollClosed`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

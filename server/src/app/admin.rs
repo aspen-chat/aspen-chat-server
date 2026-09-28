@@ -2,9 +2,9 @@
 //! growth, and searchable, sortable lists of its users and communities. Registration invites are
 //! `app::registration_invite`, and fleet health `app::fleet`.
 //!
-//! Who is an administrator is decided only from the terminal (`aspen-chat-server admin`): the
-//! one permission Aspen has before the Insanity is resolved, since a dashboard anyone could
-//! open would let anyone mint the invites an invite-only deployment is closed by.
+//! Who is an administrator is decided only from the terminal (`aspen-chat-server admin`), and
+//! community roles never reach it, since a dashboard anyone could open would let anyone mint
+//! the invites an invite-only deployment is closed by.
 
 use crate::api::GlobalServerContext;
 use crate::app::{self, CommunityId, IconId, UserId};

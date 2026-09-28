@@ -6,6 +6,7 @@ use crate::app::category::Category;
 use crate::app::community::Community;
 use crate::app::link_preview::load_previews;
 use crate::app::message::{Message, MessageWithRelations};
+use crate::app::permissions::{Permissions, require_member};
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
     UserId, publish_event,
@@ -17,7 +18,7 @@ use diesel::{
     Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rust_i18n::t;
 use vecmap::VecMap;
 
@@ -79,26 +80,81 @@ impl Loadable for Channel {
     }
 }
 
+/// Makes a text or voice channel in a community, which takes Manage channels there.
 pub async fn create_channel(
     state: &GlobalServerContext,
+    caller: UserId,
     name: String,
     sort_index: i32,
     ty: ChannelType,
     community: Option<CommunityId>,
     parent_category: Option<CategoryId>,
 ) -> super::error::Result<Channel> {
+    let Some(community) = community else {
+        return Err(app::Error::Validation(t!("channelNeedsCommunity")));
+    };
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            require_member(conn.as_mut(), caller, community)
+                .await?
+                .require(Permissions::MANAGE_CHANNELS)?;
+            if let Some(category) = parent_category {
+                ensure_category_of(conn.as_mut(), category, community).await?;
+            }
+            insert_channel(
+                state,
+                conn.as_mut(),
+                name,
+                sort_index,
+                ty,
+                community,
+                parent_category,
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Refuses, as not found, a category that is not a live one of `community`.
+async fn ensure_category_of(
+    conn: &mut AsyncPgConnection,
+    category_id: CategoryId,
+    community: CommunityId,
+) -> app::Result<()> {
+    use crate::database::schema::category;
+    category::table
+        .select(category::id)
+        .filter(
+            category::id
+                .eq(category_id)
+                .and(category::community.eq(community))
+                .and(category::deleted_at.is_null()),
+        )
+        .first::<CategoryId>(conn)
+        .await?;
+    Ok(())
+}
+
+/// Writes a new text or voice channel and announces it, inside the caller's transaction.
+pub async fn insert_channel(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    name: String,
+    sort_index: i32,
+    ty: ChannelType,
+    community: CommunityId,
+    parent_category: Option<CategoryId>,
+) -> app::Result<Channel> {
     // Threads, DMs, and group DMs have endpoints of their own, which set what they need.
     if !matches!(ty, ChannelType::Text | ChannelType::Voice) {
         return Err(app::Error::Validation(t!("channelTypeNotCreatable")));
     }
-    let Some(owner) = community else {
-        return Err(app::Error::Validation(t!("channelNeedsCommunity")));
-    };
-    let id = ChannelId::new();
-    let mut conn = state.connection_pool.get().await?;
     let channel = Channel {
-        id,
-        community: Some(MaybeLoaded::NotLoaded(owner)),
+        id: ChannelId::new(),
+        community: Some(MaybeLoaded::NotLoaded(community)),
         parent_category: parent_category.map(MaybeLoaded::NotLoaded),
         ty,
         sort_index,
@@ -110,19 +166,13 @@ pub async fn create_channel(
         last_reply_at: None,
         dm_key: None,
     };
-    conn.transaction(|conn| {
-        async move {
-            diesel::insert_into(channel::table)
-                .values(&channel)
-                .execute(conn.as_mut())
-                .await?;
-            let event = ServerEvent::Channel(ChannelEvent::Create(record(&channel, Vec::new())));
-            app::publish_event(state, conn.as_mut(), EventScope::Community(owner), &event).await?;
-            Ok(channel)
-        }
-        .scope_boxed()
-    })
-    .await
+    diesel::insert_into(channel::table)
+        .values(&channel)
+        .execute(conn)
+        .await?;
+    let event = ServerEvent::Channel(ChannelEvent::Create(record(&channel, Vec::new())));
+    app::publish_event(state, conn, EventScope::Community(community), &event).await?;
+    Ok(channel)
 }
 
 /// A channel's wire record, with its recipients when it is a DM or group DM.
@@ -137,7 +187,7 @@ pub(crate) async fn read_channel(
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    app::dm::ensure_can_see(state, conn.as_mut(), caller, id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
     let recipients = if matches!(channel.ty, ChannelType::Dm | ChannelType::GroupDm) {
         app::events::dm_recipients(conn.as_mut(), id).await?
     } else {
@@ -175,7 +225,7 @@ pub(crate) async fn read_channel_messages(
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    app::dm::ensure_can_see(state, conn.as_mut(), caller, id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
     let query = message::table
         .select(Message::as_select())
         .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
@@ -271,7 +321,7 @@ pub(crate) async fn read_channel_pins(
     channel_id: ChannelId,
 ) -> app::error::Result<Vec<Pin>> {
     let mut conn = state.connection_pool.get().await?;
-    app::dm::ensure_can_see(state, conn.as_mut(), caller, channel_id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel_id).await?;
     channel::table
         .select(Channel::as_select())
         .filter(
@@ -305,14 +355,45 @@ pub struct ChannelChangeset {
     pub sort_index: Option<i32>,
 }
 
+/// The community channel `id` and what the caller may do across its community, refusing
+/// unless they hold Manage channels there. DMs and threads are not managed this way.
+async fn managed_channel(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    id: ChannelId,
+) -> app::Result<CommunityId> {
+    let (community, parent): (Option<CommunityId>, Option<ChannelId>) = channel::table
+        .select((channel::community, channel::parent_channel))
+        .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    let (Some(community), None) = (community, parent) else {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    };
+    require_member(conn, caller, community)
+        .await?
+        .require(Permissions::MANAGE_CHANNELS)?;
+    Ok(community)
+}
+
+/// Renames or moves a community channel, which takes Manage channels. A channel stays in its
+/// community, and a category it moves into must be one of that community's.
 pub(crate) async fn update_channel(
     state: &GlobalServerContext,
+    caller: UserId,
     id: ChannelId,
     command: ChannelUpdateRequest,
 ) -> app::error::Result<Channel> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            let community = managed_channel(conn.as_mut(), caller, id).await?;
+            if command.community.is_some_and(|c| c != Some(community)) {
+                return Err(app::Error::Validation(t!("channelCommunityFixed")));
+            }
+            if let Some(Some(category)) = command.parent_category {
+                ensure_category_of(conn.as_mut(), category, community).await?;
+            }
             let rows = diesel::update(channel::table)
                 .set(ChannelChangeset {
                     parent_category: command.parent_category,
@@ -353,13 +434,16 @@ pub(crate) async fn update_channel(
     .await
 }
 
+/// Deletes a community channel, which takes Manage channels.
 pub(crate) async fn delete_channel(
     state: &GlobalServerContext,
+    caller: UserId,
     id: ChannelId,
 ) -> app::error::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            managed_channel(conn.as_mut(), caller, id).await?;
             let deleted = diesel::update(channel::table)
                 .set(channel::deleted_at.eq(diesel::dsl::now))
                 .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))

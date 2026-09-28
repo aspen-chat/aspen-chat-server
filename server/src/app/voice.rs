@@ -14,6 +14,7 @@ use crate::api::message_enum::server_event::{
 use crate::api::voice::VoiceSessionEndReason;
 use crate::api::{ChannelType, GlobalServerContext};
 use crate::app;
+use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::{
     ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId, publish_event,
 };
@@ -291,6 +292,9 @@ pub async fn join_offer(
     if !matches!(ty, ChannelType::Voice) {
         return Err(app::Error::Validation(t!("voiceChannelOnly")));
     }
+    channel_access(state, conn.as_mut(), user, channel_id)
+        .await?
+        .require(Permissions::JOIN_VOICE)?;
     let voice = &state.config.voice;
     let now = Utc::now();
     let existing: Option<VoiceSession> = voice_session::table
@@ -448,12 +452,14 @@ pub async fn report_failure(
 /// The calls on `channel`, if any, with who is in them.
 pub async fn read_channel_voice(
     state: &GlobalServerContext,
+    caller: UserId,
     channel_id: ChannelId,
 ) -> app::Result<(
     Option<message_enum::VoiceSession>,
     Vec<message_enum::VoiceParticipant>,
 )> {
     let mut conn = state.connection_pool.get().await?;
+    channel_access(state, conn.as_mut(), caller, channel_id).await?;
     let session: Option<VoiceSession> = voice_session::table
         .select(VoiceSession::as_select())
         .filter(voice_session::channel.eq(channel_id))
@@ -518,14 +524,15 @@ pub async fn read_communities_voice(
 
 /// Server-mutes or unmutes someone in a channel's call. The voice server holding the call
 /// applies it and reports the new state, which becomes the participant's `update` event; the
-/// record returned is the state as recorded before the command lands.
+/// record returned is the state as recorded before the command lands. Takes Manage calls.
 pub async fn mute_participant(
     state: &GlobalServerContext,
+    caller: UserId,
     channel: ChannelId,
     user: UserId,
     muted: bool,
 ) -> app::Result<message_enum::VoiceParticipant> {
-    command_participant(state, channel, user, |session| VoiceCommand::Mute {
+    command_participant(state, caller, channel, user, |session| VoiceCommand::Mute {
         session: session.0,
         user: user.0,
         muted,
@@ -534,13 +541,14 @@ pub async fn mute_participant(
 }
 
 /// Removes someone from a channel's call. The voice server disconnects them, telling them
-/// why, and reports their leaving, which deletes their participant row.
+/// why, and reports their leaving, which deletes their participant row. Takes Manage calls.
 pub async fn kick_participant(
     state: &GlobalServerContext,
+    caller: UserId,
     channel: ChannelId,
     user: UserId,
 ) -> app::Result<()> {
-    command_participant(state, channel, user, |session| VoiceCommand::Kick {
+    command_participant(state, caller, channel, user, |session| VoiceCommand::Kick {
         session: session.0,
         user: user.0,
     })
@@ -552,11 +560,17 @@ pub async fn kick_participant(
 /// No call, or no such participant in it, is not found.
 async fn command_participant(
     state: &GlobalServerContext,
+    caller: UserId,
     channel: ChannelId,
     user: UserId,
     command: impl FnOnce(VoiceSessionId) -> VoiceCommand,
 ) -> app::Result<message_enum::VoiceParticipant> {
     let mut conn = state.connection_pool.get().await?;
+    let access = channel_access(state, conn.as_mut(), caller, channel).await?;
+    // A DM's call has no moderators.
+    if !access.community_has(Permissions::MANAGE_CALLS) {
+        return Err(missing(Permissions::MANAGE_CALLS));
+    }
     let session = session_on_channel(conn.as_mut(), channel)
         .await?
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;

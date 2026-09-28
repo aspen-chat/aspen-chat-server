@@ -10,9 +10,9 @@
 //! counts as their vote for it and is offered to everyone else, noting who wrote it except on
 //! an anonymous poll. A written-in answer is an option like the creator's, numbered after them;
 //! one that matches an answer already on the poll (ignoring case and spacing) is a vote for that
-//! answer instead. The writer or the poll's creator may remove a write-in, which takes its votes
-//! with it and leaves its index empty, so no other answer's index changes. Under the Insanity
-//! the server lets anyone remove one; the client offers it to the writer and the creator.
+//! answer instead. The writer, the poll's creator, or anyone with Manage messages may remove a
+//! write-in, which takes its votes with it and leaves its index empty, so no other answer's
+//! index changes.
 
 use crate::api::message_enum::request::PollCreateRequest;
 use crate::api::message_enum::server_event::{MessageEvent, PollEvent, ServerEvent};
@@ -23,6 +23,7 @@ use crate::api::poll::{
 use crate::api::{GlobalServerContext, MessageKind, message_enum};
 use crate::app;
 use crate::app::message::Message;
+use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
 use crate::database::schema::{message, poll, poll_option, poll_vote};
@@ -159,7 +160,10 @@ pub async fn create_poll(
     };
     let message_row = poll_message(&row, MessageKind::Poll, now);
     let mut conn = state.connection_pool.get().await?;
-    app::dm::ensure_can_see(state, conn.as_mut(), creator, channel).await?;
+    let access = channel_access(state, conn.as_mut(), creator, channel).await?;
+    // A poll is posted as a message, so it takes sending here as well.
+    access.require(access.send_permission())?;
+    access.require(Permissions::CREATE_POLLS)?;
     conn.transaction(|conn| {
         async move {
             diesel::insert_into(poll::table)
@@ -417,7 +421,7 @@ pub async fn read_poll(
         .filter(poll::id.eq(id))
         .first(conn.as_mut())
         .await?;
-    app::dm::ensure_can_see(state, conn.as_mut(), caller, channel).await?;
+    channel_access(state, conn.as_mut(), caller, channel).await?;
     load_polls(conn.as_mut(), &[id])
         .await?
         .into_iter()
@@ -531,7 +535,7 @@ pub async fn add_vote(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
+            channel_access(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
             let Ok(option_index) = i32::try_from(option) else {
                 return Err(app::Error::Validation(t!("pollOptionOutOfRange")));
@@ -632,7 +636,7 @@ pub async fn write_in(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
+            channel_access(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
             if !row.allow_write_ins {
                 return Err(app::Error::Validation(t!("pollWriteInsOff")));
@@ -704,8 +708,30 @@ pub async fn remove_write_in(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            app::dm::ensure_can_see(state, conn.as_mut(), user, row.channel).await?;
+            let access = channel_access(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
+            let writer: Option<Option<UserId>> = poll_option::table
+                .select(poll_option::written_by)
+                .filter(
+                    poll_option::poll
+                        .eq(id)
+                        .and(poll_option::index.eq(option_index)),
+                )
+                .first(conn.as_mut())
+                .await
+                .map(Some)
+                .or_else(|e| match e {
+                    diesel::result::Error::NotFound => Ok(None),
+                    e => Err(e),
+                })?;
+            // Its writer and the poll's creator may take a write-in down, and so may anyone
+            // who may manage messages here.
+            if writer.flatten() != Some(user)
+                && row.created_by != user
+                && !access.community_has(Permissions::MANAGE_MESSAGES)
+            {
+                return Err(missing(Permissions::MANAGE_MESSAGES));
+            }
             let removed = diesel::update(poll_option::table)
                 .filter(
                     poll_option::poll

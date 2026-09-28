@@ -46,3 +46,4 @@ pub mod m20260928_035647_canonical_reaction_emoji;
 pub mod m20260928_040739_administration;
 pub mod m20260928_041109_community_user_by_community;
 pub mod m20260928_043652_registration_invite_used_up_at;
+pub mod m20260928_052552_community_roles;

@@ -72,6 +72,8 @@ pub enum Error {
     S3Presign(#[from] aws_sdk_s3::presigning::PresigningConfigError),
     #[error("user not authorized")]
     Unauthorized,
+    #[error("forbidden: {0}")]
+    Forbidden(Cow<'static, str>),
     #[error("the session must verify its user again before changing security settings")]
     ReauthenticationRequired,
     #[error("the password or code presented was wrong")]

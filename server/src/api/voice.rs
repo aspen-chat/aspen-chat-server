@@ -2,6 +2,7 @@
 //! failure reports. The media flows through the voice servers; see `app::voice` for how a call
 //! is assigned to one and how their reports become events.
 
+use crate::api::admin::AdminUser;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, NoContent, Path};
@@ -157,6 +158,7 @@ pub struct VoiceServerFailureOutcome {
         (status = OK, body = VoiceJoinOffer),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a voice channel, or no voice server is available)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -195,15 +197,16 @@ pub async fn join_voice(
         (status = OK, body = VoiceChannelState),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn get_channel_voice(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<VoiceChannelState>> {
-    let (session, participants) = app::voice::read_channel_voice(&state, channel).await?;
+    let (session, participants) = app::voice::read_channel_voice(&state, user.id, channel).await?;
     Ok(Json(VoiceChannelState {
         session,
         participants,
@@ -218,12 +221,13 @@ pub async fn get_channel_voice(
     responses(
         (status = OK, body = Vec<VoiceServer>),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_voice_servers(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    _: AdminUser,
 ) -> ApiResult<Json<Vec<VoiceServer>>> {
     let servers = app::voice::list_servers(&state).await?;
     Ok(Json(servers.into_iter().map(server_to_api).collect()))
@@ -238,13 +242,14 @@ pub async fn list_voice_servers(
         (status = CREATED, body = VoiceServer, headers(("Location" = String, description = "URL of the new server"))),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
         (status = CONFLICT, description = "A server with that name exists", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn create_voice_server(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    _: AdminUser,
     Json(request): Json<VoiceServerCreateRequest>,
 ) -> ApiResult<Created<VoiceServer>> {
     let server =
@@ -266,13 +271,14 @@ pub async fn create_voice_server(
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
+        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
         (status = CONFLICT, description = "A server with that name exists", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn update_voice_server(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    _: AdminUser,
     Path(server): Path<VoiceServerId>,
     Json(request): Json<VoiceServerUpdateRequest>,
 ) -> ApiResult<Json<VoiceServer>> {
@@ -301,13 +307,14 @@ pub async fn update_voice_server(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Not a deployment administrator", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_voice_server(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    _: AdminUser,
     Path(server): Path<VoiceServerId>,
 ) -> ApiResult<NoContent> {
     app::voice::delete_server(&state, server).await?;
@@ -353,17 +360,19 @@ pub async fn report_voice_server_failure(
         (status = ACCEPTED, description = "The voice server has been told; the participant's `update` event follows once it applies", body = VoiceParticipant),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
         (status = NOT_FOUND, description = "No call on the channel, or the user is not in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn moderate_voice_participant(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user: caller, .. }: SessionUser,
     Path((channel, user)): Path<(ChannelId, UserId)>,
     Json(request): Json<VoiceParticipantModerationRequest>,
 ) -> ApiResult<(StatusCode, Json<VoiceParticipant>)> {
-    let participant = app::voice::mute_participant(&state, channel, user, request.muted).await?;
+    let participant =
+        app::voice::mute_participant(&state, caller.id, channel, user, request.muted).await?;
     Ok((StatusCode::ACCEPTED, Json(participant)))
 }
 
@@ -377,15 +386,16 @@ pub async fn moderate_voice_participant(
         (status = ACCEPTED, description = "The voice server has been told to disconnect them; their participant `delete` event follows"),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
         (status = NOT_FOUND, description = "No call on the channel, or the user is not in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn kick_voice_participant(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user: caller, .. }: SessionUser,
     Path((channel, user)): Path<(ChannelId, UserId)>,
 ) -> ApiResult<StatusCode> {
-    app::voice::kick_participant(&state, channel, user).await?;
+    app::voice::kick_participant(&state, caller.id, channel, user).await?;
     Ok(StatusCode::ACCEPTED)
 }

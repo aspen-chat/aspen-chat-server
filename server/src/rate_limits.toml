@@ -110,6 +110,20 @@ endpoints = [
   "POST /voice-servers",
   "PATCH /voice-servers/{server}",
   "DELETE /voice-servers/{server}",
+  "PUT /communities/{community}/owner",
+  "POST /communities/{community}/roles",
+  "PUT /communities/{community}/role-order",
+  "PATCH /roles/{role}",
+  "DELETE /roles/{role}",
+  "PUT /communities/{community}/members/{user}/roles/{role}",
+  "DELETE /communities/{community}/members/{user}/roles/{role}",
+  "DELETE /communities/{community}/members/{user}",
+  "PUT /channels/{channel}/overrides/{role}",
+  "DELETE /channels/{channel}/overrides/{role}",
+  "PUT /categories/{category}/overrides/{role}",
+  "DELETE /categories/{category}/overrides/{role}",
+  "PUT /messages/{message}/pin",
+  "DELETE /messages/{message}/pin",
 ]
 limits = { user = { requests = 60, per_seconds = 60, burst = 20, bucket = "manage" } }
 

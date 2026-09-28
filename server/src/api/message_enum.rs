@@ -3,8 +3,9 @@ use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
 use crate::api::user::{CustomStatus, UserOnlineStatus};
 use crate::api::voice::VoiceSessionEndReason;
 use crate::api::{ChannelType, MessageKind};
+use crate::app::permissions::Permission;
 use crate::app::{
-    AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, PollId, UserId,
+    AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, PollId, RoleId, UserId,
     VoiceServerId, VoiceSessionId,
 };
 use chrono::Utc;
@@ -195,6 +196,43 @@ enum MessageEnumSource {
         id: CommunityId,
         name: String,
         icon: Option<IconId>,
+        // Who owns it: every permission, and alone may delete it or hand it on. `None` for a
+        // community from before owners were recorded, until the terminal names one.
+        #[message_gen(server_authoritative = "mutable")]
+        owner: Option<UserId>,
+    },
+    // A role in a community (`app::permissions`). Roles rank by `position`; the everyone role,
+    // every member's, is at 0.
+    Role {
+        #[message_gen(id)]
+        id: RoleId,
+        #[message_gen(parent)]
+        community: CommunityId,
+        name: String,
+        #[message_gen(server_authoritative = "mutable")]
+        position: i32,
+        permissions: Vec<Permission>,
+        #[message_gen(server_authoritative)]
+        everyone: bool,
+    },
+    // One role's channel permissions allowed or denied in one channel, over what the role
+    // grants across the community.
+    ChannelOverride {
+        #[message_gen(id = "client_authoritative")]
+        channel: ChannelId,
+        #[message_gen(id = "client_authoritative")]
+        role: RoleId,
+        allow: Vec<Permission>,
+        deny: Vec<Permission>,
+    },
+    // The same, for every channel of a category.
+    CategoryOverride {
+        #[message_gen(id = "client_authoritative")]
+        category: CategoryId,
+        #[message_gen(id = "client_authoritative")]
+        role: RoleId,
+        allow: Vec<Permission>,
+        deny: Vec<Permission>,
     },
     UserCommunity {
         #[message_gen(id = "client_authoritative")]
@@ -207,6 +245,9 @@ enum MessageEnumSource {
         // /communities/{community}/members/@me`; a new membership goes at the end.
         #[message_gen(server_authoritative = "mutable")]
         sort_index: i32,
+        // The roles the member holds besides everyone's.
+        #[message_gen(server_authoritative = "mutable")]
+        roles: Vec<RoleId>,
     },
     // A channel's call while anyone is in it. Created and ended by the voice server's reports,
     // never by a client request; clients join through `POST /channels/{channel}/voice/join`.
@@ -312,6 +353,7 @@ mod tests {
             id,
             name: None,
             icon: Some(None),
+            owner: None,
         });
         assert_eq!(
             serde_json::to_value(e).unwrap(),

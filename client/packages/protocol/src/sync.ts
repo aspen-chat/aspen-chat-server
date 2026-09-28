@@ -783,6 +783,8 @@ export class AspenSync {
         community: community.id,
         user: me,
         sortIndex: this.store.communities().length,
+        // The membership's own event, which follows, names the roles the creator was given.
+        roles: [],
       });
     }
     await this.loadCommunity(community.id);

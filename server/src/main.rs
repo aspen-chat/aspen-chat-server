@@ -106,6 +106,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::AdminCommand,
     },
+    /// Operator commands for communities.
+    Communities {
+        #[clap(subcommand)]
+        action: operator::CommunitiesCommand,
+    },
     /// Operator commands for registration invites.
     Invites {
         #[clap(subcommand)]
@@ -173,6 +178,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Bench { action } => operator::bench(&config, action).await,
             Command::Admin { action } => operator::admin(&config, action).await,
             Command::Invites { action } => operator::invites(&config, action).await,
+            Command::Communities { action } => operator::communities(&config, action).await,
         };
     }
     let app = api::make_router(options.gen_openapi_schema).await?;

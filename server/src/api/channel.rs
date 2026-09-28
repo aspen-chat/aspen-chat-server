@@ -24,16 +24,19 @@ pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
         (status = CREATED, body = message_enum::Channel, headers(("Location" = String, description = "URL of the new channel"))),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn create_channel(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(request): Json<ChannelCreateRequest>,
 ) -> ApiResult<Created<message_enum::Channel>> {
     let c = app::channel::create_channel(
         &state,
+        user.id,
         request.name,
         request.sort_index,
         request.ty,
@@ -113,17 +116,18 @@ pub async fn list_channel_pins(
         (status = OK, body = message_enum::Channel),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn update_channel(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
     Json(request): Json<ChannelUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Channel>> {
-    let c = app::channel::update_channel(&state, channel, request).await?;
+    let c = app::channel::update_channel(&state, user.id, channel, request).await?;
     Ok(Json(channel_to_api(c)))
 }
 
@@ -137,15 +141,16 @@ pub async fn update_channel(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_channel(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<NoContent> {
-    app::channel::delete_channel(&state, channel).await?;
+    app::channel::delete_channel(&state, user.id, channel).await?;
     Ok(NoContent)
 }

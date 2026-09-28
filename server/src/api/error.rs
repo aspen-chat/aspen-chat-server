@@ -236,6 +236,7 @@ impl From<app::Error> for ApiError {
                     min = app::login::PASSWORD_MIN_LENGTH
                 )),
             app::Error::Unauthorized => Self::new(ProblemCode::Forbidden),
+            app::Error::Forbidden(reason) => Self::new(ProblemCode::Forbidden).with_detail(reason),
             app::Error::Unauthenticated => Self::new(ProblemCode::Unauthorized),
             app::Error::Conflict(reason) => Self::new(ProblemCode::Conflict).with_detail(reason),
             app::Error::VerificationFailed => Self::new(ProblemCode::VerificationFailed),

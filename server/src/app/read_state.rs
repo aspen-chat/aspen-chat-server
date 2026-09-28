@@ -14,8 +14,7 @@
 use crate::api::ChannelType;
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::{
-    self, ChannelId, CommunityId, EventScope, GlobalServerContext, MessageId, UserId, dm,
-    publish_event,
+    self, ChannelId, CommunityId, EventScope, GlobalServerContext, MessageId, UserId, publish_event,
 };
 use crate::database::schema::{channel, message};
 use chrono::{DateTime, Utc};
@@ -191,7 +190,7 @@ pub async fn mark_read(
     message_id: MessageId,
 ) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    dm::ensure_can_see(state, conn.as_mut(), user, channel_id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
     let ty: ChannelType = channel::table
         .select(channel::ty)
         .filter(

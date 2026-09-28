@@ -2,8 +2,8 @@ use crate::CHACHA_RNG;
 use crate::api::message_enum::server_event::{InviteEvent, ServerEvent};
 use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, EventScope, UserId, publish_event};
-use crate::database::schema::community_user;
 use crate::database::schema::invite;
 use chrono::Utc;
 use diesel::{
@@ -70,20 +70,9 @@ pub(crate) async fn create_invite(
     expires_at: Option<chrono::DateTime<Utc>>,
 ) -> app::Result<Invite> {
     let mut conn = state.connection_pool.get().await?;
-
-    // Verify user is a member of the community
-    let member_count: i64 = community_user::table
-        .filter(
-            community_user::user
-                .eq(user)
-                .and(community_user::community.eq(community)),
-        )
-        .count()
-        .get_result(conn.as_mut())
-        .await?;
-    if member_count == 0 {
-        return Err(app::Error::Validation(t!("notCommunityMemberCreateInvite")));
-    }
+    require_member(conn.as_mut(), user, community)
+        .await?
+        .require(Permissions::CREATE_INVITES)?;
 
     let code = match custom_code {
         Some(c) => {
@@ -146,6 +135,20 @@ pub(crate) async fn validate_invite(
     Ok(inv.community)
 }
 
+/// Refuses anyone but the invite's creator, while still a member, and those with Manage
+/// invites in its community.
+async fn ensure_may_manage(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    invite: &Invite,
+) -> app::Result<()> {
+    let access = require_member(conn, user, invite.community).await?;
+    if invite.created_by == user {
+        return Ok(());
+    }
+    access.require(Permissions::MANAGE_INVITES)
+}
+
 pub(crate) async fn update_invite(
     state: &GlobalServerContext,
     user: UserId,
@@ -154,26 +157,13 @@ pub(crate) async fn update_invite(
 ) -> app::Result<Invite> {
     let mut conn = state.connection_pool.get().await?;
 
-    // Load the invite to check community membership
     let inv: Invite = invite::table
         .select(Invite::as_select())
         .filter(invite::code.eq(&code).and(invite::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
 
-    // Verify user is a member of the invite's community
-    let member_count: i64 = community_user::table
-        .filter(
-            community_user::user
-                .eq(user)
-                .and(community_user::community.eq(inv.community)),
-        )
-        .count()
-        .get_result(conn.as_mut())
-        .await?;
-    if member_count == 0 {
-        return Err(app::Error::Validation(t!("notCommunityMemberUpdateInvite")));
-    }
+    ensure_may_manage(conn.as_mut(), user, &inv).await?;
 
     conn.transaction(|conn| {
         async move {
@@ -207,26 +197,13 @@ pub(crate) async fn revoke_invite(
 ) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
 
-    // Load the invite to check community membership
     let inv: Invite = invite::table
         .select(Invite::as_select())
         .filter(invite::code.eq(&code).and(invite::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
 
-    // Verify user is a member of the invite's community
-    let member_count: i64 = community_user::table
-        .filter(
-            community_user::user
-                .eq(user)
-                .and(community_user::community.eq(inv.community)),
-        )
-        .count()
-        .get_result(conn.as_mut())
-        .await?;
-    if member_count == 0 {
-        return Err(app::Error::Validation(t!("notCommunityMemberRevokeInvite")));
-    }
+    ensure_may_manage(conn.as_mut(), user, &inv).await?;
 
     conn.transaction(|conn| {
         async move {
@@ -261,17 +238,23 @@ pub(crate) async fn read_invite(state: &GlobalServerContext, code: &str) -> app:
         .map_err(Into::into)
 }
 
-/// A community's invites, newest first. Revoked ones are gone; expired ones are listed for
+/// A community's invites, newest first: every one for those with Manage invites, and only
+/// their own for other members. Revoked ones are gone; expired ones are listed for
 /// `STALE_AFTER_DAYS` after they expire, so a link that just stopped working can still be seen
 /// for what it was.
 pub(crate) async fn read_community_invites(
     state: &GlobalServerContext,
+    caller: UserId,
     community: CommunityId,
 ) -> app::Result<Vec<Invite>> {
     let mut conn = state.connection_pool.get().await?;
+    let access = require_member(conn.as_mut(), caller, community).await?;
     let cutoff = Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
-    let invites = invite::table
-        .select(Invite::as_select())
+    let mut query = invite::table.select(Invite::as_select()).into_boxed();
+    if !access.has(Permissions::MANAGE_INVITES) {
+        query = query.filter(invite::created_by.eq(caller));
+    }
+    let invites = query
         .filter(
             invite::community
                 .eq(community)

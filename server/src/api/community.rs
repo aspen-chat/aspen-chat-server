@@ -21,6 +21,7 @@ pub fn community_to_api(c: app::community::Community) -> message_enum::Community
         id: c.id,
         name: c.name,
         icon: c.icon.map(|i| *i.id()),
+        owner: c.owner,
     }
 }
 
@@ -46,6 +47,10 @@ pub enum CommunityInclude {
     Mutes,
     /// The communities' categories the caller has collapsed, as `included.categoryCollapses`.
     Collapses,
+    /// The communities' roles, as `included.roles`, and their channel and category overrides,
+    /// as `included.channelOverrides` and `included.categoryOverrides`. Which roles each member
+    /// holds is on their `userCommunities` record.
+    Roles,
 }
 
 /// Body of a community read. Named aliases rather than `Sideloaded<Community>` at the handler
@@ -74,7 +79,7 @@ pub async fn sideload_communities(
     communities: &[CommunityId],
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
-    let (channels, categories, members, voice, read_states, mutes, collapses) = tokio::try_join!(
+    let (channels, categories, members, voice, read_states, mutes, collapses, roles) = tokio::try_join!(
         async {
             if include.contains(CommunityInclude::Channels) {
                 app::community::read_communities_channels(state, communities)
@@ -138,6 +143,17 @@ pub async fn sideload_communities(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(CommunityInclude::Roles) {
+                let (roles, overrides) = tokio::try_join!(
+                    app::role::read_communities_roles(state, communities),
+                    app::role::read_communities_overrides(state, communities),
+                )?;
+                Ok(Some((roles, overrides)))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let mut included = Included {
         channels: channels.map(|channels| {
@@ -172,6 +188,11 @@ pub async fn sideload_communities(
         }),
         ..Included::default()
     };
+    if let Some((roles, (channel_overrides, category_overrides))) = roles {
+        included.roles = Some(roles);
+        included.channel_overrides = Some(channel_overrides);
+        included.category_overrides = Some(category_overrides);
+    }
     if let Some((sessions, participants)) = voice {
         included.voice_sessions = Some(sessions);
         included.voice_participants = Some(participants);
@@ -188,6 +209,7 @@ pub async fn sideload_communities(
                 community: membership.community,
                 user: user_id,
                 sort_index: membership.sort_index,
+                roles: membership.roles,
             });
             if seen.insert(user_id) {
                 users.push(api::user::user_to_api(membership.user));
@@ -247,7 +269,7 @@ pub async fn get_community(
     Path(community): Path<CommunityId>,
     Query(query): Query<CommunityReadQuery>,
 ) -> ApiResult<Json<CommunityRead>> {
-    let c = app::community::read_community(&state, community).await?;
+    let c = app::community::read_community(&state, user.id, community).await?;
     let included = sideload_communities(&state, user.id, &[c.id], &query.include).await?;
     Ok(Json(Sideloaded::new(community_to_api(c), included)))
 }
@@ -262,17 +284,18 @@ pub async fn get_community(
         (status = OK, body = message_enum::Community),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn update_community(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Json(request): Json<CommunityUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Community>> {
-    let c = app::community::update_community(&state, community, request).await?;
+    let c = app::community::update_community(&state, user.id, community, request).await?;
     Ok(Json(community_to_api(c)))
 }
 
@@ -286,16 +309,17 @@ pub async fn update_community(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_community(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
 ) -> ApiResult<NoContent> {
-    app::community::delete_community(&state, community).await?;
+    app::community::delete_community(&state, user.id, community).await?;
     Ok(NoContent)
 }
 
@@ -310,6 +334,7 @@ pub async fn delete_community(
         (status = OK, body = Vec<User>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -335,15 +360,16 @@ pub async fn list_community_members(
         (status = OK, body = Vec<Channel>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_community_channels(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<Channel>>> {
-    let channels = app::community::read_community_channels(&state, community).await?;
+    let channels = app::community::read_community_channels(&state, user.id, community).await?;
     Ok(Json(
         channels
             .into_iter()
@@ -374,14 +400,7 @@ pub async fn join_community(
     Path(community): Path<CommunityId>,
     Json(request): Json<UserCommunityCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<UserCommunity>)> {
-    match app::community::join_community(
-        &state,
-        user.id,
-        community,
-        app::community::Invitation::Code(request.invite_code),
-    )
-    .await
-    {
+    match app::community::join_community(&state, user.id, community, request.invite_code).await {
         Ok(membership) => Ok((StatusCode::CREATED, Json(membership))),
         Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
             DatabaseErrorKind::UniqueViolation,

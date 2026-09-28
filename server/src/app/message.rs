@@ -1,13 +1,14 @@
 use crate::api::link_preview::LinkPreview;
 use crate::api::message_enum::request::MessageUpdateRequest;
-use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
+use crate::api::message_enum::server_event::{MessageEvent, PinEvent, ServerEvent};
 use crate::api::{ChannelType, GlobalServerContext, MessageKind, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
+use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::user::User;
 use crate::app::{
-    AttachmentId, ChannelId, EventScope, PollId, UserId, dm, publish_event, read_state, thread,
+    AttachmentId, ChannelId, EventScope, PollId, UserId, publish_event, read_state, thread,
 };
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
@@ -16,8 +17,8 @@ use crate::database::schema::message;
 use crate::database::schema::message_attachment;
 use chrono::Utc;
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl, QueryDsl,
-    Queryable, Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl,
+    OptionalExtension, QueryDsl, Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -129,9 +130,19 @@ pub async fn create_message(
                     )
                     .first(conn.as_mut())
                     .await?;
-                dm::ensure_can_see(state, conn.as_mut(), author, channel_id).await?;
-                if echo_to_parent && target.ty != ChannelType::Thread {
-                    return Err(app::Error::Validation(t!("echoOutsideThread")));
+                let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
+                access.require(access.send_permission())?;
+                if !attachments.is_empty() {
+                    access.require(Permissions::ATTACH_FILES)?;
+                }
+                if echo_to_parent {
+                    let Some(parent) = target.parent_channel else {
+                        return Err(app::Error::Validation(t!("echoOutsideThread")));
+                    };
+                    // An echo is posted in the parent channel, so it takes sending there.
+                    channel_access(state, conn.as_mut(), author, parent)
+                        .await?
+                        .require(Permissions::SEND_MESSAGES)?;
                 }
                 ensure_attachments_ready(conn.as_mut(), &attachments).await?;
                 let message = Message {
@@ -209,7 +220,7 @@ pub async fn read_message(
         )
         .first(conn.as_mut())
         .await?;
-    dm::ensure_can_see(state, conn.as_mut(), caller, *msg.channel.id()).await?;
+    channel_access(state, conn.as_mut(), caller, *msg.channel.id()).await?;
     let attachments: Vec<AttachmentId> = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.eq(id))
@@ -251,7 +262,7 @@ pub async fn read_messages(
         let may_see = match allowed.get(&channel) {
             Some(may_see) => *may_see,
             None => {
-                let may_see = dm::ensure_can_see(state, conn.as_mut(), caller, channel)
+                let may_see = channel_access(state, conn.as_mut(), caller, channel)
                     .await
                     .is_ok();
                 allowed.insert(channel, may_see);
@@ -305,12 +316,19 @@ pub async fn update_message(
     command: MessageUpdateRequest,
 ) -> Result<MessageWithRelations, app::Error> {
     let mut conn = state.connection_pool.get().await?;
-    let (channel_id, kind): (ChannelId, MessageKind) = message::table
-        .select((message::channel, message::kind))
+    let (channel_id, kind, author): (ChannelId, MessageKind, UserId) = message::table
+        .select((message::channel, message::kind, message::author))
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    dm::ensure_can_see(state, conn.as_mut(), caller, channel_id).await?;
+    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    // A message says what its author said; nobody else may put words in it.
+    if author != caller {
+        return Err(app::Error::Forbidden(t!("editOthersMessage")));
+    }
+    if command.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+        access.require(Permissions::ATTACH_FILES)?;
+    }
     // An echo shows its reply's content; there is nothing of its own to edit.
     if kind == MessageKind::ThreadEcho {
         return Err(app::Error::Validation(t!("echoNotEditable")));
@@ -411,20 +429,24 @@ pub async fn update_message(
     })
 }
 
-/// Deletes a message. A thread reply leaves its thread's summary and takes its echo with it;
-/// a thread's starter leaves the thread in place.
+/// Deletes a message, which its author may do and anyone with Manage messages. A thread reply
+/// leaves its thread's summary and takes its echo with it; a thread's starter leaves the thread
+/// in place.
 pub async fn delete_message(
     state: &GlobalServerContext,
     caller: UserId,
     id: MessageId,
 ) -> Result<(), app::Error> {
     let mut conn = state.connection_pool.get().await?;
-    let channel_id: ChannelId = message::table
-        .select(message::channel)
+    let (channel_id, author): (ChannelId, UserId) = message::table
+        .select((message::channel, message::author))
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    dm::ensure_can_see(state, conn.as_mut(), caller, channel_id).await?;
+    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
+        return Err(missing(Permissions::MANAGE_MESSAGES));
+    }
     conn.transaction(|conn| {
         async move {
             // Drop link-preview image objects from S3 first — the FK cascade
@@ -480,4 +502,95 @@ pub async fn delete_message(
     .await?;
     delete_images_for_message(state, conn.as_mut(), id).await?;
     Ok(())
+}
+
+/// Pins a message in its channel, after every pin already there, or unpins it. In a community
+/// it takes Pin messages; in a DM any recipient may. Returns the pin as it stands when pinning,
+/// and whether anything changed.
+pub async fn set_pinned(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: MessageId,
+    pinned: bool,
+) -> Result<(Option<app::channel::Pin>, bool), app::Error> {
+    use crate::database::schema::pin;
+    let mut conn = state.connection_pool.get().await?;
+    let channel_id: ChannelId = message::table
+        .select(message::channel)
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
+    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    if access.community.is_some() && !access.community_has(Permissions::PIN_MESSAGES) {
+        return Err(missing(Permissions::PIN_MESSAGES));
+    }
+    conn.transaction(|conn| {
+        async move {
+            // The channel row is locked so two pins cannot take the same place.
+            channel::table
+                .select(channel::id)
+                .filter(channel::id.eq(channel_id))
+                .for_update()
+                .first::<ChannelId>(conn.as_mut())
+                .await?;
+            let existing: Option<app::channel::Pin> = pin::table
+                .select(app::channel::Pin::as_select())
+                .filter(pin::message_id.eq(id))
+                .first(conn.as_mut())
+                .await
+                .optional()?;
+            if !pinned {
+                if existing.is_none() {
+                    return Ok((None, false));
+                }
+                diesel::delete(pin::table.filter(pin::message_id.eq(id)))
+                    .execute(conn.as_mut())
+                    .await?;
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::Channel(channel_id),
+                    &ServerEvent::Pin(PinEvent::Delete { message_id: id }),
+                )
+                .await?;
+                return Ok((None, true));
+            }
+            if let Some(existing) = existing {
+                return Ok((Some(existing), false));
+            }
+            let last: Option<i32> = pin::table
+                .select(diesel::dsl::max(pin::sort_index))
+                .filter(pin::channel.eq(channel_id))
+                .first(conn.as_mut())
+                .await?;
+            let row = app::channel::Pin {
+                message_id: id,
+                timestamp: Utc::now(),
+                sort_index: last.map_or(0, |last| last + 1),
+            };
+            diesel::insert_into(pin::table)
+                .values((
+                    pin::message_id.eq(row.message_id),
+                    pin::channel.eq(channel_id),
+                    pin::timestamp.eq(row.timestamp),
+                    pin::sort_index.eq(row.sort_index),
+                ))
+                .execute(conn.as_mut())
+                .await?;
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Channel(channel_id),
+                &ServerEvent::Pin(PinEvent::Create(message_enum::Pin {
+                    message_id: row.message_id,
+                    timestamp: row.timestamp,
+                    sort_index: row.sort_index,
+                })),
+            )
+            .await?;
+            Ok((Some(row), true))
+        }
+        .scope_boxed()
+    })
+    .await
 }

@@ -46,7 +46,9 @@ pub async fn create_react(
         .filter(crate::database::schema::message::id.eq(message_id))
         .first(conn.as_mut())
         .await?;
-    crate::app::dm::ensure_can_see(state, conn.as_mut(), author, channel).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), author, channel)
+        .await?
+        .require(crate::app::permissions::Permissions::ADD_REACTIONS)?;
     let react = React {
         emoji: emoji.clone(),
         author,
@@ -213,7 +215,7 @@ pub async fn read_reactors(
         .filter(crate::database::schema::message::id.eq(message_id))
         .first(conn.as_mut())
         .await?;
-    crate::app::dm::ensure_can_see(state, conn.as_mut(), caller, channel).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
     let Some(emoji) = canonical_emoji(emoji) else {
         return Ok(Vec::new());
     };

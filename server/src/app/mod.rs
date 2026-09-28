@@ -30,12 +30,14 @@ pub mod login;
 pub mod media_store;
 pub mod message;
 pub mod passkey;
+pub mod permissions;
 pub mod poll;
 pub mod preferences;
 pub mod rate_limit;
 pub mod react;
 pub mod read_state;
 pub mod registration_invite;
+pub mod role;
 pub mod thread;
 pub mod two_factor;
 pub mod user;
@@ -124,6 +126,7 @@ id_type!(IconId);
 id_type!(LinkPreviewImageId);
 
 id_type!(PasskeyId);
+id_type!(RoleId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

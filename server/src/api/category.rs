@@ -27,17 +27,25 @@ pub fn category_to_api(c: crate::app::category::Category) -> message_enum::Categ
         (status = CREATED, body = message_enum::Category, headers(("Location" = String, description = "URL of the new category"))),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn create_category(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Json(request): Json<CategoryCreateRequest>,
 ) -> ApiResult<Created<message_enum::Category>> {
-    let c =
-        app::category::create_category(&state, request.name, request.sort_index, community).await?;
+    let c = app::category::create_category(
+        &state,
+        user.id,
+        request.name,
+        request.sort_index,
+        community,
+    )
+    .await?;
     Ok(Created::new(
         format!("{API_PREFIX}/categories/{}", c.id.0),
         category_to_api(c),
@@ -54,15 +62,16 @@ pub async fn create_category(
         (status = OK, body = Vec<message_enum::Category>),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn list_community_categories(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<message_enum::Category>>> {
-    let categories = app::category::read_community_categories(&state, community).await?;
+    let categories = app::category::read_community_categories(&state, user.id, community).await?;
     Ok(Json(categories.into_iter().map(category_to_api).collect()))
 }
 
@@ -82,10 +91,10 @@ pub async fn list_community_categories(
 )]
 pub async fn get_category(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(category): Path<CategoryId>,
 ) -> ApiResult<Json<message_enum::Category>> {
-    let c = app::category::read_category(&state, category).await?;
+    let c = app::category::read_category(&state, user.id, category).await?;
     Ok(Json(category_to_api(c)))
 }
 
@@ -106,10 +115,10 @@ pub async fn get_category(
 )]
 pub async fn list_category_channels(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(category): Path<CategoryId>,
 ) -> ApiResult<Json<Vec<Channel>>> {
-    let channels = app::category::read_category_channels(&state, category).await?;
+    let channels = app::category::read_category_channels(&state, user.id, category).await?;
     Ok(Json(
         channels
             .into_iter()
@@ -128,17 +137,18 @@ pub async fn list_category_channels(
         (status = OK, body = message_enum::Category),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn update_category(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(category): Path<CategoryId>,
     Json(request): Json<CategoryUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Category>> {
-    let c = app::category::update_category(&state, category, request).await?;
+    let c = app::category::update_category(&state, user.id, category, request).await?;
     Ok(Json(category_to_api(c)))
 }
 
@@ -152,15 +162,16 @@ pub async fn update_category(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_category(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(category): Path<CategoryId>,
 ) -> ApiResult<NoContent> {
-    app::category::delete_category(&state, category).await?;
+    app::category::delete_category(&state, user.id, category).await?;
     Ok(NoContent)
 }

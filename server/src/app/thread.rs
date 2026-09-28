@@ -14,8 +14,7 @@ use crate::api::{ChannelType, MessageKind};
 use crate::app::channel::{Channel, record};
 use crate::app::message::Message;
 use crate::app::{
-    self, ChannelId, EventScope, GlobalServerContext, MaybeLoaded, MessageId, UserId, dm,
-    publish_event,
+    self, ChannelId, EventScope, GlobalServerContext, MaybeLoaded, MessageId, UserId, publish_event,
 };
 use crate::database::schema::{channel, message};
 use chrono::{DateTime, Utc};
@@ -42,7 +41,9 @@ pub async fn open_thread(
                     .for_update()
                     .first(conn.as_mut())
                     .await?;
-            dm::ensure_can_see(state, conn.as_mut(), caller, parent_id).await?;
+            let access =
+                crate::app::permissions::channel_access(state, conn.as_mut(), caller, parent_id)
+                    .await?;
             if let Some(thread) = existing {
                 let thread: Channel = channel::table
                     .select(Channel::as_select())
@@ -54,6 +55,8 @@ pub async fn open_thread(
             if kind == MessageKind::ThreadEcho {
                 return Err(app::Error::Validation(t!("threadFromEcho")));
             }
+            // Opening an existing thread is reading; making one takes Start threads.
+            access.require(crate::app::permissions::Permissions::START_THREADS)?;
             let parent: Channel = channel::table
                 .select(Channel::as_select())
                 .filter(channel::id.eq(parent_id).and(channel::deleted_at.is_null()))

@@ -114,8 +114,8 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
     : choice.writtenBy === null
       ? m.poll.writtenIn
       : format(m.poll.writtenInBy, { name: nameOf(choice.writtenBy) });
-  // Under the Insanity the server lets anyone remove a write-in; it is offered to its writer
-  // and to the poll's creator.
+  // A write-in can be removed by its writer and the poll's creator (and by moderators, whom
+  // this card does not yet recognise).
   const canRemove =
     open &&
     choice.writeIn &&

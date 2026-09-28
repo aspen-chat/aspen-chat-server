@@ -4,14 +4,17 @@ use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
-use crate::app::{CategoryId, CommunityId, EventScope, Loadable, MaybeLoaded, publish_event};
+use crate::app::permissions::{Permissions, require_member};
+use crate::app::{
+    CategoryId, CommunityId, EventScope, Loadable, MaybeLoaded, UserId, publish_event,
+};
 use crate::database::schema::{category, channel};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
 #[diesel(table_name=category)]
@@ -41,14 +44,19 @@ impl Loadable for Category {
     }
 }
 
+/// Makes a category, which takes Manage categories.
 pub(crate) async fn create_category(
     state: &GlobalServerContext,
+    caller: UserId,
     name: String,
     sort_index: i32,
     community: CommunityId,
 ) -> app::error::Result<Category> {
     let id = CategoryId::new();
     let mut conn = state.connection_pool.get().await?;
+    require_member(conn.as_mut(), caller, community)
+        .await?
+        .require(Permissions::MANAGE_CATEGORIES)?;
     let category = Category {
         id,
         community: MaybeLoaded::NotLoaded(community),
@@ -76,24 +84,37 @@ pub(crate) async fn create_category(
     Ok(category)
 }
 
+/// The community of a live category, when `caller` is a member of it; not found otherwise.
+async fn member_category(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    id: CategoryId,
+) -> app::Result<(Category, crate::app::permissions::CommunityAccess)> {
+    let category: Category = category::table
+        .select(Category::as_select())
+        .filter(category::id.eq(id).and(category::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    let access = require_member(conn, caller, *category.community.id()).await?;
+    Ok((category, access))
+}
+
 pub(crate) async fn read_category(
     state: &GlobalServerContext,
+    caller: UserId,
     id: CategoryId,
 ) -> app::error::Result<Category> {
     let mut conn = state.connection_pool.get().await?;
-    let category = category::table
-        .select(Category::as_select())
-        .filter(category::id.eq(id).and(category::deleted_at.is_null()))
-        .first(conn.as_mut())
-        .await?;
-    Ok(category)
+    Ok(member_category(conn.as_mut(), caller, id).await?.0)
 }
 
 pub(crate) async fn read_community_categories(
     state: &GlobalServerContext,
+    caller: UserId,
     community: CommunityId,
 ) -> app::error::Result<Vec<Category>> {
     let mut conn = state.connection_pool.get().await?;
+    require_member(conn.as_mut(), caller, community).await?;
     let categories = category::table
         .select(Category::as_select())
         .filter(
@@ -131,18 +152,11 @@ pub(crate) async fn read_communities_categories(
 
 pub(crate) async fn read_category_channels(
     state: &GlobalServerContext,
+    caller: UserId,
     category: CategoryId,
 ) -> app::error::Result<Vec<Channel>> {
     let mut conn = state.connection_pool.get().await?;
-    crate::database::schema::category::table
-        .select(Category::as_select())
-        .filter(
-            crate::database::schema::category::id
-                .eq(category)
-                .and(crate::database::schema::category::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
-        .await?;
+    member_category(conn.as_mut(), caller, category).await?;
     let channels = channel::table
         .select(Channel::as_select())
         .filter(
@@ -164,14 +178,20 @@ pub struct CategoryChangeset {
     pub sort_index: Option<i32>,
 }
 
+/// Renames or moves a category, which takes Manage categories.
 pub(crate) async fn update_category(
     state: &GlobalServerContext,
+    caller: UserId,
     id: CategoryId,
     command: CategoryUpdateRequest,
 ) -> app::error::Result<Category> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            member_category(conn.as_mut(), caller, id)
+                .await?
+                .1
+                .require(Permissions::MANAGE_CATEGORIES)?;
             let Some(category) = diesel::update(category::table)
                 .set(CategoryChangeset {
                     name: command.name.clone(),
@@ -204,13 +224,19 @@ pub(crate) async fn update_category(
     .await
 }
 
+/// Deletes a category, which takes Manage categories.
 pub(crate) async fn delete_category(
     state: &GlobalServerContext,
+    caller: UserId,
     id: CategoryId,
 ) -> app::error::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            member_category(conn.as_mut(), caller, id)
+                .await?
+                .1
+                .require(Permissions::MANAGE_CATEGORIES)?;
             let deleted = diesel::update(category::table)
                 .set(category::deleted_at.eq(diesel::dsl::now))
                 .filter(category::id.eq(id).and(category::deleted_at.is_null()))

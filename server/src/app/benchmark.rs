@@ -125,13 +125,18 @@ pub async fn seed(
             let mut next_sort_index = vec![0i32; plan.users as usize];
             for (index, planned) in plan.communities.iter().enumerate() {
                 let id = Uuid::now_v7();
+                // Its first member owns it; everyone holds the default everyone role.
+                let owner =
+                    <[u32]>::first(&planned.members).map(|member| users[*member as usize].id);
                 diesel::insert_into(community::table)
                     .values((
                         community::id.eq(id),
                         community::name.eq(format!("bench {} {index}", plan.run)),
+                        community::owner.eq(owner),
                     ))
                     .execute(conn)
                     .await?;
+                app::role::create_default_roles(conn, crate::app::CommunityId(id)).await?;
                 diesel::insert_into(benchmark_community::table)
                     .values((
                         benchmark_community::run.eq(&plan.run),

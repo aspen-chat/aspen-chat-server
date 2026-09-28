@@ -17,8 +17,8 @@ use crate::api::attachment::Attachment;
 use crate::api::category_collapse::CategoryCollapse;
 use crate::api::channel_mute::ChannelMute;
 use crate::api::message_enum::{
-    Category, Channel, Community, Message, Poll, User, UserCommunity, VoiceParticipant,
-    VoiceSession,
+    Category, CategoryOverride, Channel, ChannelOverride, Community, Message, Poll, Role, User,
+    UserCommunity, VoiceParticipant, VoiceSession,
 };
 use crate::api::poll::{OwnWriteIn, PollVote};
 use crate::api::react::ReactionSummary;
@@ -135,6 +135,18 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub voice_participants: Option<Vec<VoiceParticipant>>,
+    /// The communities' roles, lowest first within each, with their channel and category
+    /// overrides as `channelOverrides` and `categoryOverrides`. Present together whenever
+    /// roles were requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub roles: Option<Vec<Role>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub channel_overrides: Option<Vec<ChannelOverride>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub category_overrides: Option<Vec<CategoryOverride>>,
 }
 
 /// Response envelope of a single-record read that supports `?include=`.
@@ -283,6 +295,7 @@ mod tests {
                 community,
                 user,
                 sort_index: 0,
+                roles: Vec::new(),
             }]),
             ..Included::default()
         };
@@ -292,7 +305,7 @@ mod tests {
                 "data": {"id": 1},
                 "included": {
                     "users": [],
-                    "userCommunities": [{"community": community.0, "user": user.0, "sortIndex": 0}],
+                    "userCommunities": [{"community": community.0, "user": user.0, "sortIndex": 0, "roles": []}],
                 },
             })
         );

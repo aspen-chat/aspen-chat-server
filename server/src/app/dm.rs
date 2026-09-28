@@ -7,7 +7,7 @@
 use crate::api::ChannelType;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::app::channel::{Channel, record};
-use crate::app::events::{ChannelHome, channel_home, dm_recipients};
+use crate::app::events::dm_recipients;
 use crate::app::{self, ChannelId, EventScope, GlobalServerContext, UserId, publish_event};
 use crate::database::schema::{channel, community_user, dm_recipient, message};
 use chrono::Utc;
@@ -27,35 +27,6 @@ pub const MAX_RECIPIENTS: usize = 10;
 pub fn pair_key(a: UserId, b: UserId) -> String {
     let (low, high) = if a.0 <= b.0 { (a, b) } else { (b, a) };
     format!("{}:{}", low.0, high.0)
-}
-
-/// Refuses, as not found, a user who is not a recipient of the DM a channel belongs to. Every
-/// community channel passes: who may see what there is the Insanity's to answer.
-pub async fn ensure_can_see(
-    state: &GlobalServerContext,
-    conn: &mut AsyncPgConnection,
-    user: UserId,
-    channel_id: ChannelId,
-) -> app::Result<()> {
-    match channel_home(state, conn, channel_id).await? {
-        ChannelHome::Community(_) => Ok(()),
-        ChannelHome::Direct(dm) => {
-            let member = dm_recipient::table
-                .filter(
-                    dm_recipient::channel
-                        .eq(dm)
-                        .and(dm_recipient::user.eq(user)),
-                )
-                .count()
-                .get_result::<i64>(conn)
-                .await?;
-            if member == 0 {
-                Err(app::Error::Diesel(diesel::result::Error::NotFound))
-            } else {
-                Ok(())
-            }
-        }
-    }
 }
 
 /// Refuses the users in `others` who share no community with `user`.
@@ -255,7 +226,7 @@ pub async fn add_recipient(
         .filter(channel::id.eq(dm_id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    ensure_can_see(state, conn.as_mut(), caller, dm_id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, dm_id).await?;
     if dm.ty != ChannelType::GroupDm {
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
@@ -324,7 +295,7 @@ pub async fn leave(
         .filter(channel::id.eq(dm_id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    ensure_can_see(state, conn.as_mut(), caller, dm_id).await?;
+    crate::app::permissions::channel_access(state, conn.as_mut(), caller, dm_id).await?;
     if dm.ty != ChannelType::GroupDm {
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }

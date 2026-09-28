@@ -36,6 +36,7 @@ pub mod poll;
 pub(crate) mod rate_limit;
 pub(crate) mod react;
 pub(crate) mod read_state;
+pub(crate) mod role;
 pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
@@ -77,6 +78,7 @@ pub const TAG_ICONS: &str = "icons";
 pub const TAG_DMS: &str = "dms";
 pub const TAG_SECURITY: &str = "security";
 pub const TAG_ADMIN: &str = "administration";
+pub const TAG_ROLES: &str = "roles";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -108,6 +110,7 @@ pub const TAG_ADMIN: &str = "administration";
         (name = TAG_USERS, description = "Accounts. `@me` addresses the calling user."),
         (name = TAG_SECURITY, description = "A user's second factors: authenticator app, passkeys, and recovery codes"),
         (name = TAG_COMMUNITIES, description = "Communities and their membership"),
+        (name = TAG_ROLES, description = "Roles and permissions in a community: roles, who holds them, channel and category overrides, removing members, and ownership"),
         (name = TAG_CATEGORIES, description = "Groupings of channels inside a community"),
         (name = TAG_CHANNELS, description = "Text and voice channels, threads, and DMs"),
         (name = TAG_MESSAGES, description = "Messages within a channel, and the threads they start"),
@@ -228,6 +231,20 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             community::leave_community
         ))
         .routes(routes!(community::list_community_channels))
+        .routes(routes!(role::list_roles, role::create_role))
+        .routes(routes!(role::update_role, role::delete_role))
+        .routes(routes!(role::reorder_roles))
+        .routes(routes!(role::add_member_role, role::remove_member_role))
+        .routes(routes!(role::remove_member))
+        .routes(routes!(role::transfer_ownership))
+        .routes(routes!(
+            role::set_channel_override,
+            role::clear_channel_override
+        ))
+        .routes(routes!(
+            role::set_category_override,
+            role::clear_category_override
+        ))
         .routes(routes!(
             category::create_category,
             category::list_community_categories
@@ -264,6 +281,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             message::delete_message
         ))
         .routes(routes!(message::open_thread))
+        .routes(routes!(message::pin_message, message::unpin_message))
         .routes(routes!(dm::open_dm, dm::list_dms))
         .routes(routes!(dm::add_recipient))
         .routes(routes!(dm::leave_dm))

@@ -117,6 +117,7 @@ pub async fn list_reactors(
         (status = OK, description = "Reaction already present", body = React),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a single emoji)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

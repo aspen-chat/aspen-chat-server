@@ -25,7 +25,7 @@ const itemClass =
  * Everything one can do to another person in a call, opened by right-clicking them or by the
  * dots button beside them: how loud they are to this user alone, silencing them for this user
  * alone (their volume is kept for when they are unmuted), and moderation (server mute or
- * unmute, removal), which under the Insanity everyone may do.
+ * unmute, removal), which the server allows only with Manage calls.
  */
 export function ParticipantMenu({
   channelId,

@@ -61,6 +61,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    category_override (category, role) {
+        category -> Uuid,
+        role -> Uuid,
+        allow -> Int8,
+        deny -> Int8,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::ChannelType;
 
@@ -89,11 +98,40 @@ diesel::table! {
 }
 
 diesel::table! {
+    channel_override (channel, role) {
+        channel -> Uuid,
+        role -> Uuid,
+        allow -> Int8,
+        deny -> Int8,
+    }
+}
+
+diesel::table! {
     community (id) {
         id -> Uuid,
         name -> Text,
         icon -> Nullable<Uuid>,
         deleted_at -> Nullable<Timestamptz>,
+        owner -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    community_member_role (user, role) {
+        user -> Uuid,
+        community -> Uuid,
+        role -> Uuid,
+    }
+}
+
+diesel::table! {
+    community_role (id) {
+        id -> Uuid,
+        community -> Uuid,
+        name -> Text,
+        position -> Int4,
+        permissions -> Int8,
+        everyone -> Bool,
     }
 }
 
@@ -386,10 +424,17 @@ diesel::joinable!(benchmark_user -> user (user));
 diesel::joinable!(category -> community (community));
 diesel::joinable!(category_collapse -> category (category));
 diesel::joinable!(category_collapse -> user (user));
+diesel::joinable!(category_override -> category (category));
+diesel::joinable!(category_override -> community_role (role));
 diesel::joinable!(channel -> category (parent_category));
 diesel::joinable!(channel -> community (community));
 diesel::joinable!(channel_mute -> channel (channel));
 diesel::joinable!(channel_mute -> user (user));
+diesel::joinable!(channel_override -> channel (channel));
+diesel::joinable!(channel_override -> community_role (role));
+diesel::joinable!(community -> user (owner));
+diesel::joinable!(community_member_role -> community_role (role));
+diesel::joinable!(community_role -> community (community));
 diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
 diesel::joinable!(dm_recipient -> channel (channel));
@@ -433,9 +478,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_user,
     category,
     category_collapse,
+    category_override,
     channel,
     channel_mute,
+    channel_override,
     community,
+    community_member_role,
+    community_role,
     community_user,
     dm_recipient,
     icon,

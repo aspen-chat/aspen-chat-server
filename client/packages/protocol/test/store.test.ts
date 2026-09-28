@@ -65,9 +65,9 @@ function bootstrapped(): RecordStore {
     categories: [work],
     users: [me, bob],
     userCommunities: [
-      { community: aspen.id, user: me.id, sortIndex: 0 },
-      { community: aspen.id, user: bob.id, sortIndex: 0 },
-      { community: birch.id, user: me.id, sortIndex: 0 },
+      { community: aspen.id, user: me.id, sortIndex: 0, roles: [] },
+      { community: aspen.id, user: bob.id, sortIndex: 0, roles: [] },
+      { community: birch.id, user: me.id, sortIndex: 0, roles: [] },
     ],
   });
   return store;
@@ -102,7 +102,7 @@ describe("RecordStore bootstrap", () => {
       channels: [general],
       categories: [],
       users: [me],
-      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
+      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0, roles: [] }],
     });
     expect(store.communities()).toEqual([aspen]);
     expect(store.community(birch.id)).toBeUndefined();
@@ -173,6 +173,7 @@ describe("RecordStore events", () => {
       community: cedar.id,
       user: me.id,
       sortIndex: 5,
+      roles: [],
     });
     expect(store.communities()).toEqual([aspen, birch, cedar]);
     store.applyEvent({
@@ -827,7 +828,7 @@ describe("RecordStore voice", () => {
       channels: [general],
       categories: [],
       users: [me],
-      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
+      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0, roles: [] }],
       voiceSessions: [session],
       voiceParticipants: [participant(me.id, "2026-09-26T00:00:01Z")],
     });
