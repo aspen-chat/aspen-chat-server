@@ -313,7 +313,7 @@ async fn add_member(
     let membership = message_enum::UserCommunity {
         community,
         user,
-        sort_index,
+        sort_index: Some(sort_index),
         roles: roles.to_vec(),
     };
     let event = ServerEvent::UserCommunity(UserCommunityEvent::Create(membership.clone()));
@@ -350,7 +350,7 @@ pub(crate) async fn read_membership(
     Ok(message_enum::UserCommunity {
         community: row.community,
         user: row.user,
-        sort_index: row.sort_index,
+        sort_index: Some(row.sort_index),
         roles,
     })
 }
@@ -384,7 +384,7 @@ pub(crate) async fn reorder_membership(
                 &ServerEvent::UserCommunity(UserCommunityEvent::Update {
                     community,
                     user,
-                    sort_index: Some(sort_index),
+                    sort_index: Some(Some(sort_index)),
                     roles: None,
                 }),
             )
@@ -396,7 +396,7 @@ pub(crate) async fn reorder_membership(
             Ok(message_enum::UserCommunity {
                 community,
                 user,
-                sort_index,
+                sort_index: Some(sort_index),
                 roles,
             })
         }
@@ -476,8 +476,9 @@ pub struct CommunityMember {
 pub struct Membership {
     pub community: CommunityId,
     pub user: app::user::User,
-    /// Where the community sits in this user's own list.
-    pub sort_index: i32,
+    /// Where the community sits in this user's own list, for the caller's own membership only:
+    /// it is theirs alone.
+    pub sort_index: Option<i32>,
     /// The roles they hold there besides everyone's, lowest first.
     pub roles: Vec<RoleId>,
 }
@@ -519,13 +520,15 @@ pub(crate) async fn read_community_members(
     .bind::<Uuid, _>(caller.0)
     .load(conn.as_mut())
     .await?;
-    memberships_of(state, conn.as_mut(), rows).await
+    memberships_of(state, conn.as_mut(), caller, rows).await
 }
 
-/// Member rows as memberships, with the roles each holds and their online status.
+/// Member rows as memberships, as `caller` may see them: with the roles each holds and their
+/// online status, and the list position only of the caller's own.
 async fn memberships_of(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
+    caller: UserId,
     rows: Vec<CommunityMember>,
 ) -> app::Result<Vec<Membership>> {
     let mut communities = Vec::with_capacity(rows.len());
@@ -552,8 +555,8 @@ async fn memberships_of(
             roles: roles
                 .remove(&(community, user.user_pg.id))
                 .unwrap_or_default(),
+            sort_index: (user.user_pg.id == caller).then_some(sort_index),
             user,
-            sort_index,
         })
         .collect())
 }
@@ -622,7 +625,7 @@ pub(crate) async fn search_community_members(
     .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
     .load(conn.as_mut())
     .await?;
-    memberships_of(state, conn.as_mut(), rows).await
+    memberships_of(state, conn.as_mut(), caller, rows).await
 }
 
 /// The member sample of one community, for a member of it (or a deployment moderator).

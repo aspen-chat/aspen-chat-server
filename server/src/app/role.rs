@@ -441,9 +441,9 @@ pub async fn reorder_roles(
             let (movable, fixed): (Vec<RoleRow>, Vec<RoleRow>) =
                 others.into_iter().partition(|r| r.position < rank);
             let mut wanted: Vec<RoleId> = order.to_vec();
-            wanted.sort_by_key(|id| id.0);
+            wanted.sort();
             let mut have: Vec<RoleId> = movable.iter().map(|r| r.id).collect();
-            have.sort_by_key(|id| id.0);
+            have.sort();
             if wanted != have {
                 return Err(app::Error::Validation(t!("roleOrderMismatch")));
             }

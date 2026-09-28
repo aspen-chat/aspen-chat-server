@@ -400,7 +400,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   anyway; hiding only keeps the UI honest. When the caller loses sight of a channel the store
   lets it go at once (as `channelRemoved`); when they may gain some, `AspenSync` reads the
   community again after a random pause of at most `ACCESS_RELOAD_SPREAD_MS`, since the server
-  sends nothing about channels a member could not see. A join offer says whether the caller
+  sends nothing about channels a member could not see. The same holds for invites: without
+  Manage invites the server sends only the caller's own, and the store lets the rest go when
+  the permission is lost. `UserCommunity.sortIndex` is `null` on everyone's membership but the
+  caller's. A join offer says whether the caller
   may speak and share (`VoiceCallState.canSpeak`, `canShare`); without Speak the call joins to
   listen, opening no microphone. `src/features/community-settings` is the management UI: the
   sidebar gear's `CommunitySettingsDialog` (name and icon, ownership, delete or leave; roles,

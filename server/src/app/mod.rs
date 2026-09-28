@@ -49,6 +49,29 @@ use crate::api::GlobalServerContext;
 pub use error::Error;
 pub use error::Result;
 
+/// `Display` and `FromStr` for a unit-variant enum through its serde names, so the names it
+/// has on the wire are the only ones it has anywhere.
+macro_rules! wire_name_traits {
+    ($type_name:ty) => {
+        impl std::fmt::Display for $type_name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match serde_json::to_value(self) {
+                    Ok(serde_json::Value::String(name)) => f.write_str(&name),
+                    _ => Err(std::fmt::Error),
+                }
+            }
+        }
+
+        impl std::str::FromStr for $type_name {
+            type Err = serde_json::Error;
+            fn from_str(name: &str) -> Result<Self, Self::Err> {
+                serde_json::from_value(serde_json::Value::String(name.to_string()))
+            }
+        }
+    };
+}
+pub(crate) use wire_name_traits;
+
 macro_rules! id_type {
     ($type_name:ident) => {
         #[derive(
@@ -56,6 +79,8 @@ macro_rules! id_type {
             Clone,
             PartialEq,
             Eq,
+            PartialOrd,
+            Ord,
             Copy,
             Deserialize,
             Serialize,

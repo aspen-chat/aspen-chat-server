@@ -249,9 +249,10 @@ enum MessageEnumSource {
         #[message_gen(secret)]
         invite_code: String,
         // Where the community sits in this member's own list. Set by `PATCH
-        // /communities/{community}/members/@me`; a new membership goes at the end.
+        // /communities/{community}/members/@me`; a new membership goes at the end. It is the
+        // member's alone: `null` in every record and event anyone else receives.
         #[message_gen(server_authoritative = "mutable")]
-        sort_index: i32,
+        sort_index: Option<i32>,
         // The roles the member holds besides everyone's.
         #[message_gen(server_authoritative = "mutable")]
         roles: Vec<RoleId>,

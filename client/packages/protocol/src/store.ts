@@ -968,7 +968,8 @@ export class RecordStore {
           }
           ids.push(membership.user);
           this.#setMemberRoles(membership.community, membership.user, membership.roles);
-          if (membership.user === this.#myUserId) {
+          // Only the caller's own membership says where it sits in their list.
+          if (membership.user === this.#myUserId && membership.sortIndex != null) {
             this.#setMyOrder(membership.community, membership.sortIndex);
           }
         }
@@ -1372,7 +1373,9 @@ export class RecordStore {
             this.#setMemberRoles(event.community, event.user, event.roles);
             if (event.user === this.#myUserId) {
               this.#myCommunities.add(event.community);
-              this.#setMyOrder(event.community, event.sortIndex);
+              if (event.sortIndex != null) {
+                this.#setMyOrder(event.community, event.sortIndex);
+              }
               this.#touch("communities");
             }
           } else if (event.type === "update") {
@@ -1832,8 +1835,9 @@ export class RecordStore {
 
   /**
    * Something that decides what the caller may do in a community changed: every answer that
-   * depends on it is recomputed, and the channels they may no longer view are let go of, as
-   * the server stops sending anything about them.
+   * depends on it is recomputed, and the channels they may no longer view, and the invites of
+   * others they may no longer manage, are let go of, as the server stops sending anything about
+   * them.
    */
   #accessChanged(communityId: string): void {
     this.#touch(`roles:${communityId}`);
@@ -1850,6 +1854,14 @@ export class RecordStore {
       for (const channel of channels) {
         if (!this.channelAccess(channel.id).has("viewChannel")) {
           this.#removeChannel(channel.id);
+        }
+      }
+      // Without Manage invites, only the caller's own invites are theirs to see.
+      if (this.access(communityId)?.has("manageInvites") !== true) {
+        for (const invite of Array.from(this.#invites.values())) {
+          if (invite.community === communityId && invite.createdBy !== this.#myUserId) {
+            this.#removeInvite(invite.code);
+          }
         }
       }
     }

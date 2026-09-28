@@ -1134,3 +1134,36 @@ describe("RecordStore deployment moderation", () => {
     expect(store.channel(general.id)).toBeUndefined();
   });
 });
+
+describe("RecordStore invites and Manage invites", () => {
+  it("lets go of other people's invites once the caller may not manage them", () => {
+    const store = bootstrapped();
+    const everyone = {
+      id: id(40),
+      community: aspen.id,
+      name: "everyone",
+      position: 0,
+      permissions: [...TEMPLATES.member, "manageInvites" as const],
+      everyone: true,
+    };
+    store.ingest({ roles: [everyone], channelOverrides: [], categoryOverrides: [] });
+    const invite = (code: string, createdBy: string) => ({
+      code,
+      community: aspen.id,
+      createdBy,
+      createdAt: "2026-09-28T00:00:00Z",
+      expiresAt: null,
+    });
+    store.applyEvent({ serverEvent: "invite", type: "create", ...invite("MINE", me.id) });
+    store.applyEvent({ serverEvent: "invite", type: "create", ...invite("BOBS", bob.id) });
+    expect(store.invite("BOBS")).toBeDefined();
+    store.applyEvent({
+      serverEvent: "role",
+      type: "update",
+      id: everyone.id,
+      permissions: [...TEMPLATES.member],
+    });
+    expect(store.invite("BOBS")).toBeUndefined();
+    expect(store.invite("MINE")).toBeDefined();
+  });
+});

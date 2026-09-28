@@ -31,6 +31,7 @@
 //! and `publish_event` refuses a scope of the wrong kind.
 
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::permissions::Permission;
 use crate::app::{
     self, CategoryId, ChannelId, CommunityId, GlobalServerContext, MessageId, UserId,
     VoiceSessionId,
@@ -50,6 +51,12 @@ pub const EVENT_ID_HEADER: &str = "Aspen-Event-Id";
 /// The header naming the community channel an event is about or happens in: the channel whose
 /// View channel permission decides who receives it, which for a thread is its parent's.
 pub const CHANNEL_HEADER: &str = "Aspen-Channel";
+/// The header naming the community permission an event needs besides membership, as its wire
+/// name (`manageInvites`); with it, `CREATOR_HEADER` may name one member who receives it anyway.
+pub const REQUIRES_HEADER: &str = "Aspen-Requires";
+/// The header naming the member who made what an event is about, who receives it without the
+/// permission `REQUIRES_HEADER` names.
+pub const CREATOR_HEADER: &str = "Aspen-Creator";
 
 /// Whose an event is, as the publishing code knows it. The ids it does not have in hand are
 /// looked up on the caller's connection, so an event published inside a transaction can name
@@ -339,6 +346,50 @@ async fn governing_channel(
     })
 }
 
+/// Who besides the holders of a permission may receive an event: the permission it needs, and
+/// the one member who receives it without. An invite is its code, so every event about one
+/// reaches only those who may manage invites and whoever made it.
+async fn audience(
+    conn: &mut AsyncPgConnection,
+    event: &ServerEvent,
+) -> app::Result<Option<(Permission, Option<UserId>)>> {
+    use crate::api::message_enum::server_event::InviteEvent;
+    let ServerEvent::Invite(event) = event else {
+        return Ok(None);
+    };
+    let creator = match event {
+        InviteEvent::Create(invite) => Some(invite.created_by),
+        InviteEvent::Update { code, .. } | InviteEvent::Delete { code } => invite::table
+            .select(invite::created_by)
+            .filter(invite::code.eq(code))
+            .first(conn)
+            .await
+            .optional()?,
+    };
+    Ok(Some((Permission::ManageInvites, creator)))
+}
+
+/// The copy of a membership event the rest of the community receives: without the member's own
+/// list position, which is theirs alone. `None` when nothing else is left to tell them, as for a
+/// reorder.
+fn for_community(event: &ServerEvent) -> Option<ServerEvent> {
+    use crate::api::message_enum::server_event::UserCommunityEvent;
+    let mut copy = event.clone();
+    match &mut copy {
+        ServerEvent::UserCommunity(UserCommunityEvent::Create(membership)) => {
+            membership.sort_index = None;
+        }
+        ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            sort_index, roles, ..
+        }) => {
+            *sort_index = None;
+            roles.as_ref()?;
+        }
+        _ => {}
+    }
+    Some(copy)
+}
+
 /// The subjects an event with this scope is published on.
 async fn subjects(
     state: &GlobalServerContext,
@@ -411,17 +462,41 @@ pub async fn publish_event(
     }
     let scope = to_channel(conn, scope).await?;
     let governing = governing_channel(state, conn, &scope).await?;
+    let audience = audience(conn, event).await?;
+    // A membership's community copy leaves out what is the member's alone.
+    let community_copy = match &scope {
+        EventScope::Membership { community, .. } => Some((
+            community_subject(*community),
+            for_community(event)
+                .map(|copy| serde_json::to_string(&copy))
+                .transpose()?,
+        )),
+        _ => None,
+    };
     let subjects = subjects(state, conn, scope).await?;
     let payload: bytes::Bytes = serde_json::to_string(event)?.into_bytes().into();
     let event_id = Uuid::now_v7().to_string();
-    let publishes = subjects.into_iter().map(|subject| {
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert(EVENT_ID_HEADER, event_id.as_str());
-        if let Some(channel) = governing {
-            headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert(EVENT_ID_HEADER, event_id.as_str());
+    if let Some(channel) = governing {
+        headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+    }
+    if let Some((permission, creator)) = &audience {
+        headers.insert(REQUIRES_HEADER, permission.to_string().as_str());
+        if let Some(creator) = creator {
+            headers.insert(CREATOR_HEADER, creator.0.to_string().as_str());
         }
-        let payload = payload.clone();
-        async move {
+    }
+    let publishes = subjects.into_iter().filter_map(|subject| {
+        let payload = match &community_copy {
+            // A membership event with nothing left for the community is not sent to it.
+            Some((community, copy)) if *community == subject => {
+                bytes::Bytes::from(copy.clone()?.into_bytes())
+            }
+            _ => payload.clone(),
+        };
+        let headers = headers.clone();
+        Some(async move {
             let started = std::time::Instant::now();
             state
                 .nats_context
@@ -432,7 +507,7 @@ pub async fn publish_event(
                 .record(started.elapsed().as_secs_f64());
             metrics::counter!(aspen_metrics::api::EVENTS_PUBLISHED).increment(1);
             Ok::<(), app::Error>(())
-        }
+        })
     });
     try_join_all(publishes).await?;
     Ok(())
@@ -522,5 +597,36 @@ mod tests {
             })),
             ScopeKind::Membership
         );
+    }
+
+    #[test]
+    fn the_community_never_learns_a_members_list_position() {
+        use crate::api::message_enum::UserCommunity;
+        let (community, user) = (CommunityId::new(), UserId::new());
+        let joined = ServerEvent::UserCommunity(UserCommunityEvent::Create(UserCommunity {
+            community,
+            user,
+            sort_index: Some(3),
+            roles: Vec::new(),
+        }));
+        let copy = serde_json::to_value(for_community(&joined).expect("a copy")).unwrap();
+        assert_eq!(copy["sortIndex"], serde_json::Value::Null);
+        // A reorder is the member's alone; the community is told nothing.
+        let reordered = ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            community,
+            user,
+            sort_index: Some(Some(1)),
+            roles: None,
+        });
+        assert!(for_community(&reordered).is_none());
+        let promoted = ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            community,
+            user,
+            sort_index: Some(Some(1)),
+            roles: Some(Vec::new()),
+        });
+        let copy = serde_json::to_value(for_community(&promoted).expect("a copy")).unwrap();
+        assert!(copy.get("sortIndex").is_none());
+        assert_eq!(copy["roles"], serde_json::json!([]));
     }
 }

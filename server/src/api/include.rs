@@ -294,7 +294,7 @@ mod tests {
             user_communities: Some(vec![UserCommunity {
                 community,
                 user,
-                sort_index: 0,
+                sort_index: Some(0),
                 roles: Vec::new(),
             }]),
             ..Included::default()

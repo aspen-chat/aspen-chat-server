@@ -239,12 +239,12 @@ pub enum AdminCommand {
     Allow {
         /// A deployment permission's name: `viewDashboard`, `manageRegistrationInvites`,
         /// `manageVoiceServers`, `manageDeploymentRoles`, or `moderateCommunities`.
-        permission: String,
+        permission: crate::app::deployment::DeploymentPermission,
     },
     /// Stop the deployment's top role doing something.
     Deny {
         /// A deployment permission's name, as for `allow`.
-        permission: String,
+        permission: crate::app::deployment::DeploymentPermission,
     },
 }
 
@@ -332,8 +332,8 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
             tracing::info!(%username, taken, operator = operator(), "revoked deployment roles");
             println!("{username} no longer holds any deployment role");
         }
-        AdminCommand::Allow { permission } => top_role(&mut conn, &permission, true).await?,
-        AdminCommand::Deny { permission } => top_role(&mut conn, &permission, false).await?,
+        AdminCommand::Allow { permission } => top_role(&mut conn, permission, true).await?,
+        AdminCommand::Deny { permission } => top_role(&mut conn, permission, false).await?,
         AdminCommand::List => {
             let holders = deployment::holders(&mut conn)
                 .await
@@ -352,14 +352,11 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
 /// Allows `permission` to the deployment's top role, or denies it.
 async fn top_role(
     conn: &mut diesel_async::AsyncPgConnection,
-    permission: &str,
+    permission: crate::app::deployment::DeploymentPermission,
     allow: bool,
 ) -> Result<()> {
     use crate::app::deployment;
-    let parsed: deployment::DeploymentPermission =
-        serde_json::from_value(serde_json::Value::String(permission.to_string()))
-            .map_err(|_| anyhow!("{permission:?} is not a deployment permission"))?;
-    let role = deployment::set_top_role_permission(conn, parsed, allow)
+    let role = deployment::set_top_role_permission(conn, permission, allow)
         .await
         .map_err(|e| anyhow!("{e}"))?;
     tracing::info!(%permission, allow, %role, operator = operator(), "changed the top deployment role");

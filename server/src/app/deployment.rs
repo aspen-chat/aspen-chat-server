@@ -105,6 +105,8 @@ impl DeploymentPermission {
     }
 }
 
+app::wire_name_traits!(DeploymentPermission);
+
 pub fn to_names(permissions: DeploymentPermissions) -> Vec<DeploymentPermission> {
     DeploymentPermission::ALL
         .into_iter()
@@ -571,9 +573,9 @@ pub async fn reorder_roles(
             let (movable, fixed): (Vec<_>, Vec<_>) =
                 roles.into_iter().partition(|r| r.position < rank);
             let mut wanted = order.to_vec();
-            wanted.sort_by_key(|id| id.0);
+            wanted.sort();
             let mut have: Vec<DeploymentRoleId> = movable.iter().map(|r| r.id).collect();
-            have.sort_by_key(|id| id.0);
+            have.sort();
             if wanted != have {
                 return Err(app::Error::Validation(t!("roleOrderMismatch")));
             }

@@ -200,6 +200,8 @@ impl Permission {
     }
 }
 
+app::wire_name_traits!(Permission);
+
 /// A set of permissions as the names the API uses, in their fixed order.
 pub fn to_names(permissions: Permissions) -> Vec<Permission> {
     Permission::ALL
@@ -868,6 +870,15 @@ mod tests {
         assert!(access.require_above(3).is_err());
         assert!(access.require_holds(Permissions::MANAGE_ROLES).is_ok());
         assert!(access.require_holds(Permissions::ASSIGN_ROLES).is_err());
+    }
+
+    #[test]
+    fn names_parse_back() {
+        for p in Permission::ALL {
+            assert_eq!(p.to_string().parse::<Permission>().unwrap(), p);
+        }
+        assert_eq!(Permission::ManageInvites.to_string(), "manageInvites");
+        assert!("manage_invites".parse::<Permission>().is_err());
     }
 
     #[test]

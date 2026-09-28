@@ -240,23 +240,32 @@ impl CommunityModel {
         self.owner == Some(user)
     }
 
-    /// Whether `user`, holding `roles` besides everyone's, may view `channel`, a channel of
-    /// this community that is not a thread.
-    pub fn can_view(&self, user: UserId, roles: &[RoleId], channel: ChannelId) -> bool {
+    /// What `user`, holding `roles` besides everyone's, may do across the community.
+    fn access_of(&self, user: UserId, roles: &[RoleId]) -> CommunityAccess {
         let grants = self
             .roles
             .iter()
             .filter(|(id, (_, everyone))| *everyone || roles.contains(id))
             .map(|(id, (permissions, everyone))| RoleGrant {
                 id: *id,
-                // Rank plays no part in viewing.
+                // Rank plays no part in what they may see.
                 position: 0,
                 permissions: *permissions,
                 everyone: *everyone,
             })
             .collect();
-        let access =
-            CommunityAccess::resolve(user, self.community, self.owner == Some(user), grants);
+        CommunityAccess::resolve(user, self.community, self.owner == Some(user), grants)
+    }
+
+    /// Whether `user`, holding `roles` besides everyone's, holds a community permission.
+    pub fn holds(&self, user: UserId, roles: &[RoleId], permission: Permissions) -> bool {
+        self.access_of(user, roles).has(permission)
+    }
+
+    /// Whether `user`, holding `roles` besides everyone's, may view `channel`, a channel of
+    /// this community that is not a thread.
+    pub fn can_view(&self, user: UserId, roles: &[RoleId], channel: ChannelId) -> bool {
+        let access = self.access_of(user, roles);
         let none = Vec::new();
         let category = self
             .categories

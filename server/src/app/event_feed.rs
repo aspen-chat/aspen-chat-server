@@ -42,7 +42,10 @@
 //! stream's sequence jumps, or restarts after NATS lost it), every local connection is dropped,
 //! and each learns from `resumed: false` that it must rebuild its state.
 
-use crate::app::events::{CHANNEL_HEADER, SubjectOwner, memberships, subject_owner};
+use crate::app::events::{
+    CHANNEL_HEADER, CREATOR_HEADER, REQUIRES_HEADER, SubjectOwner, memberships, subject_owner,
+};
+use crate::app::permissions::{Permission, Permissions};
 use crate::app::visibility::{CommunityModel, ModelChange, member_roles};
 use crate::app::{
     self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, GlobalServerContext, RoleId, UserId,
@@ -97,6 +100,10 @@ pub struct FeedEvent {
     moderator: Option<bool>,
     /// The community channel whose View channel permission decides who receives the event.
     channel: Option<ChannelId>,
+    /// A community permission the event needs besides membership (Manage invites for an
+    /// invite's), and the member who receives it without that permission (the invite's creator).
+    requires: Option<Permissions>,
+    creator: Option<UserId>,
     /// On a community's subject, the change the event makes to who may view what.
     change: Option<ModelChange>,
     /// The community's model as it stood after this event, when the dispatcher held one.
@@ -292,8 +299,10 @@ fn moderation_change(payload: &str) -> Option<bool> {
     )
 }
 
-/// Whether `event`, of a community's, may reach `user` holding `roles` there: it names no
-/// channel, or `model` lets them view the one it names. With no model it reaches no one.
+/// Whether `event`, of a community's, may reach `user` holding `roles` there: they hold the
+/// permission it requires, if any, or made what it is about; and it names no channel, or they
+/// may view the one it names, by `model`. A deployment moderator reads everything. Anything
+/// restricted reaches no one without a model.
 fn may_read(
     event: &FeedEvent,
     model: Option<&CommunityModel>,
@@ -301,14 +310,23 @@ fn may_read(
     roles: Option<&Vec<RoleId>>,
     moderator: bool,
 ) -> bool {
-    let Some(channel) = event.channel else {
-        return true;
-    };
-    if moderator {
+    if moderator || (event.requires.is_none() && event.channel.is_none()) {
         return true;
     }
     let none = Vec::new();
-    model.is_some_and(|model| model.can_view(user, roles.unwrap_or(&none), channel))
+    let roles = roles.unwrap_or(&none);
+    let Some(model) = model else {
+        return false;
+    };
+    if let Some(required) = event.requires
+        && event.creator != Some(user)
+        && !model.holds(user, roles, required)
+    {
+        return false;
+    }
+    event
+        .channel
+        .is_none_or(|channel| model.can_view(user, roles, channel))
 }
 
 /// The events the stream retains, by owner.
@@ -540,18 +558,22 @@ impl Routes {
             return Vec::new();
         };
         let readers = readers.clone();
-        // Readers holding the same roles see the same channels; each set is decided once.
-        let mut decided: HashMap<(bool, Vec<RoleId>), bool> = HashMap::new();
+        // Readers holding the same roles see the same; each set is decided once, apart from the
+        // one who made what the event is about.
+        let mut decided: HashMap<(bool, bool, Vec<RoleId>), bool> = HashMap::new();
         let mut slow = Vec::new();
         for id in &readers {
             let Some(connection) = self.connections.get(id) else {
                 continue;
             };
-            if let (SubjectOwner::Community(community), Some(_)) = (event.owner, event.channel) {
+            if let SubjectOwner::Community(community) = event.owner
+                && (event.channel.is_some() || event.requires.is_some())
+            {
                 let model = event.access.as_deref();
                 let roles = connection.roles.get(&community);
                 let key = (
                     connection.moderator || model.is_some_and(|m| m.is_owner(connection.user)),
+                    event.creator == Some(connection.user),
                     roles.cloned().unwrap_or_default(),
                 );
                 let visible = *decided.entry(key).or_insert_with(|| {
@@ -733,6 +755,19 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         .and_then(|headers| headers.get(CHANNEL_HEADER))
         .and_then(|value| value.as_str().parse().ok())
         .map(ChannelId);
+    let header = |name: &str| {
+        message
+            .headers
+            .as_ref()
+            .and_then(|headers| headers.get(name))
+            .map(|value| value.as_str().to_string())
+    };
+    let requires = header(REQUIRES_HEADER)
+        .and_then(|name| name.parse::<Permission>().ok())
+        .map(Permission::bits);
+    let creator = header(CREATOR_HEADER)
+        .and_then(|id| id.parse().ok())
+        .map(UserId);
     let age = (time::OffsetDateTime::now_utc() - info.published).clamp(
         time::Duration::ZERO,
         time::Duration::try_from(MAX_EVENT_AGE).unwrap_or_default(),
@@ -755,6 +790,8 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             roles,
             moderator,
             channel,
+            requires,
+            creator,
             change,
             access: None,
             published,
@@ -1019,7 +1056,16 @@ mod tests {
         owner: SubjectOwner,
         membership: Option<(CommunityId, bool)>,
     ) -> Arc<FeedEvent> {
-        Arc::new(FeedEvent {
+        Arc::new(plain(sequence, owner, membership))
+    }
+
+    /// An event to adjust before it is routed.
+    fn plain(
+        sequence: u64,
+        owner: SubjectOwner,
+        membership: Option<(CommunityId, bool)>,
+    ) -> FeedEvent {
+        FeedEvent {
             sequence,
             event_id: None,
             payload: RawValue::from_string(format!("{{\"n\":{sequence}}}")).unwrap(),
@@ -1028,10 +1074,12 @@ mod tests {
             roles: None,
             moderator: None,
             channel: None,
+            requires: None,
+            creator: None,
             change: None,
             access: None,
             published: Instant::now(),
-        })
+        }
     }
 
     /// An event in `channel` of a community, routed with `model` attached.
@@ -1041,8 +1089,7 @@ mod tests {
         channel: ChannelId,
         model: &Arc<CommunityModel>,
     ) -> Arc<FeedEvent> {
-        let mut e = Arc::into_inner(event(sequence, SubjectOwner::Community(community), None))
-            .expect("fresh");
+        let mut e = plain(sequence, SubjectOwner::Community(community), None);
         e.channel = Some(channel);
         e.access = Some(model.clone());
         Arc::new(e)
@@ -1266,16 +1313,14 @@ mod tests {
         assert_eq!(received(&mut member_rx), vec![1]);
         assert_eq!(received(&mut moderator_rx), vec![1, 2]);
         // Losing the role, by their own event, ends what it showed them.
-        let mut demoted =
-            Arc::into_inner(event(3, SubjectOwner::User(moderator_user), None)).expect("fresh");
+        let mut demoted = plain(3, SubjectOwner::User(moderator_user), None);
         demoted.roles = Some((community, Vec::new()));
         routes.route(&Arc::new(demoted));
         routes.route(&in_channel(4, community, hidden, &model));
         assert_eq!(received(&mut moderator_rx), vec![3]);
         // Moderating the deployment, by their own event, shows every channel whatever the
         // roles.
-        let mut promoted =
-            Arc::into_inner(event(5, SubjectOwner::User(moderator_user), None)).expect("fresh");
+        let mut promoted = plain(5, SubjectOwner::User(moderator_user), None);
         promoted.moderator = Some(true);
         routes.route(&Arc::new(promoted));
         routes.route(&in_channel(6, community, hidden, &model));
@@ -1301,17 +1346,68 @@ mod tests {
             role: moderator,
             set: None,
         };
-        let mut change =
-            Arc::into_inner(event(1, SubjectOwner::Community(community), None)).expect("fresh");
+        let mut change = plain(1, SubjectOwner::Community(community), None);
         change.change = Some(everyone_view);
         assert!(models.follow(&mut change).is_empty());
         let attached = change.access.clone().expect("a model");
         assert!(!attached.can_view(UserId::new(), &[moderator], hidden));
-        let mut join =
-            Arc::into_inner(event(2, SubjectOwner::User(user), Some((unmodelled, true))))
-                .expect("fresh");
+        let mut join = plain(2, SubjectOwner::User(user), Some((unmodelled, true)));
         assert_eq!(models.follow(&mut join), vec![7]);
         // The resynced connection no longer counts as a reader, so its model goes.
         assert!(models.models.is_empty());
+    }
+
+    #[test]
+    fn invite_events_reach_their_creator_and_whoever_manages_invites() {
+        use crate::app::permissions::Permissions;
+        let community = CommunityId::new();
+        let (everyone, keeper) = (RoleId::new(), RoleId::new());
+        let mut model = CommunityModel::new(community);
+        for change in [
+            ModelChange::Role {
+                id: everyone,
+                permissions: Some(Permissions::MEMBER_TEMPLATE),
+                everyone: Some(true),
+            },
+            ModelChange::Role {
+                id: keeper,
+                permissions: Some(Permissions::MANAGE_INVITES),
+                everyone: Some(false),
+            },
+        ] {
+            model.apply(&change);
+        }
+        let model = Arc::new(model);
+        let (creator, manager, bystander) = (UserId::new(), UserId::new(), UserId::new());
+        let mut routes = Routes::default();
+        let mut receivers = Vec::new();
+        for (id, user, roles) in [
+            (1, creator, vec![]),
+            (2, manager, vec![keeper]),
+            (3, bystander, vec![]),
+        ] {
+            let (tx, rx) = mpsc::channel(8);
+            routes.add(
+                id,
+                Connection {
+                    user,
+                    communities: HashSet::from([community]),
+                    roles: HashMap::from([(community, roles)]),
+                    moderator: false,
+                    deliveries: tx,
+                },
+            );
+            receivers.push(rx);
+        }
+        let mut invite = plain(1, SubjectOwner::Community(community), None);
+        invite.requires = Some(Permissions::MANAGE_INVITES);
+        invite.creator = Some(creator);
+        invite.access = Some(model);
+        routes.route(&Arc::new(invite));
+        let got: Vec<bool> = receivers
+            .iter_mut()
+            .map(|rx| rx.try_recv().is_ok())
+            .collect();
+        assert_eq!(got, vec![true, true, false]);
     }
 }
