@@ -5,6 +5,7 @@ import { Button } from "react-aria-components";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMembersPanel } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
  * The bar above a channel: a way back to the channel list on small screens, the channel's
@@ -21,6 +22,8 @@ export function ChannelHeader({
   name: string;
   children?: ReactNode;
 }) {
+  const onePane = useOnePane();
+  const Heading = onePane ? "h1" : "h2";
   const m = useMessages();
   const membersPanel = useMembersPanel();
   return (
@@ -33,12 +36,12 @@ export function ChannelHeader({
       >
         <ArrowLeftIcon size={18} aria-hidden="true" />
       </Link>
-      <h2 className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
+      <Heading className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
         <span aria-hidden="true" className="text-ink-faint">
           {glyph}
         </span>
         {name}
-      </h2>
+      </Heading>
       {children}
       <Tooltip text={membersPanel.open ? m.hideMembers : m.showMembers}>
         <Button

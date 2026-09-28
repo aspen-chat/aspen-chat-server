@@ -8,7 +8,7 @@ import {
   SpeakerHighIcon,
 } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   Button,
   DropIndicator,
@@ -59,6 +59,7 @@ const CHANNEL_DRAG_TYPE = "application/x-aspen-channel";
 /** The community's channels, grouped by category, with the signed-in user's controls below. */
 export function ChannelSidebar({ community }: { community: Community }) {
   const m = useMessages();
+  const headingId = useId();
   const channels = useChannels(community.id);
   const categories = useCategories(community.id);
   const createInvites = useCan(community.id, "createInvites");
@@ -70,9 +71,15 @@ export function ChannelSidebar({ community }: { community: Community }) {
   const manageInvites = useCan(community.id, "manageInvites");
   const { topLevel, byCategory } = groupChannels(channels, categories);
   return (
-    <div className="flex h-full flex-col border-r border-line bg-surface-raised">
+    // A landmark named by its heading, holding the channels and the user's own controls.
+    <section
+      aria-labelledby={headingId}
+      className="flex h-full flex-col border-r border-line bg-surface-raised"
+    >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
-        <h1 className="min-w-0 flex-1 truncate font-semibold">{community.name}</h1>
+        <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
+          {community.name}
+        </h1>
         <CommunitySettingsDialog community={community} triggerClassName={headerIconButtonClass} />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
       </div>
@@ -100,7 +107,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
         </div>
       </nav>
       <SidebarFooter />
-    </div>
+    </section>
   );
 }
 

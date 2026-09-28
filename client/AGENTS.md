@@ -498,6 +498,15 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 
 - Components come from `react-aria-components`. Do not reach for `react-aria` hooks or another
   component library unless React Aria genuinely lacks the primitive; if so, say why in a comment.
+- Every screen and dialog passes axe (`@axe-core/playwright`): `e2e/accessibility.spec.ts`
+  audits them in every palette and both colour schemes on Chromium, and in the default palette
+  on the other browsers and phones. So every ink token, `ink-faint` included, reaches 4.5:1 on
+  each surface text sits on; a new palette or token must too. Content sits in landmarks: each
+  sidebar is a `section` named by its `h1`, the conversation is `main`, and where one pane
+  shows at a time (`useOnePane`) the pane shown is `main` and its title the `h1`, headings
+  below it moving up a level. A popover is audited without the landmark rule, since React Aria
+  renders it at the end of the page, outside every landmark, as a floating layer must be. A
+  region that may scroll sideways is focusable (`tabIndex={0}`) so a keyboard can scroll it.
 - Colour comes only from the semantic tokens in `src/styles.css` (`bg-surface`, `text-ink-muted`,
   `border-line`, `bg-accent`, `text-danger`, ...). Do not use Tailwind's named colours or
   `dark:` variants: each token is a `light-dark()` pair inside a palette, and a palette is a

@@ -6,6 +6,14 @@ import { useCallback, useSyncExternalStore } from "react";
  */
 export const MEDIUM_SCREEN = "(min-width: 48rem)";
 
+/**
+ * Whether the app shows one pane at a time: a list, or a conversation, never both. Then the
+ * pane shown is the page's main content, and a conversation's title is its first heading.
+ */
+export function useOnePane(): boolean {
+  return !useMediaQuery(MEDIUM_SCREEN);
+}
+
 /** The query's live result, or `null` where there is no `matchMedia` (tests without a DOM). */
 function mediaQueryList(query: string): MediaQueryList | null {
   return typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia(query) : null;

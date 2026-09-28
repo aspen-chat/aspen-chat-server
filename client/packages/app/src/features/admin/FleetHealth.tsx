@@ -172,9 +172,14 @@ export function Table({
   children: ReactNode;
 }) {
   return (
+    // Focusable, so a keyboard can scroll it sideways where it does not fit; a group rather
+    // than a landmark, since the table's section is the landmark.
     <div
+      role="group"
+      aria-label={label}
+      tabIndex={0}
       className={
-        "overflow-x-auto rounded-lg border border-line bg-surface-raised transition-opacity" +
+        "overflow-x-auto rounded-lg border border-line bg-surface-raised transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-accent/50" +
         (dimmed ? " opacity-50" : "")
       }
     >

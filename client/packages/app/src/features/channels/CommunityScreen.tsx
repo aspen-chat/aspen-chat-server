@@ -7,6 +7,7 @@ import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { MembersPanelContext } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
 import { communityRoute } from "@/router";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
@@ -16,6 +17,7 @@ import { communityRoute } from "@/router";
  * the server may open a community they are not in, which is read here on arrival.
  */
 export function ChannelSidebarLayout() {
+  const onePane = useOnePane();
   const m = useMessages();
   const { communityId } = useParams({ from: communityRoute.id });
   const { channelId } = useParams({ strict: false });
@@ -51,7 +53,10 @@ export function ChannelSidebarLayout() {
         },
       }}
     >
-      <div className={`${showingChannel ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}>
+      <div
+        role={onePane && !showingChannel ? "main" : undefined}
+        className={`${showingChannel ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+      >
         <ChannelSidebar community={community} />
       </div>
       <div className={`${showingChannel ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>

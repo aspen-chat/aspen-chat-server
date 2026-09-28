@@ -108,7 +108,7 @@ export function RegistrationInvites({
             m.admin.note,
             m.admin.created,
             m.admin.expires,
-            "",
+            m.admin.actions,
           ]}
           numeric={[2]}
         >

@@ -52,6 +52,8 @@ test("developer mode shows the user's bots, makes one, and shows its token once"
 });
 
 test("a bot's link adds it to a community with the permissions it suggests", async ({ page }) => {
+  // Signed in first, so opening the link does not cut the sign-in short.
+  await expect(page.getByRole("navigation", { name: "Communities" })).toBeVisible();
   await page.goto(`/bots/${helper}/add?permissions=sendMessages,addReactions`);
   await expect(page.getByRole("heading", { name: "Add Helper to a community" })).toBeVisible();
   const permissions = page.getByRole("group", { name: "Permissions to give it" });

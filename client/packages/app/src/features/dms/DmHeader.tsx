@@ -21,6 +21,7 @@ import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /** The most people a group DM holds, the caller included; the server's `MAX_RECIPIENTS`. */
 export const MAX_DM_PEOPLE = 10;
@@ -34,6 +35,8 @@ const iconButtonClass =
  * DM also offers to add people and to leave.
  */
 export function DmHeader({ channel }: { channel: Channel }) {
+  const onePane = useOnePane();
+  const Heading = onePane ? "h1" : "h2";
   const m = useMessages();
   const sync = useSync();
   const title = useDmTitle(channel);
@@ -47,12 +50,12 @@ export function DmHeader({ channel }: { channel: Channel }) {
       >
         <ArrowLeftIcon size={18} aria-hidden="true" />
       </Link>
-      <h2 className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
+      <Heading className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
         <span aria-hidden="true" className="text-ink-faint">
           {group ? <UsersThreeIcon size={16} /> : <AtIcon size={16} />}
         </span>
         <PeopleNames channel={channel} fallback={title} />
-      </h2>
+      </Heading>
       <PinsButton channelId={channel.id} channelName={title} home={null} />
       {group && (
         <>

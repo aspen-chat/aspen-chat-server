@@ -1,6 +1,6 @@
 import type { Channel } from "@aspen/protocol";
 import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button } from "react-aria-components";
 import { useDms, useMe, useMentions, useMute, useSync, useUnread, useUser } from "@/api/hooks";
@@ -19,17 +19,22 @@ import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
  * `/dms`: the caller's DMs and group DMs beside the route's content, the most recently active
  * first. On narrow screens only one of the two is shown, as in a community.
  */
 export function DmLayout() {
+  const onePane = useOnePane();
   const { channelId } = useParams({ strict: false });
   const showing = channelId !== undefined;
   return (
     <>
-      <div className={`${showing ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}>
+      <div
+        role={onePane && !showing ? "main" : undefined}
+        className={`${showing ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+      >
         <DmSidebar current={channelId} />
       </div>
       <div className={`${showing ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
@@ -41,13 +46,20 @@ export function DmLayout() {
 
 function DmSidebar({ current }: { current: string | undefined }) {
   const m = useMessages();
+  const headingId = useId();
   const sync = useSync();
   const navigate = useNavigate();
   const dms = useDms();
   return (
-    <div className="flex h-full flex-col border-r border-line bg-surface-raised">
+    // A landmark named by its heading, holding the DMs and the user's own controls.
+    <section
+      aria-labelledby={headingId}
+      className="flex h-full flex-col border-r border-line bg-surface-raised"
+    >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
-        <h1 className="min-w-0 flex-1 truncate font-semibold">{m.dms.label}</h1>
+        <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
+          {m.dms.label}
+        </h1>
         <PeoplePicker
           trigger={
             <Tooltip text={m.dms.newMessage}>
@@ -79,7 +91,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
         ))}
       </nav>
       <SidebarFooter />
-    </div>
+    </section>
   );
 }
 

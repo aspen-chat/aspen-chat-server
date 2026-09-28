@@ -11,6 +11,7 @@ import { MessageItem } from "@/features/messages/MessageItem";
 import { MessageList } from "@/features/messages/MessageList";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
  * A thread beside its channel: the message that started it, its replies, and a composer whose
@@ -26,6 +27,7 @@ export function ThreadPanel({
   parentId: string;
   threadId: string;
 }) {
+  const onePane = useOnePane();
   const m = useMessages();
   const sync = useSync();
   const status = useSyncStatus();
@@ -75,13 +77,19 @@ export function ThreadPanel({
     parent === undefined || isDm(parent) ? m.threads.thisConversation : `#${parent.name}`;
   const starter = thread?.starterMessage;
   return (
-    <aside
+    // Beside its channel it is complementary; alone on a phone it is the page's main content.
+    <section
+      role={onePane ? "main" : "complementary"}
       aria-label={m.threads.heading}
       className="flex min-h-0 w-full flex-col border-l border-line bg-surface md:w-96"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-3">
         <ChatsCircleIcon size={18} aria-hidden="true" className="text-ink-faint" />
-        <h2 className="flex-1 font-semibold">{m.threads.heading}</h2>
+        {onePane ? (
+          <h1 className="flex-1 font-semibold">{m.threads.heading}</h1>
+        ) : (
+          <h2 className="flex-1 font-semibold">{m.threads.heading}</h2>
+        )}
         <Tooltip text={m.threads.close}>
           <Button
             aria-label={m.threads.close}
@@ -115,7 +123,7 @@ export function ThreadPanel({
           />
         </>
       )}
-    </aside>
+    </section>
   );
 }
 

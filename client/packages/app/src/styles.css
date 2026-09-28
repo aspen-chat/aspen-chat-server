@@ -9,6 +9,9 @@
  * (`bg-surface`, `text-ink-muted`, `border-line`, `bg-accent`) that reads the variable at use, so
  * changing `data-theme` on <html> restyles the page without a rebuild. Every value is a
  * `light-dark()` pair: the palette chooses the hues, the OS chooses light or dark.
+ *
+ * Every ink, faint included, reaches 4.5:1 (WCAG AA for small text) on each surface text is
+ * drawn on, in every palette and both schemes; `e2e/accessibility.spec.ts` checks it with axe.
  */
 @theme inline {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
@@ -53,7 +56,7 @@
   --palette-surface-hover: light-dark(#ececec, #262626);
   --palette-ink: light-dark(#171717, #f5f5f5);
   --palette-ink-muted: light-dark(#525252, #a3a3a3);
-  --palette-ink-faint: light-dark(#8a8a8a, #737373);
+  --palette-ink-faint: light-dark(#696969, #909090);
   --palette-line: light-dark(#d4d4d4, #2e2e2e);
   --palette-accent: light-dark(#047857, #34d399);
   --palette-accent-strong: light-dark(#065f46, #6ee7b7);
@@ -65,7 +68,7 @@
   --palette-away: light-dark(#eab308, #facc15);
   --palette-code-keyword: light-dark(#7c3aed, #c4b5fd);
   --palette-code-string: light-dark(#047857, #6ee7b7);
-  --palette-code-comment: light-dark(#8a8a8a, #737373);
+  --palette-code-comment: light-dark(#696969, #909090);
   --palette-code-number: light-dark(#b45309, #fbbf24);
   --palette-code-type: light-dark(#1d4ed8, #93c5fd);
   --palette-code-attr: light-dark(#0f766e, #5eead4);
@@ -79,7 +82,7 @@
   --palette-surface-hover: light-dark(#e3e0f0, #262336);
   --palette-ink: light-dark(#1b1930, #f2f0fa);
   --palette-ink-muted: light-dark(#5b5876, #a6a2c2);
-  --palette-ink-faint: light-dark(#8f8ba8, #6f6b8a);
+  --palette-ink-faint: light-dark(#63607e, #8e8aa9);
   --palette-line: light-dark(#d5d2e6, #2f2c42);
   --palette-accent: light-dark(#6d28d9, #a78bfa);
   --palette-accent-strong: light-dark(#5b21b6, #c4b5fd);
@@ -91,7 +94,7 @@
   --palette-away: light-dark(#ca8a04, #fde047);
   --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
   --palette-code-string: light-dark(#0f766e, #5eead4);
-  --palette-code-comment: light-dark(#8f8ba8, #6f6b8a);
+  --palette-code-comment: light-dark(#63607e, #8e8aa9);
   --palette-code-number: light-dark(#b45309, #fcd34d);
   --palette-code-type: light-dark(#1e40af, #a5b4fc);
   --palette-code-attr: light-dark(#9d174d, #f9a8d4);

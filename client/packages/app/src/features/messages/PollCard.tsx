@@ -44,6 +44,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useOnePane } from "@/features/layout/useMediaQuery";
 
 /**
  * A poll in its message: the question, one bar per answer showing its share of the votes, the
@@ -62,6 +63,8 @@ export function PollCard({ pollId }: { pollId: string }) {
 }
 
 function LoadedPollCard({ poll }: { poll: Poll }) {
+  // A level below the channel's title, which is the page's first heading on a phone.
+  const Question = useOnePane() ? "h2" : "h3";
   const m = useMessages();
   const myWriteIns = useMyWriteIns(poll.id);
   const now = useNow(poll);
@@ -75,7 +78,7 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
       aria-label={format(m.poll.label, { question: poll.question })}
       className="mt-1 flex w-full max-w-lg flex-col gap-2 rounded-md border border-line bg-surface-raised p-3"
     >
-      <h3 className="font-medium">{poll.question}</h3>
+      <Question className="font-medium">{poll.question}</Question>
       <ul className="flex flex-col gap-1.5">
         {pollChoices(poll).map((choice) => (
           <ChoiceRow key={choice.index} poll={poll} choice={choice} open={open} />
