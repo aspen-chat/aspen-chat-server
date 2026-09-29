@@ -1,0 +1,56 @@
+# Backups
+
+Two things hold everything that cannot be made again: **the PostgreSQL database** and **the
+object storage bucket**. Back up both, on a schedule, somewhere other than the machines they run
+on, and try restoring now and then.
+
+## The database
+
+Every account, community, channel, message, reaction, poll, role, invite, setting, and session
+is in PostgreSQL, and so is this deployment's federation key. Any PostgreSQL backup works: a
+nightly `pg_dump -Fc`, or continuous archiving (base backups and WAL) when losing a day of
+messages is too much.
+
+**The database's backups are as secret as its key.** The federation key is what other
+deployments trust when this one vouches for its people, and it is stored in the database so
+that every API server signs with the same one. Anyone holding a backup can sign as your
+deployment. Encrypt backups, and limit who can read them. If one leaks, replace the key with
+`aspen-chat-server federation rotate-key --compromised` and tell the deployments you federate
+with (see [Federation](federation.md#keys)). The sessions and password hashes in it are
+sensitive too: a leak means everyone should change their password.
+
+## The object storage
+
+Attachments, icons, avatars, and link preview images are objects in the `[media.s3]` bucket;
+the database holds only their names. Back the bucket up with your storage's own tools
+(replication, versioning, or copying it elsewhere with `rclone` or `aws s3 sync`). A restored
+database whose bucket was lost shows every picture and file as missing, and the people who
+posted them would have to post them again.
+
+## What needs no backup
+
+- **NATS** holds only the last minute of events. After a loss, every client notices the gap,
+  reloads what it shows, and carries on.
+- **Valkey** holds rate limit counters, who is online, and sign-in steps in progress (tickets
+  for a second factor, passkey ceremonies). After a loss, people halfway through signing in
+  start again; nobody is signed out.
+- **The servers themselves** keep nothing: rebuild or redeploy them.
+- **`aspen.toml` and `voice_server.toml`** are configuration, not data, but they hold secrets
+  (the database password, the storage keys, `token_secret`). Keep them with your other secrets,
+  not in the same place as the backups.
+
+## Restoring
+
+1. Restore the database (`pg_restore`, or your archive's recovery).
+2. Restore the bucket.
+3. Run `aspen-migrate up`, in case the restored database is older than the servers.
+4. Start the API servers with the same `[federation] domain`. They use the key in the restored
+   database, so other deployments still recognise yours.
+
+Sessions in the backup still work; anyone who signed in after it was taken signs in again.
+Everyone's apps reload what they show.
+
+If the database is restored from a backup older than a key replacement
+(`federation rotate-key`), the restored deployment signs with the old key, which the deployments
+that followed the replacement no longer accept: replace the key again with `rotate-key
+--compromised`, and ask their administrators to accept the new one.

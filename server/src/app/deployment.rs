@@ -73,8 +73,10 @@ impl DeploymentPermissions {
     ToSchema,
     JsonSchema,
     strum::VariantArray,
+    strum::IntoStaticStr,
 )]
 #[serde(rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
 pub enum DeploymentPermission {
     ViewDashboard,
     ManageRegistrationInvites,
@@ -732,6 +734,17 @@ pub async fn holders(conn: &mut AsyncPgConnection) -> app::Result<Vec<(String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The terminal names each permission as the API does.
+    #[test]
+    fn permission_names_match_the_wire() {
+        for permission in <DeploymentPermission as strum::VariantArray>::VARIANTS {
+            assert_eq!(
+                serde_json::to_value(permission).unwrap(),
+                <&'static str>::from(permission)
+            );
+        }
+    }
 
     /// The log's action names are the ones `spec/moderation_actions.json` lists, which the
     /// client names in its dashboard.

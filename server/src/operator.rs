@@ -220,15 +220,29 @@ pub enum AdminCommand {
     /// Let the deployment's top role do something more, such as `moderateCommunities`, which
     /// its holders may then give to the roles below it.
     Allow {
-        /// A deployment permission's name: `viewDashboard`, `manageRegistrationInvites`,
-        /// `manageVoiceServers`, `manageDeploymentRoles`, or `moderateCommunities`.
+        /// A deployment permission's name.
+        #[clap(value_enum)]
         permission: crate::app::deployment::DeploymentPermission,
     },
     /// Stop the deployment's top role doing something.
     Deny {
-        /// A deployment permission's name, as for `allow`.
+        /// A deployment permission's name.
+        #[clap(value_enum)]
         permission: crate::app::deployment::DeploymentPermission,
     },
+}
+
+/// The terminal names deployment permissions as the API does, and lists them in its help.
+impl clap::ValueEnum for crate::app::deployment::DeploymentPermission {
+    fn value_variants<'a>() -> &'a [Self] {
+        <Self as strum::VariantArray>::VARIANTS
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(clap::builder::PossibleValue::new(<&'static str>::from(
+            self,
+        )))
+    }
 }
 
 #[derive(Subcommand, Debug)]

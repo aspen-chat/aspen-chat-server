@@ -30,6 +30,8 @@ Federation, letting a user of one deployment use others, is being built in phase
 
 ## Building and Running
 
+`docs/operators/` is the guide for people who run a deployment: installing, every setting, federation, backups, and troubleshooting by problem code. It describes the code as it stands, like every comment: a change to a setting (`aspen_config.rs`, `voice_server/src/config.rs`), an operator command, a `ProblemCode`, or what an operator must open, route, or back up updates it in the same commit.
+
 1. Start infrastructure services:
    ```
    docker-compose up -d
