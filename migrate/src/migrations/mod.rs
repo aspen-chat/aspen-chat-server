@@ -59,3 +59,4 @@ pub mod m20260929_011737_federation_standing;
 pub mod m20260929_035231_message_search;
 pub mod m20260929_052246_push;
 pub mod m20260929_063942_notification_setting;
+pub mod m20260929_111437_foreign_key_indexes;

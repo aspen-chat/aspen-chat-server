@@ -1,0 +1,13 @@
+DROP INDEX poll_vote_user;
+DROP INDEX react_author;
+DROP INDEX message_thread;
+DROP INDEX read_state_channel;
+DROP INDEX channel_mute_channel;
+DROP INDEX poll_channel;
+DROP INDEX pin_channel;
+DROP INDEX invite_community;
+DROP INDEX channel_parent_category;
+DROP INDEX category_community;
+DROP INDEX channel_community;
+DROP INDEX session_refresh_token;
+DROP INDEX refresh_token_user;
