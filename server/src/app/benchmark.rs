@@ -9,9 +9,11 @@
 //! own foreign keys rather than a list here, so a table added later is covered without a change
 //! to this file. It starts from the run's users and communities, plus any community or DM whose
 //! every member is one of the run's users (the run made those), and follows every foreign key
-//! from rows being removed to the rows that reference them. Nullable references among the doomed
-//! rows are cleared first, which breaks every cycle (a thread and its starter message name each
-//! other), and the rows are deleted children first. Files in object storage that only those rows
+//! from rows being removed to the rows that reference them. Nullable references that close a
+//! cycle among the doomed rows are cleared first, which breaks every cycle (a thread and its
+//! starter message name each other), and the rows are deleted children first. Every other
+//! reference is left for the order of deletion to honour, since clearing it could break a rule of
+//! its table (a notification setting names a community or a channel, never neither). Files in object storage that only those rows
 //! used (attachments, icons, link preview images) are deleted after the transaction commits.
 
 use crate::CHACHA_RNG;
@@ -378,6 +380,27 @@ fn children_first(tables: &HashSet<String>, edges: &[(String, String)]) -> Optio
     Some(order)
 }
 
+/// Whether the reference `child` → `parent` closes a cycle: `parent` reaches `child` through
+/// references, itself included.
+fn closes_cycle(edges: &[(String, String)], child: &str, parent: &str) -> bool {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut next = vec![parent];
+    while let Some(table) = next.pop() {
+        if table == child {
+            return true;
+        }
+        if seen.insert(table) {
+            next.extend(
+                edges
+                    .iter()
+                    .filter(|(from, _)| from == table)
+                    .map(|(_, to)| to.as_str()),
+            );
+        }
+    }
+    false
+}
+
 /// Removes run `run` and everything depending on it.
 pub async fn purge(
     conn: &mut AsyncPgConnection,
@@ -568,8 +591,13 @@ async fn purge_rows(
             .map(|id| crate::api::link_preview::image_storage_key(app::LinkPreviewImageId(id)))
     }));
 
-    // Clear references among the doomed rows, which breaks every cycle.
-    for fk in foreign_keys.iter().filter(|fk| fk.nullable) {
+    // Clear the references that close a cycle among the doomed rows, which breaks every cycle.
+    let references: Vec<(String, String)> = foreign_keys
+        .iter()
+        .map(|fk| (fk.child.clone(), fk.parent.clone()))
+        .collect();
+    let cleared = |fk: &ForeignKey| fk.nullable && closes_cycle(&references, &fk.child, &fk.parent);
+    for fk in foreign_keys.iter().filter(|fk| cleared(fk)) {
         let child_key = key_of(&fk.child)?;
         let assignments = fk
             .child_columns
@@ -588,7 +616,7 @@ async fn purge_rows(
 
     let edges: Vec<(String, String)> = foreign_keys
         .iter()
-        .filter(|fk| !fk.nullable)
+        .filter(|fk| !cleared(fk))
         .map(|fk| (fk.child.clone(), fk.parent.clone()))
         .collect();
     let order = children_first(&tables, &edges).ok_or_else(|| {
@@ -670,6 +698,22 @@ mod tests {
         assert!(at("react") < at("message"));
         assert!(at("message") < at("user"));
         assert!(at("message") < at("channel"));
+    }
+
+    #[test]
+    fn only_references_that_close_a_cycle_are_cleared() {
+        let edges: Vec<(String, String)> = [
+            ("channel", "message"),
+            ("message", "channel"),
+            ("message", "message"),
+            ("notification_setting", "channel"),
+        ]
+        .iter()
+        .map(|(c, p)| (c.to_string(), p.to_string()))
+        .collect();
+        assert!(closes_cycle(&edges, "channel", "message"));
+        assert!(closes_cycle(&edges, "message", "message"));
+        assert!(!closes_cycle(&edges, "notification_setting", "channel"));
     }
 
     #[test]
