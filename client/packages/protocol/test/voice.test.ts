@@ -828,6 +828,36 @@ describe("VoiceCall", () => {
     expect(volumes).toHaveLength(2);
   });
 
+  it("sets every consumer's gain again when who is silenced changes", async () => {
+    FakeSocket.behaviour = new Map();
+    let silenced = new Set<string>();
+    const { call, volumes } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      userVolume: (userId) => (silenced.has(userId) ? 0 : 1),
+    });
+    await call.join(channel);
+    for (const [consumerId, user] of [
+      ["a1", "blocked-elsewhere"],
+      ["a2", "friend"],
+    ] as const) {
+      FakeSocket.instances[0]?.frame({
+        type: "newConsumer",
+        consumerId,
+        producerId: `p-${consumerId}`,
+        user,
+        kind: "audio",
+        source: "microphone",
+        rtpParameters: {},
+        producerPaused: false,
+      });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+    silenced = new Set(["blocked-elsewhere"]);
+    call.refreshVolumes();
+    expect(volumes).toEqual(["a1=0", "a2=1"]);
+  });
+
   it("ranks unreachable servers last and builds signalling URLs", () => {
     const ranked = rankCandidates([
       { candidate: servers.far, latencyMs: Infinity },

@@ -13,7 +13,7 @@ import { useRef, useState } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
-  useBlockedUsers,
+  useSilenced,
   useChannelCan,
   useChannelVoice,
   useMe,
@@ -37,7 +37,7 @@ import { format } from "@/i18n/messages";
 /**
  * A voice channel's screen: the shared screens, one of them large and the rest as thumbnails
  * to pick from, then everyone in the call as tiles, and the way in or the share control. The
- * screens of people the user blocked are not shown.
+ * screens of people the user blocked, here or on another deployment, are not shown.
  */
 export function VoiceScreen({ channel, communityId }: { channel: Channel; communityId: string }) {
   const m = useMessages();
@@ -48,7 +48,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
-  const blocked = useBlockedUsers();
+  const silenced = useSilenced(call.status === "connected" ? call.screens.map((s) => s.user) : []);
 
   const screens: { id: string; user: string | null; track: MediaStreamTrack }[] = inThisCall
     ? [
@@ -56,7 +56,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
           ? []
           : [{ id: "local", user: null, track: call.localScreen }]),
         ...call.screens
-          .filter((screen) => !blocked.includes(screen.user))
+          .filter((screen) => !silenced.has(screen.user))
           .map((screen) => ({
             id: screen.consumerId,
             user: screen.user,

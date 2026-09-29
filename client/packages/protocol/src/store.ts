@@ -37,6 +37,7 @@ import type {
   UserCommunity,
 } from "./generated/events";
 import type { components } from "./generated/openapi";
+import { identityOf } from "./identity";
 
 type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
 
@@ -233,6 +234,12 @@ export class RecordStore {
   readonly #collapsed = new Set<string>();
   /** The users the caller has blocked. */
   readonly #blocked = new Set<string>();
+  /**
+   * People the caller blocked on any deployment, by `identityOf`, and this deployment's domain,
+   * which names its own users' identities; `silenced` reads them.
+   */
+  #blockedIdentities: ReadonlySet<string> = new Set();
+  #domain = "";
   readonly #roles = new Map<string, Role>();
   /** Overrides by `channel/role` and `category/role`. */
   readonly #channelOverrides = new Map<string, ChannelOverride>();
@@ -598,6 +605,44 @@ export class RecordStore {
     this.#batch(() => {
       this.#removeUser(userId);
     });
+  }
+
+  /**
+   * Topic `silenced`: whether the user is silenced and hidden in calls here, which a block made
+   * here or on any other deployment the caller uses does (`setBlockedIdentities`). Only a block
+   * made here does anything more.
+   */
+  silenced(userId: string): boolean {
+    return this.#blocked.has(userId) || this.#blockedElsewhere(userId);
+  }
+
+  /**
+   * Who the caller blocked on every deployment they use, by `identityOf`, with `domain`, the
+   * name of this one, so its own users' identities can be told.
+   */
+  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
+    const same =
+      domain === this.#domain &&
+      identities.size === this.#blockedIdentities.size &&
+      [...identities].every((identity) => this.#blockedIdentities.has(identity));
+    if (same) {
+      return;
+    }
+    this.#batch(() => {
+      this.#domain = domain;
+      this.#blockedIdentities = new Set(identities);
+      this.#touch("silenced");
+    });
+  }
+
+  #blockedElsewhere(userId: string): boolean {
+    if (this.#blockedIdentities.size === 0) {
+      return false;
+    }
+    const user = this.#users.get(userId);
+    return this.#blockedIdentities.has(
+      identityOf(user ?? { id: userId, homeDomain: null, homeId: null }, this.#domain),
+    );
   }
 
   /** Topic `blocks`: everyone the caller has blocked. */
@@ -1787,6 +1832,10 @@ export class RecordStore {
     const previous = this.#users.get(user.id);
     this.#users.set(user.id, user);
     this.#touch(`user:${user.id}`);
+    // A record can say who someone is elsewhere, which may be someone blocked there.
+    if (this.#blockedElsewhere(user.id)) {
+      this.#touch("silenced");
+    }
     if (user.bot || previous?.bot === true) {
       this.#touch("bots");
     }
@@ -2085,6 +2134,7 @@ export class RecordStore {
     }
     this.#touch(`block:${userId}`);
     this.#touch("blocks");
+    this.#touch("silenced");
     // What the caller may do in a one-to-one DM with them, and in its threads, changes too.
     for (const channel of this.#channels.values()) {
       const dm =

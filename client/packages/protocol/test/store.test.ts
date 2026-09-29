@@ -1240,6 +1240,28 @@ describe("RecordStore blocks", () => {
     expect(store.blockedUsers()).toEqual([]);
   });
 
+  it("silences someone blocked on another deployment, once it knows who they are", () => {
+    const store = bootstrapped();
+    const heard = vi.fn();
+    store.subscribe("silenced", heard);
+    // Bob is native here; a guest from a.example is known only once their record arrives.
+    store.setBlockedIdentities("b.example", new Set([`b.example/${bob.id}`, "a.example/h1"]));
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(store.silenced(bob.id)).toBe(true);
+    expect(store.blocked(bob.id)).toBe(false);
+    const guest = { ...bob, id: id(3), name: "guest", homeDomain: "a.example", homeId: "h1" };
+    expect(store.silenced(guest.id)).toBe(false);
+    store.ingest({ users: [guest] });
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(store.silenced(guest.id)).toBe(true);
+    store.setBlockedIdentities("b.example", new Set([`b.example/${bob.id}`, "a.example/h1"]));
+    expect(heard).toHaveBeenCalledTimes(2);
+    store.setBlockedIdentities("b.example", new Set());
+    expect(store.silenced(bob.id)).toBe(false);
+    store.setBlocked(bob.id, true);
+    expect(store.silenced(bob.id)).toBe(true);
+  });
+
   it("never lets a blocked user's message make a channel unread", () => {
     const store = bootstrapped();
     store.ingest({

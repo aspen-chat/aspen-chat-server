@@ -669,6 +669,13 @@ export class VoiceCall {
     }
   }
 
+  /** Sets every consumer's gain again from `userVolume`, after what it answers has changed. */
+  refreshVolumes(): void {
+    for (const [consumerId, consumer] of this.#consumers) {
+      this.#media.setVolume(consumerId, this.#userVolume(consumer.user));
+    }
+  }
+
   /** Sets how loud `userId` is heard right now; the preference behind it is the caller's to keep. */
   setUserVolume(userId: string, gain: number): void {
     for (const [consumerId, consumer] of this.#consumers) {

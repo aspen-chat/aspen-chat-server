@@ -300,6 +300,10 @@ export class AspenSync {
     }
     voiceOptions.userVolume = (userId) => this.#userGain(userId);
     this.voice = new VoiceCall(voiceOptions);
+    // A block made or lifted, here or on another deployment, changes who is heard at once.
+    this.store.subscribe("silenced", () => {
+      this.voice.refreshVolumes();
+    });
     this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
     if (typeof document !== "undefined") {
       // A page coming back into view gets fresh presence at once rather than at the next tick.
@@ -1513,9 +1517,18 @@ export class AspenSync {
     this.voice.setUserVolume(userId, this.#userGain(userId));
   }
 
-  /** How loud `userId` plays here: silent while blocked or muted for this user. */
+  /** How loud `userId` plays here: silent while muted for this user, or blocked on any deployment. */
   #userGain(userId: string): number {
-    return this.store.blocked(userId) ? 0 : effectiveUserVolume(this.preferences, userId);
+    return this.store.silenced(userId) ? 0 : effectiveUserVolume(this.preferences, userId);
+  }
+
+  /**
+   * Who the user blocked on every deployment they use, by `identityOf`, with `domain`, this
+   * deployment's name: those of them in a call here are silenced and their screens hidden, as
+   * if blocked here.
+   */
+  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
+    this.store.setBlockedIdentities(domain, identities);
   }
 
   /**
@@ -1530,7 +1543,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     if (this.store.setBlocked(userId, true)) {
-      this.#blockChanged(userId);
+      this.#blockChanged();
     }
   }
 
@@ -1543,7 +1556,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     if (this.store.setBlocked(userId, false)) {
-      this.#blockChanged(userId);
+      this.#blockChanged();
     }
   }
 
@@ -1651,11 +1664,11 @@ export class AspenSync {
   }
 
   /**
-   * Follows a block made or lifted, here or on another device. The call's gain changes at once;
-   * what the server counts for the caller alone (unread, reaction summaries) is read again.
+   * Follows a block made or lifted, here or on another device: what the server counts for the
+   * caller alone (unread, reaction summaries) is read again. The call follows the store's
+   * `silenced` topic.
    */
-  #blockChanged(userId: string): void {
-    this.voice.setUserVolume(userId, this.#userGain(userId));
+  #blockChanged(): void {
     void this.#refreshBlockedCounts();
   }
 
@@ -2220,7 +2233,6 @@ export class AspenSync {
       if (blocks.data === undefined) {
         throw new ApiProblemError(problemOf(blocks.error, blocks.response));
       }
-      const wasBlocked = this.store.blockedUsers();
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data);
@@ -2231,9 +2243,6 @@ export class AspenSync {
       this.#scheduleMuteEnd();
       this.store.ingest(blocks.data.included);
       this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
-      for (const userId of new Set([...wasBlocked, ...this.store.blockedUsers()])) {
-        this.voice.setUserVolume(userId, this.#userGain(userId));
-      }
       this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
@@ -2387,7 +2396,7 @@ export class AspenSync {
       event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
     this.store.applyEvent(event);
     if (blockChanged) {
-      this.#blockChanged(event.user);
+      this.#blockChanged();
     }
     for (const channelId of orphaned) {
       void this.#reloadReadState(channelId);

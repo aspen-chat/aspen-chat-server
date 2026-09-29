@@ -93,9 +93,14 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   picks (`StartOn` in the DM list's picker, the one shown by default), which hosts it. When the
   home says the user is in a DM elsewhere (`foreignDmJoined`, `AspenSync.onForeignDm`), the hub
   signs in there if needed and reads it. A block made on any deployment hides the person on
-  every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf` names
-  a person by their home's domain and their id there, from `homeDomain` and `homeId`, and
-  `ScopeDomainContext` says which deployment a record in scope is from.
+  every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf`
+  (`packages/protocol/src/identity.ts`) names a person by their home's domain and their id
+  there, from `homeDomain` and `homeId`, and `ScopeDomainContext` says which deployment a record
+  in scope is from. In calls the same holds below the UI: `ShareBlocksAcrossDeployments` hands
+  every deployment's sync the blocked identities (`AspenSync.setBlockedIdentities`), and its
+  store's `silenced` (topic `silenced`, `useSilenced`) decides each voice's gain
+  (`VoiceCall.refreshVolumes` whenever it changes) and which shared screens are hidden, even
+  for someone whose record only arrives with the call.
   The Administration Dashboard's user directory shows a user of another deployment as
   `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
   `AspenSync.setForeignUserBanned`).

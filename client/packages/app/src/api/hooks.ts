@@ -282,6 +282,15 @@ export function useBlockedUsers(): readonly string[] {
   return useTopic("blocks", (s) => s.blockedUsers());
 }
 
+/**
+ * Which of `userIds` are silenced and hidden in calls here: blocked here or, as the same
+ * person, on any other deployment the viewer uses.
+ */
+export function useSilenced(userIds: readonly string[]): ReadonlySet<string> {
+  const key = useTopic("silenced", (s) => userIds.filter((id) => s.silenced(id)).join(","));
+  return useMemo(() => new Set(key === "" ? [] : key.split(",")), [key]);
+}
+
 /** The caller's mute of a channel while it lasts, if any. */
 export function useMute(channelId: string): ChannelMute | undefined {
   return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));

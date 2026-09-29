@@ -145,6 +145,7 @@ export type {
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
 export { acceptLanguage, setPreferredLanguages } from "./languages";
+export { identityOf } from "./identity";
 export {
   MEMBER_SEARCH_PAGE,
   PRESENCE_BATCH,

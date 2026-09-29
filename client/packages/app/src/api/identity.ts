@@ -1,26 +1,22 @@
-import type { User } from "@aspen/protocol";
+import { identityOf as identityOn, type User } from "@aspen/protocol";
 import { useContext, useEffect, useState } from "react";
 import { authMethods } from "@/features/auth/authMethods";
 import { HomeClientContext } from "./context";
 import { ScopeDomainContext } from "./deploymentsContext";
-import { useEverywhere } from "./everywhere";
+import { useEverywhere, useSources } from "./everywhere";
 import { AspenSyncContext } from "./syncContext";
 
 /**
- * Who a user is across deployments: their home's domain and their id there. On their own
- * deployment that is the deployment's domain and their id; elsewhere their record names both
- * (`homeDomain`, `homeId`). `deployment` is the domain of the deployment the record is from,
- * `home` the domain of the viewer's home, which stands for it when it is the home's record.
+ * Who a user is across deployments (the protocol's `identityOf`). `deployment` is the domain of
+ * the deployment the record is from, `home` the domain of the viewer's home, which stands for
+ * it when it is the home's record.
  */
 export function identityOf(
   user: Pick<User, "id" | "homeDomain" | "homeId">,
   deployment: string | null,
   home: string | null,
 ): string {
-  if (user.homeDomain != null && user.homeId != null) {
-    return `${user.homeDomain}/${user.homeId}`;
-  }
-  return `${deployment ?? home ?? ""}/${user.id}`;
+  return identityOn(user, deployment ?? home ?? "");
 }
 
 /** The domain of the viewer's home among deployments; `null` while unknown or when it has none. */
@@ -74,7 +70,15 @@ export function useBlockedAnywhere(userId: string | undefined): boolean {
   const home = useHomeDomain();
   const scope = useContext(ScopeDomainContext);
   const sync = useContext(AspenSyncContext);
-  const blocked = useEverywhere(["blocks"], (sources) => {
+  const blocked = useBlockedIdentities();
+  const user = userId === undefined ? undefined : sync?.store.user(userId);
+  return user !== undefined && blocked.has(identityOf(user, scope, home));
+}
+
+/** Everyone the viewer blocked on any deployment they use, by `identityOf`. */
+export function useBlockedIdentities(): ReadonlySet<string> {
+  const home = useHomeDomain();
+  return useEverywhere(["blocks"], (sources) => {
     const identities = new Set<string>();
     for (const source of sources) {
       for (const id of source.sync.store.blockedUsers()) {
@@ -86,6 +90,20 @@ export function useBlockedAnywhere(userId: string | undefined): boolean {
     }
     return identities;
   });
-  const user = userId === undefined ? undefined : sync?.store.user(userId);
-  return user !== undefined && blocked.has(identityOf(user, scope, home));
+}
+
+/**
+ * Tells each deployment's sync who the viewer blocked everywhere, so that someone blocked on one
+ * deployment is silenced and hidden in calls on every other (`AspenSync.setBlockedIdentities`).
+ */
+export function ShareBlocksAcrossDeployments() {
+  const home = useHomeDomain();
+  const identities = useBlockedIdentities();
+  const sources = useSources();
+  useEffect(() => {
+    for (const source of sources) {
+      source.sync.setBlockedIdentities(source.domain ?? home ?? "", identities);
+    }
+  }, [sources, home, identities]);
+  return null;
 }

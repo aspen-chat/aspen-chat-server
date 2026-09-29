@@ -2,6 +2,7 @@ import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-route
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
 import { useOneCallAtATime } from "@/api/calls";
+import { ShareBlocksAcrossDeployments } from "@/api/identity";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { LoginForm } from "@/features/auth/LoginForm";
@@ -86,6 +87,7 @@ function SignedIn() {
   return (
     <SyncProvider client={client}>
       <OneCall />
+      <ShareBlocksAcrossDeployments />
       <FollowLanguagePreference />
       <div className="flex h-full flex-col">
         <SyncBanner />
