@@ -45,9 +45,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   opens that page and listens on a one-shot loopback port for the browser's return
   (`packages/desktop/src/main/passkeyHandoff.ts`), then sends the tab back to the page to say
   it is done. On mobile the return is the `aspen://auth/passkey` URL, caught with
-  `@capacitor/app` while `@capacitor/browser` shows the page, so the native projects must
-  register the `aspen` URL scheme (`CFBundleURLTypes` on iOS, an intent filter on Android) when
-  they are generated; this path has not yet run on a device.
+  `@capacitor/app` while `@capacitor/browser` shows the page, so the native projects register
+  the `aspen` URL scheme (an intent filter on Android, `CFBundleURLTypes` on iOS once its
+  project is made); this path has not yet run on a device.
 - A server that requires two-factor sign-in answers every request of an account without a
   second factor with `twoFactorEnrollmentRequired`. `AspenClient` notices it on any response
   and flags the session (`twoFactorEnrollmentRequired`), and the root layout then shows the
@@ -627,7 +627,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   decrypts a push, RFC 8291, as the native code must), saving the `PushState` through the native
   plugin `AspenPush` (`src/api/pushBridge.ts`), which says which platform, app, and relay the
   build is. A build without that plugin simply has no push. Signing out forgets every account.
-  Tapping a notification opens its message.
+  Tapping a notification opens its message. On Android (`packages/mobile/android`, the one
+  native project kept in git), `AspenPushPlugin` holds the state in the app's private storage,
+  and `AspenMessagingService` takes the place of the push plugin's FCM service (the manifest
+  removes that one), handing it anything that is not a relay push: `PushHandler` decrypts
+  (`WebPush`), fetches with the account's session, refreshing it on `401`, and posts the
+  notification, tagged `channel/message` so `read` and `deleted` take it down. A build pushes
+  only with a relay in the `aspen_push_relay` string and a `google-services.json` from its
+  publisher's Firebase project. `pnpm --filter @aspen/mobile test:android` runs the JVM tests
+  and, on a connected device or emulator, the handler end to end against a stand-in deployment
+  (debug builds may use plain HTTP to the device itself for it). It needs JDK 21 and the Android
+  SDK; CI does not run it yet.
 - Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
   `pnpm build:shell` (`--base ./`, used by the desktop and mobile packages, which load the bundle
   from `file://` or an app-local origin and route after a `#`). Never write an absolute

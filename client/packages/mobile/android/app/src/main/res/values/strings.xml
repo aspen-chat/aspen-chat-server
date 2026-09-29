@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Aspen</string>
+    <string name="title_activity_main">Aspen</string>
+    <string name="package_name">org.aspenchat.client</string>
+    <string name="custom_url_scheme">org.aspenchat.client</string>
+    <!-- The relay of whoever publishes this build, which alone can wake it (spec/push.md). Empty,
+         the build has no push. -->
+    <string name="aspen_push_relay" translatable="false"></string>
+    <string name="aspen_push_channel_name">Messages</string>
+    <string name="aspen_push_new_message">New message</string>
+</resources>

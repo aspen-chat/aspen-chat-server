@@ -13,6 +13,7 @@ test-results/
 .env.*.local
 # Output of `pnpm codegen`; regenerated from ../openapi.yaml and ../event_schema.json.
 packages/protocol/src/generated/
-# Native projects are created on demand with `npx cap add <platform>`.
+# The iOS project is created on demand with `npx cap add ios` until it holds code of its own. The
+# Android project is kept: it holds the app's push code (spec/push.md), and ignores its own
+# build output and copied web assets.
 packages/mobile/ios/
-packages/mobile/android/
