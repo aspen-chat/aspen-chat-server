@@ -348,7 +348,9 @@ pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) ->
         }
     }
     conn.transaction(|conn| app::user::retire(state, conn.as_mut(), bot).scope_boxed())
-        .await
+        .await?;
+    app::federation::notices::announce_deleted(state, bot);
+    Ok(())
 }
 
 /// Makes a bot `caller` owns public, so anyone allowed to add bots to a community may add it,

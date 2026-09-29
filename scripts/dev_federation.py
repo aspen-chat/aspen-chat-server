@@ -489,6 +489,62 @@ def check_dms_abroad(traveller: str) -> None:
            "beta delivered its notice to alpha")
 
 
+def abroad_alive(token: str) -> bool:
+    return request("GET", f"https://{BETA.domain}/api/v1/users/@me", token=token)[0] == 200
+
+
+def wait_until(what: str, done, seconds: float = 30) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if done():
+            return
+        time.sleep(0.5)
+    raise Failed(f"{what} did not happen within {seconds:.0f} s")
+
+
+def check_standing() -> None:
+    """Beta asks alpha about alpha's users signed in there every few seconds, as it would every
+    hour: one who left beta loses their session there, an account deleted at alpha is retired at
+    beta at once by alpha's notice, and beta's moderators ban and unban one of alpha's users."""
+    restart(BETA, {"ASPEN_FEDERATION__STANDING_INTERVAL_SECONDS": "3"})
+    stamp = int(time.time())
+    leaver = sign_in(ALPHA, f"alphaleaver{stamp}")
+    status, left = sign_in_abroad(assertion_for(leaver))
+    expect(status == 200 and abroad_alive(left["sessionToken"]), "alpha's leaver signs in at beta")
+    api(ALPHA, "DELETE", f"/users/@me/foreign-deployments/{urllib.parse.quote(BETA.domain, safe='')}",
+        token=leaver, expect=(204,))
+    wait_until("beta ending the leaver's session", lambda: not abroad_alive(left["sessionToken"]))
+    expect(True, "once alpha no longer lets them be at beta, beta's next check ends their session")
+    status, again = sign_in_abroad(assertion_for(leaver))
+    expect(status == 200 and abroad_alive(again["sessionToken"]),
+           "signing in at beta again is allowed, and lists beta again")
+
+    deleter = sign_in(ALPHA, f"alphadeleter{stamp}")
+    status, deleted = sign_in_abroad(assertion_for(deleter))
+    deleter_at_beta = deleted["userId"]
+    api(ALPHA, "DELETE", "/users/@me", token=deleter, expect=(204,))
+    wait_until("beta retiring the deleted account", lambda: not abroad_alive(deleted["sessionToken"]), 10)
+    expect(True, "an account deleted at alpha is gone from beta too")
+
+    moderator = sign_in(BETA, f"betamod{stamp}")
+    terminal(BETA, "admin", "grant", f"betamod{stamp}")
+    terminal(BETA, "admin", "allow", "moderateCommunities")
+    rogue = sign_in(ALPHA, f"alpharogue{stamp}")
+    status, roguish = sign_in_abroad(assertion_for(rogue))
+    api(BETA, "PUT", f"/admin/users/{roguish['userId']}/ban", token=moderator, expect=(201,))
+    expect(not abroad_alive(roguish["sessionToken"]), "a ban ends the user's sessions at beta")
+    expect(problem(*sign_in_abroad(assertion_for(rogue))) == "403 federationRefused",
+           "a banned user cannot sign in at beta again")
+    api(BETA, "PUT", f"/admin/users/{deleter_at_beta}/ban", token=moderator, expect=(404,))
+    log = api(BETA, "GET", "/admin/moderation-log", token=moderator)
+    entries = log if isinstance(log, list) else log.get("entries", log.get("data", []))
+    expect(any(e.get("action") == "banForeignUser" for e in entries), "the ban is in beta's moderation log")
+    api(BETA, "DELETE", f"/admin/users/{roguish['userId']}/ban", token=moderator, expect=(204,))
+    status, _ = sign_in_abroad(assertion_for(rogue))
+    expect(status == 200, "once the ban is lifted they may sign in again")
+    restart(BETA)
+
+
 def totp(secret: str, step_offset: int = 0) -> str:
     """The RFC 6238 code for `secret` (base32) at the current step plus `step_offset`."""
     key = base64.b32decode(secret + "=" * (-len(secret) % 8))
@@ -588,6 +644,7 @@ def check_abroad(admin: str) -> None:
     expect(status == 200, "once beta's operator accepts the new key, alpha's users sign in again")
 
     check_dms_abroad(traveller)
+    check_standing()
 
     restart(BETA, {"ASPEN_AUTH__REQUIRE_TWO_FACTOR": "true",
                    "ASPEN_FEDERATION__USERS__IMMIGRATION_INVITE_REQUIRED": "true"})

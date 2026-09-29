@@ -99,7 +99,9 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
                   <span className="truncate font-medium">{user.displayName ?? user.name}</span>
                   {user.bot && <BotBadge />}
                 </span>
-                <span className="block truncate text-xs text-ink-muted">{user.name}</span>
+                <span className="block truncate text-xs text-ink-muted">
+                  {user.homeDomain == null ? user.name : `${user.name}@${user.homeDomain}`}
+                </span>
               </span>
             </span>
           ),
@@ -124,6 +126,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
                 cell: (user: AdminUserEntry) => (
                   <span className="flex flex-wrap items-center gap-2">
                     {moderator && <UserDms user={user} />}
+                    {moderator && user.homeDomain != null && <BanForeignUser user={user} />}
                     {manageBots && user.bot && user.botOwner == null && (
                       <DeleteOwnerlessBot user={user} />
                     )}
@@ -134,6 +137,76 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
           : []),
       ]}
     />
+  );
+}
+
+/**
+ * Bans a user of another server from this one, after a confirming second press, or lifts the
+ * ban: a banned user's sessions here end and they cannot sign in here again.
+ */
+function BanForeignUser({ user }: { user: AdminUserEntry }) {
+  const m = useMessages();
+  const sync = useSync();
+  const [banned, setBanned] = useState(user.banned);
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = user.displayName ?? user.name;
+  const change = (next: boolean) => {
+    setPending(true);
+    setError(null);
+    sync.setForeignUserBanned(user.id, next).then(
+      () => {
+        setBanned(next);
+        setConfirming(false);
+        setPending(false);
+      },
+      (e: unknown) => {
+        setError(e instanceof ApiProblemError ? e.message : String(e));
+        setPending(false);
+      },
+    );
+  };
+  return (
+    <span className="flex flex-col gap-1">
+      {banned ? (
+        <>
+          <span className="text-xs text-danger">{m.deployments.banned}</span>
+          <Button
+            isDisabled={pending}
+            aria-label={format(m.deployments.liftBanLabel, { name })}
+            onPress={() => {
+              change(false);
+            }}
+            className={secondaryButtonClass + " self-start"}
+          >
+            {m.deployments.liftBan}
+          </Button>
+        </>
+      ) : (
+        <Button
+          isDisabled={pending}
+          aria-label={format(m.deployments.banLabel, { name })}
+          onPress={() => {
+            if (confirming) {
+              change(true);
+            } else {
+              setConfirming(true);
+            }
+          }}
+          className={
+            (confirming ? dangerButtonClass : secondaryButtonClass + " text-danger") + " self-start"
+          }
+        >
+          {confirming ? format(m.deployments.banConfirm, { name }) : m.deployments.ban}
+        </Button>
+      )}
+      {error !== null && (
+        <span role="alert" className="text-xs text-danger">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 

@@ -249,7 +249,7 @@ pub struct LimitsConfig {
 /// of its users: none (both closed, the default), emigration (only `emigration` open or on a
 /// list), immigration (only `immigration`), and full (both), each either open or with a list.
 /// Bots have gates of their own, which work the same way.
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default, deny_unknown_fields)]
 pub struct FederationConfig {
     /// This deployment's name among deployments: the domain it is served at, with `:port` when
@@ -258,6 +258,13 @@ pub struct FederationConfig {
     pub domain: Option<String>,
     pub users: MigrationRules,
     pub bots: MigrationRules,
+    /// How often this deployment asks the homes of the users from elsewhere signed in here
+    /// whether they are still in good standing there (`app::federation::standing`): an hour.
+    #[default = 3600]
+    pub standing_interval_seconds: u64,
+    /// How long a home may go unreached before its users' sessions here end: a day.
+    #[default = 86400]
+    pub standing_grace_seconds: u64,
     /// Settings for trying federation on one machine; a deployment others use leaves them out.
     pub development: FederationDevelopment,
 }

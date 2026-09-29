@@ -203,6 +203,10 @@ pub struct AdminUserEntry {
     /// account, which a holder of Manage bots may delete.
     pub bot: bool,
     pub bot_owner: Option<UserId>,
+    /// For a user of another deployment, that deployment's domain.
+    pub home_domain: Option<String>,
+    /// Whether this deployment's moderators banned them.
+    pub banned: bool,
 }
 
 /// A page of the deployment's users, searched by name and sorted.
@@ -271,6 +275,8 @@ pub async fn list_users(
                 registered_with: u.registered_with,
                 bot: u.bot,
                 bot_owner: u.bot_owner,
+                home_domain: u.home_domain,
+                banned: u.banned,
             })
             .collect(),
     ))
@@ -687,4 +693,61 @@ pub async fn get_fleet(
             })
             .collect(),
     }))
+}
+
+/// Bans a user of another deployment from this one: their sessions here end, and they cannot
+/// sign in here until the ban is lifted. Takes Moderate any community; written to the
+/// moderation log.
+#[utoipa::path(
+    put,
+    path = "/admin/users/{user}/ban",
+    tag = TAG_ADMIN,
+    params(("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "Banned"),
+        (status = OK, description = "Was banned already"),
+        (status = BAD_REQUEST, description = "`validation`: this deployment's own users are not banned this way", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn ban_user(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Path(user): Path<UserId>,
+) -> ApiResult<axum::http::StatusCode> {
+    let changed = app::admin::set_foreign_user_banned(&state, &access, user, true).await?;
+    Ok(if changed {
+        axum::http::StatusCode::CREATED
+    } else {
+        axum::http::StatusCode::OK
+    })
+}
+
+/// Lifts a ban of a user of another deployment.
+#[utoipa::path(
+    delete,
+    path = "/admin/users/{user}/ban",
+    tag = TAG_ADMIN,
+    params(("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT, description = "Not banned"),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn lift_ban(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Path(user): Path<UserId>,
+) -> ApiResult<NoContent> {
+    app::admin::set_foreign_user_banned(&state, &access, user, false).await?;
+    Ok(NoContent)
 }

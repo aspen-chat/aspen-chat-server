@@ -55,13 +55,14 @@ pub fn invalid(domain: Option<&Domain>, why: &str) -> app::Error {
     app::Error::AssertionInvalid
 }
 
-/// Verifies `token` as a statement of kind `T` from a deployment that a gate of `direction`
-/// admits, for users or for bots; the caller then checks the gate for the statement's own
-/// subject. Nothing is fetched from, or recorded about, a deployment neither gate admits.
+/// Verifies `token` as a statement of kind `T` from a deployment that a gate of one of
+/// `directions` admits, for users or for bots; the caller then checks the gate for what the
+/// statement is about. Nothing is fetched from, or recorded about, a deployment no such gate
+/// admits.
 pub async fn receive<T: Statement>(
     state: &GlobalServerContext,
     token: &str,
-    direction: Direction,
+    directions: &[Direction],
 ) -> app::Result<Received<T>> {
     let config = &state.config.federation;
     let here = own_domain(config).ok_or(app::Error::FederationRefused(t!("federationOff")))?;
@@ -83,10 +84,18 @@ pub async fn receive<T: Statement>(
         .await?
         .remove(&from)
         .unwrap_or_default();
-    if !admits(config, Subject::Users, direction, &lists)
-        && !admits(config, Subject::Bots, direction, &lists)
-    {
-        return Err(refused(&from, direction));
+    let admitted = directions.iter().any(|direction| {
+        admits(config, Subject::Users, *direction, &lists)
+            || admits(config, Subject::Bots, *direction, &lists)
+    });
+    if !admitted {
+        return Err(refused(
+            &from,
+            directions
+                .first()
+                .copied()
+                .unwrap_or(Direction::Immigration),
+        ));
     }
     let known: Option<FederatedDeployment> = federated_deployment::table
         .find(&from)

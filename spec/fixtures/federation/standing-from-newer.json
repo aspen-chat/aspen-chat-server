@@ -1,0 +1,12 @@
+{
+  "iss": "future.example",
+  "aud": "beta.localhost:8444",
+  "iat": 1790640000,
+  "exp": 1790640120,
+  "jti": "5b8f6f1e-6a2c-4d0f-9d1b-1d2c3e4f5a6d",
+  "users": [
+    { "sub": "01a0ea60-64a9-7662-b97d-bd6c8a6e6e3f", "standing": "good" },
+    { "sub": "01a0ea60-64a9-7662-b97d-bd6c8a6e6e40", "standing": "suspendedUntilAppeal", "until": "2031-02-01" }
+  ],
+  "note": "an unknown field"
+}

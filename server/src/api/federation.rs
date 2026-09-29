@@ -795,3 +795,45 @@ pub async fn receive_notice(
     app::federation::notices::receive_notice(&state, &request.notice).await?;
     Ok(StatusCode::ACCEPTED)
 }
+
+/// Another deployment asks about this deployment's users signed in there.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StandingRequestBody {
+    /// A compact JWS of `typ` `aspen-standing-request+jwt`, as `federation_schema.json`
+    /// describes.
+    pub request: String,
+}
+
+/// This deployment's answer: whether each user is still in good standing here.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StandingAnswerBody {
+    /// A compact JWS of `typ` `aspen-standing+jwt`.
+    pub standing: String,
+}
+
+/// Answers another deployment for this deployment's users signed in there: whether each still
+/// exists and may still use it (`spec/federation.md`). Sent by deployments rather than clients.
+#[utoipa::path(
+    post,
+    path = "/federation/standing",
+    tag = TAG_AUTH,
+    request_body = StandingRequestBody,
+    responses(
+        (status = OK, body = StandingAnswerBody),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, description = "`assertionInvalid`: the request is malformed, forged, expired, used, or not for this deployment", body = Problem),
+        (status = FORBIDDEN, description = "`federationRefused`: this deployment does not federate with the asker", body = Problem),
+        (status = BAD_GATEWAY, description = "`deploymentUnreachable`: the asker could not be reached to read its key", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn answer_standing(
+    State(state): State<GlobalServerContext>,
+    Json(request): Json<StandingRequestBody>,
+) -> ApiResult<Json<StandingAnswerBody>> {
+    Ok(Json(StandingAnswerBody {
+        standing: app::federation::standing::answer(&state, &request.request).await?,
+    }))
+}

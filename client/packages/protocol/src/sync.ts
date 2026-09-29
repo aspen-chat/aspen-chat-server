@@ -1589,6 +1589,20 @@ export class AspenSync {
   }
 
   /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
+  /**
+   * Bans a user of another deployment from this one, ending their sessions here, or lifts the
+   * ban; takes Moderate any community.
+   */
+  async setForeignUserBanned(userId: string, banned: boolean): Promise<void> {
+    const params = { params: { path: { user: userId } } };
+    const result = banned
+      ? await this.#client.api.PUT("/api/v1/admin/users/{user}/ban", params)
+      : await this.#client.api.DELETE("/api/v1/admin/users/{user}/ban", params);
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   async deleteBot(botId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/bots/{bot}", {
       params: { path: { bot: botId } },

@@ -244,6 +244,8 @@ pub enum ModerationAction {
     RenameCommunity,
     DeleteCommunity,
     RemoveWriteIn,
+    BanForeignUser,
+    LiftForeignUserBan,
 }
 
 /// Writes a use of Moderate any community to the moderation log, and to the server's own log.

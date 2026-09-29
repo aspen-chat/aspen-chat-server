@@ -21,6 +21,7 @@ pub mod keys;
 pub mod notices;
 pub mod protocol;
 pub mod received;
+pub mod standing;
 
 pub use contact::{ContactOutcome, contact, fetch_document, record_contact};
 pub use keys::{
@@ -692,6 +693,7 @@ mod tests {
             users,
             bots: MigrationRules::default(),
             development: FederationDevelopment::default(),
+            ..FederationConfig::default()
         }
     }
 

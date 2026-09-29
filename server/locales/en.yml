@@ -194,6 +194,8 @@ federationNotYourHome: "Your account belongs to another server; sign in to other
 federationEmigrationClosed: "This server does not let its accounts sign in at %{domain}."
 federationImmigrationClosed: "This server does not accept accounts from %{domain}."
 federationIncompatible: "%{domain} speaks a version of the Aspen protocol this server does not."
+banOnlyForeign: "Only users of other servers can be banned from this one."
+federationBanned: "This server's moderators have banned this account from it."
 federationAccountClosed: "This account can no longer sign in here."
 foreignProfileAtHome: "Your profile belongs to your home server; change it there."
 federationDocumentOtherDomain: "The deployment's document names another domain, %{domain}."

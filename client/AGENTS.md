@@ -90,6 +90,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf` names
   a person by their home's domain and their id there, from `homeDomain` and `homeId`, and
   `ScopeDomainContext` says which deployment a record in scope is from.
+  The Administration Dashboard's user directory shows a user of another deployment as
+  `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
+  `AspenSync.setForeignUserBanned`).
 - Every endpoint is rate limited and may answer `429` `rateLimited` with `Retry-After`.
   `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
   refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized

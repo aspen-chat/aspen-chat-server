@@ -3,22 +3,26 @@
 //! `/api/v1/federation/notices` there, naming the user by their id at home. What it says is its
 //! `kind`; a kind the receiver does not know it accepts and ignores (`spec/federation.md`).
 //!
-//! The one kind so far, `dmJoined`: a deployment that hosts a DM tells each of its participants
-//! from elsewhere that they are in it, when it is started with them or they are added to it, and
-//! their home tells their devices (`foreignDmJoined`), which sign in there if they are not and
-//! read it. A home passes on notices only from deployments its user still uses, so one they left
-//! stays left.
+//! The kinds so far:
+//! - `dmJoined`, from a host to a home: a deployment that hosts a DM tells each of its
+//!   participants' homes that they are in it, when it is started with them or they are added to
+//!   it, and the home tells their devices (`foreignDmJoined`), which sign in there if they are
+//!   not and read it. A home passes it on only from deployments its user still uses, so one they
+//!   left stays left.
+//! - `accountDeleted`, from a home to the deployments its user used: the account is gone, and
+//!   each retires its user from there (`app::user::retire`).
 
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Statement, receive};
-use crate::app::federation::{Direction, Domain, Subject, admits, jws, own_domain};
+use crate::app::federation::{Direction, Domain, FederationList, Subject, admits, jws, own_domain};
 use crate::app::{self, ChannelId, EventScope, UserId, publish_event};
 use crate::database::schema::{user, user_foreign_deployment};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -64,6 +68,8 @@ pub enum About {
         /// Who started it or added them.
         by: Person,
     },
+    /// The user deleted their account at home.
+    AccountDeleted,
     /// A kind this deployment does not know, sent by a newer one; accepted and ignored.
     #[serde(other)]
     Unknown,
@@ -139,40 +145,89 @@ async fn announce_dm_now(
         .find(by)
         .first(&mut conn)
         .await?;
-    let Some(key) = signing_key(&mut conn).await? else {
-        return Ok(());
-    };
     drop(conn);
     for (home, home_id) in foreign {
         let (Some(home), Some(home_id)) = (home, home_id) else {
             continue;
         };
-        let now = Utc::now();
-        let notice = jws::sign(
-            NOTICE_TYPE,
-            key.id,
-            &key.pair,
-            &Notice {
-                iss: here.clone(),
-                aud: home.clone(),
-                sub: home_id,
-                iat: now.timestamp(),
-                exp: (now + NOTICE_LIFETIME).timestamp(),
-                jti: Uuid::new_v4(),
-                about: About::DmJoined {
-                    channel,
-                    by: Person {
-                        name: name.clone(),
-                        display_name: display_name.clone(),
-                    },
+        send(
+            state,
+            &here,
+            home,
+            home_id,
+            About::DmJoined {
+                channel,
+                by: Person {
+                    name: name.clone(),
+                    display_name: display_name.clone(),
                 },
             },
-        );
-        let state = state.clone();
-        tokio::spawn(async move {
-            deliver(&state, &home, notice).await;
-        });
+        )
+        .await?;
     }
+    Ok(())
+}
+
+/// Tells every other deployment `user`, one of this deployment's own, has used that their
+/// account is gone, in the background.
+pub fn announce_deleted(state: &GlobalServerContext, user_id: UserId) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Err(error) = announce_deleted_now(&state, user_id).await {
+            tracing::warn!(%error, "could not announce a deleted account to other deployments");
+        }
+    });
+}
+
+async fn announce_deleted_now(state: &GlobalServerContext, user_id: UserId) -> app::Result<()> {
+    let Some(here) = own_domain(&state.config.federation) else {
+        return Ok(());
+    };
+    let used: Vec<String> = user_foreign_deployment::table
+        .select(user_foreign_deployment::domain)
+        .filter(user_foreign_deployment::user.eq(user_id))
+        .load(&mut state.connection_pool.get().await?)
+        .await?;
+    for domain in used {
+        let Ok(domain) = Domain::parse(&domain) else {
+            continue;
+        };
+        send(state, &here, domain, user_id.0, About::AccountDeleted).await?;
+    }
+    Ok(())
+}
+
+/// Signs a notice about the user `sub` (their id at home) for `to`, and delivers it in the
+/// background.
+async fn send(
+    state: &GlobalServerContext,
+    here: &Domain,
+    to: Domain,
+    sub: Uuid,
+    about: About,
+) -> app::Result<()> {
+    let Some(key) = signing_key(state.connection_pool.get().await?.as_mut()).await? else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    let notice = jws::sign(
+        NOTICE_TYPE,
+        key.id,
+        &key.pair,
+        &Notice {
+            iss: here.clone(),
+            aud: to.clone(),
+            sub,
+            iat: now.timestamp(),
+            exp: (now + NOTICE_LIFETIME).timestamp(),
+            jti: Uuid::new_v4(),
+            about,
+        },
+    );
+    let state = state.clone();
+    tokio::spawn(async move {
+        deliver(&state, &to, notice).await;
+    });
     Ok(())
 }
 
@@ -199,21 +254,42 @@ async fn deliver(state: &GlobalServerContext, to: &Domain, notice: String) {
     tracing::warn!(%to, "gave up delivering a notice");
 }
 
-/// Takes a notice from another deployment about one of this deployment's users, and passes it
-/// on to their devices when they still use that deployment.
+/// Takes a notice from another deployment: about one of this deployment's users, from a
+/// deployment they use, or about one of that deployment's users signed in here, from their home.
 pub async fn receive_notice(state: &GlobalServerContext, token: &str) -> app::Result<()> {
     let Received {
         claims,
         from,
         lists,
-    } = receive::<Notice>(state, token, Direction::Emigration).await?;
-    let About::DmJoined { channel, by } = claims.about else {
-        return Ok(());
-    };
+    } = receive::<Notice>(
+        state,
+        token,
+        &[Direction::Emigration, Direction::Immigration],
+    )
+    .await?;
+    match claims.about {
+        About::DmJoined { channel, by } => {
+            dm_joined(state, &from, &lists, claims.sub, channel, by).await
+        }
+        About::AccountDeleted => account_deleted(state, &from, claims.sub).await,
+        About::Unknown => Ok(()),
+    }
+}
+
+/// One of this deployment's users is in a DM on `from`: their devices hear of it while they
+/// still use `from`.
+async fn dm_joined(
+    state: &GlobalServerContext,
+    from: &Domain,
+    lists: &[FederationList],
+    sub: Uuid,
+    channel: ChannelId,
+    by: Person,
+) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     let found: Option<(UserId, bool)> = user::table
         .select((user::id, user::bot))
-        .filter(user::id.eq(claims.sub))
+        .filter(user::id.eq(sub))
         .filter(user::home_domain.is_null())
         .filter(user::deleted_at.is_null())
         .first(&mut conn)
@@ -235,7 +311,7 @@ pub async fn receive_notice(state: &GlobalServerContext, token: &str) -> app::Re
             &state.config.federation,
             subject,
             Direction::Emigration,
-            &lists,
+            lists,
         )
     {
         return Ok(());
@@ -252,6 +328,27 @@ pub async fn receive_notice(state: &GlobalServerContext, token: &str) -> app::Re
         },
     )
     .await
+}
+
+/// A user from `from` deleted their account there: their user here is retired. Any home may
+/// say so of its own users, whatever the gates now say, since it only takes away.
+async fn account_deleted(state: &GlobalServerContext, from: &Domain, sub: Uuid) -> app::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    let found: Option<UserId> = user::table
+        .select(user::id)
+        .filter(user::home_domain.eq(from))
+        .filter(user::home_id.eq(sub))
+        .filter(user::deleted_at.is_null())
+        .first(&mut conn)
+        .await
+        .optional()?;
+    let Some(user_id) = found else {
+        return Ok(());
+    };
+    conn.transaction(|conn| app::user::retire(state, conn, user_id).scope_boxed())
+        .await?;
+    tracing::info!(%from, user = %user_id.0, "retired a user whose home account was deleted");
+    Ok(())
 }
 
 #[cfg(test)]

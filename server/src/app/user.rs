@@ -398,7 +398,9 @@ pub(crate) async fn delete_user(
     caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| retire(&state, conn.as_mut(), id).scope_boxed())
-        .await
+        .await?;
+    app::federation::notices::announce_deleted(&state, id);
+    Ok(())
 }
 
 /// Deletes an account inside the caller's transaction: marks it deleted, takes its credentials

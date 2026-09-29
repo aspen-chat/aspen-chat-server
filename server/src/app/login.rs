@@ -484,6 +484,21 @@ pub async fn try_change_password(
     Ok(ChangePasswordOutcome::Ok)
 }
 
+/// Expires every session and sign-in of `user_id`, as when their home withdraws them from this
+/// deployment or its moderators ban them.
+pub async fn revoke_all_sessions(conn: &mut AsyncPgConnection, user_id: UserId) -> app::Result<()> {
+    use schema::refresh_token;
+    diesel::update(
+        refresh_token::table
+            .filter(refresh_token::user.eq(user_id))
+            .filter(refresh_token::expires.gt(diesel::dsl::now)),
+    )
+    .set(refresh_token::expires.eq(diesel::dsl::now))
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// Expires every session and sign-in of `user_id` except the one `current_session_token`
 /// belongs to, so a stolen credential stops working once its owner secures the account.
 pub async fn revoke_other_sessions(

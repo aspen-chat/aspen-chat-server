@@ -309,12 +309,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::revoke_registration_invite))
         .routes(routes!(admin::get_fleet))
         .routes(routes!(admin::get_growth))
+        .routes(routes!(admin::ban_user, admin::lift_ban))
         .routes(routes!(federation::issue_assertion))
         .routes(routes!(federation::federated_sign_in))
         .routes(routes!(federation::list_foreign_deployments))
         .routes(routes!(federation::forget_foreign_deployment))
         .routes(routes!(federation::home_avatar))
         .routes(routes!(federation::receive_notice))
+        .routes(routes!(federation::answer_standing))
         .routes(routes!(federation::get_federation))
         .routes(routes!(
             federation::list_deployments,
@@ -498,6 +500,7 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     if context.config.federation.domain.is_some() {
         app::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     }
+    app::federation::standing::spawn_confirmer(context.clone());
     let cors = cors_layer(&context.config.cors, &context.config.federation);
     let router: axum::Router = router.with_state(context).into();
     Ok(match cors {

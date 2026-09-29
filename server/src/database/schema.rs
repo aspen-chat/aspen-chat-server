@@ -443,6 +443,9 @@ diesel::table! {
         home_domain -> Nullable<Text>,
         home_id -> Nullable<Uuid>,
         home_icon -> Nullable<Uuid>,
+        home_confirmed_at -> Nullable<Timestamptz>,
+        banned_at -> Nullable<Timestamptz>,
+        banned_by -> Nullable<Uuid>,
     }
 }
 

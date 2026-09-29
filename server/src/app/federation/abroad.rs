@@ -236,7 +236,7 @@ pub async fn sign_in(
         from: home,
         lists,
         ..
-    } = receive::<Assertion>(state, token, Direction::Immigration).await?;
+    } = receive::<Assertion>(state, token, &[Direction::Immigration]).await?;
     let subject = if claims.profile.bot {
         Subject::Bots
     } else {
@@ -369,7 +369,10 @@ async fn arrive(
                     .execute(conn)
                     .await?;
                 diesel::update(user::table.find(id))
-                    .set(user::registered_with.eq(registered_with))
+                    .set((
+                        user::registered_with.eq(registered_with),
+                        user::home_confirmed_at.eq(diesel::dsl::now),
+                    ))
                     .execute(conn)
                     .await?;
                 tracing::info!(%home, user = %id.0, "a foreign user arrived");
@@ -378,6 +381,18 @@ async fn arrive(
             if existing.deleted_at.is_some() {
                 return Err(app::Error::FederationRefused(t!("federationAccountClosed")));
             }
+            let banned: bool = user::table
+                .select(user::banned_at.is_not_null())
+                .find(existing.id)
+                .first(conn)
+                .await?;
+            if banned {
+                return Err(app::Error::FederationRefused(t!("federationBanned")));
+            }
+            diesel::update(user::table.find(existing.id))
+                .set(user::home_confirmed_at.eq(diesel::dsl::now))
+                .execute(conn)
+                .await?;
             let changed =
                 |now: &Option<String>, then: &Option<String>| (now != then).then(|| now.clone());
             let event = UserEvent::Update {

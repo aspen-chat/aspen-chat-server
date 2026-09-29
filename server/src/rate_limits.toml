@@ -99,6 +99,8 @@ endpoints = [
   "DELETE /admin/users/{user}/roles/{role}",
   "GET /admin/moderation-log",
   "GET /admin/users/{user}/dms",
+  "PUT /admin/users/{user}/ban",
+  "DELETE /admin/users/{user}/ban",
   "GET /admin/federation",
   "GET /admin/federation/deployments",
   "POST /admin/federation/deployments",
@@ -175,6 +177,10 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 [rate_limits.endpoints."POST /federation/notices"]
 # Other deployments tell this one about its users; each of their servers may send on its own.
 ip = { requests = 120, per_seconds = 60, burst = 60 }
+
+[rate_limits.endpoints."POST /federation/standing"]
+# Each deployment the home's users use asks about them in batches, about hourly.
+ip = { requests = 60, per_seconds = 60, burst = 30 }
 
 [rate_limits.endpoints."GET /federation/icons/{icon}"]
 # Other deployments copy an avatar when it changes; each of their servers may ask on its own.

@@ -95,6 +95,11 @@ pub struct FederationProtocol {
     /// The claims of an `aspen-notice+jwt`, POSTed to `/api/v1/federation/notices` at the
     /// home of the user it is about.
     pub notice: super::notices::Notice,
+    /// The claims of an `aspen-standing-request+jwt`, POSTed as `{"request": …}` to
+    /// `/api/v1/federation/standing` at a home.
+    pub standing_request: super::standing::StandingRequest,
+    /// The claims of the `aspen-standing+jwt` a home answers with, as `{"standing": …}`.
+    pub standing: super::standing::StandingAnswer,
 }
 
 #[cfg(test)]

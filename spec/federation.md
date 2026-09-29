@@ -28,6 +28,16 @@ deployments use too, are described by those two.
     - `dmJoined` (`channel`, `by`): the user is in a DM on the sender, started with them or
       with them added. The home passes it on to the user's devices only while the user still
       uses the sender.
+    - `accountDeleted`: sent by a home to every deployment its user used; the account is gone,
+      and each retires its user.
+  - `aspen-standing-request+jwt`: a deployment asks one home, POSTing `{"request": "…"}` to
+    `https://{home}/api/v1/federation/standing`, about that home's users signed in to it (by
+    their ids at home, at most 500), about hourly.
+  - `aspen-standing+jwt`: the home's answer, `{"standing": "…"}`, saying of each user `good`
+    (the account exists and may still use the asker), `gone` (there is no such account), or
+    `refused` (it may no longer use the asker). An asker ends the sessions of a user it hears
+    `refused`, or a standing it does not know, of; retires one it hears `gone` of; and ends the
+    sessions of users whose home it has not reached for a day.
 
 A deployment hosts a DM only while starting it with at least one of its own users in it; it
 may go on after they leave. Everyone in it therefore has an account on the host, and the host's
