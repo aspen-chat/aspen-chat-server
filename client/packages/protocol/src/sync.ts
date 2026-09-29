@@ -27,7 +27,7 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
-import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
+import { REACTION_SUMMARY_USERS, RecordStore, type NotificationLevel } from "./store";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
 
@@ -149,6 +149,12 @@ export const PRESENCE_POLL_MS = 30_000;
 export const READ_REPORT_MS = 1_000;
 
 /** How many people a page of a reaction list holds. */
+/**
+ * How far before this sync began a message may say it was posted and still notify, allowing for
+ * the server's clock and the device's disagreeing; well inside the minute a connection replays.
+ */
+const NOTIFY_CLOCK_SLACK_MS = 5_000;
+
 export const REACTORS_PAGE = 50;
 
 /** The longest delay `setTimeout` keeps; a longer one fires at once. */
@@ -275,6 +281,7 @@ export class AspenSync {
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
+  readonly #notifyListeners = new Set<(message: Message) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
   readonly #ownsPreferences: boolean;
 
@@ -385,6 +392,18 @@ export class AspenSync {
     this.#foreignDmListeners.add(listener);
     return () => {
       this.#foreignDmListeners.delete(listener);
+    };
+  };
+
+  /**
+   * Registers for new messages the user's notification settings say to tell them of
+   * (`RecordStore.notifies`), as they arrive, and returns the unsubscribe function. How to tell
+   * them is the app's.
+   */
+  readonly onNotify = (listener: (message: Message) => void): (() => void) => {
+    this.#notifyListeners.add(listener);
+    return () => {
+      this.#notifyListeners.delete(listener);
     };
   };
 
@@ -1071,6 +1090,61 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+  }
+
+  /**
+   * Sets how much of a channel (a text channel or DM) the user is told of, or with `null`
+   * returns it to its community's setting or the default. The store follows at once; the
+   * `notificationSettingChanged` event that follows changes nothing more.
+   */
+  async setChannelNotifications(channelId: string, level: NotificationLevel | null): Promise<void> {
+    const path = { params: { path: { channel: channelId } } };
+    const result =
+      level === null
+        ? await this.#client.api.DELETE(
+            "/api/v1/channels/{channel}/notification-settings/@me",
+            path,
+          )
+        : await this.#client.api.PUT("/api/v1/channels/{channel}/notification-settings/@me", {
+            ...path,
+            body: { level },
+          });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: null,
+      channel: channelId,
+      level,
+    });
+  }
+
+  /** Sets how much of a community's channels without a setting of their own the user is told of. */
+  async setCommunityNotifications(
+    communityId: string,
+    level: NotificationLevel | null,
+  ): Promise<void> {
+    const path = { params: { path: { community: communityId } } };
+    const result =
+      level === null
+        ? await this.#client.api.DELETE(
+            "/api/v1/communities/{community}/notification-settings/@me",
+            path,
+          )
+        : await this.#client.api.PUT("/api/v1/communities/{community}/notification-settings/@me", {
+            ...path,
+            body: { level },
+          });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: communityId,
+      channel: null,
+      level,
+    });
   }
 
   // --- The Administration Dashboard. Its reads are queries rather than cached records: each
@@ -2131,6 +2205,7 @@ export class AspenSync {
             "mutes",
             "collapses",
             "roles",
+            "notifications",
           ],
         },
       },
@@ -2206,12 +2281,13 @@ export class AspenSync {
                 "mutes",
                 "collapses",
                 "roles",
+                "notifications",
               ],
             },
           },
         }),
         this.#client.api.GET("/api/v1/users/@me/dms", {
-          params: { query: { include: ["users", "readStates", "mutes"] } },
+          params: { query: { include: ["users", "readStates", "mutes", "notifications"] } },
         }),
         this.#client.api.GET("/api/v1/users/@me/admin"),
         this.#client.api.GET("/api/v1/users/@me/blocks", {
@@ -2241,6 +2317,10 @@ export class AspenSync {
         ...(dms.data.included.channelMutes ?? []),
       ]);
       this.#scheduleMuteEnd();
+      this.store.replaceNotificationSettings([
+        ...(communities.data.included.notificationSettings ?? []),
+        ...(dms.data.included.notificationSettings ?? []),
+      ]);
       this.store.ingest(blocks.data.included);
       this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
       this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
@@ -2370,6 +2450,21 @@ export class AspenSync {
       return;
     }
     this.#apply(event);
+    // Only what arrives live, and was posted since this sync began, is news: the replay a
+    // connection starts with is not.
+    if (event.serverEvent === "message" && event.type === "create") {
+      const message = this.store.message(event.id);
+      if (
+        message !== undefined &&
+        // Some seconds' allowance for the server's clock and this device's disagreeing.
+        Date.parse(message.timestamp) >= this.#bootstrappedAt - NOTIFY_CLOCK_SLACK_MS &&
+        this.store.notifies(message)
+      ) {
+        for (const listener of this.#notifyListeners) {
+          listener(message);
+        }
+      }
+    }
   }
 
   #apply(event: ServerEvent): void {

@@ -40,6 +40,7 @@ import { SecurityDialog } from "@/features/security/SecurityDialog";
 import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
+import { NotificationsSection } from "@/features/settings/NotificationsSection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -76,6 +77,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   </h3>
                   <ThemePicker />
                 </section>
+                <NotificationsSection />
                 <LanguageSection />
                 <BlockedUsersSection />
                 <OtherServersSection />

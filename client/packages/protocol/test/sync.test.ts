@@ -88,7 +88,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
       ),
     "/api/v1/users/@me/communities": (url) => {
       expect(url.searchParams.get("include")).toBe(
-        "channels,categories,members,voice,readStates,mutes,collapses,roles",
+        "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications",
       );
       return json({
         data: [aspen],
@@ -104,7 +104,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
       });
     },
     "/api/v1/users/@me/dms": (url) => {
-      expect(url.searchParams.get("include")).toBe("users,readStates,mutes");
+      expect(url.searchParams.get("include")).toBe("users,readStates,mutes,notifications");
       return json({ data: [], included: { users: [] } });
     },
   };
@@ -516,7 +516,7 @@ describe("AspenSync", () => {
           json({ community: cedar.id, user: me.id, sortIndex: 0 }, 201),
         [`/api/v1/communities/${cedar.id}`]: (url) => {
           expect(url.searchParams.get("include")).toBe(
-            "channels,categories,members,voice,readStates,mutes,collapses,roles",
+            "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications",
           );
           return json({
             data: cedar,

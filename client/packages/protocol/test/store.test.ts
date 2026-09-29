@@ -1365,3 +1365,59 @@ describe("RecordStore unread tags", () => {
     expect(store.mentions(general.id)).toBe(0);
   });
 });
+
+describe("RecordStore notifications", () => {
+  it("resolves a channel's level from its own setting, its community's, and the default", () => {
+    const store = bootstrapped();
+    expect(store.notificationLevel(general.id)).toEqual({
+      level: "tags",
+      own: null,
+      inherited: "tags",
+    });
+    store.replaceNotificationSettings([{ community: aspen.id, channel: null, level: "all" }]);
+    expect(store.notificationLevel(general.id).level).toBe("all");
+    store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: null,
+      channel: general.id,
+      level: "nothing",
+    });
+    expect(store.notificationLevel(general.id)).toEqual({
+      level: "nothing",
+      own: "nothing",
+      inherited: "all",
+    });
+    expect(store.notificationLevel(dev.id).level).toBe("all");
+    store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: null,
+      channel: general.id,
+      level: null,
+    });
+    expect(store.notificationLevel(general.id).level).toBe("all");
+    expect(store.communityNotificationLevel(aspen.id)).toBe("all");
+  });
+
+  it("notifies of others' unread messages as the level asks, never muted or blocked ones", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null, mentions: 0 }],
+    });
+    const plain = message(2, general.id, bob.id);
+    const tagging = {
+      ...message(3, general.id, bob.id),
+      mentions: { users: [me.id], roles: [], everyone: false },
+    };
+    expect(store.notifies(plain)).toBe(false);
+    expect(store.notifies(tagging)).toBe(true);
+    expect(store.notifies({ ...tagging, author: me.id })).toBe(false);
+    expect(store.notifies({ ...tagging, id: id(999) })).toBe(false);
+    store.replaceNotificationSettings([{ community: null, channel: general.id, level: "all" }]);
+    expect(store.notifies(plain)).toBe(true);
+    store.replaceMutes([{ channel: general.id, until: null }]);
+    expect(store.notifies(plain)).toBe(false);
+    store.replaceMutes([]);
+    store.setBlocked(bob.id, true);
+    expect(store.notifies(plain)).toBe(false);
+  });
+});

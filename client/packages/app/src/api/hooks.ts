@@ -16,6 +16,7 @@ import type {
   Pin,
   Role,
   ChannelMute,
+  NotificationLevel,
   ChannelVoice,
   PreferenceDefinition,
   Channel,
@@ -294,6 +295,26 @@ export function useSilenced(userIds: readonly string[]): ReadonlySet<string> {
 /** The caller's mute of a channel while it lasts, if any. */
 export function useMute(channelId: string): ChannelMute | undefined {
   return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));
+}
+
+/**
+ * How much of a channel the caller is told of: the level in force, the channel's own setting if
+ * it has one, and what it would be without it (`RecordStore.notificationLevel`).
+ */
+export function useNotificationLevel(channelId: string): {
+  level: NotificationLevel;
+  own: NotificationLevel | null;
+  inherited: NotificationLevel;
+} {
+  const level = useTopic("notifications", (s) => s.notificationLevel(channelId).level);
+  const own = useTopic("notifications", (s) => s.notificationLevel(channelId).own);
+  const inherited = useTopic("notifications", (s) => s.notificationLevel(channelId).inherited);
+  return { level, own, inherited };
+}
+
+/** The caller's setting for a community, if they made one. */
+export function useCommunityNotificationLevel(communityId: string): NotificationLevel | null {
+  return useTopic("notifications", (s) => s.communityNotificationLevel(communityId));
 }
 
 /** How many unread messages in a channel tag the caller. */

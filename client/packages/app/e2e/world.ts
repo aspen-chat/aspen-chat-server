@@ -315,7 +315,7 @@ function searchMessages(url: URL) {
 }
 
 /** Sends a server event down the page's event stream. */
-type Publish = (event: Record<string, unknown>) => void;
+export type Publish = (event: Record<string, unknown>) => void;
 
 /** A registration invite of the world's, as the admin API lists it. */
 interface WorldInvite {
@@ -981,6 +981,35 @@ async function answer(
       },
     ],
     [
+      "PUT",
+      /^\/(channels|communities)\/[^/]+\/notification-settings\/@me$/,
+      () => {
+        const [, kind, id] = path.split("/");
+        const { level } = request.postDataJSON() as { level: string };
+        const setting = {
+          community: kind === "communities" ? (id ?? null) : null,
+          channel: kind === "channels" ? (id ?? null) : null,
+          level,
+        };
+        publish({ serverEvent: "notificationSettingChanged", ...setting });
+        return reply(setting, 201);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/(channels|communities)\/[^/]+\/notification-settings\/@me$/,
+      () => {
+        const [, kind, id] = path.split("/");
+        publish({
+          serverEvent: "notificationSettingChanged",
+          community: kind === "communities" ? (id ?? null) : null,
+          channel: kind === "channels" ? (id ?? null) : null,
+          level: null,
+        });
+        return reply(null, 204);
+      },
+    ],
+    [
       "DELETE",
       /^\/channels\/[^/]+\/mutes\/@me$/,
       () => {
@@ -1215,7 +1244,7 @@ export async function signInToWorld(
   page: Page,
   /** Routes that answer before the world's own, registered after it so they win. */
   before?: (page: Page) => Promise<void>,
-): Promise<void> {
+): Promise<Publish> {
   const publish = await events(page);
   const poll = lunch(publish);
   const admin = administration();
@@ -1226,4 +1255,5 @@ export async function signInToWorld(
   await page.getByLabel("Username").fill("kate");
   await page.getByLabel("Password").fill("hunter22");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  return publish;
 }

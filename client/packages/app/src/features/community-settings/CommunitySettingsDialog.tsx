@@ -39,6 +39,7 @@ import {
   wideModalClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { CommunityNotifications } from "@/features/notifications/CommunityNotifications";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -127,6 +128,7 @@ function Overview({ community }: { community: Community }) {
     <div className="flex flex-col gap-6">
       {moderator && !member && <p className={hintClass}>{m.communitySettings.moderatorNote}</p>}
       {(manage || moderator) && <Rename community={community} icon={manage} />}
+      {member && <CommunityNotifications communityId={community.id} />}
       <section className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold text-ink-muted">{m.communitySettings.ownerHeading}</h3>
         <p className={hintClass}>

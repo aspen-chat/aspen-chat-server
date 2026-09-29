@@ -99,6 +99,26 @@ export const NOTIFICATION_OUTPUT: PreferenceDefinition<NotificationChoice> = {
   parse: parseNotification,
 };
 
+/**
+ * Whether this install shows the system's notifications for messages the user's notification
+ * settings ask to be told of, while the app is open but not looking at them. Off until the user
+ * turns it on, which is when the browser asks their permission.
+ */
+export const DESKTOP_NOTIFICATIONS: PreferenceDefinition<boolean> = {
+  key: "notifications.desktop",
+  scope: "device",
+  fallback: false,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
+/** Whether this install plays a sound for such messages. */
+export const NOTIFICATION_SOUNDS: PreferenceDefinition<boolean> = {
+  key: "notifications.sounds",
+  scope: "device",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
 /** How loud one other person is to this user: a gain, 1 being as sent, up to double. */
 export const MAX_USER_VOLUME = 2;
 

@@ -53,6 +53,8 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+export type NotificationLevel = components["schemas"]["NotificationLevel"];
+export type NotificationSetting = components["schemas"]["NotificationSetting"];
 /** Who a message tags, as far as its author was allowed to; the tags that count. */
 export type Mentions = components["schemas"]["Mentions"];
 /** Someone the caller has blocked, and since when. */
@@ -231,6 +233,9 @@ export class RecordStore {
   readonly #myWriteIns = new Map<string, ReadonlySet<number>>();
   readonly #readStates = new Map<string, ReadState>();
   readonly #mutes = new Map<string, ChannelMute>();
+  /** The caller's notification settings: per channel, and per community. */
+  readonly #channelLevels = new Map<string, NotificationLevel>();
+  readonly #communityLevels = new Map<string, NotificationLevel>();
   readonly #collapsed = new Set<string>();
   /** The users the caller has blocked. */
   readonly #blocked = new Set<string>();
@@ -557,6 +562,59 @@ export class RecordStore {
       }
     }
     return total;
+  }
+
+  /**
+   * Topic `notifications`: how much of a channel the caller wants to be told of (a thread
+   * follows its parent): their setting for the channel, else for its community, else every
+   * message of a DM and tags elsewhere. `own` is the channel's own setting, if it has one, and
+   * `inherited` what the level would be without it.
+   */
+  notificationLevel(channelId: string): {
+    level: NotificationLevel;
+    own: NotificationLevel | null;
+    inherited: NotificationLevel;
+  } {
+    const channel = this.#channels.get(channelId);
+    const place =
+      channel?.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+    const own = this.#channelLevels.get(place?.id ?? channelId) ?? null;
+    const community =
+      place?.community == null ? undefined : this.#communityLevels.get(place.community);
+    const fallback: NotificationLevel =
+      place?.ty === "dm" || place?.ty === "groupDm" ? "all" : "tags";
+    const inherited = community ?? fallback;
+    return { level: own ?? inherited, own, inherited };
+  }
+
+  /** Topic `notifications`: the caller's setting for a community, if they made one. */
+  communityNotificationLevel(communityId: string): NotificationLevel | null {
+    return this.#communityLevels.get(communityId) ?? null;
+  }
+
+  /**
+   * Whether a message should notify the caller: someone else's, not someone they blocked here
+   * or elsewhere, still unread, in a channel not muted, and at a level that asks for it.
+   */
+  notifies(message: Message): boolean {
+    if (message.author === this.#myUserId || this.silenced(message.author)) {
+      return false;
+    }
+    if (message.kind === "threadEcho" || message.kind === "pollClosed") {
+      return false;
+    }
+    const channel = this.#channels.get(message.channelId);
+    const place = channel?.parentChannel ?? message.channelId;
+    // A mute that ran out is gone already: `AspenSync` ends it by the clock.
+    if (this.#mutes.has(place)) {
+      return false;
+    }
+    const read = this.#readStates.get(place);
+    if (read !== undefined && message.id <= read.lastRead) {
+      return false;
+    }
+    const { level } = this.notificationLevel(message.channelId);
+    return level === "all" || (level === "tags" && this.mentionsMe(message));
   }
 
   /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
@@ -1050,6 +1108,13 @@ export class RecordStore {
       for (const mute of included.channelMutes ?? []) {
         this.#putMute(mute);
       }
+      for (const setting of included.notificationSettings ?? []) {
+        this.#putNotificationSetting(
+          setting.community ?? null,
+          setting.channel ?? null,
+          setting.level,
+        );
+      }
       for (const { category } of included.categoryCollapses ?? []) {
         this.#setCollapsed(category, true);
       }
@@ -1279,6 +1344,22 @@ export class RecordStore {
    * Replaces every mute held with `mutes`, the complete list a bootstrap read, so a mute lifted
    * while the stream was away does not linger.
    */
+  /** Replaces every notification setting held with `settings`, the complete list a bootstrap read. */
+  replaceNotificationSettings(settings: readonly NotificationSetting[]): void {
+    this.#batch(() => {
+      this.#channelLevels.clear();
+      this.#communityLevels.clear();
+      for (const setting of settings) {
+        this.#putNotificationSetting(
+          setting.community ?? null,
+          setting.channel ?? null,
+          setting.level,
+        );
+      }
+      this.#touch("notifications");
+    });
+  }
+
   replaceMutes(mutes: readonly ChannelMute[]): void {
     this.#batch(() => {
       for (const channelId of Array.from(this.#mutes.keys())) {
@@ -1699,6 +1780,13 @@ export class RecordStore {
         case "categoryCollapseChanged":
           this.#setCollapsed(event.category, event.collapsed);
           break;
+        case "notificationSettingChanged":
+          this.#putNotificationSetting(
+            event.community ?? null,
+            event.channel ?? null,
+            event.level ?? null,
+          );
+          break;
         case "channelMuteChanged":
           if (event.muted) {
             this.#putMute({ channel: event.channel, until: event.until ?? null });
@@ -2108,6 +2196,24 @@ export class RecordStore {
       this.#collapsed.delete(categoryId);
     }
     this.#touch(`collapse:${categoryId}`);
+  }
+
+  #putNotificationSetting(
+    community: string | null,
+    channel: string | null,
+    level: NotificationLevel | null,
+  ): void {
+    const levels = channel === null ? this.#communityLevels : this.#channelLevels;
+    const id = channel ?? community;
+    if (id === null) {
+      return;
+    }
+    if (level === null) {
+      levels.delete(id);
+    } else {
+      levels.set(id, level);
+    }
+    this.#touch("notifications");
   }
 
   #putMute(mute: ChannelMute): void {

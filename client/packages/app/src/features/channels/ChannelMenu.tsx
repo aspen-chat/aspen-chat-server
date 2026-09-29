@@ -1,3 +1,4 @@
+import type { NotificationLevel } from "@aspen/protocol";
 import { DotsThreeVerticalIcon } from "@phosphor-icons/react";
 import type { RefObject } from "react";
 import {
@@ -9,7 +10,7 @@ import {
   MenuSection,
   Popover,
 } from "react-aria-components";
-import { useMute, useSync } from "@/api/hooks";
+import { useMute, useNotificationLevel, useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
@@ -39,6 +40,9 @@ const UNTIL: Intl.DateTimeFormatOptions = {
 
 const itemClass = "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover";
 const headerClass = "px-2 pt-1 pb-0.5 text-xs font-semibold text-ink-faint";
+/** A choice among several, marked when it is the one in force. */
+const checkClass = "selected:font-medium selected:text-accent";
+const NOTIFICATION_LEVELS: readonly NotificationLevel[] = ["all", "tags", "nothing"];
 
 /**
  * What the user can do to a channel or DM, opened by right-clicking its row or by its options
@@ -74,6 +78,7 @@ export function ChannelMenu({
   const until = useDateFormat(UNTIL);
   const sync = useSync();
   const mute = useMute(channelId);
+  const notify = useNotificationLevel(channelId);
   const label = format(m.mute.options, { name });
   return (
     <Popover
@@ -99,6 +104,16 @@ export function ChannelMenu({
             }
             if (key === "delete") {
               onDelete?.();
+              return;
+            }
+            if (typeof key === "string" && key.startsWith("notify:")) {
+              const level = key.slice("notify:".length);
+              void sync
+                .setChannelNotifications(
+                  channelId,
+                  level === "default" ? null : (level as NotificationLevel),
+                )
+                .catch(() => undefined);
               return;
             }
             if (key === "unmute") {
@@ -132,6 +147,28 @@ export function ChannelMenu({
               <MenuItem id="unmute" className={itemClass}>
                 {m.mute.unmute}
               </MenuItem>
+            </MenuSection>
+          )}
+          {mutable && (
+            <MenuSection
+              selectionMode="single"
+              selectedKeys={[`notify:${notify.own ?? "default"}`]}
+            >
+              <Header className={headerClass}>{m.notifications.notifyMe}</Header>
+              <MenuItem id="notify:default" className={itemClass + " " + checkClass}>
+                {format(m.notifications.default, {
+                  level: m.notifications.levels[notify.inherited],
+                })}
+              </MenuItem>
+              {NOTIFICATION_LEVELS.map((level) => (
+                <MenuItem
+                  key={level}
+                  id={`notify:${level}`}
+                  className={itemClass + " " + checkClass}
+                >
+                  {m.notifications.levels[level]}
+                </MenuItem>
+              ))}
             </MenuSection>
           )}
           {(onAccess !== undefined || onRename !== undefined || onDelete !== undefined) && (

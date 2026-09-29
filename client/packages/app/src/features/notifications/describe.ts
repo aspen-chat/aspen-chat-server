@@ -1,0 +1,41 @@
+import type { AspenSync, Message } from "@aspen/protocol";
+import { decodeTags } from "@/features/mentions/tags";
+import { displayNameOf } from "@/features/users/profile";
+import { format, type Messages } from "@/i18n/messages";
+
+/** What a notification says of a message: who wrote it where, and its text with tags as names. */
+export function describe(
+  m: Messages,
+  sync: AspenSync,
+  message: Message,
+): { title: string; body: string } {
+  const store = sync.store;
+  const author = store.user(message.author);
+  const name = author === undefined ? m.unknownUser : displayNameOf(author);
+  const channel = store.channel(message.channelId);
+  const place = channel?.parentChannel != null ? store.channel(channel.parentChannel) : channel;
+  const community = place?.community == null ? undefined : store.community(place.community);
+  const title =
+    place === undefined || community === undefined
+      ? name
+      : format(m.notifications.titleInChannel, {
+          name,
+          channel: place.name,
+          community: community.name,
+        });
+  const roles = place?.community == null ? [] : store.roles(place.community);
+  const { text } = decodeTags(
+    message.content,
+    (id) => store.user(id)?.name,
+    (id) => roles.find((role) => role.id === id)?.name,
+  );
+  const body =
+    text.trim() !== ""
+      ? text
+      : message.kind === "poll"
+        ? m.notifications.poll
+        : message.attachments.length > 0
+          ? m.notifications.attachment
+          : m.notifications.newMessage;
+  return { title, body };
+}
