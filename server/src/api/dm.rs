@@ -58,7 +58,7 @@ pub struct DmListQuery {
         (status = OK, description = "The existing one-to-one DM", body = Channel, headers(("Location" = String, description = "URL of the DM"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (no recipient, too many, or one who shares no community with the caller)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM; `federationRefused`: everyone in it belongs to other deployments", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

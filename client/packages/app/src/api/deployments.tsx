@@ -18,7 +18,12 @@ import { Button } from "react-aria-components";
 import { reportActivity } from "./activity";
 import type { Source } from "./everywhere";
 import { AspenClientContext, useHomeClient } from "./context";
-import { DeploymentsContext, useDeploymentsHub, useForeignDeployments } from "./deploymentsContext";
+import {
+  DeploymentsContext,
+  ScopeDomainContext,
+  useDeploymentsHub,
+  useForeignDeployments,
+} from "./deploymentsContext";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { useMessages } from "@/i18n/context";
@@ -75,6 +80,18 @@ export function DeploymentsProvider({
       hub.stop();
     };
   }, [hub]);
+  // The home says the user is in a DM on another deployment: sign in there if this device is
+  // not, and read the DM, so it shows in the one DM list at once.
+  useEffect(
+    () =>
+      homeSync.onForeignDm(({ domain, channel }) => {
+        void hub
+          .join(domain)
+          .then((entry) => entry.sync?.loadChannel(channel))
+          .catch(() => undefined);
+      }),
+    [hub, homeSync],
+  );
   const list = useSyncExternalStore(hub.subscribe, () => hub.list);
   useEffect(() => {
     const stops = list.flatMap((entry) =>
@@ -97,9 +114,11 @@ export function ForeignScope({ domain, children }: { domain: string; children: R
   const [joining, setJoining] = useState(false);
   if (entry?.status === "ready" && entry.sync !== null) {
     return (
-      <AspenClientContext.Provider value={entry.client}>
-        <AspenSyncContext.Provider value={entry.sync}>{children}</AspenSyncContext.Provider>
-      </AspenClientContext.Provider>
+      <ScopeDomainContext.Provider value={domain}>
+        <AspenClientContext.Provider value={entry.client}>
+          <AspenSyncContext.Provider value={entry.sync}>{children}</AspenSyncContext.Provider>
+        </AspenClientContext.Provider>
+      </ScopeDomainContext.Provider>
     );
   }
   const join = () => {
@@ -162,9 +181,11 @@ export function HomeScope({ children }: { children: ReactNode }) {
   const client = useHomeClient();
   const sync = useContext(HomeSyncContext);
   return (
-    <AspenClientContext.Provider value={client}>
-      <AspenSyncContext.Provider value={sync}>{children}</AspenSyncContext.Provider>
-    </AspenClientContext.Provider>
+    <ScopeDomainContext.Provider value={null}>
+      <AspenClientContext.Provider value={client}>
+        <AspenSyncContext.Provider value={sync}>{children}</AspenSyncContext.Provider>
+      </AspenClientContext.Provider>
+    </ScopeDomainContext.Provider>
   );
 }
 
@@ -174,8 +195,10 @@ export function HomeScope({ children }: { children: ReactNode }) {
  */
 export function SourceScope({ source, children }: { source: Source; children: ReactNode }) {
   return (
-    <AspenClientContext.Provider value={source.client}>
-      <AspenSyncContext.Provider value={source.sync}>{children}</AspenSyncContext.Provider>
-    </AspenClientContext.Provider>
+    <ScopeDomainContext.Provider value={source.domain}>
+      <AspenClientContext.Provider value={source.client}>
+        <AspenSyncContext.Provider value={source.sync}>{children}</AspenSyncContext.Provider>
+      </AspenClientContext.Provider>
+    </ScopeDomainContext.Provider>
   );
 }

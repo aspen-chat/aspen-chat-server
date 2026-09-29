@@ -13,20 +13,17 @@ use crate::api::GlobalServerContext;
 use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::protocol::Protocol;
-use crate::app::federation::{
-    self, Direction, Domain, Subject, admits, contact, jws, lists_of, own_domain,
-};
+use crate::app::federation::received::{Received, Statement, invalid, receive, refused};
+use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};
 use crate::app::login::{Session, SignInMethod, issue_session};
 use crate::app::two_factor::Caller;
 use crate::app::user::UserPg;
 use crate::app::{self, EventScope, IconId, UserId, publish_event};
-use crate::database::schema::{federated_deployment, icon, user, user_foreign_deployment};
+use crate::database::schema::{icon, user, user_foreign_deployment};
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::prelude::KeysInterface as _;
 use futures_util::StreamExt as _;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -38,10 +35,6 @@ const ASSERTION_TYPE: &str = "aspen-assertion+jwt";
 /// How long an assertion this deployment signs lasts: long enough to hand to the other
 /// deployment, and short enough that one intercepted is soon useless.
 const ASSERTION_LIFETIME: Duration = Duration::minutes(2);
-/// The longest lifetime an assertion from elsewhere may claim.
-const MAX_ASSERTION_LIFETIME: Duration = Duration::minutes(5);
-/// How far another deployment's clock may run ahead of this one's.
-const CLOCK_SKEW: Duration = Duration::seconds(60);
 /// Where a home serves its users' avatars to the deployments they sign in to, under the API.
 pub const HOME_ICON_PATH: &str = "/federation/icons";
 /// The largest avatar copied from a home.
@@ -63,6 +56,25 @@ pub struct Assertion {
     jti: Uuid,
     method: SignInMethod,
     profile: Profile,
+}
+
+impl Statement for Assertion {
+    const TYPE: &'static str = ASSERTION_TYPE;
+    fn issuer(&self) -> &Domain {
+        &self.iss
+    }
+    fn audience(&self) -> &Domain {
+        &self.aud
+    }
+    fn issued_at(&self) -> i64 {
+        self.iat
+    }
+    fn expires_at(&self) -> i64 {
+        self.exp
+    }
+    fn id(&self) -> Uuid {
+        self.jti
+    }
 }
 
 /// A user's profile as their home keeps it.
@@ -210,16 +222,6 @@ pub async fn forget_foreign_deployment(
     Ok(())
 }
 
-/// Why an assertion is refused, for the server's log; the caller is told only that it was.
-fn invalid(domain: Option<&Domain>, why: &str) -> app::Error {
-    tracing::info!(
-        domain = domain.map(Domain::as_str),
-        why,
-        "refused an assertion"
-    );
-    app::Error::AssertionInvalid
-}
-
 /// Signs in the foreign user `token` asserts, making their local row the first time.
 /// `invite_code` is a registration invite, which a first arrival needs when
 /// `immigration_invite_required` says so.
@@ -229,93 +231,19 @@ pub async fn sign_in(
     invite_code: Option<&str>,
 ) -> app::Result<Session> {
     let config = &state.config.federation;
-    let here = own_domain(config).ok_or(app::Error::FederationRefused(t!("federationOff")))?;
-    let unverified = jws::parse(token).map_err(|_| invalid(None, "malformed"))?;
-    #[derive(Deserialize)]
-    struct Issuer {
-        iss: Domain,
-    }
-    // Only who claims to have signed it is read before the signature is checked, to know
-    // which key to check it with.
-    let Issuer { iss: home } = unverified
-        .peek::<Issuer>()
-        .map_err(|_| invalid(None, "no issuer"))?;
-    if home == here {
-        return Err(invalid(Some(&home), "issued here"));
-    }
-    let mut conn = state.connection_pool.get().await?;
-    let lists = lists_of(&mut conn, std::slice::from_ref(&home))
-        .await?
-        .remove(&home)
-        .unwrap_or_default();
-    let refused =
-        || app::Error::FederationRefused(t!("federationImmigrationClosed", domain = home.as_str()));
-    // Nothing is fetched from, or recorded about, a deployment neither gate admits.
-    if !admits(config, Subject::Users, Direction::Immigration, &lists)
-        && !admits(config, Subject::Bots, Direction::Immigration, &lists)
-    {
-        return Err(refused());
-    }
-    let known: Option<federation::FederatedDeployment> = federated_deployment::table
-        .find(&home)
-        .select(federation::FederatedDeployment::as_select())
-        .first(&mut conn)
-        .await
-        .optional()?;
-    drop(conn);
-    let verified = known
-        .as_ref()
-        .and_then(|d| d.public_key.as_deref())
-        .and_then(|key| unverified.verify::<Assertion>(ASSERTION_TYPE, key).ok());
-    let (claims, home_deployment) = match (verified, known) {
-        (Some(claims), Some(known)) => (claims, known),
-        _ => {
-            // A key never pinned, or one the home has since handed over from: contacting it
-            // pins or follows the handover, and a key that changed unannounced stays refused.
-            let (listed, outcome) = contact(state, &home).await?;
-            if outcome == federation::ContactOutcome::KeyChanged {
-                return Err(invalid(Some(&home), "its key changed without a handover"));
-            }
-            let key = listed
-                .deployment
-                .public_key
-                .clone()
-                .ok_or_else(|| invalid(Some(&home), "no key"))?;
-            let claims = unverified
-                .verify::<Assertion>(ASSERTION_TYPE, &key)
-                .map_err(|_| invalid(Some(&home), "signature"))?;
-            (claims, listed.deployment)
-        }
-    };
-    // A home last contacted before it said which protocol it speaks speaks the first version.
-    if home_deployment
-        .protocol()
-        .unwrap_or_default()
-        .common_version(&Protocol::ours())
-        .is_none()
-    {
-        return Err(app::Error::FederationRefused(t!(
-            "federationIncompatible",
-            domain = home.as_str()
-        )));
-    }
-    let now = Utc::now();
-    if claims.iss != home || claims.aud != here {
-        return Err(invalid(Some(&home), "issuer or audience"));
-    }
-    if claims.exp <= now.timestamp()
-        || claims.iat > (now + CLOCK_SKEW).timestamp()
-        || claims.exp - claims.iat > MAX_ASSERTION_LIFETIME.num_seconds()
-    {
-        return Err(invalid(Some(&home), "expired or too long-lived"));
-    }
+    let Received {
+        claims,
+        from: home,
+        lists,
+        ..
+    } = receive::<Assertion>(state, token, Direction::Immigration).await?;
     let subject = if claims.profile.bot {
         Subject::Bots
     } else {
         Subject::Users
     };
     if !admits(config, subject, Direction::Immigration, &lists) {
-        return Err(refused());
+        return Err(refused(&home, Direction::Immigration));
     }
     // A bot has no second factor anywhere; a person must have proved more than a password.
     let proved = if claims.profile.bot {
@@ -330,22 +258,6 @@ pub async fn sign_in(
         return Err(app::Error::StrongerSignInRequired);
     }
     check_profile(&claims.profile).map_err(|_| invalid(Some(&home), "profile"))?;
-    // Used once: the id is remembered until the assertion could no longer be accepted anyway.
-    let remembered: Option<String> = state
-        .valkey
-        .set(
-            format!("federation:assertion:{home}:{}", claims.jti),
-            1,
-            Some(fred::types::Expiration::EX(
-                (claims.exp - now.timestamp() + CLOCK_SKEW.num_seconds()).max(1),
-            )),
-            Some(fred::types::SetOptions::NX),
-            false,
-        )
-        .await?;
-    if remembered.is_none() {
-        return Err(invalid(Some(&home), "used before"));
-    }
     let rules = match subject {
         Subject::Users => &config.users,
         Subject::Bots => &config.bots,

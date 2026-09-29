@@ -1,7 +1,7 @@
 import type { AspenSync, Topic } from "@aspen/protocol";
 import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "react";
 import type { AspenClient } from "@aspen/protocol";
-import { useHomeClient } from "./context";
+import { HomeClientContext } from "./context";
 import { useForeignDeployments } from "./deploymentsContext";
 import { HomeSyncContext } from "./syncContext";
 
@@ -15,11 +15,13 @@ export interface Source {
 /** The user's home and every other deployment they are signed in to, home first. */
 export function useSources(): readonly Source[] {
   const home = useContext(HomeSyncContext);
-  const homeClient = useHomeClient();
+  const homeClient = useContext(HomeClientContext);
   const foreign = useForeignDeployments();
   return useMemo(() => {
     const sources: Source[] =
-      home === null ? [] : [{ domain: null, client: homeClient, sync: home }];
+      home === null || homeClient === null
+        ? []
+        : [{ domain: null, client: homeClient, sync: home }];
     for (const entry of foreign) {
       if (entry.status === "ready" && entry.sync !== null) {
         sources.push({ domain: entry.domain, client: entry.client, sync: entry.sync });

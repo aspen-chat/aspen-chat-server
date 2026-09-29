@@ -455,6 +455,40 @@ def check(_args: argparse.Namespace) -> None:
     say("every check passed")
 
 
+def check_dms_abroad(traveller: str) -> None:
+    """DMs on beta with alpha's users: beta hosts one only with one of its own in it, and tells
+    alpha when one of alpha's users is put in one. That alpha passes the notice on to its user's
+    devices is checked in a browser; here, that it takes it and refuses a forged one."""
+    stamp = int(time.time())
+    host = sign_in(BETA, f"betahost{stamp}")
+    club = api(BETA, "POST", "/communities", {"name": f"Beta DMs {stamp}"}, token=host)
+    invite = api(BETA, "POST", f"/communities/{club['id']}/invites", {}, token=host)
+    other = sign_in(ALPHA, f"alphaother{stamp}")
+    abroad = {}
+    for name, token in [("traveller", traveller), ("other", other)]:
+        status, session = sign_in_abroad(assertion_for(token))
+        if status != 200:
+            raise Failed(f"signing {name} in at beta answered {status}")
+        api(BETA, "PUT", f"/communities/{club['id']}/members/@me", {"inviteCode": invite["code"]},
+            token=session["sessionToken"], expect=(200, 201))
+        abroad[name] = (session["sessionToken"], session["userId"])
+    status, text = request("POST", f"https://{BETA.domain}/api/v1/users/@me/dms",
+                           {"recipients": [abroad["other"][1]]}, abroad["traveller"][0])
+    expect(status == 403 and json.loads(text)["code"] == "federationRefused",
+           "beta hosts no DM between two of alpha's users")
+    host_id = api(BETA, "GET", "/users/@me", token=host)["id"]
+    dm = api(BETA, "POST", "/users/@me/dms", {"recipients": [abroad["traveller"][1]]}, token=host,
+             expect=(200, 201))
+    expect(dm["ty"] == "dm" and host_id in dm["recipients"], "a beta user starts a DM with alpha's user")
+    status, text = request("POST", f"https://{ALPHA.domain}/api/v1/federation/notices", {"notice": "a.b.c"})
+    expect(status == 401 and json.loads(text)["code"] == "assertionInvalid", "alpha refuses a forged notice")
+    # Delivered in the background; a refusal or failure is logged at once.
+    time.sleep(2)
+    log = (BETA.dir / "server.log").read_text()
+    expect("refused a notice" not in log and "gave up delivering a notice" not in log,
+           "beta delivered its notice to alpha")
+
+
 def totp(secret: str, step_offset: int = 0) -> str:
     """The RFC 6238 code for `secret` (base32) at the current step plus `step_offset`."""
     key = base64.b32decode(secret + "=" * (-len(secret) % 8))
@@ -552,6 +586,8 @@ def check_abroad(admin: str) -> None:
     terminal(BETA, "federation", "accept-key", ALPHA.domain, "--fingerprint", compromised)
     status, _ = sign_in_abroad(assertion_for(traveller))
     expect(status == 200, "once beta's operator accepts the new key, alpha's users sign in again")
+
+    check_dms_abroad(traveller)
 
     restart(BETA, {"ASPEN_AUTH__REQUIRE_TWO_FACTOR": "true",
                    "ASPEN_FEDERATION__USERS__IMMIGRATION_INVITE_REQUIRED": "true"})

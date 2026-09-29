@@ -18,7 +18,9 @@ pub mod contact;
 pub mod fetch;
 pub mod jws;
 pub mod keys;
+pub mod notices;
 pub mod protocol;
+pub mod received;
 
 pub use contact::{ContactOutcome, contact, fetch_document, record_contact};
 pub use keys::{

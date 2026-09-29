@@ -108,6 +108,7 @@ export {
   type GrowthRange,
   type UserSort,
   type RegistrationInvite,
+  type ForeignDmNotice,
   type RegistrationInviteRequest,
   type VoiceServerHealth,
   type ContactResult,

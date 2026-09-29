@@ -92,6 +92,9 @@ pub struct FederationProtocol {
     pub assertion: super::abroad::Assertion,
     /// The claims of an `aspen-key-handover+jwt`.
     pub handover: super::keys::Handover,
+    /// The claims of an `aspen-notice+jwt`, POSTed to `/api/v1/federation/notices` at the
+    /// home of the user it is about.
+    pub notice: super::notices::Notice,
 }
 
 #[cfg(test)]

@@ -319,6 +319,8 @@ export const en = {
   },
   dms: {
     label: "Direct messages",
+    startOn: "Start on",
+    home: "Home",
     newMessage: "New message",
     people: "People",
     search: "Search people",

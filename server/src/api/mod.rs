@@ -314,6 +314,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(federation::list_foreign_deployments))
         .routes(routes!(federation::forget_foreign_deployment))
         .routes(routes!(federation::home_avatar))
+        .routes(routes!(federation::receive_notice))
         .routes(routes!(federation::get_federation))
         .routes(routes!(
             federation::list_deployments,

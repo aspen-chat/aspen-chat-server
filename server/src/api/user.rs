@@ -91,6 +91,7 @@ impl From<app::user::User> for User {
             bot_owner: user.user_pg.bot_owner,
             bot_public: user.user_pg.bot_public,
             home_domain: user.user_pg.home_domain.map(String::from),
+            home_id: user.user_pg.home_id,
         }
     }
 }
@@ -140,6 +141,7 @@ pub async fn create_user(
             bot_owner: None,
             bot_public: false,
             home_domain: None,
+            home_id: None,
         },
     ))
 }

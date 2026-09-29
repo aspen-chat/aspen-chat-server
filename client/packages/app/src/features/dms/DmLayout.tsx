@@ -2,10 +2,10 @@ import type { Channel } from "@aspen/protocol";
 import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
-import { Button } from "react-aria-components";
+import { Button, Label, RadioButton, RadioField, RadioGroup } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
-import { useEverywhere, type Source } from "@/api/everywhere";
-import { useDms, useMe, useMentions, useMute, useSync, useUnread, useUser } from "@/api/hooks";
+import { useEverywhere, useSources, type Source } from "@/api/everywhere";
+import { useDms, useMe, useMentions, useMute, useUnread, useUser } from "@/api/hooks";
 import { mergeDms } from "@/features/dms/mergeDms";
 import { channelLink, useDomain } from "@/features/messages/links";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
@@ -19,6 +19,7 @@ import { useDmTitle } from "@/features/dms/useDmTitle";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { unreadMarkClass } from "@/features/channels/ChannelSidebar";
+import { RadioMark, choiceClass } from "@/features/layout/choices";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -58,9 +59,15 @@ interface DmEntry {
 function DmSidebar({ current }: { current: string | undefined }) {
   const m = useMessages();
   const headingId = useId();
-  const sync = useSync();
   const domain = useDomain();
   const navigate = useNavigate();
+  const sources = useSources();
+  // A new conversation starts on the deployment shown unless the user picks another.
+  const [chosen, setChosen] = useState<string | null>(domain);
+  const host =
+    sources.find((s) => s.domain === chosen) ??
+    sources.find((s) => s.domain === domain) ??
+    sources[0];
   const dms = useEverywhere(["dms"], (sources) =>
     mergeDms<DmEntry>(
       sources.map((source) => ({
@@ -95,9 +102,18 @@ function DmSidebar({ current }: { current: string | undefined }) {
           pendingLabel={m.dms.starting}
           exclude={[]}
           max={MAX_DM_PEOPLE - 1}
+          {...(host === undefined ? {} : { source: host })}
+          above={
+            sources.length > 1 && host !== undefined ? (
+              <StartOn sources={sources} value={host.domain} onChange={setChosen} />
+            ) : undefined
+          }
           onConfirm={async (ids) => {
-            const dm = await sync.openDm(ids);
-            void navigate(channelLink({ domain, community: null }, dm.id));
+            if (host === undefined) {
+              return;
+            }
+            const dm = await host.sync.openDm(ids);
+            void navigate(channelLink({ domain: host.domain, community: null }, dm.id));
           }}
         />
       </div>
@@ -233,6 +249,46 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
     </div>
   );
 }
+
+/**
+ * Which deployment a new conversation starts on, among those the user is on: it hosts the
+ * conversation, and offers the people the user shares a community with there.
+ */
+function StartOn({
+  sources,
+  value,
+  onChange,
+}: {
+  sources: readonly Source[];
+  value: string | null;
+  onChange: (domain: string | null) => void;
+}) {
+  const m = useMessages();
+  return (
+    <RadioGroup
+      value={value ?? HOME}
+      onChange={(next) => {
+        onChange(next === HOME ? null : next);
+      }}
+      className="flex flex-col gap-1.5"
+    >
+      <Label className="text-sm font-medium">{m.dms.startOn}</Label>
+      <div className="flex flex-wrap gap-2">
+        {sources.map((source) => (
+          <RadioField key={source.domain ?? HOME} value={source.domain ?? HOME}>
+            <RadioButton className={choiceClass}>
+              <RadioMark />
+              <span>{source.domain ?? m.dms.home}</span>
+            </RadioButton>
+          </RadioField>
+        ))}
+      </div>
+    </RadioGroup>
+  );
+}
+
+/** The home deployment among the radio values, which are otherwise domains. */
+const HOME = "";
 
 /** `/dms` with nothing chosen: how to start, when there is nothing yet. */
 export function DmIndex() {

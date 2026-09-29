@@ -172,6 +172,10 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 # A client asks for one each time it signs in somewhere; people have a handful of deployments.
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+[rate_limits.endpoints."POST /federation/notices"]
+# Other deployments tell this one about its users; each of their servers may send on its own.
+ip = { requests = 120, per_seconds = 60, burst = 60 }
+
 [rate_limits.endpoints."GET /federation/icons/{icon}"]
 # Other deployments copy an avatar when it changes; each of their servers may ask on its own.
 ip = { requests = 120, per_seconds = 60, burst = 60 }

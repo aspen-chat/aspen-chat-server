@@ -129,6 +129,12 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
         },
       });
     }
+    if (method === "POST" && path === "/users/@me/dms") {
+      return json(
+        route,
+        channelRecord(foreignDm, "", { community: null, ty: "dm", recipients: [meThere, host] }),
+      );
+    }
     if (path === "/users/@me/dms") {
       return json(route, {
         data: [

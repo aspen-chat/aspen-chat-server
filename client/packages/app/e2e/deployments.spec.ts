@@ -43,3 +43,19 @@ test("someone adds another server from the rail", async ({ page }) => {
   ).toBeVisible();
   await expect(page).toHaveURL(/\/at\/beta\.example\/communities\//);
 });
+
+test("a new message starts on the deployment chosen", async ({ page }) => {
+  await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: true }));
+  await expect(
+    rail(page).getByRole("row", { name: `Beta club on ${foreignDomain}` }),
+  ).toBeVisible();
+  await rail(page)
+    .getByRole("link", { name: /Direct messages/ })
+    .click();
+  await page.getByRole("button", { name: "New message" }).click();
+  const picker = page.getByRole("dialog", { name: "New message" });
+  await picker.getByRole("radio", { name: foreignDomain }).check({ force: true });
+  await picker.getByRole("option", { name: /Hostess/ }).click();
+  await picker.getByRole("button", { name: "Message", exact: true }).click();
+  await expect(page).toHaveURL(/\/at\/beta\.example\/dms\//);
+});

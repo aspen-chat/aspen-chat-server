@@ -1,0 +1,11 @@
+{
+  "iss": "future.example",
+  "aud": "alpha.localhost:8443",
+  "sub": "01a0ea60-64a9-7662-b97d-bd6c8a6e6e3f",
+  "iat": 1790640000,
+  "exp": 1790640120,
+  "jti": "5b8f6f1e-6a2c-4d0f-9d1b-1d2c3e4f5a6c",
+  "kind": "accountMerged",
+  "into": "someone@future.example",
+  "priority": 3
+}

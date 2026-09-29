@@ -2,6 +2,12 @@ import type { Deployments, ForeignDeployment } from "@aspen/protocol";
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import { useHomeClient } from "./context";
 
+/**
+ * The deployment whose client and sync are in scope: `null` for the user's home, or another
+ * deployment's domain, as `ForeignScope`, `HomeScope`, and `SourceScope` set it.
+ */
+export const ScopeDomainContext = createContext<string | null>(null);
+
 export const DeploymentsContext = createContext<Deployments | null>(null);
 
 /** The other deployments the user signs in to from home. Only valid inside the signed-in app. */
@@ -13,10 +19,16 @@ export function useDeploymentsHub(): Deployments {
   return hub;
 }
 
-/** Every other deployment, re-rendering as they are signed in to, left, or fail. */
+const NONE: readonly ForeignDeployment[] = [];
+const NOTHING_TO_HEAR = () => () => undefined;
+
+/**
+ * Every other deployment, re-rendering as they are signed in to, left, or fail; none outside
+ * the signed-in app.
+ */
 export function useForeignDeployments(): readonly ForeignDeployment[] {
-  const hub = useDeploymentsHub();
-  return useSyncExternalStore(hub.subscribe, () => hub.list);
+  const hub = useContext(DeploymentsContext);
+  return useSyncExternalStore(hub?.subscribe ?? NOTHING_TO_HEAR, () => hub?.list ?? NONE);
 }
 
 /**

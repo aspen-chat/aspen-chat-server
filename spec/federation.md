@@ -21,6 +21,17 @@ deployments use too, are described by those two.
   - `aspen-assertion+jwt`: a home deployment says who one of its users is, how they signed in,
     and their profile, to one other deployment (`aud`), for at most five minutes, once (`jti`).
   - `aspen-key-handover+jwt`: a deployment's outgoing key vouches for its next.
+  - `aspen-notice+jwt`: a deployment tells one user's home something about them, POSTed as
+    `{"notice": "…"}` to `https://{home}/api/v1/federation/notices`, which answers `202` for
+    any notice it verifies, of a kind it knows or not. The notice's `kind` says what it is
+    about; the kinds so far:
+    - `dmJoined` (`channel`, `by`): the user is in a DM on the sender, started with them or
+      with them added. The home passes it on to the user's devices only while the user still
+      uses the sender.
+
+A deployment hosts a DM only while starting it with at least one of its own users in it; it
+may go on after they leave. Everyone in it therefore has an account on the host, and the host's
+own rules (a community shared with whoever started it or added them, blocks) apply there.
 
 ## Versions and capabilities
 

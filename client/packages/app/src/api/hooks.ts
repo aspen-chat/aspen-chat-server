@@ -34,6 +34,7 @@ import type {
   VoiceCallState,
 } from "@aspen/protocol";
 import { useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useBlockedAnywhere } from "./identity";
 import { AspenSyncContext } from "./syncContext";
 
 export function useSync(): AspenSync {
@@ -253,8 +254,14 @@ export function useShownWhenCollapsed(channelIds: readonly string[]): ReadonlySe
 }
 
 /** Whether the caller has blocked `userId`. */
+/**
+ * Whether the caller blocked `userId`, here or on any other deployment they use
+ * (`useBlockedAnywhere`), as the client hides a blocked person everywhere.
+ */
 export function useBlocked(userId: string | undefined): boolean {
-  return useTopic(`block:${userId ?? ""}`, (s) => userId !== undefined && s.blocked(userId));
+  const here = useTopic(`block:${userId ?? ""}`, (s) => userId !== undefined && s.blocked(userId));
+  const elsewhere = useBlockedAnywhere(userId);
+  return here || elsewhere;
 }
 
 /**

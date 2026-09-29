@@ -21,6 +21,8 @@ import { displayNameOf, handleOf } from "@/features/users/profile";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { SourceScope } from "@/api/deployments";
+import type { Source } from "@/api/everywhere";
 
 /**
  * A dialog for choosing people the caller shares a community with: whom to start a DM with,
@@ -36,6 +38,8 @@ export function PeoplePicker({
   exclude,
   max,
   onConfirm,
+  above,
+  source,
 }: {
   trigger: ReactNode;
   heading: string;
@@ -44,6 +48,10 @@ export function PeoplePicker({
   exclude: readonly string[];
   max: number;
   onConfirm: (ids: readonly string[]) => Promise<void>;
+  /** Shown under the heading, above the people. */
+  above?: ReactNode;
+  /** The deployment whose people are offered; the one shown when absent. */
+  source?: Source;
 }) {
   return (
     <DialogTrigger>
@@ -51,17 +59,27 @@ export function PeoplePicker({
       <ModalOverlay isDismissable className={overlayClass}>
         <Modal className={modalClass}>
           <Dialog className={dialogClass}>
-            {({ close }) => (
-              <PickerBody
-                heading={heading}
-                confirmLabel={confirmLabel}
-                pendingLabel={pendingLabel}
-                exclude={exclude}
-                max={max}
-                onConfirm={onConfirm}
-                close={close}
-              />
-            )}
+            {({ close }) => {
+              const body = (
+                <PickerBody
+                  // Another deployment's people are other people: the picks start over.
+                  key={source?.domain ?? ""}
+                  heading={heading}
+                  above={above}
+                  confirmLabel={confirmLabel}
+                  pendingLabel={pendingLabel}
+                  exclude={exclude}
+                  max={max}
+                  onConfirm={onConfirm}
+                  close={close}
+                />
+              );
+              return source === undefined ? (
+                body
+              ) : (
+                <SourceScope source={source}>{body}</SourceScope>
+              );
+            }}
           </Dialog>
         </Modal>
       </ModalOverlay>
@@ -71,6 +89,7 @@ export function PeoplePicker({
 
 function PickerBody({
   heading,
+  above,
   confirmLabel,
   pendingLabel,
   exclude,
@@ -79,6 +98,7 @@ function PickerBody({
   close,
 }: {
   heading: string;
+  above: ReactNode;
   confirmLabel: string;
   pendingLabel: string;
   exclude: readonly string[];
@@ -124,6 +144,7 @@ function PickerBody({
   return (
     <>
       <DialogHeading>{heading}</DialogHeading>
+      {above}
       <SearchField
         aria-label={m.dms.search}
         value={query}

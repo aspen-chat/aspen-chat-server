@@ -10,7 +10,7 @@ use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::app::channel::{Channel, record};
 use crate::app::events::dm_recipients;
 use crate::app::{self, ChannelId, EventScope, GlobalServerContext, UserId, publish_event};
-use crate::database::schema::{channel, community_user, dm_recipient, message};
+use crate::database::schema::{channel, community_user, dm_recipient, message, user};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
@@ -105,79 +105,96 @@ pub async fn open_dm(
     ensure_shared_community(conn.as_mut(), caller, &others).await?;
     let mut everyone = others.clone();
     everyone.push(caller);
+    // A DM is this deployment's to host only with one of its own users in it; people who all
+    // belong elsewhere talk on a deployment of theirs.
+    let natives: i64 = user::table
+        .filter(user::id.eq_any(&everyone))
+        .filter(user::home_domain.is_null())
+        .count()
+        .get_result(conn.as_mut())
+        .await?;
+    if natives == 0 {
+        return Err(app::Error::FederationRefused(t!("dmNeedsNative")));
+    }
     let blocked = app::block::any_between(conn.as_mut(), &everyone).await?;
-    conn.transaction(|conn| {
-        async move {
-            if blocked {
-                if others.len() > 1 {
-                    return Err(app::Error::Blocked);
+    let opened = conn
+        .transaction(|conn| {
+            async move {
+                if blocked {
+                    if others.len() > 1 {
+                        return Err(app::Error::Blocked);
+                    }
+                    let existing: Channel = channel::table
+                        .select(Channel::as_select())
+                        .filter(channel::dm_key.eq(pair_key(caller, others[0])))
+                        .first(conn.as_mut())
+                        .await
+                        .optional()?
+                        .ok_or(app::Error::Blocked)?;
+                    let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
+                    return Ok((existing, recipients, false));
                 }
-                let existing: Channel = channel::table
-                    .select(Channel::as_select())
-                    .filter(channel::dm_key.eq(pair_key(caller, others[0])))
-                    .first(conn.as_mut())
-                    .await
-                    .optional()?
-                    .ok_or(app::Error::Blocked)?;
-                let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
-                return Ok((existing, recipients, false));
-            }
-            let (ty, key) = if others.len() == 1 {
-                (ChannelType::Dm, Some(pair_key(caller, others[0])))
-            } else {
-                (ChannelType::GroupDm, None)
-            };
-            let dm = new_dm(ty, key.clone());
-            // Concurrent first messages between the same two people make one DM: the second
-            // insert yields to the first, and the existing one is returned.
-            let inserted = diesel::insert_into(channel::table)
-                .values(&dm)
-                .on_conflict(channel::dm_key)
-                .do_nothing()
-                .execute(conn.as_mut())
-                .await?;
-            if inserted == 0 {
-                let existing: Channel = channel::table
-                    .select(Channel::as_select())
-                    .filter(channel::dm_key.eq(key))
-                    .first(conn.as_mut())
+                let (ty, key) = if others.len() == 1 {
+                    (ChannelType::Dm, Some(pair_key(caller, others[0])))
+                } else {
+                    (ChannelType::GroupDm, None)
+                };
+                let dm = new_dm(ty, key.clone());
+                // Concurrent first messages between the same two people make one DM: the second
+                // insert yields to the first, and the existing one is returned.
+                let inserted = diesel::insert_into(channel::table)
+                    .values(&dm)
+                    .on_conflict(channel::dm_key)
+                    .do_nothing()
+                    .execute(conn.as_mut())
                     .await?;
-                let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
-                return Ok((existing, recipients, false));
-            }
-            let now = Utc::now();
-            let mut recipients = vec![caller];
-            recipients.extend(others.iter().copied());
-            diesel::insert_into(dm_recipient::table)
-                .values(
-                    recipients
-                        .iter()
-                        .map(|user| {
-                            (
-                                dm_recipient::channel.eq(dm.id),
-                                dm_recipient::user.eq(*user),
-                                dm_recipient::joined_at.eq(now),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
+                if inserted == 0 {
+                    let existing: Channel = channel::table
+                        .select(Channel::as_select())
+                        .filter(channel::dm_key.eq(key))
+                        .first(conn.as_mut())
+                        .await?;
+                    let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
+                    return Ok((existing, recipients, false));
+                }
+                let now = Utc::now();
+                let mut recipients = vec![caller];
+                recipients.extend(others.iter().copied());
+                diesel::insert_into(dm_recipient::table)
+                    .values(
+                        recipients
+                            .iter()
+                            .map(|user| {
+                                (
+                                    dm_recipient::channel.eq(dm.id),
+                                    dm_recipient::user.eq(*user),
+                                    dm_recipient::joined_at.eq(now),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .execute(conn.as_mut())
+                    .await?;
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::ChannelDefinition {
+                        channel: dm.id,
+                        departed: None,
+                    },
+                    &ServerEvent::Channel(ChannelEvent::Create(record(&dm, recipients.clone()))),
                 )
-                .execute(conn.as_mut())
                 .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::ChannelDefinition {
-                    channel: dm.id,
-                    departed: None,
-                },
-                &ServerEvent::Channel(ChannelEvent::Create(record(&dm, recipients.clone()))),
-            )
-            .await?;
-            Ok((dm, recipients, true))
-        }
-        .scope_boxed()
-    })
-    .await
+                Ok((dm, recipients, true))
+            }
+            .scope_boxed()
+        })
+        .await?;
+    let (dm, recipients, created) = &opened;
+    if *created {
+        app::federation::notices::announce_dm(state, dm.id, recipients.clone(), caller);
+    }
+    Ok(opened)
 }
 
 /// The caller's DMs and group DMs with their recipients, the most recently active first.
@@ -251,60 +268,65 @@ pub async fn add_recipient(
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
     ensure_shared_community(conn.as_mut(), caller, &[user]).await?;
-    conn.transaction(|conn| {
-        async move {
-            // The DM row is locked so two additions cannot both see room for one more.
-            channel::table
-                .select(channel::id)
-                .filter(channel::id.eq(dm_id))
-                .for_update()
-                .first::<ChannelId>(conn.as_mut())
+    let added = conn
+        .transaction(|conn| {
+            async move {
+                // The DM row is locked so two additions cannot both see room for one more.
+                channel::table
+                    .select(channel::id)
+                    .filter(channel::id.eq(dm_id))
+                    .for_update()
+                    .first::<ChannelId>(conn.as_mut())
+                    .await?;
+                let recipients = dm_recipients(conn.as_mut(), dm_id).await?;
+                if recipients.contains(&user) {
+                    return Ok(false);
+                }
+                let mut joined = recipients.clone();
+                joined.push(user);
+                if app::block::any_between(conn.as_mut(), &joined).await? {
+                    return Err(app::Error::Blocked);
+                }
+                if recipients.len() >= MAX_RECIPIENTS {
+                    return Err(app::Error::Validation(t!(
+                        "dmTooManyRecipients",
+                        max = MAX_RECIPIENTS
+                    )));
+                }
+                diesel::insert_into(dm_recipient::table)
+                    .values((
+                        dm_recipient::channel.eq(dm_id),
+                        dm_recipient::user.eq(user),
+                        dm_recipient::joined_at.eq(Utc::now()),
+                    ))
+                    .on_conflict((dm_recipient::channel, dm_recipient::user))
+                    .do_update()
+                    .set(dm_recipient::joined_at.eq(excluded(dm_recipient::joined_at)))
+                    .execute(conn.as_mut())
+                    .await?;
+                let mut now = recipients;
+                now.push(user);
+                // The whole record, as a `Create`: the newcomer gains the DM, and everyone else's
+                // copy is replaced by one with the new recipient in it.
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::ChannelDefinition {
+                        channel: dm_id,
+                        departed: None,
+                    },
+                    &ServerEvent::Channel(ChannelEvent::Create(record(&dm, now))),
+                )
                 .await?;
-            let recipients = dm_recipients(conn.as_mut(), dm_id).await?;
-            if recipients.contains(&user) {
-                return Ok(false);
+                Ok(true)
             }
-            let mut joined = recipients.clone();
-            joined.push(user);
-            if app::block::any_between(conn.as_mut(), &joined).await? {
-                return Err(app::Error::Blocked);
-            }
-            if recipients.len() >= MAX_RECIPIENTS {
-                return Err(app::Error::Validation(t!(
-                    "dmTooManyRecipients",
-                    max = MAX_RECIPIENTS
-                )));
-            }
-            diesel::insert_into(dm_recipient::table)
-                .values((
-                    dm_recipient::channel.eq(dm_id),
-                    dm_recipient::user.eq(user),
-                    dm_recipient::joined_at.eq(Utc::now()),
-                ))
-                .on_conflict((dm_recipient::channel, dm_recipient::user))
-                .do_update()
-                .set(dm_recipient::joined_at.eq(excluded(dm_recipient::joined_at)))
-                .execute(conn.as_mut())
-                .await?;
-            let mut now = recipients;
-            now.push(user);
-            // The whole record, as a `Create`: the newcomer gains the DM, and everyone else's
-            // copy is replaced by one with the new recipient in it.
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::ChannelDefinition {
-                    channel: dm_id,
-                    departed: None,
-                },
-                &ServerEvent::Channel(ChannelEvent::Create(record(&dm, now))),
-            )
-            .await?;
-            Ok(true)
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    if added {
+        app::federation::notices::announce_dm(state, dm_id, vec![user], caller);
+    }
+    Ok(added)
 }
 
 /// Takes the caller out of a group DM. The others see them go; the caller's own clients see

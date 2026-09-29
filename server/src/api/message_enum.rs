@@ -51,6 +51,10 @@ enum MessageEnumSource {
         // their name; `None` for this deployment's own users. See `app::federation::abroad`.
         #[message_gen(server_authoritative)]
         home_domain: Option<String>,
+        // Their id at home, which with `home_domain` names the same person on every deployment,
+        // as clients need to hold a block across deployments; `None` for this deployment's own.
+        #[message_gen(server_authoritative)]
+        home_id: Option<uuid::Uuid>,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.
@@ -84,6 +88,16 @@ enum MessageEnumSource {
     // blocked user is never told. See `app::block`.
     #[message_gen(custom_event)]
     UserBlockChanged { user: UserId, blocked: bool },
+    // Another deployment the user signs in to says they are now in a DM there, started by, or
+    // joined to them by, `by_name`: their devices sign in there if they are not, and read it.
+    // `channel` is that deployment's id. See `app::federation::notices`.
+    #[message_gen(custom_event)]
+    ForeignDmJoined {
+        domain: String,
+        channel: ChannelId,
+        by_name: String,
+        by_display_name: Option<String>,
+    },
     // The user muted or unmuted a channel, on one of their devices; the others follow. A mute
     // with no `until` lasts until it is lifted. See `app::channel_mute`.
     #[message_gen(custom_event)]

@@ -83,7 +83,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   that shares none is `incompatible`, and `ForeignScope` says so. Code that reads what a server
   sends ignores what it does not know, as `spec/federation.md` requires: an unknown event type
   or field changes nothing in `RecordStore`, and a feature that is a capability is used only
-  where `supports` says the deployment has it.
+  where `supports` says the deployment has it. A new message starts on the deployment the user
+  picks (`StartOn` in the DM list's picker, the one shown by default), which hosts it. When the
+  home says the user is in a DM elsewhere (`foreignDmJoined`, `AspenSync.onForeignDm`), the hub
+  signs in there if needed and reads it. A block made on any deployment hides the person on
+  every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf` names
+  a person by their home's domain and their id there, from `homeDomain` and `homeId`, and
+  `ScopeDomainContext` says which deployment a record in scope is from.
 - Every endpoint is rate limited and may answer `429` `rateLimited` with `Retry-After`.
   `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
   refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized

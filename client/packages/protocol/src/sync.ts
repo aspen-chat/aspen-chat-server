@@ -197,6 +197,17 @@ export interface AspenSyncOptions {
 
 export type SyncListener = () => void;
 
+/**
+ * Another deployment the user signs in to says they are now in a DM there (the home's
+ * `foreignDmJoined` event). `channel` is that deployment's id.
+ */
+export interface ForeignDmNotice {
+  readonly domain: string;
+  readonly channel: string;
+  readonly byName: string;
+  readonly byDisplayName: string | null;
+}
+
 /** How many members one page of a member search holds. */
 export const MEMBER_SEARCH_PAGE = 20;
 
@@ -244,6 +255,7 @@ export class AspenSync {
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
+  readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
   readonly #ownsPreferences: boolean;
 
@@ -340,6 +352,18 @@ export class AspenSync {
   get lastError(): Problem | null {
     return this.#lastError;
   }
+
+  /**
+   * Registers for the home's word that the user is now in a DM on another deployment, and
+   * returns the unsubscribe function. What to do about it is the app's: sign in there if it is
+   * not, and read the DM.
+   */
+  readonly onForeignDm = (listener: (notice: ForeignDmNotice) => void): (() => void) => {
+    this.#foreignDmListeners.add(listener);
+    return () => {
+      this.#foreignDmListeners.delete(listener);
+    };
+  };
 
   /** Registers for status changes and returns the unsubscribe function. */
   readonly subscribe = (listener: SyncListener): (() => void) => {
@@ -2275,6 +2299,17 @@ export class AspenSync {
   }
 
   #apply(event: ServerEvent): void {
+    if (event.serverEvent === "foreignDmJoined") {
+      for (const listener of this.#foreignDmListeners) {
+        listener({
+          domain: event.domain,
+          channel: event.channel,
+          byName: event.byName,
+          byDisplayName: event.byDisplayName ?? null,
+        });
+      }
+      return;
+    }
     // A deleted message that was a channel's newest leaves the store unable to say what is
     // newest now, so the channel's read state is read again.
     const orphaned =

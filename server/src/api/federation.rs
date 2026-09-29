@@ -762,3 +762,36 @@ pub async fn home_avatar(
     )
         .into_response())
 }
+
+/// A notice another deployment sends about one of this deployment's users.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NoticeRequest {
+    /// A compact JWS of `typ` `aspen-notice+jwt`, as `federation_schema.json` describes.
+    pub notice: String,
+}
+
+/// Takes a notice from another deployment about one of this deployment's users (`spec/
+/// federation.md`). Sent by deployments rather than clients. A notice of a kind this deployment
+/// does not know, or about someone who no longer uses the sender, is accepted and ignored.
+#[utoipa::path(
+    post,
+    path = "/federation/notices",
+    tag = TAG_AUTH,
+    request_body = NoticeRequest,
+    responses(
+        (status = ACCEPTED, description = "Taken"),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, description = "`assertionInvalid`: the notice is malformed, forged, expired, used, or not for this deployment", body = Problem),
+        (status = FORBIDDEN, description = "`federationRefused`: this deployment does not federate with the sender", body = Problem),
+        (status = BAD_GATEWAY, description = "`deploymentUnreachable`: the sender could not be reached to read its key", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn receive_notice(
+    State(state): State<GlobalServerContext>,
+    Json(request): Json<NoticeRequest>,
+) -> ApiResult<StatusCode> {
+    app::federation::notices::receive_notice(&state, &request.notice).await?;
+    Ok(StatusCode::ACCEPTED)
+}
