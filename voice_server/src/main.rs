@@ -13,6 +13,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
+use axum::serve::ListenerExt as _;
 use clap::Parser;
 use mediasoup::prelude::*;
 use mediasoup::worker::{WorkerLogLevel, WorkerLogTag};
@@ -175,7 +176,15 @@ async fn main() -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .expose_headers([axum::http::header::RETRY_AFTER]),
         );
-    let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
+    // Signalling frames are small and each is sent as it is written; with Nagle's algorithm on,
+    // one written while the previous is unacknowledged waits for the client's delayed ACK.
+    let listener = tokio::net::TcpListener::bind(config.listen_addr)
+        .await?
+        .tap_io(|stream| {
+            if let Err(e) = stream.set_nodelay(true) {
+                tracing::warn!("could not turn off Nagle's algorithm: {e}");
+            }
+        });
     info!(
         addr = config.listen_addr.to_string(),
         server = config.id.to_string(),

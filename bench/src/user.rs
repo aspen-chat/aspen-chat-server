@@ -831,6 +831,8 @@ async fn connect_events(
     };
     socket.bind(std::net::SocketAddr::new(source, 0))?;
     let stream = socket.connect(server).await?;
+    // As `connect_async` does, and browsers do for WebSockets.
+    stream.set_nodelay(true)?;
     Ok(tokio_tungstenite::client_async_tls(url, stream).await?)
 }
 

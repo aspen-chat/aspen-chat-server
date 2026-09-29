@@ -318,6 +318,11 @@ async fn run(options: Opt) -> Result<()> {
                 break Ok(());
             }
         };
+        // Event frames are small and each is flushed as it is written; without this, one written
+        // while the previous is still unacknowledged waits for the client's delayed ACK.
+        if let Err(e) = socket.set_nodelay(true) {
+            warn!("could not turn off Nagle's algorithm for {remote_addr}: {e}");
+        }
         let tls_acceptor = tls_acceptor.clone();
         let service = app.clone();
         tokio::spawn(async move {

@@ -698,7 +698,17 @@ impl GlobalServerContext {
             })
             .await?;
         let valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
-        let valkey = fred::prelude::Client::new(valkey_config.clone(), None, None, None);
+        // Commands are small and many are in flight at once; with Nagle's algorithm on, one sent
+        // while another is unacknowledged waits for Valkey's delayed ACK.
+        let valkey_connection = fred::types::config::ConnectionConfig {
+            tcp: fred::types::config::TcpConfig {
+                nodelay: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let valkey =
+            fred::prelude::Client::new(valkey_config.clone(), None, Some(valkey_connection), None);
         valkey.init().await?;
 
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);

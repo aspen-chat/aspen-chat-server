@@ -13,6 +13,7 @@ use aspen_limits::suspension::{self, Scope, Suspension};
 use axum::extract::State;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
+use axum::serve::ListenerExt as _;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -78,9 +79,14 @@ pub async fn remote_agents(listen: SocketAddr, count: u32) -> Result<Vec<AgentLi
     let app = axum::Router::new()
         .route("/agent", axum::routing::get(accept))
         .with_state(arrivals_tx);
+    // Clock synchronisation times round trips over these connections, which Nagle's algorithm
+    // would stretch by the agent's delayed ACK.
     let listener = tokio::net::TcpListener::bind(listen)
         .await
-        .map_err(|e| format!("could not listen on {listen}: {e}"))?;
+        .map_err(|e| format!("could not listen on {listen}: {e}"))?
+        .tap_io(|stream| {
+            let _ = stream.set_nodelay(true);
+        });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
