@@ -178,14 +178,14 @@ impl DeploymentAccess {
 
 /// What `user` may do across the deployment.
 pub async fn deployment_access(
-    conn: &mut AsyncPgConnection,
+    mut conn: &AsyncPgConnection,
     user: UserId,
 ) -> app::Result<DeploymentAccess> {
     let rows: Vec<(i32, DeploymentPermissions)> = user_deployment_role::table
         .inner_join(deployment_role::table)
         .select((deployment_role::position, deployment_role::permissions))
         .filter(user_deployment_role::user.eq(user))
-        .load(conn)
+        .load(&mut conn)
         .await?;
     Ok(DeploymentAccess {
         user,

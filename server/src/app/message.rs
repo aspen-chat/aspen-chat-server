@@ -423,7 +423,7 @@ pub async fn update_message(
                 // same transaction as the content change so nobody reads
                 // "new content + stale previews" in between.
                 if let Some(mentions) = &mentions {
-                    mention::record(conn.as_mut(), id, channel_id, mentions).await?;
+                    mention::replace(conn.as_mut(), id, channel_id, mentions).await?;
                 }
                 let mut previews_cleared = false;
                 if content_changed {

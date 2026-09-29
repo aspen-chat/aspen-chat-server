@@ -509,57 +509,60 @@ impl From<RoleRow> for RoleGrant {
 /// What `user` may do across `community`; `None` when they are neither a member nor a deployment
 /// moderator.
 pub async fn community_access(
-    conn: &mut AsyncPgConnection,
+    mut conn: &AsyncPgConnection,
     user: UserId,
     community_id: CommunityId,
 ) -> app::Result<Option<CommunityAccess>> {
-    let member: bool = diesel::select(diesel::dsl::exists(
+    // The four reads are independent, so they go to the database together, pipelined on the
+    // one connection: one round trip rather than four.
+    let member = diesel::select(diesel::dsl::exists(
         community_user::table.filter(
             community_user::user
                 .eq(user)
                 .and(community_user::community.eq(community_id)),
         ),
     ))
-    .get_result(conn)
-    .await?;
-    let moderator = app::deployment::is_moderator(conn, user).await?;
-    if !member && !moderator {
-        return Ok(None);
-    }
-    let owner: Option<Option<UserId>> = community::table
+    .get_result::<bool>(&mut conn);
+    let owner = community::table
         .select(community::owner)
         .filter(
             community::id
                 .eq(community_id)
                 .and(community::deleted_at.is_null()),
         )
-        .first(conn)
-        .await
-        .optional()?;
-    let Some(owner) = owner else {
+        .load::<Option<UserId>>(&mut conn);
+    // The everyone role and those held; someone not a member holds none, and the rows are then
+    // set aside.
+    let held = community_member_role::table
+        .filter(
+            community_member_role::user
+                .eq(user)
+                .and(community_member_role::community.eq(community_id)),
+        )
+        .select(community_member_role::role);
+    let roles = community_role::table
+        .select(RoleRow::as_select())
+        .filter(community_role::community.eq(community_id))
+        .filter(
+            community_role::everyone
+                .eq(true)
+                .or(community_role::id.eq_any(held)),
+        )
+        .load::<RoleRow>(&mut conn);
+    let (member, deployment, owner, roles) = futures_util::try_join!(
+        async { Ok::<_, app::Error>(member.await?) },
+        app::deployment::deployment_access(conn, user),
+        async { Ok(owner.await?) },
+        async { Ok(roles.await?) },
+    )?;
+    let moderator = deployment.has(app::deployment::DeploymentPermission::ModerateCommunities);
+    if !member && !moderator {
+        return Ok(None);
+    }
+    let Some(owner) = owner.into_iter().next() else {
         return Ok(None);
     };
-    let roles: Vec<RoleRow> = if member {
-        let held = community_member_role::table
-            .filter(
-                community_member_role::user
-                    .eq(user)
-                    .and(community_member_role::community.eq(community_id)),
-            )
-            .select(community_member_role::role);
-        community_role::table
-            .select(RoleRow::as_select())
-            .filter(community_role::community.eq(community_id))
-            .filter(
-                community_role::everyone
-                    .eq(true)
-                    .or(community_role::id.eq_any(held)),
-            )
-            .load(conn)
-            .await?
-    } else {
-        Vec::new()
-    };
+    let roles = if member { roles } else { Vec::new() };
     let mut access = CommunityAccess::resolve(
         user,
         community_id,
@@ -600,7 +603,7 @@ pub async fn require_member(
 }
 
 async fn overrides_of_channel(
-    conn: &mut AsyncPgConnection,
+    mut conn: &AsyncPgConnection,
     channel_id: ChannelId,
 ) -> app::Result<Vec<Override>> {
     Ok(channel_override::table
@@ -610,12 +613,12 @@ async fn overrides_of_channel(
             channel_override::deny,
         ))
         .filter(channel_override::channel.eq(channel_id))
-        .load(conn)
+        .load(&mut conn)
         .await?)
 }
 
 async fn overrides_of_category(
-    conn: &mut AsyncPgConnection,
+    mut conn: &AsyncPgConnection,
     category_id: CategoryId,
 ) -> app::Result<Vec<Override>> {
     Ok(category_override::table
@@ -625,7 +628,7 @@ async fn overrides_of_category(
             category_override::deny,
         ))
         .filter(category_override::category.eq(category_id))
-        .load(conn)
+        .load(&mut conn)
         .await?)
 }
 
@@ -733,14 +736,19 @@ pub async fn channel_access(
             community: community_id,
             ..
         } => {
-            let access = community_access(conn, user, community_id)
-                .await?
-                .ok_or_else(not_found)?;
-            let category_overrides = match category {
-                Some(category) => overrides_of_category(conn, category).await?,
-                None => Vec::new(),
-            };
-            let channel_overrides = overrides_of_channel(conn, governing).await?;
+            // Pipelined together, as in `community_access`.
+            let conn: &AsyncPgConnection = conn;
+            let (access, category_overrides, channel_overrides) = futures_util::try_join!(
+                community_access(conn, user, community_id),
+                async {
+                    match category {
+                        Some(category) => overrides_of_category(conn, category).await,
+                        None => Ok(Vec::new()),
+                    }
+                },
+                overrides_of_channel(conn, governing),
+            )?;
+            let access = access.ok_or_else(not_found)?;
             let permissions = access.in_channel(&category_overrides, &channel_overrides);
             if !permissions.contains(Permissions::VIEW_CHANNEL) {
                 return Err(not_found());

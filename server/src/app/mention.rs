@@ -239,17 +239,26 @@ pub async fn resolve(
     Ok(mentions)
 }
 
-/// Writes a message's tags for the unread counts to read, replacing any it had, inside the
-/// caller's transaction.
-pub async fn record(
+/// Replaces an edited message's tags with `mentions`, inside the caller's transaction.
+pub async fn replace(
     conn: &mut AsyncPgConnection,
     message: MessageId,
     channel: ChannelId,
     mentions: &Mentions,
 ) -> app::Result<()> {
     diesel::delete(mention::table.filter(mention::message.eq(message)))
-        .execute(conn)
+        .execute(&mut *conn)
         .await?;
+    record(conn, message, channel, mentions).await
+}
+
+/// Writes a new message's tags for the unread counts to read, inside the caller's transaction.
+pub async fn record(
+    conn: &mut AsyncPgConnection,
+    message: MessageId,
+    channel: ChannelId,
+    mentions: &Mentions,
+) -> app::Result<()> {
     let mut rows = Vec::new();
     for user in &mentions.users {
         rows.push((
