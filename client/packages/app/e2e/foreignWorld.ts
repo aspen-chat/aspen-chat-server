@@ -7,6 +7,8 @@ const origin = `https://${foreignDomain}`;
 const meThere = "0290f0a0-0000-7000-8000-000000000001";
 const host = "0290f0a0-0000-7000-8000-000000000002";
 export const foreignCommunity = "0290f0a0-0000-7000-8000-000000000010";
+/** The one message a search there finds. */
+export const foreignSearchText = "The lemonade stand on beta opens at noon.";
 /** An invite to its community. */
 export const foreignInviteCode = "BetaClub7";
 const foreignChannel = "0290f0a0-0000-7000-8000-000000000011";
@@ -166,6 +168,29 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
         included: {
           communities: [{ id: foreignCommunity, name: "Beta club", icon: null, owner: host }],
         },
+      });
+    }
+    if (path === "/messages") {
+      // Found wherever it is searched for: newer than anything the home holds.
+      return json(route, {
+        data: [
+          {
+            id: "0290f0a0-0000-7000-9fff-000000000002",
+            channelId: foreignChannel,
+            author: host,
+            timestamp: later(-1),
+            editedAt: null,
+            linkPreviews: [],
+            kind: "standard",
+            poll: null,
+            thread: null,
+            echoOf: null,
+            content: foreignSearchText,
+            attachments: [],
+            mentions: { users: [], roles: [], everyone: false },
+          },
+        ],
+        included: { users, channels: [channelRecord(foreignChannel, "lobby")], reactions: [] },
       });
     }
     if (path === "/users/@me/blocks") {

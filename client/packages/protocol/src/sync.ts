@@ -66,6 +66,25 @@ export type DeploymentRole = components["schemas"]["DeploymentRole"];
 export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
 export type ModerationEntry = components["schemas"]["ModerationEntry"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
+export type MessageHolding = components["schemas"]["MessageHolding"];
+
+/** What to search messages for (`AspenSync.searchMessages`); at least one of the first four. */
+export interface MessageSearch {
+  /** Words, in web search syntax: `"a phrase"`, `or`, `-left out`. */
+  text?: string;
+  author?: string;
+  /** Messages tagging this user by name. */
+  mentions?: string;
+  has?: readonly MessageHolding[];
+  /** Only this community; or `channel`, only that channel or DM and its threads. */
+  community?: string;
+  channel?: string;
+  /** The last message of the previous page. */
+  before?: string;
+}
+
+/** How many messages one page of search results holds. */
+export const SEARCH_PAGE = 25;
 
 /** A page of one of the dashboard's lists. */
 export interface AdminListQuery<S extends string> {
@@ -1938,6 +1957,38 @@ export class AspenSync {
     });
     this.#pinLoads.set(channelId, load);
     return load;
+  }
+
+  /**
+   * The messages matching `search` that the user may read on this deployment, newest first, a
+   * page of `SEARCH_PAGE`. Their authors, channels (threads among them), attachments, polls,
+   * and reactions are cached, so they render as they do in a channel.
+   */
+  async searchMessages(search: MessageSearch): Promise<Message[]> {
+    const result = await this.#client.api.GET("/api/v1/messages", {
+      params: {
+        query: {
+          ...(search.text === undefined ? {} : { "filter[text]": search.text }),
+          ...(search.author === undefined ? {} : { "filter[author]": search.author }),
+          ...(search.mentions === undefined ? {} : { "filter[mentions]": search.mentions }),
+          ...(search.has === undefined ? {} : { "filter[has]": [...search.has] }),
+          ...(search.community === undefined ? {} : { "filter[community]": search.community }),
+          ...(search.channel === undefined ? {} : { "filter[channel]": search.channel }),
+          ...(search.before === undefined ? {} : { before: search.before }),
+          limit: SEARCH_PAGE,
+          include: ["authors", "attachments", "polls", "channels", "reactions"],
+        },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ ...result.data.included, messages: result.data.data });
+    this.store.setReactions(
+      result.data.data.map((m) => m.id),
+      result.data.included.reactions ?? [],
+    );
+    return result.data.data;
   }
 
   /**

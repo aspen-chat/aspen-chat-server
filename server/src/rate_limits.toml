@@ -293,6 +293,11 @@ ip = { requests = 60, per_seconds = 3600, burst = 20 }
 [rate_limits.endpoints."GET /communities/{community}/members"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Searching messages reads an index across everything the user may read: enough for someone
+# searching and paging through results by hand.
+[rate_limits.endpoints."GET /messages"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
 [rate_limits.endpoints."GET /invites/{code}"]
 # Guessing invite codes.
 user = { requests = 30, per_seconds = 60, burst = 10 }

@@ -56,3 +56,4 @@ pub mod m20260928_213600_federation;
 pub mod m20260928_223657_federated_sign_in;
 pub mod m20260929_001328_federation_peer_protocol;
 pub mod m20260929_011737_federation_standing;
+pub mod m20260929_035231_message_search;

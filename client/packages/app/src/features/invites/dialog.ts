@@ -10,6 +10,8 @@ const modalFrameClass =
   "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-raised " +
   "p-4 shadow-xl outline-none sm:p-5";
 export const modalClass = modalFrameClass + " max-w-md";
+/** A modal with room for a list of results beside its controls, such as message search. */
+export const listModalClass = modalFrameClass + " max-w-xl";
 /** A modal with room for a grid of choices, such as the screen share picker. */
 export const wideModalClass = modalFrameClass + " max-w-3xl";
 export const dialogClass = "flex flex-col gap-4 outline-none";

@@ -281,6 +281,39 @@ const dmMessages = [
 /** The one message in the DM, which the caller has not read. */
 export const dmMessageId = messageId(220);
 
+/**
+ * A message search as the server answers it: messages holding every word of `filter[text]`,
+ * ignoring case, in `filter[channel]` and its thread when given, newest first, with their
+ * authors and channels.
+ */
+function searchMessages(url: URL) {
+  const words = (url.searchParams.get("filter[text]") ?? "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word !== "");
+  const within = url.searchParams.get("filter[channel]");
+  const found = [...generalMessages, ...threadReplies, ...dmMessages]
+    .filter((m) => m.kind !== "threadEcho" && m.kind !== "poll")
+    .filter((m) => words.every((word) => String(m.content).toLowerCase().includes(word)))
+    .filter(
+      (m) =>
+        within === null || m.channelId === within || (within === general && m.channelId === thread),
+    )
+    .sort((a, b) => String(b.id).localeCompare(String(a.id)))
+    .slice(0, 25);
+  const posted = new Set(found.map((m) => m.channelId));
+  return {
+    data: found,
+    included: {
+      users,
+      channels: [...channels, threadRecord, dmRecord].filter((c: Record<string, unknown>) =>
+        posted.has(c.id),
+      ),
+      reactions: [],
+    },
+  };
+}
+
 /** Sends a server event down the page's event stream. */
 type Publish = (event: Record<string, unknown>) => void;
 
@@ -1071,6 +1104,7 @@ async function answer(
       () => admin.federation.forget(path.split("/")[4] ?? ""),
     ],
     ["GET", /^\/admin\/growth$/, () => admin.growth(url)],
+    ["GET", /^\/messages$/, () => searchMessages(url)],
     ["GET", /^\/users\/@me\/preferences$/, () => ({ values: {}, updatedAt: minutesAgo(600) })],
     [
       "PATCH",

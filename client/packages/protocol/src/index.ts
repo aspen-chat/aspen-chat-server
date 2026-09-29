@@ -106,6 +106,8 @@ export {
   type Growth,
   type ModerationEntry,
   type GrowthRange,
+  type MessageHolding,
+  type MessageSearch,
   type UserSort,
   type RegistrationInvite,
   type ForeignDmNotice,
@@ -149,6 +151,7 @@ export {
   PRESENCE_POLL_MS,
   READ_REPORT_MS,
   REACTORS_PAGE,
+  SEARCH_PAGE,
 } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,

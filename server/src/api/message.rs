@@ -15,7 +15,7 @@ type PollSideload = (
 );
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_MESSAGES};
 use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
-use crate::app::{AttachmentId, ChannelId, MessageId, PollId, UserId};
+use crate::app::{AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
 use crate::t;
 use crate::{api, app};
 use axum::extract::State;
@@ -57,6 +57,9 @@ pub enum MessageInclude {
     /// The messages' reactions in brief, one summary per message and emoji, as
     /// `included.reactions`.
     Reactions,
+    /// The channels the messages were posted in, as `included.channels`: what a search's
+    /// results need to say where each was said, threads among them.
+    Channels,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -87,7 +90,7 @@ async fn sideload_messages(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let (users, attachments, polls, threads, echoes, reactions) = tokio::try_join!(
+    let (users, attachments, polls, threads, channels, echoes, reactions) = tokio::try_join!(
         async {
             if include.contains(MessageInclude::Authors) {
                 let authors: Vec<UserId> = messages
@@ -131,6 +134,19 @@ async fn sideload_messages(
             if include.contains(MessageInclude::Threads) {
                 let ids: Vec<ChannelId> = messages.iter().filter_map(|m| m.thread).collect();
                 app::thread::read_threads(state, &ids).await.map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(MessageInclude::Channels) {
+                let ids: Vec<ChannelId> = messages
+                    .iter()
+                    .map(|m| m.channel_id)
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                app::channel::read_channels(state, &ids).await.map(Some)
             } else {
                 Ok(None)
             }
@@ -181,11 +197,150 @@ async fn sideload_messages(
         polls,
         poll_votes,
         own_write_ins,
-        channels: threads,
+        // Both are channel records; a thread the messages started and were posted in is listed
+        // once.
+        channels: match (threads, channels) {
+            (Some(mut threads), Some(channels)) => {
+                let started: HashSet<ChannelId> = threads.iter().map(|t| t.id).collect();
+                threads.extend(channels.into_iter().filter(|c| !started.contains(&c.id)));
+                Some(threads)
+            }
+            (threads, channels) => threads.or(channels),
+        },
         messages: echoes,
         reactions,
         ..Included::default()
     })
+}
+
+/// Something a found message may hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MessageHolding {
+    /// Any attachment.
+    Attachment,
+    /// An attachment that is a picture.
+    Image,
+    /// A poll.
+    Poll,
+}
+
+impl From<MessageHolding> for app::search::Holding {
+    fn from(holding: MessageHolding) -> Self {
+        match holding {
+            MessageHolding::Attachment => Self::Attachment,
+            MessageHolding::Image => Self::Image,
+            MessageHolding::Poll => Self::Poll,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MessageSearchQuery {
+    /// Words the messages contain, in the syntax of web search engines: every word must
+    /// appear, `"a phrase"` must appear as written, `or` accepts either side, and `-word`
+    /// leaves out messages with it. Words are compared ignoring case, and whole, in any
+    /// language. At most 200 characters.
+    #[serde(rename = "filter[text]")]
+    #[param(rename = "filter[text]")]
+    pub text: Option<String>,
+    /// Only messages in this community.
+    #[serde(rename = "filter[community]")]
+    #[param(rename = "filter[community]")]
+    pub community: Option<CommunityId>,
+    /// Only messages in this channel or DM, or its threads.
+    #[serde(rename = "filter[channel]")]
+    #[param(rename = "filter[channel]")]
+    pub channel: Option<ChannelId>,
+    /// Only messages written by this user.
+    #[serde(rename = "filter[author]")]
+    #[param(rename = "filter[author]")]
+    pub author: Option<UserId>,
+    /// Only messages tagging this user by name.
+    #[serde(rename = "filter[mentions]")]
+    #[param(rename = "filter[mentions]")]
+    pub mentions: Option<UserId>,
+    /// Only messages holding each of these, comma separated.
+    #[serde(rename = "filter[has]", default)]
+    #[param(rename = "filter[has]", value_type = Option<Vec<MessageHolding>>, style = Form, explode = false)]
+    pub has: IncludeSet<MessageHolding>,
+    /// Only messages older than this one: the last of the previous page.
+    pub before: Option<MessageId>,
+    /// How many to return, at most 50; 25 when absent.
+    pub limit: Option<u32>,
+    /// Related records to return alongside the messages, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<MessageInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<MessageInclude>,
+}
+
+/// How many messages a search returns when it does not say.
+const DEFAULT_SEARCH_RESULTS: u32 = 25;
+
+/// Searches the messages the caller may read, newest first: the channels they may view in the
+/// communities they belong to, the DMs they are in, and the threads of both, leaving out
+/// messages by anyone they blocked. `filter[community]` or `filter[channel]` narrows where;
+/// `filter[text]`, `filter[author]`, `filter[mentions]`, and `filter[has]` narrow what, and at
+/// least one of them must be given. A community the caller does not belong to, or a channel they
+/// may not read, is answered `404`.
+#[utoipa::path(
+    get,
+    path = "/messages",
+    tag = TAG_MESSAGES,
+    params(MessageSearchQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = MessageList),
+        (status = BAD_REQUEST, description = "`validation`: nothing to search for, text too long, or both a community and a channel", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn search_messages(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Query(query): Query<MessageSearchQuery>,
+) -> ApiResult<Json<MessageList>> {
+    let scope = match (query.community, query.channel) {
+        (None, None) => app::search::SearchScope::Everywhere,
+        (Some(community), None) => app::search::SearchScope::Community(community),
+        (None, Some(channel)) => app::search::SearchScope::Channel(channel),
+        (Some(_), Some(_)) => {
+            return Err(
+                ApiError::new(ProblemCode::Validation).with_detail(t!("searchCommunityAndChannel"))
+            );
+        }
+    };
+    let holding = [
+        MessageHolding::Attachment,
+        MessageHolding::Image,
+        MessageHolding::Poll,
+    ]
+    .into_iter()
+    .filter(|h| query.has.contains(*h))
+    .map(app::search::Holding::from)
+    .collect();
+    let messages: Vec<Message> = app::search::search_messages(
+        &state,
+        user.id,
+        app::search::MessageSearch {
+            text: query.text,
+            scope,
+            author: query.author,
+            mentions: query.mentions,
+            holding,
+            before: query.before,
+            limit: query.limit.unwrap_or(DEFAULT_SEARCH_RESULTS),
+        },
+    )
+    .await?
+    .into_iter()
+    .map(Message::from)
+    .collect();
+    let included = sideload_messages(&state, user.id, &messages, &query.include).await?;
+    Ok(Json(MessageList::new(messages, included)))
 }
 
 #[utoipa::path(

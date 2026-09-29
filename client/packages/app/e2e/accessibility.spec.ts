@@ -117,6 +117,19 @@ for (const { palette, scheme } of combinations) {
       await expectAccessible(page, "bots");
     });
 
+    test("message search", async ({ page }) => {
+      await openChannel(page, "general");
+      await page.getByRole("button", { name: "Search messages" }).click();
+      const dialog = page.getByRole("dialog", { name: "Search messages" });
+      await expectAccessible(page, "search");
+      await dialog.getByRole("searchbox", { name: "Words" }).fill("lemonade");
+      await dialog.getByRole("button", { name: "Search", exact: true }).click();
+      await expect(dialog.getByRole("region", { name: "Results" }).getByRole("link")).toHaveCount(
+        1,
+      );
+      await expectAccessible(page, "search results");
+    });
+
     test("community settings", async ({ page }) => {
       await page.getByRole("button", { name: "Community settings" }).click();
       const dialog = page.getByRole("dialog");

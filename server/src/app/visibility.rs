@@ -448,6 +448,16 @@ impl Visibility {
         })
     }
 
+    /// Every channel of the communities that the user may view, threads aside (each is viewed
+    /// as its parent is).
+    pub fn visible_channels(&self) -> Vec<ChannelId> {
+        self.communities
+            .keys()
+            .copied()
+            .filter(|channel| self.can_view(*channel))
+            .collect()
+    }
+
     /// Whether the user may view `channel`. A channel of none of the communities (a DM, or a
     /// thread, which is answered by its parent where it is read) is not this struct's to
     /// refuse.

@@ -13,7 +13,7 @@ use crate::app::{
     UserId, publish_event,
 };
 use crate::database::schema::message_attachment;
-use crate::database::schema::{channel, message};
+use crate::database::schema::{channel, dm_recipient, message};
 use crate::t;
 use diesel::{
     AsChangeset, BoolExpressionMethods, CombineDsl, ExpressionMethods, Insertable, QueryDsl,
@@ -21,6 +21,7 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use std::collections::HashMap;
 use vecmap::VecMap;
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
@@ -197,6 +198,37 @@ pub(crate) async fn read_channel(
     Ok(record(&channel, recipients))
 }
 
+/// The wire records of the channels named in `ids` that still exist, a DM's or group DM's with
+/// its people. Two queries however many there are.
+pub async fn read_channels(
+    state: &GlobalServerContext,
+    ids: &[ChannelId],
+) -> app::error::Result<Vec<message_enum::Channel>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let channels: Vec<Channel> = channel::table
+        .select(Channel::as_select())
+        .filter(channel::id.eq_any(ids).and(channel::deleted_at.is_null()))
+        .load(conn.as_mut())
+        .await?;
+    let mut recipients: HashMap<ChannelId, Vec<UserId>> = HashMap::new();
+    for (channel, user) in dm_recipient::table
+        .select((dm_recipient::channel, dm_recipient::user))
+        .filter(dm_recipient::channel.eq_any(ids))
+        .order_by((dm_recipient::channel, dm_recipient::joined_at))
+        .load::<(ChannelId, UserId)>(conn.as_mut())
+        .await?
+    {
+        recipients.entry(channel).or_default().push(user);
+    }
+    Ok(channels
+        .iter()
+        .map(|c| record(c, recipients.remove(&c.id).unwrap_or_default()))
+        .collect())
+}
+
 /// Upper bound on the number of messages a single read returns.
 pub const MAX_MESSAGES_QUERIED: u32 = 200;
 
@@ -280,6 +312,15 @@ pub(crate) async fn read_channel_messages(
                 .await?
         }
     };
+    with_relations(state, conn.as_mut(), messages).await
+}
+
+/// `messages` with their attachments and link previews, in the order given.
+pub(crate) async fn with_relations(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    messages: Vec<Message>,
+) -> app::error::Result<Vec<MessageWithRelations>> {
     let message_ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
     let message_attachments: Vec<(MessageId, AttachmentId)> = message_attachment::table
         .select((
@@ -288,12 +329,11 @@ pub(crate) async fn read_channel_messages(
         ))
         .filter(message_attachment::message_id.eq_any(&message_ids))
         .order_by(message_attachment::message_id.asc())
-        .load(conn.as_mut())
+        .load(conn)
         .await?;
     // Link previews live in a separate child table; batch-load them by
     // message id so we don't N+1 the query for larger backfills.
-    let mut previews_by_id =
-        load_previews(conn.as_mut(), state.media_store.as_ref(), &message_ids).await?;
+    let mut previews_by_id = load_previews(conn, state.media_store.as_ref(), &message_ids).await?;
     let mut ret = messages
         .into_iter()
         .map(|message| {

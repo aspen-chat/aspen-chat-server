@@ -210,9 +210,21 @@ def smoke(bins: Path, work: Path, processes: list) -> None:
     if status != 401 or not (title.startswith("[") and title.endswith("]")):
         raise Failed(f"a refusal asked for in en-XA answered {status} {text[:300]}")
 
-    say("joining a call, which needs the voice server to have reported in")
     community = api("POST", "/communities", {"name": "Smoke"}, token)
     community_id = community.get("id") or community.get("data", {}).get("id")
+
+    say("finding a message by its words")
+    general = next(c for c in api("GET", f"/communities/{community_id}/channels", token=token) if c["ty"] == "text")
+    posted = api("POST", f"/channels/{general['id']}/messages", {"content": "Smoke signals from the Tuesday picnic", "attachments": []}, token)
+    api("POST", f"/channels/{general['id']}/messages", {"content": "Nothing about lunch here", "attachments": []}, token)
+    found = api("GET", "/messages?filter[text]=PICNIC%20tuesday&include=channels", token=token)
+    if [m["id"] for m in found["data"]] != [posted["id"]] or found["included"]["channels"][0]["id"] != general["id"]:
+        raise Failed(f"searching for the picnic found {found}")
+    left_out = api("GET", "/messages?filter[text]=smoke%20-picnic", token=token)
+    if left_out["data"]:
+        raise Failed(f"searching for smoke without the picnic found {left_out}")
+
+    say("joining a call, which needs the voice server to have reported in")
     channel = api("POST", "/channels", {"community": community_id, "name": "Lounge", "sortIndex": 0, "ty": "voice"}, token)
     offer: dict = {}
 

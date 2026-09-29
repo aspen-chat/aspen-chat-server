@@ -103,6 +103,7 @@ pub const TAG_ROLES: &str = "roles";
     components(schemas(
         community::CommunityInclude,
         message::MessageInclude,
+        message::MessageHolding,
         dm::DmInclude,
         block::BlockInclude,
         poll::PollInclude,
@@ -289,6 +290,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             message::update_message,
             message::delete_message
         ))
+        .routes(routes!(message::search_messages))
         .routes(routes!(message::open_thread))
         .routes(routes!(message::pin_message, message::unpin_message))
         .routes(routes!(message::remove_attachment))

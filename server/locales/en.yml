@@ -239,3 +239,6 @@ statementTooLong: "This claims to be good for %{seconds} seconds, longer than th
 statementReused: "This was already used, and each is good once. Ask %{domain} for a new one; the app does this on its own when you try again."
 statementInconsistent: "%{domain} described this account inconsistently: a bot signed in as a person, or a person as a bot. %{domain}'s administrators should look into it."
 statementProfile: "The profile %{domain} sent for this account does not fit this server: %{detail} Change it at %{domain} and sign in again."
+searchEmpty: "Say what to search for: some words, who wrote it, whom it tags, or what it holds."
+searchTooLong: "Search for at most %{max} characters at a time."
+searchCommunityAndChannel: "Search one community or one channel, not both: a channel already says which community."

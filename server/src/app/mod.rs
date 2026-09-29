@@ -46,6 +46,7 @@ pub mod react;
 pub mod read_state;
 pub mod registration_invite;
 pub mod role;
+pub mod search;
 pub mod thread;
 pub mod two_factor;
 pub mod user;

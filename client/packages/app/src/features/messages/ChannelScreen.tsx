@@ -7,6 +7,7 @@ import { DmHeader } from "@/features/dms/DmHeader";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Composer } from "@/features/messages/Composer";
 import { PinsButton } from "@/features/messages/PinsButton";
+import { SearchButton } from "@/features/search/SearchDialog";
 import { MessageList } from "@/features/messages/MessageList";
 import { threadLink, type ChannelHome } from "@/features/messages/links";
 import { ThreadPanel } from "@/features/threads/ThreadPanel";
@@ -99,6 +100,11 @@ export function ChannelScreen() {
           <DmHeader channel={channel} />
         ) : (
           <ChannelHeader communityId={communityId ?? ""} glyph="#" name={channel.name}>
+            <SearchButton
+              channelId={channelId}
+              channelName={channel.name}
+              communityId={communityId ?? null}
+            />
             <PinsButton channelId={channelId} channelName={channel.name} home={home} />
           </ChannelHeader>
         )}

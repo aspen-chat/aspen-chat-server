@@ -15,6 +15,7 @@ import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { PinsButton } from "@/features/messages/PinsButton";
+import { SearchButton } from "@/features/search/SearchDialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { ProfilePopover } from "@/features/users/ProfileCard";
@@ -58,6 +59,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
         </span>
         <PeopleNames channel={channel} fallback={title} />
       </Heading>
+      <SearchButton channelId={channel.id} channelName={title} communityId={null} />
       <PinsButton channelId={channel.id} channelName={title} home={{ domain, community: null }} />
       {group && (
         <>
