@@ -214,6 +214,30 @@ def check(origin: str) -> None:
                                            "message": tagged["id"]},
            "a deleted message's notification is taken down")
 
+    api(ALPHA, "PUT", f"/communities/{club['id']}/notification-settings/@me", {"level": "all"}, token=reader,
+        expect=(201,))
+    chatter = api(ALPHA, "POST", f"/channels/{general['id']}/messages", {"content": "Nice weather", "attachments": []},
+                  token=sender, expect=(201,))
+    expect(phone.decrypt(next_push("a message in a community set to all")["body"])["message"] == chatter["id"],
+           "a community the reader wants every message of wakes them for one that tags no one")
+    api(ALPHA, "PUT", f"/channels/{general['id']}/notification-settings/@me", {"level": "nothing"}, token=reader,
+        expect=(201,))
+    api(ALPHA, "POST", f"/channels/{general['id']}/messages", {"content": f"<@{reader_id}> hello?", "attachments": []},
+        token=sender, expect=(201,))
+    no_push("a channel set to nothing outranks its community, even for a tag")
+    api(ALPHA, "DELETE", f"/channels/{general['id']}/notification-settings/@me", token=reader, expect=(204,))
+    api(ALPHA, "DELETE", f"/communities/{club['id']}/notification-settings/@me", token=reader, expect=(204,))
+    api(ALPHA, "POST", f"/channels/{general['id']}/messages", {"content": "Back to normal", "attachments": []},
+        token=sender, expect=(201,))
+    no_push("with the settings removed, a community tells only of tags again")
+    api(ALPHA, "PUT", f"/channels/{dm['id']}/notification-settings/@me", {"level": "tags"}, token=reader,
+        expect=(201,))
+    api(ALPHA, "POST", f"/channels/{dm['id']}/messages", {"content": "Just chatting", "attachments": []},
+        token=sender, expect=(201,))
+    no_push("a DM set to tags only is quiet for a message that tags no one")
+    api(ALPHA, "DELETE", f"/channels/{dm['id']}/notification-settings/@me", token=reader, expect=(204,))
+    Endpoint.pushes.clear()
+
     api(ALPHA, "PUT", f"/channels/{dm['id']}/mutes/@me", {}, token=reader, expect=(201,))
     api(ALPHA, "POST", f"/channels/{dm['id']}/messages", {"content": "Still there?", "attachments": []},
         token=sender, expect=(201,))

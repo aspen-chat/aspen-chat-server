@@ -36,6 +36,7 @@ pub mod markdown;
 pub mod media_store;
 pub mod mention;
 pub mod message;
+pub mod notification_setting;
 pub mod outbound;
 pub mod passkey;
 pub mod permissions;

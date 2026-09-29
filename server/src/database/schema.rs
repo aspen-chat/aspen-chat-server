@@ -299,6 +299,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    notification_setting (id) {
+        id -> Uuid,
+        user -> Uuid,
+        community -> Nullable<Uuid>,
+        channel -> Nullable<Uuid>,
+        level -> Text,
+    }
+}
+
+diesel::table! {
     passkey (id) {
         id -> Uuid,
         user -> Uuid,
@@ -587,6 +597,9 @@ diesel::joinable!(message_link_preview -> message (message_id));
 diesel::joinable!(moderation_log -> channel (channel));
 diesel::joinable!(moderation_log -> community (community));
 diesel::joinable!(moderation_log -> user (actor));
+diesel::joinable!(notification_setting -> channel (channel));
+diesel::joinable!(notification_setting -> community (community));
+diesel::joinable!(notification_setting -> user (user));
 diesel::joinable!(passkey -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
@@ -645,6 +658,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     message_attachment,
     message_link_preview,
     moderation_log,
+    notification_setting,
     passkey,
     pin,
     poll,

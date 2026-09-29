@@ -30,6 +30,8 @@ pub enum DmInclude {
     ReadStates,
     /// The caller's mutes of the DMs, as `included.channelMutes`.
     Mutes,
+    /// The caller's notification settings for the DMs, as `included.notificationSettings`.
+    Notifications,
 }
 
 /// Body of a DM list read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -146,6 +148,18 @@ pub async fn list_dms(
     } else {
         None
     };
+    let notification_settings = if query.include.contains(DmInclude::Notifications) {
+        let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
+        Some(
+            app::notification_setting::read_settings(&state, user.id, &ids, &[])
+                .await?
+                .into_iter()
+                .map(crate::api::notification_setting::NotificationSetting::from)
+                .collect(),
+        )
+    } else {
+        None
+    };
     let records = dms
         .into_iter()
         .map(|(dm, recipients)| app::channel::record(&dm, recipients))
@@ -156,6 +170,7 @@ pub async fn list_dms(
             users,
             read_states,
             channel_mutes,
+            notification_settings,
             ..Included::default()
         },
     )))

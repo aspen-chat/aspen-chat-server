@@ -106,6 +106,15 @@ enum MessageEnumSource {
         muted: bool,
         until: Option<chrono::DateTime<Utc>>,
     },
+    // The user changed what they want to be told of a community or a channel, on one of their
+    // devices; the others follow. One of `community` and `channel` is set; `level` is `null`
+    // when the setting was removed. See `app::notification_setting`.
+    #[message_gen(custom_event)]
+    NotificationSettingChanged {
+        community: Option<CommunityId>,
+        channel: Option<ChannelId>,
+        level: Option<crate::app::notification_setting::NotificationLevel>,
+    },
     Message {
         #[message_gen(id)]
         id: MessageId,

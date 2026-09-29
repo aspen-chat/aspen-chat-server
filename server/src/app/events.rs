@@ -143,6 +143,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         ServerEvent::UserPreferencesChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
+        | ServerEvent::NotificationSettingChanged { .. }
         | ServerEvent::ForeignDmJoined { .. }
         | ServerEvent::UserBlockChanged { .. }
         | ServerEvent::CategoryCollapseChanged { .. }

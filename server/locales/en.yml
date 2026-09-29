@@ -246,3 +246,4 @@ pushOff: "This server does not wake phones: its administrators have turned push 
 pushBots: "Bots have no phones to wake; they read the event stream instead."
 pushEndpoint: "A push endpoint must be an https:// URL of at most %{max} characters, as the app's push service gave it."
 pushKeys: "The push keys must be a P-256 public key (65 bytes, uncompressed) and a 16-byte secret, each base64url."
+notificationSettingKind: "Only text channels and DMs have notification settings; a thread follows its channel, and a voice channel has no messages."

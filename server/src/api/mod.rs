@@ -35,6 +35,7 @@ pub(crate) mod link_preview;
 pub(crate) mod message;
 pub(crate) mod message_enum;
 pub(crate) mod metrics;
+pub mod notification_setting;
 pub(crate) mod passkey_page;
 pub mod poll;
 pub mod push;
@@ -365,6 +366,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(
             channel_mute::mute_channel,
             channel_mute::unmute_channel
+        ))
+        .routes(routes!(
+            notification_setting::set_community_notifications,
+            notification_setting::reset_community_notifications
+        ))
+        .routes(routes!(
+            notification_setting::set_channel_notifications,
+            notification_setting::reset_channel_notifications
         ))
         .routes(routes!(block::list_blocks))
         .routes(routes!(bot::list_bots, bot::create_bot))

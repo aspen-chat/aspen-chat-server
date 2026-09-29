@@ -17,6 +17,7 @@ use crate::api::MessageKind;
 use crate::app::channel::Channel;
 use crate::app::events::{SubjectOwner, subject_owner};
 use crate::app::message::Message;
+use crate::app::notification_setting::{NotificationLevel, default_level};
 use crate::app::two_factor::Caller;
 use crate::app::visibility::CommunityModel;
 use crate::app::{
@@ -24,8 +25,8 @@ use crate::app::{
     RoleId, UserId,
 };
 use crate::database::schema::{
-    channel, channel_mute, community_member_role, community_user, dm_recipient, message, push_key,
-    push_subscription, read_state, user_block,
+    channel, channel_mute, community_member_role, community_user, dm_recipient, message,
+    notification_setting, push_key, push_subscription, read_state, user_block,
 };
 use crate::t;
 use base64::Engine as _;
@@ -635,8 +636,10 @@ async fn channel_read(
 }
 
 /// Whom a new message is for, among those with a phone to wake (`spec/push.md`, Who is woken):
-/// the other people of a DM, or those it tags who may read it; never its author, anyone who
-/// blocked them, anyone who muted the channel, or anyone using Aspen right now.
+/// the people of a DM, or the members of a community who may read it, as far as each one's
+/// notification setting for the channel asks (`app::notification_setting`: every message, or
+/// only those that tag them); never its author, anyone who blocked them, anyone who muted the
+/// channel (a thread counting as its parent), or anyone using Aspen right now.
 async fn recipients(
     state: &GlobalServerContext,
     found: &Message,
@@ -649,7 +652,7 @@ async fn recipients(
         .find(channel_id)
         .first(conn.as_mut())
         .await?;
-    // A thread's messages are its parent's, for who may read them and for muting.
+    // A thread's messages are its parent's, for who may read them, settings, and muting.
     let place = match posted_in.parent_channel {
         Some(parent) => {
             channel::table
@@ -660,19 +663,83 @@ async fn recipients(
         }
         None => posted_in,
     };
+    let community = place.community.as_ref().map(|c| *c.id());
     let subscribed = push_subscription::table.select(push_subscription::user);
-    let mut candidates: HashSet<UserId> = match place.community.as_ref().map(|c| *c.id()) {
-        None => dm_recipient::table
-            .select(dm_recipient::user)
-            .filter(dm_recipient::channel.eq(place.id))
-            .filter(dm_recipient::user.eq_any(subscribed))
-            .load::<UserId>(conn.as_mut())
-            .await?
-            .into_iter()
-            .collect(),
-        Some(community) => tagged(conn.as_mut(), community, &found.mentions, place.id).await?,
+    // Everyone who might be told: a DM's people, or a community's members who are tagged or
+    // want every message.
+    let (candidates, tagged_users): (HashSet<UserId>, HashSet<UserId>) = match community {
+        None => {
+            let people: HashSet<UserId> = dm_recipient::table
+                .select(dm_recipient::user)
+                .filter(dm_recipient::channel.eq(place.id))
+                .filter(dm_recipient::user.eq_any(subscribed))
+                .load::<UserId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .collect();
+            let tagged_users = people
+                .iter()
+                .filter(|u| found.mentions.everyone || found.mentions.users.contains(u))
+                .copied()
+                .collect();
+            (people, tagged_users)
+        }
+        Some(community) => {
+            let tagged_users = tagged(conn.as_mut(), community, &found.mentions).await?;
+            let everything: HashSet<UserId> = notification_setting::table
+                .select(notification_setting::user)
+                .filter(notification_setting::level.eq(NotificationLevel::All))
+                .filter(
+                    notification_setting::channel
+                        .eq(place.id)
+                        .or(notification_setting::community.eq(community)),
+                )
+                .filter(notification_setting::user.eq_any(subscribed))
+                .load::<UserId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .collect();
+            (&tagged_users | &everything, tagged_users)
+        }
     };
+    let mut candidates = candidates;
     candidates.remove(&author);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let listed: Vec<UserId> = candidates.iter().copied().collect();
+    // Each one's level here: the channel's own setting, else the community's, else the default.
+    let settings: Vec<(UserId, Option<CommunityId>, NotificationLevel)> =
+        notification_setting::table
+            .select((
+                notification_setting::user,
+                notification_setting::community,
+                notification_setting::level,
+            ))
+            .filter(notification_setting::user.eq_any(&listed))
+            .filter(
+                notification_setting::channel
+                    .eq(place.id)
+                    .or(notification_setting::community.nullable().eq(community)),
+            )
+            .load(conn.as_mut())
+            .await?;
+    let level_of = |user: UserId| {
+        let mine = settings.iter().filter(|(u, _, _)| *u == user);
+        mine.clone()
+            .find(|(_, community, _)| community.is_none())
+            .or_else(|| mine.clone().find(|(_, community, _)| community.is_some()))
+            .map_or_else(|| default_level(place.ty), |(_, _, level)| *level)
+    };
+    candidates.retain(|user| match level_of(*user) {
+        NotificationLevel::All => true,
+        NotificationLevel::Tags => tagged_users.contains(user),
+        NotificationLevel::Nothing => false,
+    });
+    if let Some(community) = community {
+        let viewers = can_view(conn.as_mut(), community, &candidates, place.id).await?;
+        candidates.retain(|user| viewers.contains(user));
+    }
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
@@ -714,13 +781,11 @@ async fn recipients(
         .collect())
 }
 
-/// The members of `community` with a phone to wake whom `mentions` tags and who may view
-/// `place`.
+/// The members of `community` with a phone to wake whom `mentions` tags.
 async fn tagged(
     conn: &mut AsyncPgConnection,
     community: CommunityId,
     mentions: &app::mention::Mentions,
-    place: ChannelId,
 ) -> app::Result<HashSet<UserId>> {
     if mentions.users.is_empty() && mentions.roles.is_empty() && !mentions.everyone {
         return Ok(HashSet::new());
@@ -746,13 +811,27 @@ async fn tagged(
             .load(conn)
             .await?
     };
-    if members.is_empty() {
-        return Ok(HashSet::new());
-    }
-    let model = CommunityModel::load(conn, &[community])
+    Ok(members.into_iter().collect())
+}
+
+/// Which of `users` belong to `community` and may view `place`.
+async fn can_view(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    users: &HashSet<UserId>,
+    place: ChannelId,
+) -> app::Result<HashSet<UserId>> {
+    let listed: Vec<UserId> = users.iter().copied().collect();
+    let members: Vec<UserId> = community_user::table
+        .select(community_user::user)
+        .filter(community_user::community.eq(community))
+        .filter(community_user::user.eq_any(&listed))
+        .load(conn)
+        .await?;
+    let Some(model) = CommunityModel::load(conn, &[community])
         .await?
-        .remove(&community);
-    let Some(model) = model else {
+        .remove(&community)
+    else {
         return Ok(HashSet::new());
     };
     let mut roles: HashMap<UserId, Vec<RoleId>> = HashMap::new();

@@ -20,6 +20,7 @@ use crate::api::message_enum::{
     Category, CategoryOverride, Channel, ChannelOverride, Community, Message, Poll, Role, User,
     UserCommunity, VoiceParticipant, VoiceSession,
 };
+use crate::api::notification_setting::NotificationSetting;
 use crate::api::poll::{OwnWriteIn, PollVote};
 use crate::api::react::ReactionSummary;
 use crate::api::read_state::ReadState;
@@ -118,6 +119,10 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub channel_mutes: Option<Vec<ChannelMute>>,
+    /// The caller's notification settings for the communities and channels in the read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub notification_settings: Option<Vec<NotificationSetting>>,
     /// The categories in the read the caller has collapsed in their channel list.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
