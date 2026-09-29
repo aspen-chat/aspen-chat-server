@@ -10,6 +10,8 @@ use ring::hkdf::{HKDF_SHA256, KeyType, Salt};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// The largest message a push service accepts, encrypted (RFC 8030 and every service after it).
 pub const MAX_MESSAGE_BYTES: usize = 4096;
@@ -21,6 +23,8 @@ const RECORD_SIZE: u32 = 4096;
 pub const OVERHEAD: usize = 16 + 4 + 1 + 65 + 1 + 16;
 /// How long a VAPID token is good for; RFC 8292 allows at most a day.
 const TOKEN_LIFETIME_SECONDS: i64 = 12 * 60 * 60;
+/// A token is reused for pushes to the same service until less than this much of it is left.
+const TOKEN_RENEW_SECONDS: i64 = TOKEN_LIFETIME_SECONDS / 2;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum WebPushError {
@@ -129,6 +133,16 @@ fn expand<const N: usize>(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; N] {
 /// The deployment's push key, loaded to sign with.
 pub struct PushKey {
     pair: EcdsaKeyPair,
+    /// The `Authorization` header made for each audience and subject, and when its token
+    /// expires. RFC 8292 lets a token be reused until then, so a message waking thousands of
+    /// phones through one relay is signed once, not once per phone.
+    tokens: Mutex<HashMap<(String, Option<String>), Token>>,
+}
+
+/// An `Authorization` header made earlier, and when its token expires.
+struct Token {
+    expires: i64,
+    header: String,
 }
 
 impl PushKey {
@@ -147,7 +161,10 @@ impl PushKey {
             document,
             &SystemRandom::new(),
         )
-        .map(|pair| PushKey { pair })
+        .map(|pair| PushKey {
+            pair,
+            tokens: Mutex::default(),
+        })
         .map_err(|_| WebPushError::Key)
     }
 
@@ -157,8 +174,32 @@ impl PushKey {
     }
 
     /// The `Authorization` header of a push to an endpoint at `audience` (its origin), naming
-    /// the deployment by `subject` (`https://…` or `mailto:…`) when it has one.
+    /// the deployment by `subject` (`https://…` or `mailto:…`) when it has one: the one made
+    /// for them before while at least [`TOKEN_RENEW_SECONDS`] of it is left, else a new one.
     pub fn authorization(
+        &self,
+        audience: &str,
+        subject: Option<&str>,
+        now: i64,
+    ) -> Result<String, WebPushError> {
+        let slot = (audience.to_owned(), subject.map(str::to_owned));
+        if let Some(token) = self.tokens.lock().expect("token cache").get(&slot)
+            && token.expires - now >= TOKEN_RENEW_SECONDS
+        {
+            return Ok(token.header.clone());
+        }
+        let header = self.sign(audience, subject, now)?;
+        self.tokens.lock().expect("token cache").insert(
+            slot,
+            Token {
+                expires: now + TOKEN_LIFETIME_SECONDS,
+                header: header.clone(),
+            },
+        );
+        Ok(header)
+    }
+
+    fn sign(
         &self,
         audience: &str,
         subject: Option<&str>,
@@ -258,6 +299,23 @@ mod tests {
         assert_eq!(
             encrypt(b"{}", public.as_ref(), &[7; 15]),
             Err(WebPushError::AuthSecret)
+        );
+    }
+
+    #[test]
+    fn a_vapid_token_is_reused_for_its_audience_until_half_its_life_is_left() {
+        let (document, _) = PushKey::generate().unwrap();
+        let key = PushKey::from_pkcs8(&document).unwrap();
+        let at = |audience: &str, now: i64| key.authorization(audience, None, now).unwrap();
+        let first = at("https://push.example", 1_000);
+        assert_eq!(
+            at("https://push.example", 1_000 + TOKEN_RENEW_SECONDS),
+            first
+        );
+        assert_ne!(at("https://other.example", 1_000), first);
+        assert_ne!(
+            at("https://push.example", 1_001 + TOKEN_RENEW_SECONDS),
+            first
         );
     }
 

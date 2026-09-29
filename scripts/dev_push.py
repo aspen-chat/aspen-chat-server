@@ -89,14 +89,15 @@ class Endpoint(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def serve() -> str:
+def serve(handler: type[BaseHTTPRequestHandler] = Endpoint) -> str:
+    """Serves `handler` over HTTPS at `push.localhost` on a free port, answering its origin."""
     cert, key = issue_certificate(HOST)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(cert), str(key))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    server = ThreadingHTTPServer(("127.0.0.1", port), Endpoint)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return f"https://{HOST}:{port}"

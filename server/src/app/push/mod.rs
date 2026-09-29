@@ -47,6 +47,9 @@ use webpush::PushKey;
 const CONSUMER: &str = "aspen_push";
 /// How many events one server handles at once.
 const CONCURRENCY: usize = 16;
+/// How many people one event wakes at once: a message tagging everyone in a large community
+/// wakes thousands, each a request to a push service that spends most of its time waiting.
+const FAN_OUT: usize = 128;
 /// How long whom a message woke, and for what, is remembered: longer than anyone leaves a
 /// notification unread on a phone that has not been turned on meanwhile.
 const REMEMBERED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -243,28 +246,33 @@ struct Payload {
     badge: Option<i64>,
 }
 
-/// Sends `pointer` to every phone of `user`, dropping those their relay says are gone.
-async fn wake(state: &GlobalServerContext, user: UserId, pointer: Pointer, badge: Option<i64>) {
-    let subscriptions: Vec<PushSubscription> = match async {
-        let mut conn = state.connection_pool.get().await?;
-        Ok::<_, app::Error>(
-            push_subscription::table
-                .select(PushSubscription::as_select())
-                .filter(push_subscription::user.eq(user))
-                .load(conn.as_mut())
-                .await?,
-        )
-    }
-    .await
+/// The phones of each of `users`.
+async fn phones_of(
+    state: &GlobalServerContext,
+    users: &[UserId],
+) -> app::Result<HashMap<UserId, Vec<PushSubscription>>> {
+    let mut conn = state.connection_pool.get().await?;
+    let mut phones: HashMap<UserId, Vec<PushSubscription>> = HashMap::new();
+    for (user, subscription) in push_subscription::table
+        .select((push_subscription::user, PushSubscription::as_select()))
+        .filter(push_subscription::user.eq_any(users))
+        .load::<(UserId, PushSubscription)>(conn.as_mut())
+        .await?
     {
-        Ok(found) => found,
-        Err(e) => {
-            tracing::error!("reading push subscriptions failed: {e}");
-            return;
-        }
-    };
-    for subscription in subscriptions {
-        match send(state, &subscription, pointer, badge).await {
+        phones.entry(user).or_default().push(subscription);
+    }
+    Ok(phones)
+}
+
+/// Sends `pointer` to each of `phones`, dropping those their relay says are gone.
+async fn wake(
+    state: &GlobalServerContext,
+    phones: &[PushSubscription],
+    pointer: Pointer,
+    badge: Option<i64>,
+) {
+    for subscription in phones {
+        match send(state, subscription, pointer, badge).await {
             Ok(Delivery::Accepted) => {}
             Ok(Delivery::Gone) => {
                 tracing::debug!(subscription = %subscription.id.0, "push subscription is gone");
@@ -531,8 +539,9 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> app::Res
         .valkey
         .expire(message_key(id), REMEMBERED.as_secs() as i64, None)
         .await?;
+    let phones = &phones_of(state, &recipients).await?;
     futures_util::stream::iter(recipients)
-        .for_each_concurrent(CONCURRENCY, |user| async move {
+        .for_each_concurrent(FAN_OUT, |user| async move {
             let _: Result<(), _> = state
                 .valkey
                 .set(
@@ -548,7 +557,13 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> app::Res
             } else {
                 None
             };
-            wake(state, user, pointer, badge).await;
+            wake(
+                state,
+                phones.get(&user).map_or(&[], Vec::as_slice),
+                pointer,
+                badge,
+            )
+            .await;
         })
         .await;
     Ok(())
@@ -571,18 +586,18 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> app::Res
         return Ok(());
     };
     drop(conn);
-    for user in woken.iter().filter_map(|u| u.parse().ok().map(UserId)) {
-        wake(
-            state,
-            user,
-            Pointer::Deleted {
-                channel,
-                message: id,
-            },
-            None,
-        )
+    let woken: Vec<UserId> = woken
+        .iter()
+        .filter_map(|u| u.parse().ok().map(UserId))
+        .collect();
+    let pointer = Pointer::Deleted {
+        channel,
+        message: id,
+    };
+    let phones = phones_of(state, &woken).await?;
+    futures_util::stream::iter(phones.values())
+        .for_each_concurrent(FAN_OUT, |phones| wake(state, phones, pointer, None))
         .await;
-    }
     Ok(())
 }
 
@@ -622,9 +637,13 @@ async fn channel_read(
         drop(conn);
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let phones = phones_of(state, &[user]).await?;
+    let Some(phones) = phones.get(&user) else {
+        return Ok(());
+    };
     wake(
         state,
-        user,
+        phones,
         Pointer::Read {
             channel,
             message: last_read,
@@ -724,12 +743,20 @@ async fn recipients(
             )
             .load(conn.as_mut())
             .await?;
+    let mut for_channel = HashMap::new();
+    let mut for_community = HashMap::new();
+    for (user, community, level) in settings {
+        match community {
+            Some(_) => for_community.insert(user, level),
+            None => for_channel.insert(user, level),
+        };
+    }
     let level_of = |user: UserId| {
-        let mine = settings.iter().filter(|(u, _, _)| *u == user);
-        mine.clone()
-            .find(|(_, community, _)| community.is_none())
-            .or_else(|| mine.clone().find(|(_, community, _)| community.is_some()))
-            .map_or_else(|| default_level(place.ty), |(_, _, level)| *level)
+        for_channel
+            .get(&user)
+            .or_else(|| for_community.get(&user))
+            .copied()
+            .unwrap_or_else(|| default_level(place.ty))
     };
     candidates.retain(|user| match level_of(*user) {
         NotificationLevel::All => true,
