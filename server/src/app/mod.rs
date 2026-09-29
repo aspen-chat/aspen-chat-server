@@ -41,6 +41,7 @@ pub mod passkey;
 pub mod permissions;
 pub mod poll;
 pub mod preferences;
+pub mod push;
 pub mod rate_limit;
 pub mod react;
 pub mod read_state;
@@ -221,6 +222,8 @@ id_type!(PasskeyId);
 id_type!(RoleId);
 id_type!(DeploymentRoleId);
 id_type!(FederationKeyId);
+id_type!(PushKeyId);
+id_type!(PushSubscriptionId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

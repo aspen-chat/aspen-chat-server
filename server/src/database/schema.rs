@@ -356,6 +356,29 @@ diesel::table! {
 }
 
 diesel::table! {
+    push_key (id) {
+        id -> Uuid,
+        private_key -> Bytea,
+        public_key -> Bytea,
+        created_at -> Timestamptz,
+        retired_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    push_subscription (id) {
+        id -> Uuid,
+        user -> Uuid,
+        refresh_token -> Text,
+        endpoint -> Text,
+        p256dh -> Bytea,
+        auth -> Bytea,
+        push_key -> Uuid,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     react (emoji, author, message) {
         emoji -> Text,
         author -> Uuid,
@@ -572,6 +595,9 @@ diesel::joinable!(poll -> user (created_by));
 diesel::joinable!(poll_option -> poll (poll));
 diesel::joinable!(poll_option -> user (written_by));
 diesel::joinable!(poll_vote -> user (user));
+diesel::joinable!(push_subscription -> push_key (push_key));
+diesel::joinable!(push_subscription -> refresh_token (refresh_token));
+diesel::joinable!(push_subscription -> user (user));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(read_state -> channel (channel));
@@ -624,6 +650,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     poll,
     poll_option,
     poll_vote,
+    push_key,
+    push_subscription,
     react,
     read_state,
     recovery_code,

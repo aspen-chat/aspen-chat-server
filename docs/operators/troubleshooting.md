@@ -88,6 +88,14 @@ NATS with the same token, and has the `id` the registry gave it.
 ports (`[rtc] min_port` to `max_port`, UDP and TCP) are closed, or `[rtc] announced_address` is
 not the address clients can reach (behind NAT it must be the public one).
 
+**Phones are not woken.** The app registers each phone when it signs in, and the server then
+calls the phone's relay over HTTPS. Check that `[push] enabled` is on and that the server can
+reach the internet (`curl https://push.aspen.chat`, or the relay the app names). The log warns
+of every push a relay refuses: `quotaExhausted` means the deployment has sent more pushes this
+month than its tier with that relay allows, and pushes resume next month or when its tier is
+raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
+channel, or by someone they blocked.
+
 **A voice server was disabled.** `failure_threshold` people failed to start a call on it within
 `failure_window_seconds`. Fix the cause (usually its TLS proxy or its ports), then enable it
 again in the dashboard.

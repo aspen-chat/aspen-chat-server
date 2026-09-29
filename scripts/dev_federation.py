@@ -135,25 +135,31 @@ def make_certificates() -> None:
             "-addext", "basicConstraints=critical,CA:TRUE",
             "-addext", "keyUsage=critical,keyCertSign,cRLSign", check=True)
     for deployment in DEPLOYMENTS:
-        cert = WORK / f"{deployment.host}.pem"
-        if cert.exists():
-            continue
-        say(f"issuing a certificate for {deployment.host}")
-        key = WORK / f"{deployment.host}.key"
-        request = WORK / f"{deployment.host}.csr"
-        extensions = WORK / f"{deployment.host}.ext"
-        extensions.write_text(
-            f"subjectAltName=DNS:{deployment.host}\n"
-            "extendedKeyUsage=serverAuth\n"
-            "basicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature\n"
-        )
-        run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
-            "-keyout", str(key), "-out", str(request), "-subj", f"/CN={deployment.host}", check=True)
-        run("openssl", "x509", "-req", "-in", str(request), "-CA", str(CA), "-CAkey", str(WORK / "ca.key"),
-            "-CAcreateserial", "-out", str(cert), "-days", "825", "-extfile", str(extensions), check=True)
-        request.unlink()
-        extensions.unlink()
+        issue_certificate(deployment.host)
+
+
+def issue_certificate(host: str) -> tuple[Path, Path]:
+    """A certificate for `host` from the development authority, made once: its PEM and key."""
+    cert = WORK / f"{host}.pem"
+    key = WORK / f"{host}.key"
+    if cert.exists():
+        return cert, key
+    say(f"issuing a certificate for {host}")
+    request = WORK / f"{host}.csr"
+    extensions = WORK / f"{host}.ext"
+    extensions.write_text(
+        f"subjectAltName=DNS:{host}\n"
+        "extendedKeyUsage=serverAuth\n"
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature\n"
+    )
+    run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+        "-keyout", str(key), "-out", str(request), "-subj", f"/CN={host}", check=True)
+    run("openssl", "x509", "-req", "-in", str(request), "-CA", str(CA), "-CAkey", str(WORK / "ca.key"),
+        "-CAcreateserial", "-out", str(cert), "-days", "825", "-extfile", str(extensions), check=True)
+    request.unlink()
+    extensions.unlink()
+    return cert, key
 
 
 def start_services(deployment: Deployment) -> None:

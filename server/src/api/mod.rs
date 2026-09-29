@@ -37,6 +37,7 @@ pub(crate) mod message_enum;
 pub(crate) mod metrics;
 pub(crate) mod passkey_page;
 pub mod poll;
+pub mod push;
 pub(crate) mod rate_limit;
 pub(crate) mod react;
 pub(crate) mod read_state;
@@ -291,6 +292,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             message::delete_message
         ))
         .routes(routes!(message::search_messages))
+        .routes(routes!(push::create_push_subscription))
+        .routes(routes!(push::delete_push_subscription))
         .routes(routes!(message::open_thread))
         .routes(routes!(message::pin_message, message::unpin_message))
         .routes(routes!(message::remove_attachment))
@@ -503,6 +506,8 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         app::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     }
     app::federation::standing::spawn_confirmer(context.clone());
+    app::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
+    app::push::spawn_dispatcher(context.clone());
     let cors = cors_layer(&context.config.cors, &context.config.federation);
     let router: axum::Router = axum::Router::from(router.with_state(context))
         .layer(axum::middleware::from_fn(app::locale::layer));

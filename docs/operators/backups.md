@@ -19,6 +19,10 @@ deployment. Encrypt backups, and limit who can read them. If one leaks, replace 
 with (see [Federation](federation.md#keys)). The sessions and password hashes in it are
 sensitive too: a leak means everyone should change their password.
 
+The database also holds the deployment's push key, which phones' relays know it by. A
+deployment restored without it makes a new one, and phones then need to be opened once to be
+woken again.
+
 ## The object storage
 
 Attachments, icons, avatars, and link preview images are objects in the `[media.s3]` bucket;

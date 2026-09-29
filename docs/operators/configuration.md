@@ -118,6 +118,12 @@ them in the dashboard.
 | `url` | required | Where clients reach it, as `https://voice-1.chat.example.org`. |
 | `capacity` | required | The most people it carries at once; `voice_server estimate-capacity` suggests one. |
 
+## `[push]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `enabled` | `true` | Whether the Aspen app on phones may ask to be woken when it is not open, for DMs and messages that tag someone. Phones are woken through the relay of whoever published their app (the Aspen Foundation's, for the published apps) or through a UnifiedPush distributor; this server calls them over HTTPS, as it calls other deployments. What it sends them is encrypted to the phone, and says only which channel and message to fetch. |
+
 ## `[metrics]`
 
 | Setting | Default | |

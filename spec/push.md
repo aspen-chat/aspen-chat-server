@@ -1,6 +1,6 @@
 # The Aspen push protocol
 
-**Draft for review.** Nothing here is built yet.
+The deployment's side is `app::push`; the relay is its own repository, `aspen-push-relay`.
 
 How an Aspen deployment wakes a phone that is not running Aspen, so that it can show a
 notification, without the deployment holding anything that could reach a phone that did not ask
@@ -39,9 +39,11 @@ waking. (This is the protocol browsers use for their push, but nothing here invo
 1. The app asks the relay for a **subscription**: an endpoint URL that reaches this phone, and
    only accepts messages signed by one deployment's key.
 2. The app gives the deployment the endpoint and a public key of the phone's.
-3. The deployment encrypts a small **pointer** (which account, which channel, which message) to
+3. The deployment encrypts a small **pointer** (which channel, which message) to
    the phone's key, signs the request, and POSTs it to the endpoint.
-4. The relay forwards the ciphertext through APNs or FCM without being able to read it.
+4. The relay forwards the ciphertext through APNs or FCM without being able to read it, with
+   the id of the subscription it came through, by which the phone knows which account it is
+   for and which key decrypts it.
 5. On the phone, Aspen decrypts the pointer, fetches the message from the deployment with the
    account's own session, and shows it.
 
@@ -106,7 +108,7 @@ A device has one subscription per deployment account it is signed in to. `DELETE
 ### Pushing
 
 `POST /v1/push/{id}` is an RFC 8030 push: the body is the RFC 8291 (`aes128gcm`) ciphertext, at
-most 4096 bytes, with the headers
+most 2048 bytes (what fits an APNs payload once encoded; UnifiedPush servers take 4096), with the headers
 
 - `Content-Encoding: aes128gcm`.
 - `Authorization: vapid t=<JWT>, k=<push key>`: the JWT, signed ES256 with the push key the
@@ -114,7 +116,8 @@ most 4096 bytes, with the headers
   deployment's contact (`https://{domain}`, or `mailto:`), which is optional on the free tier.
 - `TTL`: seconds the message is worth delivering; `0` to drop it if the phone cannot be
   reached now.
-- `Urgency`: `high` for what a person should see now (a message for them), `normal` otherwise.
+- `Urgency`: `high` for what a person should see now (a message for them); `low` for a pointer
+  that shows nothing (`read`, `deleted`).
 - `Topic`: optional; a later message with the same topic replaces an undelivered earlier one.
   Deployments set it to a hash of the channel id, so a burst in one channel wakes the phone once.
 
@@ -126,14 +129,14 @@ Answers:
 | `400` | Malformed. | Logs it; a bug. |
 | `403` `wrongKey` | Not signed by the key this subscription was made for. | Deletes the subscription. |
 | `404`, `410` | No such subscription, or the platform says the phone is gone. | Deletes the subscription. |
-| `413` | Over 4096 bytes. | Logs it; a bug. |
+| `413` | Over 2048 bytes. | Logs it; a bug. |
 | `429` `quotaExhausted` / `rateLimited` | Over the key's quota for the period, or too fast for this phone; `Retry-After` says when. | Retries after it; tells its administrators when it is the quota. |
 
 ### What reaches the phone
 
 **iOS**: an alert push (`apns-push-type: alert`) with `mutable-content: 1` and a placeholder
 the app localizes on the phone (`"loc-key": "notification.placeholder"`, "New activity in
-Aspen"), carrying the ciphertext under the key `aspen`. Aspen's notification service extension
+Aspen"), carrying `"aspen": { "s": "<subscription id>", "c": "<ciphertext, base64url>" }`. Aspen's notification service extension
 decrypts it, fetches, and replaces the placeholder with the real notification, all within the
 thirty seconds iOS allows it; if it fails, the placeholder shows, which is why the placeholder
 must read sensibly on its own. `Topic` becomes `apns-collapse-id`, `TTL` `apns-expiration`, and
@@ -141,12 +144,13 @@ must read sensibly on its own. `Topic` becomes `apns-collapse-id`, `TTL` `apns-e
 
 A pointer that should show nothing (a `read` or `deleted`, below) needs Apple's notification
 filtering entitlement, which lets the extension drop a notification; the Foundation must request
-it for the published app. Until Apple grants it, deployments send no pointer that shows nothing
-on iOS.
+it for the published app. A relay whose iOS app lacks it answers `201` to a `low` push for an
+iOS phone and delivers nothing, so deployments need not know which phones are which.
 
-**Android (FCM)**: a high-priority data message carrying the ciphertext; the app decrypts,
-fetches, and posts the notification itself. Android lowers the priority of apps whose
-high-priority messages show nothing, so pointers that show nothing are sent `Urgency: normal`.
+**Android (FCM)**: a data message carrying the same `s` and `c`, high priority for `Urgency:
+high` and normal otherwise; the app decrypts, fetches, and posts the notification itself.
+Android lowers the priority of apps whose high-priority messages show nothing, which is why
+pointers that show nothing are `low`.
 
 **Android (UnifiedPush)**: the distributor hands the app the RFC 8291 ciphertext, and the app
 does the same as for FCM.
@@ -159,8 +163,6 @@ APNs payload once encoded.
 ```json
 {
   "v": 1,
-  "origin": "https://chat.example.org",
-  "account": "<the user's id on this deployment>",
   "kind": "message",
   "channel": "<channel id>",
   "message": "<message id>",
@@ -168,9 +170,10 @@ APNs payload once encoded.
 }
 ```
 
-- `origin`: the deployment's API origin, as the app signed in to it, so the app finds the
-  account's session.
-- `account`: which account on that deployment, for a phone signed in to several.
+The pointer names no deployment or account: the app knows both from the subscription the push
+came through (the relay's `s`, or on UnifiedPush the registration it arrived for), and keeps
+each subscription's keys beside the session it registered them with.
+
 - `kind`, and what it needs:
   - `message` (`channel`, `message`): a message the person should be told of. The app fetches
     it (`GET /api/v1/messages/{message}?include=authors,channels`) and shows who wrote it,
@@ -180,7 +183,9 @@ APNs payload once encoded.
   - `deleted` (`channel`, `message`): the message is gone; the app removes its notification. It
     shows nothing.
 - `badge`: how many unread messages tag the person on this deployment (the sum of their
-  `ReadState.mentions`). The app keeps each account's latest and shows their sum.
+  `ReadState.mentions`), and how many of their DMs are unread; absent when a message wakes so
+  many people that working it out for each would cost too much. The app keeps each account's
+  latest and shows their sum.
 
 An app ignores a kind it does not know, and fields it does not know, as the federation
 protocol's readers do; kinds and fields are only ever added (`spec/federation.md`, How the
@@ -191,13 +196,16 @@ fetch.
 
 - `GET /api/v1/auth/methods` gains `push: { applicationServerKey }`, absent where push is off.
 - `POST /api/v1/users/@me/push-subscriptions` with `{ endpoint, p256dh, auth }` registers the
-  calling session's phone, answering `201`. A subscription belongs to the session that made it:
-  signing out, or the session ending any other way, deletes it, and the deployment tells the
-  relay (`DELETE` on the endpoint, signed as a push is). One session holds at most one.
+  calling sign-in's phone, answering `201`. A subscription belongs to the sign-in that made it
+  (its refresh token): signing out, or the sign-in ending any other way, deletes it. One
+  sign-in holds at most one; registering again replaces it. The app ends its relay subscription
+  itself when it signs out; one whose sign-in ended some other way is simply never pushed to
+  again.
 - `DELETE /api/v1/users/@me/push-subscriptions/{subscription}`.
 
-The deployment POSTs only to HTTPS endpoints at public addresses (`app::outbound`), since an
-endpoint is a URL a client chose.
+The deployment POSTs only to HTTPS endpoints at public addresses (`app::outbound`, as for calls
+to other deployments), since an endpoint is a URL a client chose. It drops a subscription whose
+endpoint answers `403`, `404`, or `410`, and one made for a push key since replaced.
 
 ## Who is woken, and for what
 
@@ -229,18 +237,15 @@ message is deleted, `deleted`.
 - A phone's platform token is known only to the app and its relay, never to deployments, so
   nobody can subscribe a phone they do not hold.
 
-## Open questions
+## Decisions
 
-1. **Where the relay lives**: a crate in this workspace (sharing `aspen_limits`, metrics, and
-   the Problem types), or a repository of its own, since the Foundation runs it and deployments
-   never do. Leaning towards its own repository.
-2. **The free tier**: how many pushes a month per key, and whether it needs any registration.
-   Leaning towards no registration at all, as Web Push has none, with a quota generous enough
-   for a community of a few hundred.
-3. **Calls**: ringing a phone for a DM call needs Apple's VoIP push and CallKit, with rules of
-   their own (every VoIP push must show a call at once). Leaning towards a later kind, `call`,
-   once calls ring anywhere.
-4. **Proving the app is genuine** to the relay (App Attest, Play Integrity), which would stop a
-   modified app from registering devices. Leaning towards not at first: a registered device
-   only receives what deployments send it.
+1. **The relay** is its own repository (`aspen-push-relay`), run by the Foundation for the apps
+   it publishes; deployments never run one.
+2. **The free tier** needs no registration: each deployment key may send a fixed number of
+   pushes a month, generous for a community of a few hundred, and a relay's operators give a
+   key a tier of its own when it needs more.
+3. **Calls** will ring phones with a later kind, `call`, once calls ring anywhere; it needs
+   Apple's VoIP push and CallKit, with rules of their own.
+4. **The relay trusts any app that registers**, without App Attest or Play Integrity: a
+   registered device only receives what deployments it subscribed to send it.
 5. **The desktop apps** keep their event stream open, and need none of this.

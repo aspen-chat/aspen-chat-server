@@ -57,4 +57,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260929_001328_federation_peer_protocol::M,
     &migrations::m20260929_011737_federation_standing::M,
     &migrations::m20260929_035231_message_search::M,
+    &migrations::m20260929_052246_push::M,
 ];

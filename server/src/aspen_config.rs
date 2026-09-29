@@ -36,6 +36,8 @@ pub struct AspenConfig {
     pub metrics: MetricsConfig,
     #[serde(default)]
     pub federation: FederationConfig,
+    #[serde(default)]
+    pub push: PushConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -376,6 +378,15 @@ impl FederationConfig {
         }
         Ok(())
     }
+}
+
+/// Waking phones that are not running Aspen (`app::push`, `spec/push.md`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct PushConfig {
+    /// Whether apps may ask to be woken, and messages wake them.
+    #[default = true]
+    pub enabled: bool,
 }
 
 /// Bots: accounts that sign in only with a token, each made and managed by a person
