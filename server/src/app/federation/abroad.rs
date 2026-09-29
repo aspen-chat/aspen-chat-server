@@ -252,12 +252,24 @@ pub async fn sign_in(
         claims.method != SignInMethod::Token
     };
     if !proved {
-        return Err(invalid(Some(&home), "method does not fit the account"));
+        return Err(invalid(
+            Some(&home),
+            t!("statementInconsistent", domain = home.as_str()),
+        ));
     }
     if state.config.auth.require_two_factor && !claims.profile.bot && !claims.method.strong() {
         return Err(app::Error::StrongerSignInRequired);
     }
-    check_profile(&claims.profile).map_err(|_| invalid(Some(&home), "profile"))?;
+    check_profile(&claims.profile).map_err(|error| {
+        let detail = match error {
+            app::Error::Validation(reason) => reason,
+            other => other.to_string().into(),
+        };
+        invalid(
+            Some(&home),
+            t!("statementProfile", domain = home.as_str(), detail = detail),
+        )
+    })?;
     let rules = match subject {
         Subject::Users => &config.users,
         Subject::Bots => &config.bots,
@@ -544,7 +556,7 @@ async fn fetch_avatar(
         ))
         .send()
         .await
-        .map_err(|_| unreachable())?;
+        .map_err(|error| super::fetch::failure(home, &error))?;
     let mime_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)

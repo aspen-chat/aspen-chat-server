@@ -91,8 +91,8 @@ pub enum ProblemCode {
     /// deployment takes no part in federation, or the account cannot travel. `detail` says
     /// which.
     FederationRefused,
-    /// Signing in abroad: the assertion is malformed, forged, expired, already used, or not for
-    /// this deployment. Ask the home deployment for a fresh one.
+    /// Signing in abroad, or a statement another deployment sent: it is malformed, forged,
+    /// expired, already used, or not for this deployment. `detail` says which, and what to do.
     AssertionInvalid,
     /// Signing in abroad: this deployment requires two factors, and the sign-in at home used a
     /// password alone. Sign in at home with a second factor or a passkey first.
@@ -293,7 +293,9 @@ impl From<app::Error> for ApiError {
             app::Error::FederationRefused(detail) => {
                 Self::new(ProblemCode::FederationRefused).with_detail(detail)
             }
-            app::Error::AssertionInvalid => Self::new(ProblemCode::AssertionInvalid),
+            app::Error::AssertionInvalid(reason) => {
+                Self::new(ProblemCode::AssertionInvalid).with_detail(reason)
+            }
             app::Error::StrongerSignInRequired => Self::new(ProblemCode::StrongerSignInRequired),
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)

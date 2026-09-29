@@ -116,10 +116,10 @@ pub enum Error {
     /// Federation refuses the crossing; the reason is localized for the person refused.
     #[error("federation refused: {0}")]
     FederationRefused(Cow<'static, str>),
-    /// An assertion from another deployment is malformed, forged, expired, used, or not for
-    /// this deployment; the server's log says which.
-    #[error("the assertion is not valid")]
-    AssertionInvalid,
+    /// A statement from another deployment (an assertion, a notice) is malformed, forged,
+    /// expired, used, or not for this deployment; the reason says which, and what to do.
+    #[error("the statement is not valid: {0}")]
+    AssertionInvalid(Cow<'static, str>),
     /// This deployment requires two factors, and the sign-in at home proved only a password.
     #[error("a sign-in stronger than a password is required")]
     StrongerSignInRequired,

@@ -28,6 +28,18 @@ pub fn is_public_address(ip: IpAddr) -> bool {
     }
 }
 
+/// Why `PublicResolver` found no address to connect to, which callers tell apart for the
+/// people they report to.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// The name does not resolve at all.
+    #[error("{0} was not found")]
+    NotFound(String),
+    /// It resolves, but only to addresses inside a network.
+    #[error("{0} has no public address")]
+    NoPublicAddress(String),
+}
+
 /// A resolver for `reqwest` that answers only with public addresses (`is_public_address`),
 /// unless `allow_private` is set. It filters at the moment of connecting, so a name cannot
 /// resolve to a public address when checked and a private one when used.
@@ -41,12 +53,19 @@ impl Resolve for PublicResolver {
         let allow_private = self.allow_private;
         Box::pin(async move {
             let host = name.as_str().to_owned();
-            let found: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
+            let all: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|_| ResolveError::NotFound(host.clone()))?
+                .collect();
+            if all.is_empty() {
+                return Err(ResolveError::NotFound(host).into());
+            }
+            let found: Vec<SocketAddr> = all
+                .into_iter()
                 .filter(|addr| allow_private || is_public_address(addr.ip()))
                 .collect();
             if found.is_empty() {
-                return Err(format!("{host} has no public address").into());
+                return Err(ResolveError::NoPublicAddress(host).into());
             }
             Ok(Box::new(found.into_iter()) as Addrs)
         })

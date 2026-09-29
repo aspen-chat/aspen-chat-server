@@ -74,7 +74,8 @@ fn check_document(domain: &Domain, document: &DeploymentDocument) -> app::Result
     }
     if current_of(document).is_none() {
         return Err(app::Error::DeploymentUnreachable(t!(
-            "federationDocumentInvalid"
+            "federationDocumentInvalid",
+            domain = domain.as_str()
         )));
     }
     Ok(())
@@ -87,8 +88,9 @@ pub async fn record_contact(
     domain: &Domain,
     document: &DeploymentDocument,
 ) -> app::Result<(Listed, ContactOutcome)> {
-    let presented = current_of(document)
-        .ok_or_else(|| app::Error::DeploymentUnreachable(t!("federationDocumentInvalid")))?;
+    let presented = current_of(document).ok_or_else(|| {
+        app::Error::DeploymentUnreachable(t!("federationDocumentInvalid", domain = domain.as_str()))
+    })?;
     let domain = domain.clone();
     conn.transaction(|conn| {
         async move {

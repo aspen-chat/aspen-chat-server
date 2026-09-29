@@ -45,14 +45,15 @@ pub struct Received<T> {
     pub lists: Vec<FederationList>,
 }
 
-/// Why a statement is refused, for the server's log; the sender is told only that it was.
-pub fn invalid(domain: Option<&Domain>, why: &str) -> app::Error {
+/// Refuses a statement for `reason`, which says what is wrong and what to do about it: nothing
+/// in a statement's refusal helps anyone forge one, so its sender is told as plainly as the log.
+pub fn invalid(domain: Option<&Domain>, reason: std::borrow::Cow<'static, str>) -> app::Error {
     tracing::info!(
         domain = domain.map(Domain::as_str),
-        why,
+        %reason,
         "refused a statement"
     );
-    app::Error::AssertionInvalid
+    app::Error::AssertionInvalid(reason)
 }
 
 /// Verifies `token` as a statement of kind `T` from a deployment that a gate of one of
@@ -66,7 +67,7 @@ pub async fn receive<T: Statement>(
 ) -> app::Result<Received<T>> {
     let config = &state.config.federation;
     let here = own_domain(config).ok_or(app::Error::FederationRefused(t!("federationOff")))?;
-    let unverified = jws::parse(token).map_err(|_| invalid(None, "malformed"))?;
+    let unverified = jws::parse(token).map_err(|_| invalid(None, t!("statementMalformed")))?;
     #[derive(Deserialize)]
     struct Issuer {
         iss: Domain,
@@ -75,9 +76,9 @@ pub async fn receive<T: Statement>(
     // which key to check it with.
     let Issuer { iss: from } = unverified
         .peek::<Issuer>()
-        .map_err(|_| invalid(None, "no issuer"))?;
+        .map_err(|_| invalid(None, t!("statementMalformed")))?;
     if from == here {
-        return Err(invalid(Some(&from), "issued here"));
+        return Err(invalid(Some(&from), t!("statementFromHere")));
     }
     let mut conn = state.connection_pool.get().await?;
     let lists = lists_of(&mut conn, std::slice::from_ref(&from))
@@ -115,40 +116,82 @@ pub async fn receive<T: Statement>(
             // pins or follows the handover, and a key that changed unannounced stays refused.
             let (listed, outcome) = contact(state, &from).await?;
             if outcome == ContactOutcome::KeyChanged {
-                return Err(invalid(Some(&from), "its key changed without a handover"));
+                return Err(invalid(
+                    Some(&from),
+                    t!("statementKeyChanged", domain = from.as_str()),
+                ));
             }
-            let key = listed
-                .deployment
-                .public_key
-                .clone()
-                .ok_or_else(|| invalid(Some(&from), "no key"))?;
-            let claims = unverified
-                .verify::<T>(T::TYPE, &key)
-                .map_err(|_| invalid(Some(&from), "signature"))?;
+            let key = listed.deployment.public_key.clone().ok_or_else(|| {
+                invalid(
+                    Some(&from),
+                    t!("statementKeyChanged", domain = from.as_str()),
+                )
+            })?;
+            let claims = unverified.verify::<T>(T::TYPE, &key).map_err(|_| {
+                invalid(
+                    Some(&from),
+                    t!("statementSignature", domain = from.as_str()),
+                )
+            })?;
             (claims, listed.deployment)
         }
     };
     // A deployment last contacted before it said which protocol it speaks speaks the first.
-    if sender
-        .protocol()
-        .unwrap_or_default()
-        .common_version(&Protocol::ours())
-        .is_none()
-    {
+    let theirs = sender.protocol().unwrap_or_default();
+    if theirs.common_version(&Protocol::ours()).is_none() {
         return Err(app::Error::FederationRefused(t!(
             "federationIncompatible",
-            domain = from.as_str()
+            domain = from.as_str(),
+            theirs = theirs.range(),
+            ours = Protocol::ours().range()
         )));
     }
     let now = Utc::now().timestamp();
-    if *claims.issuer() != from || *claims.audience() != here {
-        return Err(invalid(Some(&from), "issuer or audience"));
+    if *claims.issuer() != from {
+        return Err(invalid(
+            Some(&from),
+            t!("statementSignature", domain = from.as_str()),
+        ));
     }
-    if claims.expires_at() <= now
-        || claims.issued_at() > now + CLOCK_SKEW.num_seconds()
-        || claims.expires_at() - claims.issued_at() > MAX_LIFETIME.num_seconds()
-    {
-        return Err(invalid(Some(&from), "expired or too long-lived"));
+    if *claims.audience() != here {
+        return Err(invalid(
+            Some(&from),
+            t!(
+                "statementWrongAudience",
+                audience = claims.audience().as_str(),
+                here = here.as_str()
+            ),
+        ));
+    }
+    if claims.expires_at() <= now {
+        return Err(invalid(
+            Some(&from),
+            t!(
+                "statementExpired",
+                domain = from.as_str(),
+                seconds = now - claims.expires_at()
+            ),
+        ));
+    }
+    if claims.issued_at() > now + CLOCK_SKEW.num_seconds() {
+        return Err(invalid(
+            Some(&from),
+            t!(
+                "statementFromFuture",
+                domain = from.as_str(),
+                seconds = claims.issued_at() - now
+            ),
+        ));
+    }
+    if claims.expires_at() - claims.issued_at() > MAX_LIFETIME.num_seconds() {
+        return Err(invalid(
+            Some(&from),
+            t!(
+                "statementTooLong",
+                seconds = claims.expires_at() - claims.issued_at(),
+                max = MAX_LIFETIME.num_seconds()
+            ),
+        ));
     }
     // Used once: the id is remembered until the statement could no longer be accepted anyway.
     let remembered: Option<String> = state
@@ -164,7 +207,10 @@ pub async fn receive<T: Statement>(
         )
         .await?;
     if remembered.is_none() {
-        return Err(invalid(Some(&from), "used before"));
+        return Err(invalid(
+            Some(&from),
+            t!("statementReused", domain = from.as_str()),
+        ));
     }
     Ok(Received {
         claims,

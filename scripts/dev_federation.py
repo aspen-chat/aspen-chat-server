@@ -402,6 +402,14 @@ def check(_args: argparse.Namespace) -> None:
     api(ALPHA, "POST", "/admin/federation/deployments", {"domain": BETA.domain}, token=admin, expect=(409,))
     api(ALPHA, "POST", "/admin/federation/deployments", {"domain": ALPHA.domain}, token=admin, expect=(400,))
     expect(True, "adding beta again, or alpha itself, is refused")
+    nowhere = "nowhere.localhost:9999"
+    nowhere_path = f"/admin/federation/deployments/{urllib.parse.quote(nowhere, safe='')}"
+    request("DELETE", f"https://{ALPHA.domain}/api/v1{nowhere_path}", token=admin)
+    api(ALPHA, "POST", "/admin/federation/deployments", {"domain": nowhere}, token=admin, expect=(201,))
+    status, text = request("POST", f"https://{ALPHA.domain}/api/v1{nowhere_path}/contact", token=admin)
+    api(ALPHA, "DELETE", nowhere_path, token=admin, expect=(204,))
+    expect(status == 502 and f"{nowhere} refused the connection" in json.loads(text)["detail"],
+           "contacting a deployment nothing serves says the connection was refused")
     expect(added["admission"] == {"usersEmigration": False, "usersImmigration": True,
                                   "botsEmigration": False, "botsImmigration": True},
            "beta's admission follows alpha's gates before any list")

@@ -373,7 +373,7 @@ async fn ask(
         .json(&serde_json::json!({ "request": request }))
         .send()
         .await
-        .map_err(|_| unreachable())?;
+        .map_err(|error| super::fetch::failure(home, &error))?;
     if !response.status().is_success() {
         return Err(unreachable());
     }

@@ -41,6 +41,15 @@ impl Protocol {
         }
     }
 
+    /// Its versions as people read them: `1`, or `2–4`.
+    pub fn range(&self) -> String {
+        if self.minimum == self.version {
+            self.version.to_string()
+        } else {
+            format!("{}–{}", self.minimum, self.version)
+        }
+    }
+
     /// The version two deployments speak to each other in, the newest both know; `None` when
     /// their ranges do not meet.
     pub fn common_version(&self, other: &Protocol) -> Option<u32> {

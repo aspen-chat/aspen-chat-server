@@ -391,6 +391,7 @@ Aspen uses [`rust-i18n`](https://crates.io/crates/rust-i18n) for internationaliz
 
 - **Never hardcode English text** in API responses, validation errors, or any string returned to clients. Use the `t!()` macro instead.
 - Log messages (`tracing::error!`, `tracing::warn!`, etc.) are **not** localized — they are developer-facing and should remain in English.
+- **Every error a person reads says what went wrong and what to do about it**, in words the person who sees it can act on: "%{domain}'s certificate has expired. Its administrators need to renew it", never "could not be reached" when the cause is known. Name the thing (the domain, the limit, the permission) and the one who can fix it (the reader, the other side's administrators, this server's). Classify failures where they happen so the specific cause reaches the message (`app::federation::fetch::failure` does this for requests to other deployments), and give a refusal its reason in `detail` rather than a generic title. A Problem's `title` may stay general because its `detail` carries the specifics.
 - Translation keys use **camelCase** (e.g., `inviteCodeLength`, `tryAgainLater`).
 - The `t!()` macro returns `Cow<'static, str>`. The `app::Error::Validation` variant and all manually-defined API response error/reason fields accept `Cow<'static, str>` to match. Do not call `.to_string()` on `t!()` output.
 

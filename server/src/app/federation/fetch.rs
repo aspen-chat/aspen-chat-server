@@ -1,8 +1,9 @@
 //! Calls to other deployments: HTTPS only, no redirects, a short timeout, a capped body, and
 //! only public addresses (`app::outbound`) unless `[federation.development]` says otherwise.
 
+use crate::app;
 use crate::app::federation::{DeploymentDocument, Domain};
-use crate::app::{self, outbound::PublicResolver};
+use crate::app::outbound::{PublicResolver, ResolveError};
 use crate::aspen_config::FederationConfig;
 use futures_util::StreamExt;
 use rust_i18n::t;
@@ -60,6 +61,65 @@ fn unreachable(detail: std::borrow::Cow<'static, str>) -> app::Error {
     app::Error::DeploymentUnreachable(detail)
 }
 
+/// Why a call to `domain` failed, as the person who asked for it can act on: which of the
+/// ways a call can fail it was, and what to check.
+pub fn failure(domain: &Domain, error: &reqwest::Error) -> app::Error {
+    tracing::info!(%domain, error = %error_chain(error), "could not reach a deployment");
+    let domain_text = domain.as_str();
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(cause) = source {
+        if let Some(resolve) = cause.downcast_ref::<ResolveError>() {
+            return unreachable(match resolve {
+                ResolveError::NotFound(_) => t!("federationNotFound", domain = domain_text),
+                ResolveError::NoPublicAddress(_) => {
+                    t!("federationPrivateAddress", domain = domain_text)
+                }
+            });
+        }
+        if let Some(tls) = cause.downcast_ref::<rustls::Error>() {
+            return unreachable(certificate_failure(domain_text, tls));
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if let Some(tls) = io.get_ref().and_then(|e| e.downcast_ref::<rustls::Error>()) {
+                return unreachable(certificate_failure(domain_text, tls));
+            }
+            if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                return unreachable(t!("federationConnectionRefused", domain = domain_text));
+            }
+        }
+        source = cause.source();
+    }
+    if error.is_timeout() {
+        return unreachable(t!(
+            "federationTimedOut",
+            domain = domain_text,
+            seconds = TIMEOUT.as_secs()
+        ));
+    }
+    unreachable(t!("federationNoAnswer", domain = domain_text))
+}
+
+/// A certificate `domain` presented that this server does not trust, by what is wrong with it.
+fn certificate_failure(domain: &str, error: &rustls::Error) -> std::borrow::Cow<'static, str> {
+    use rustls::CertificateError as Certificate;
+    match error {
+        rustls::Error::InvalidCertificate(certificate) => match certificate {
+            Certificate::Expired | Certificate::ExpiredContext { .. } => {
+                t!("federationCertificateExpired", domain = domain)
+            }
+            Certificate::NotValidYet | Certificate::NotValidYetContext { .. } => {
+                t!("federationCertificateNotYetValid", domain = domain)
+            }
+            Certificate::NotValidForName | Certificate::NotValidForNameContext { .. } => {
+                t!("federationCertificateWrongName", domain = domain)
+            }
+            Certificate::UnknownIssuer => t!("federationCertificateUntrusted", domain = domain),
+            _ => t!("federationCertificateInvalid", domain = domain),
+        },
+        _ => t!("federationTls", domain = domain),
+    }
+}
+
 /// `domain`'s published document.
 pub async fn document(
     client: &reqwest::Client,
@@ -70,32 +130,50 @@ pub async fn document(
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|error| {
-            tracing::info!(%domain, error = %error_chain(&error), "could not reach a deployment");
-            unreachable(t!("federationNoAnswer", domain = domain.as_str()))
-        })?;
-    if !response.status().is_success() {
-        tracing::info!(%domain, status = %response.status(), "a deployment has no document");
+        .map_err(|error| failure(domain, &error))?;
+    let status = response.status();
+    if status.is_redirection() {
+        let to = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("?")
+            .to_string();
+        return Err(unreachable(t!(
+            "federationRedirected",
+            domain = domain.as_str(),
+            to = to
+        )));
+    }
+    if !status.is_success() {
+        tracing::info!(%domain, %status, "a deployment has no document");
         return Err(unreachable(t!(
             "federationNoDocument",
-            domain = domain.as_str()
+            domain = domain.as_str(),
+            status = status.as_u16()
         )));
     }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| {
-            tracing::info!(%domain, error = %error_chain(&error), "a deployment's document broke off");
-            unreachable(t!("federationNoAnswer", domain = domain.as_str()))
-        })?;
+        let chunk = chunk.map_err(|error| failure(domain, &error))?;
         if body.len() + chunk.len() > MAX_DOCUMENT_BYTES {
-            return Err(unreachable(t!("federationDocumentInvalid")));
+            return Err(unreachable(t!(
+                "federationDocumentTooLarge",
+                domain = domain.as_str(),
+                max = MAX_DOCUMENT_BYTES / 1024
+            )));
         }
         body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|error| {
         tracing::info!(%domain, %error, "a deployment's document did not parse");
-        unreachable(t!("federationDocumentInvalid"))
+        // What did not parse is quoted as the parser put it, as a path or a name would be.
+        unreachable(t!(
+            "federationDocumentUnreadable",
+            domain = domain.as_str(),
+            detail = error.to_string()
+        ))
     })
 }
 
