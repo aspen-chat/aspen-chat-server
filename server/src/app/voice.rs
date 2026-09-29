@@ -252,6 +252,7 @@ pub struct JoinOffer {
     /// What the token lets them send, which the voice server enforces.
     pub speak: bool,
     pub share_screen: bool,
+    pub transfer_files: bool,
 }
 
 /// Whether a server is offered to a joiner: enabled, with room, and heard from within the
@@ -346,9 +347,10 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
-    let (speak, share_screen) = (
+    let (speak, share_screen, transfer_files) = (
         access.has(Permissions::SPEAK),
         access.has(Permissions::SHARE_SCREEN),
+        voice.file_transfers && access.has(Permissions::TRANSFER_FILES),
     );
     let claims = JoinClaims {
         user: user.0,
@@ -358,6 +360,7 @@ pub async fn join_offer(
         nonce: Uuid::now_v7(),
         speak,
         share_screen,
+        transfer_files,
     };
     Ok(JoinOffer {
         session,
@@ -366,6 +369,7 @@ pub async fn join_offer(
         expires_at,
         speak,
         share_screen,
+        transfer_files,
     })
 }
 
@@ -843,6 +847,52 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                         )
                         .await?;
                     }
+                }
+                VoiceReport::FileOffered {
+                    channel,
+                    record,
+                    sender,
+                    name,
+                    size,
+                    allow_direct,
+                    valid_for_seconds,
+                } => {
+                    app::file_transfer::record_offer(
+                        conn.as_mut(),
+                        app::file_transfer::NewOffer {
+                            channel,
+                            record,
+                            sender,
+                            name,
+                            size,
+                            allow_direct,
+                            valid_for_seconds,
+                        },
+                    )
+                    .await?;
+                }
+                VoiceReport::TransferStarted {
+                    record,
+                    receiver,
+                    mode,
+                    ..
+                } => {
+                    app::file_transfer::record_start(conn.as_mut(), record, receiver, mode).await?;
+                }
+                VoiceReport::TransferEnded {
+                    record,
+                    receiver,
+                    ended_by,
+                    reason,
+                } => {
+                    app::file_transfer::record_end(
+                        conn.as_mut(),
+                        record,
+                        receiver,
+                        ended_by,
+                        reason,
+                    )
+                    .await?;
                 }
             }
             Ok(())

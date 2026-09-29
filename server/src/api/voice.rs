@@ -133,6 +133,9 @@ pub struct VoiceJoinOffer {
     /// Whether they may share a screen or game (Share screen), which the voice server also
     /// enforces.
     pub share_screen: bool,
+    /// Whether they may offer files to the others in the call (Transfer files), which the voice
+    /// server also enforces.
+    pub transfer_files: bool,
 }
 
 /// The call on a channel, if any, and who is in it.
@@ -194,6 +197,7 @@ pub async fn join_voice(
         expires_at: offer.expires_at,
         speak: offer.speak,
         share_screen: offer.share_screen,
+        transfer_files: offer.transfer_files,
     }))
 }
 

@@ -101,6 +101,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   store's `silenced` (topic `silenced`, `useSilenced`) decides each voice's gain
   (`VoiceCall.refreshVolumes` whenever it changes) and which shared screens are hidden, even
   for someone whose record only arrives with the call.
+  File offers from silenced people are hidden the same way (`FilesPanel`). File transfers in
+  calls are `FileTransfers` (`packages/protocol/src/transfers.ts`), which `VoiceCall` feeds its
+  signalling frames and whose state it carries as `files`; its peer connections are injected
+  (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. The
+  root AGENTS.md's File transfers describes the flow.
   The Administration Dashboard's user directory shows a user of another deployment as
   `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
   `AspenSync.setForeignUserBanned`).

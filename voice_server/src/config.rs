@@ -22,6 +22,8 @@ pub struct VoiceServerConfig {
     pub listen_addr: SocketAddr,
     #[serde(default)]
     pub rtc: RtcConfig,
+    #[serde(default)]
+    pub transfer: TransferConfig,
     /// mediasoup workers, each a process carrying some of the calls. Defaults to the number
     /// of CPUs.
     #[serde(default = "default_workers")]
@@ -138,6 +140,26 @@ pub struct RtcConfig {
     pub min_port: u16,
     #[default = 40999]
     pub max_port: u16,
+}
+
+/// File transfers between the people of a call (`transfer`): a STUN and TURN server on one UDP
+/// port, on the media interface (`rtc.ip`) and announced at `rtc.announced_address` like media.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct TransferConfig {
+    /// The most every transfer relayed through this server may carry together, in megabits a
+    /// second. 0 turns relaying off: transfers then go directly between devices or not at all,
+    /// and STUN still answers so that direct connections can be made.
+    #[default = 50]
+    pub relay_mbps: u32,
+    /// The UDP port STUN and TURN answer on.
+    #[default = 3478]
+    pub port: u16,
+    /// The UDP ports relayed transfers take, one per side of each; outside the media range.
+    #[default = 42000]
+    pub relay_min_port: u16,
+    #[default = 42999]
+    pub relay_max_port: u16,
 }
 
 fn default_workers() -> usize {

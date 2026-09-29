@@ -326,3 +326,14 @@ body {
   /* The emoji keep the library's 40px size, which `EmojiPicker.tsx` sizes the picker for. */
   border: 0;
 }
+
+/* A transfer's link between two call tiles: its dashes march from sender to receiver, one dash
+   and gap (12px) per cycle. */
+@theme {
+  --animate-march: march 0.8s linear infinite;
+  @keyframes march {
+    to {
+      stroke-dashoffset: -12;
+    }
+  }
+}

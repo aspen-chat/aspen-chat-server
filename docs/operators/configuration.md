@@ -106,6 +106,7 @@ Passkeys are offered only when this section is present.
 | `offer_silence_seconds` | `60` | A voice server that has not reported for this long is not offered to people joining. |
 | `session_silence_seconds` | `86400` | A voice server that has not reported for this long has its calls ended. Long on purpose: a call is worth more than tidiness after a brief network fault. |
 | `idle_session_seconds` | `86400` | A call that never had two people in it at once ends after this long, so a forgotten client cannot hold a place on a voice server. |
+| `file_transfers` | `true` | Whether people may offer files to one another in calls. Transfers go between their devices, or through a voice server's relay (`[transfer]` in `voice_server.toml`); either way this deployment keeps a record of each offer and transfer for its moderators, never the file. `false` turns the whole feature off: no one can offer a file, whatever the channels' permissions. |
 
 ### `[[voice.servers]]`
 
@@ -201,6 +202,20 @@ of a deployment anyone else uses.
 | `ip` | `0.0.0.0` | The interface media is received on. |
 | `announced_address` | the primary interface's address | The address clients send media to. Set it to the public address when the server is behind NAT. Never a loopback address: the server refuses to start with one. |
 | `min_port`, `max_port` | `40000`, `40999` | The media ports, UDP and TCP; open them to clients. The range bounds how many people the server can carry. |
+
+### `[transfer]`
+
+Files people offer each other in calls travel over a connection between their two devices,
+encrypted end to end. The voice server answers STUN, so that devices can find the addresses a
+direct connection would use, and relays transfers through TURN for people who choose not to
+connect directly, or whose connection cannot be made. It relays only between people in its own
+calls, never to the rest of the internet, and sees only ciphertext.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `relay_mbps` | `50` | The most every relayed transfer on this server may carry together, in megabits a second. People are told this limit before they choose the relay. `0` turns relaying off: transfers then go directly between devices or not at all. |
+| `port` | `3478` | The UDP port STUN and TURN answer on; open it to clients. |
+| `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side), inside the server only: they need not be open to clients. |
 
 ### `[metrics]` and `[rate_limits]`
 

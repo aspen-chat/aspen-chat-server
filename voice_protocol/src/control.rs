@@ -4,6 +4,7 @@
 //! queue group on it so exactly one of them acts on each report. The API server sends a
 //! [`VoiceCommand`] to one voice server on that server's own subject from [`command_subject`].
 
+use crate::signal::{TransferEnd, TransferMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -63,6 +64,32 @@ pub enum VoiceReport {
     },
     /// The last participant left, or the server is shutting the session down.
     SessionEnded { session: Uuid },
+    /// A participant offered a file to the call, for the deployment's record of transfers.
+    /// `record` is the voice server's own id for the offer, time-ordered and never the id the
+    /// client chose, so no client can make its offer collide with another in the record.
+    FileOffered {
+        channel: Uuid,
+        record: Uuid,
+        sender: Uuid,
+        name: String,
+        size: u64,
+        allow_direct: bool,
+        valid_for_seconds: u32,
+    },
+    /// A transfer of an offered file began.
+    TransferStarted {
+        record: Uuid,
+        sender: Uuid,
+        receiver: Uuid,
+        mode: TransferMode,
+    },
+    /// A transfer ended, ended by `ended_by` (one of its two sides) for `reason`.
+    TransferEnded {
+        record: Uuid,
+        receiver: Uuid,
+        ended_by: Uuid,
+        reason: TransferEnd,
+    },
 }
 
 /// Something the API server asks a voice server to do.

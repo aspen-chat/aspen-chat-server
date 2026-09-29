@@ -34,7 +34,7 @@ export const PERMISSION_GROUPS = [
       "mentionEveryone",
     ],
   },
-  { key: "voice", permissions: ["joinVoice", "speak", "shareScreen"] },
+  { key: "voice", permissions: ["joinVoice", "speak", "shareScreen", "transferFiles"] },
 ] as const satisfies readonly { key: string; permissions: readonly Permission[] }[];
 
 /** The groups a channel or category override can adjust. */

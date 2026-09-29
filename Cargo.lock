@@ -5918,6 +5918,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "stun"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e3b8d5ad1dd4c8cd0595440f26521a71dd593cb5873ee8e06b91510b7d97269"
+dependencies = [
+ "base64 0.22.1",
+ "crc",
+ "lazy_static",
+ "md-5",
+ "rand 0.9.5",
+ "ring",
+ "subtle",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "webrtc-util",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6609,6 +6628,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "turn"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d99249a493335eb44c4d7943a8751b22561a82c9903d8eb2d29780b3927880a7"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "log",
+ "md-5",
+ "portable-atomic",
+ "rand 0.9.5",
+ "ring",
+ "stun",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "webrtc-util",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6854,18 +6894,23 @@ dependencies = [
  "aspen_limits",
  "aspen_metrics",
  "async-nats",
+ "async-trait",
  "axum",
+ "base64 0.22.1",
  "clap",
  "config",
  "futures-util",
+ "hmac",
  "libc",
  "local-ip-address",
  "mediasoup",
  "metrics",
  "num_cpus",
+ "rand 0.10.0",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "smart-default",
  "strum",
  "thiserror 2.0.18",
@@ -6874,8 +6919,10 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "turn",
  "uuid",
  "voice_protocol",
+ "webrtc-util",
 ]
 
 [[package]]

@@ -107,6 +107,7 @@ export {
   type DeploymentRole,
   type Growth,
   type ModerationEntry,
+  type FileOfferEntry,
   type GrowthRange,
   type MessageHolding,
   type MessageSearch,
@@ -197,6 +198,21 @@ export {
   type VoiceMedia,
   type VoiceTransport,
 } from "./voice";
+export {
+  DEFAULT_OFFER_SECONDS,
+  MAX_OFFER_SECONDS,
+  MIN_OFFER_SECONDS,
+  NO_FILES,
+  FileTransfers,
+  routeOf,
+  type FilesState,
+  type OfferState,
+  type TransferLink,
+  type TransferMode,
+  type TransferRoute,
+  type TransferState,
+  type TransferStatus,
+} from "./transfers";
 export { browserVoiceMedia, canChooseOutput } from "./browserMedia";
 export {
   AUDIO_INPUT,

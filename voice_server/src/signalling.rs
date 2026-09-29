@@ -240,6 +240,52 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ClientMessage::SetState { muted, deafened } => {
                 state.rooms.set_state(channel, user, muted, deafened).await
             }
+            ClientMessage::OfferFile { .. } if !claims.transfer_files => {
+                Err(RoomError::TransferNotPermitted)
+            }
+            ClientMessage::OfferFile {
+                offer,
+                name,
+                size,
+                allow_direct,
+                valid_for_seconds,
+            } => {
+                state
+                    .rooms
+                    .offer_file(
+                        channel,
+                        user,
+                        offer,
+                        name,
+                        size,
+                        allow_direct,
+                        valid_for_seconds,
+                    )
+                    .await
+            }
+            ClientMessage::WithdrawFile { offer } => {
+                state.rooms.withdraw_file(channel, user, offer)
+            }
+            ClientMessage::AcceptFile { offer, mode } => {
+                state.rooms.accept_file(channel, user, offer, mode).await
+            }
+            ClientMessage::TransferSignal {
+                offer,
+                peer,
+                signal,
+            } => state
+                .rooms
+                .transfer_signal(channel, user, offer, peer, signal),
+            ClientMessage::EndTransfer {
+                offer,
+                peer,
+                reason,
+            } => {
+                state
+                    .rooms
+                    .end_transfer(channel, user, offer, peer, reason)
+                    .await
+            }
             ClientMessage::Leave => break,
         };
         if let Err(e) = result {

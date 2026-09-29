@@ -2,8 +2,13 @@
 //! audio level observer that drives speaking events, and the participants with their
 //! transports, producers, and consumers. Rooms come into being with their first participant
 //! and go with their last, and the API server hears about each step through the reporter.
+//! Files offered in a call, and the transfers between its participants, are the room's too
+//! (`transfers`).
+
+mod transfers;
 
 use crate::reporter::Reporter;
+use crate::transfer::Relay;
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::TransportTuple;
 use mediasoup::types::srtp_parameters::SrtpParameters;
@@ -50,6 +55,13 @@ pub enum RoomError {
     /// The join token does not grant sending from this source.
     #[error("this call does not let you send {0:?}")]
     NotPermitted(voice_protocol::signal::MediaSource),
+    /// The join token does not grant offering files.
+    #[error("this call does not let you offer files")]
+    TransferNotPermitted,
+    #[error("no such offer, or it no longer stands")]
+    UnknownOffer,
+    #[error("no such transfer")]
+    UnknownTransfer,
 }
 
 /// Where a participant's frames go: the writer half of their socket.
@@ -132,6 +144,10 @@ pub struct Room {
     participants: Mutex<HashMap<Uuid, Participant>>,
     /// Which user each audio producer belongs to, for the volume events.
     producer_owner: Mutex<HashMap<ProducerId, Uuid>>,
+    /// Files offered in the call that may still be accepted, by id.
+    offers: Mutex<HashMap<Uuid, transfers::Offer>>,
+    /// Transfers under way, by offer and receiver. They outlive their offers.
+    transfers: Mutex<HashMap<(Uuid, Uuid), transfers::Transfer>>,
 }
 
 impl Room {
@@ -195,6 +211,7 @@ pub struct Rooms {
     rtc_ip: IpAddr,
     announced_address: Option<String>,
     reporter: Reporter,
+    relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
 }
 
@@ -279,6 +296,7 @@ impl Rooms {
         rtc_ip: IpAddr,
         announced_address: Option<String>,
         reporter: Reporter,
+        relay: Arc<Relay>,
     ) -> Arc<Self> {
         Arc::new(Self {
             server,
@@ -287,6 +305,7 @@ impl Rooms {
             rtc_ip,
             announced_address,
             reporter,
+            relay,
             rooms: Mutex::new(HashMap::new()),
         })
     }
@@ -398,6 +417,9 @@ impl Rooms {
                 router_rtp_capabilities: serde_json::to_value(room.router.rtp_capabilities())
                     .expect("capabilities serialize"),
                 participants: others,
+                offers: room.standing_offers(),
+                links: room.links(),
+                transfers: self.relay.policy(),
             });
             participants.insert(user, participant);
             replaced.is_some()
@@ -441,6 +463,8 @@ impl Rooms {
             _audio_observer: audio_observer.clone(),
             participants: Mutex::new(HashMap::new()),
             producer_owner: Mutex::new(HashMap::new()),
+            offers: Mutex::new(HashMap::new()),
+            transfers: Mutex::new(HashMap::new()),
         });
         // Volume events arrive on mediasoup's own threads; they are handed to a task that
         // owns the room and reports, so the callbacks stay quick and never block.
@@ -1164,6 +1188,7 @@ impl Rooms {
         for producer in producers {
             self.drop_producer(&room, producer).await;
         }
+        self.end_everything_of(&room, user).await;
         room.broadcast(&ServerMessage::ParticipantLeft { user }, None);
         self.reporter
             .report(VoiceReport::ParticipantLeft {

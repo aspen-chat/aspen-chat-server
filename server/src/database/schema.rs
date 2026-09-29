@@ -211,6 +211,32 @@ diesel::table! {
 }
 
 diesel::table! {
+    file_offer (id) {
+        id -> Uuid,
+        channel -> Nullable<Uuid>,
+        sender -> Nullable<Uuid>,
+        file_name -> Text,
+        file_size -> Int8,
+        allow_direct -> Bool,
+        valid_for_seconds -> Int4,
+        offered_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    file_transfer (id) {
+        id -> Uuid,
+        offer -> Uuid,
+        receiver -> Nullable<Uuid>,
+        mode -> Text,
+        started_at -> Timestamptz,
+        ended_at -> Nullable<Timestamptz>,
+        outcome -> Nullable<Text>,
+        ended_by -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
     icon (id) {
         id -> Uuid,
         icon_mime_type -> Text,
@@ -583,6 +609,9 @@ diesel::joinable!(dm_recipient -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
 diesel::joinable!(federation_list_entry -> federated_deployment (domain));
 diesel::joinable!(federation_list_entry -> user (added_by));
+diesel::joinable!(file_offer -> channel (channel));
+diesel::joinable!(file_offer -> user (sender));
+diesel::joinable!(file_transfer -> file_offer (offer));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(mention -> channel (channel));
@@ -651,6 +680,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     federated_deployment,
     federation_key,
     federation_list_entry,
+    file_offer,
+    file_transfer,
     icon,
     invite,
     mention,

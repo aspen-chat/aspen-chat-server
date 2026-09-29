@@ -21,7 +21,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 }
@@ -44,7 +45,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -60,7 +62,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 0,
             "moderator": false
@@ -85,7 +88,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -133,7 +137,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -153,7 +158,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 2,
             "moderator": false
@@ -178,7 +184,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -210,7 +217,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": false
                 }
@@ -241,7 +249,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -257,7 +266,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 0,
             "moderator": false
@@ -291,7 +301,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ]
                 }
             ],
@@ -312,7 +323,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ]
                 }
             ],
@@ -341,7 +353,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "manageCommunity",
@@ -368,7 +381,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 2147483647,
             "moderator": false
@@ -393,7 +407,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -439,7 +454,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -455,7 +471,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 1,
             "moderator": false
@@ -480,7 +497,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -524,7 +542,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -539,7 +558,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 0,
             "moderator": false
@@ -563,7 +583,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -608,7 +629,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -623,7 +645,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 1,
             "moderator": false
@@ -648,7 +671,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -701,7 +725,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -717,7 +742,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 2,
             "moderator": false
@@ -742,7 +768,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 }
@@ -782,7 +809,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -797,7 +825,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 0,
             "moderator": false
@@ -822,7 +851,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 },
@@ -869,7 +899,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -884,7 +915,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 1,
             "moderator": false
@@ -909,7 +941,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 }
@@ -952,7 +985,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -968,7 +1002,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 0,
             "moderator": false
@@ -993,7 +1028,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 }
@@ -1043,7 +1079,8 @@
                         "shareScreen",
                         "mentionMembers",
                         "mentionRoles",
-                        "mentionEveryone"
+                        "mentionEveryone",
+                        "transferFiles"
                     ],
                     "everyone": true
                 }
@@ -1078,7 +1115,8 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "channel": [
                 "createInvites",
@@ -1095,9 +1133,84 @@
                 "shareScreen",
                 "mentionMembers",
                 "mentionRoles",
-                "mentionEveryone"
+                "mentionEveryone",
+                "transferFiles"
             ],
             "rank": 2147483646
+        },
+        {
+            "name": "a channel can deny transferring files and keep screen sharing",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone",
+                        "transferFiles"
+                    ],
+                    "everyone": true
+                }
+            ],
+            "owner": false,
+            "holds": [],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000001",
+                    "allow": [],
+                    "deny": [
+                        "transferFiles"
+                    ]
+                }
+            ],
+            "community": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone",
+                "transferFiles"
+            ],
+            "channel": [
+                "createInvites",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone"
+            ],
+            "rank": 0,
+            "moderator": false
         }
     ]
 }

@@ -68,3 +68,22 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 # Every mute and deafen is reported to the API server and announced to everyone who can see
 # the call.
 channel = { requests = 120, per_seconds = 60, burst = 30 }
+
+# File transfers. An offer and an acceptance are announced to everyone in the call.
+[rate_limits.frames.offerFile]
+user = { requests = 20, per_seconds = 60, burst = 5 }
+channel = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.frames.withdrawFile]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.frames.acceptFile]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+channel = { requests = 120, per_seconds = 60, burst = 30 }
+
+# A peer connection's offer, answer, and candidates: a few dozen frames per transfer.
+[rate_limits.frames.transferSignal]
+user = { requests = 600, per_seconds = 60, burst = 100 }
+
+[rate_limits.frames.endTransfer]
+user = { requests = 60, per_seconds = 60, burst = 20 }

@@ -8,6 +8,7 @@ mod metrics;
 mod reporter;
 mod rooms;
 mod signalling;
+mod transfer;
 
 use anyhow::Context;
 use axum::Router;
@@ -127,12 +128,25 @@ async fn main() -> anyhow::Result<()> {
         ports = format!("{}-{}", config.rtc.min_port, config.rtc.max_port),
         "media listening"
     );
+    let relay = Arc::new(
+        transfer::Relay::start(
+            &config.transfer,
+            config.rtc.ip,
+            announced_address
+                .clone()
+                .unwrap_or_else(|| config.rtc.ip.to_string())
+                .as_str(),
+        )
+        .await
+        .context("could not start STUN and TURN for file transfers")?,
+    );
     let rooms = rooms::Rooms::new(
         config.id,
         workers,
         config.rtc.ip,
         announced_address,
         reporter.clone(),
+        Arc::clone(&relay),
     );
     {
         let rooms = Arc::clone(&rooms);
@@ -200,5 +214,6 @@ async fn main() -> anyhow::Result<()> {
     })
     .await?;
     rooms.shutdown().await;
+    relay.shutdown().await;
     Ok(())
 }

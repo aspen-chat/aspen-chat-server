@@ -31,13 +31,16 @@ import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
 import { ScreenTile } from "@/features/voice/ScreenTile";
+import { FilesPanel } from "@/features/voice/FilesPanel";
+import { TransferLinks } from "@/features/voice/TransferLinks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
  * A voice channel's screen: the shared screens, one of them large and the rest as thumbnails
- * to pick from, then everyone in the call as tiles, and the way in or the share control. The
- * screens of people the user blocked, here or on another deployment, are not shown.
+ * to pick from, then everyone in the call as tiles, with the transfers under way between them
+ * drawn over the tiles, the call's files, and the way in or the share control. The screens and
+ * file offers of people the user blocked, here or on another deployment, are not shown.
  */
 export function VoiceScreen({ channel, communityId }: { channel: Channel; communityId: string }) {
   const m = useMessages();
@@ -48,6 +51,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
+  const tiles = useRef<HTMLDivElement>(null);
   const silenced = useSilenced(call.status === "connected" ? call.screens.map((s) => s.user) : []);
 
   const screens: { id: string; user: string | null; track: MediaStreamTrack }[] = inThisCall
@@ -112,21 +116,25 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
           {voice.participants.length === 0 ? (
             <p className="py-8 text-center text-ink-muted">{m.voice.nobodyHere}</p>
           ) : (
-            <ul className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
-              {voice.participants.map((participant) => (
-                <ParticipantTile
-                  key={participant.user}
-                  channelId={channel.id}
-                  userId={participant.user}
-                  speaking={participant.speaking}
-                  muted={participant.muted}
-                  deafened={participant.deafened}
-                  sharingScreen={participant.sharingScreen}
-                />
-              ))}
-            </ul>
+            <div ref={tiles} className="relative">
+              <ul className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
+                {voice.participants.map((participant) => (
+                  <ParticipantTile
+                    key={participant.user}
+                    channelId={channel.id}
+                    userId={participant.user}
+                    speaking={participant.speaking}
+                    muted={participant.muted}
+                    deafened={participant.deafened}
+                    sharingScreen={participant.sharingScreen}
+                  />
+                ))}
+              </ul>
+              {inThisCall && <TransferLinks links={call.files.links} container={tiles} />}
+            </div>
           )}
         </section>
+        {inThisCall && <FilesPanel />}
         {!inThisCall && mayJoin && (
           <div className="flex justify-center">
             <Button

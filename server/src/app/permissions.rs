@@ -71,6 +71,7 @@ bitflags::bitflags! {
         const MENTION_MEMBERS = 1 << 26;
         const MENTION_ROLES = 1 << 27;
         const MENTION_EVERYONE = 1 << 28;
+        const TRANSFER_FILES = 1 << 29;
     }
 }
 
@@ -80,7 +81,7 @@ impl Permissions {
     /// Every permission that holds across the community.
     pub const COMMUNITY: Self = Self::from_bits_retain((1 << 12) - 1);
     /// Every permission an override may adjust.
-    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 29) - 1) & !((1 << 16) - 1));
+    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 30) - 1) & !((1 << 16) - 1));
 
     /// The everyone role of a new community: taking part, tagging one another, and inviting
     /// others. Tagging roles and everyone at once is left to moderators.
@@ -149,6 +150,7 @@ pub enum Permission {
     MentionMembers,
     MentionRoles,
     MentionEveryone,
+    TransferFiles,
 }
 
 impl Permission {
@@ -181,6 +183,7 @@ impl Permission {
             Permission::MentionMembers => Permissions::MENTION_MEMBERS,
             Permission::MentionRoles => Permissions::MENTION_ROLES,
             Permission::MentionEveryone => Permissions::MENTION_EVERYONE,
+            Permission::TransferFiles => Permissions::TRANSFER_FILES,
         }
     }
 }
@@ -411,6 +414,7 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
         Permissions::MENTION_MEMBERS => "permissionMentionMembers",
         Permissions::MENTION_ROLES => "permissionMentionRoles",
         Permissions::MENTION_EVERYONE => "permissionMentionEveryone",
+        Permissions::TRANSFER_FILES => "permissionTransferFiles",
         _ => "permissionOwner",
     };
     t!(key)
@@ -922,9 +926,9 @@ mod tests {
 
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
-        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 134_152_200);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 536_809_368);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 536_809_471);
+        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 671_023_112);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 1_073_680_280);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 1_073_680_383);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

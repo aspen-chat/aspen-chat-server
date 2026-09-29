@@ -10,6 +10,16 @@
 //! the client acknowledges with `resumeConsumer` once it has set the consumer up. Everything
 //! mediasoup-shaped (RTP parameters, ICE and DTLS parameters) crosses as opaque JSON that the
 //! mediasoup libraries on each side understand.
+//!
+//! Files are offered to the call and sent between two participants over a WebRTC data channel
+//! of their own, never through mediasoup. An offer (`offerFile`) stands for the time its sender
+//! chose; each participant who accepts it (`acceptFile`) starts one transfer, in the mode they
+//! chose among those the sender and this server allow. The server answers both people with
+//! `transferStarting`, carrying the ICE servers for that transfer (its STUN, and its TURN relay
+//! with credentials for this transfer alone), passes the peer connection's offer, answer, and
+//! candidates between them (`transferSignal`), and ends the transfer when either side ends it
+//! (`endTransfer`) or leaves. A transfer outlives its offer; the offer only bounds when it may
+//! be accepted.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,6 +73,97 @@ pub struct ParticipantInfo {
     pub deafened: bool,
     pub speaking: bool,
     pub producers: Vec<ProducerInfo>,
+}
+
+/// How a transfer travels, as the person receiving it chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferMode {
+    /// Straight between the two devices when a hole-punched connection can be made, which lets
+    /// each learn the other's address; through the relay otherwise, when this server relays.
+    DirectPreferred,
+    /// Through this server's relay alone, so neither side learns the other's address.
+    RelayOnly,
+}
+
+/// Which end of a transfer a participant is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferRole {
+    Sender,
+    Receiver,
+}
+
+/// Why a transfer ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferEnd {
+    /// Every byte arrived.
+    Completed,
+    /// One side cancelled it.
+    Cancelled,
+    /// The connection could not be made or broke.
+    Failed,
+    /// The other side left the call. Only the server says this.
+    Left,
+}
+
+/// Why an offer stopped standing. Transfers it started go on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum OfferEnd {
+    /// Its sender withdrew it.
+    Withdrawn,
+    /// The time its sender gave it ran out.
+    Expired,
+    /// Its sender left the call.
+    Left,
+}
+
+/// A file offered to the others in the call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOffer {
+    pub id: Uuid,
+    pub from: Uuid,
+    pub name: String,
+    /// In bytes, as the sender stated it.
+    pub size: u64,
+    /// Whether the sender lets people who accept connect to them directly.
+    pub allow_direct: bool,
+    /// How much longer the offer may be accepted, counted from when this frame was sent, so
+    /// that clocks need not agree.
+    pub expires_in_ms: u64,
+}
+
+/// A transfer under way in the call, as everyone in it is told: who sends to whom, and nothing
+/// of what or how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferLink {
+    pub sender: Uuid,
+    pub receiver: Uuid,
+}
+
+/// Whether this server relays transfers, and how fast. A server that says nothing of it relays
+/// nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferPolicy {
+    /// Every relayed transfer on this server together is held to this many megabits a second;
+    /// absent when this server does not relay transfers, which leaves direct transfers alone.
+    pub relay_mbps: Option<u32>,
+}
+
+/// One ICE server for a transfer's peer connection, as `RTCIceServer` takes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// Frames a client sends.
@@ -132,6 +233,37 @@ pub enum ClientMessage {
         muted: bool,
         deafened: bool,
     },
+    /// Offers a file to everyone else in the call, under an id the client chose, for
+    /// `valid_for_seconds`. Takes the join token's Transfer files grant.
+    OfferFile {
+        offer: Uuid,
+        name: String,
+        size: u64,
+        allow_direct: bool,
+        valid_for_seconds: u32,
+    },
+    /// Takes back one of the client's own offers. Transfers it started go on.
+    WithdrawFile {
+        offer: Uuid,
+    },
+    /// Accepts an offer that still stands, starting a transfer from its sender to the client.
+    AcceptFile {
+        offer: Uuid,
+        mode: TransferMode,
+    },
+    /// Part of the transfer's peer connection (its offer, answer, or a candidate), for the
+    /// other side; the server passes it on unread.
+    TransferSignal {
+        offer: Uuid,
+        peer: Uuid,
+        signal: Value,
+    },
+    /// Ends one transfer, telling the other side why: `completed`, `cancelled`, or `failed`.
+    EndTransfer {
+        offer: Uuid,
+        peer: Uuid,
+        reason: TransferEnd,
+    },
     Leave,
 }
 
@@ -161,6 +293,14 @@ pub enum ServerMessage {
         /// The router's RTP capabilities, for loading the client's mediasoup device.
         router_rtp_capabilities: Value,
         participants: Vec<ParticipantInfo>,
+        /// The offers standing in the call.
+        #[serde(default)]
+        offers: Vec<FileOffer>,
+        /// Every transfer under way in the call, one entry each.
+        #[serde(default)]
+        links: Vec<TransferLink>,
+        #[serde(default)]
+        transfers: TransferPolicy,
     },
     TransportCreated {
         direction: TransportDirection,
@@ -237,6 +377,47 @@ pub enum ServerMessage {
     /// The server closed the client's place in the call.
     Kicked {
         reason: KickReason,
+    },
+    /// A file offered to the call, the client's own included.
+    FileOffered {
+        offer: FileOffer,
+    },
+    /// An offer no longer stands.
+    FileWithdrawn {
+        offer: Uuid,
+        reason: OfferEnd,
+    },
+    /// A transfer begins between the client and `peer`: the sender opens a peer connection
+    /// with these ICE servers (only the relay's in `relayOnly`) and a data channel, and the
+    /// receiver answers.
+    TransferStarting {
+        offer: Uuid,
+        peer: Uuid,
+        role: TransferRole,
+        mode: TransferMode,
+        /// The file's name and size as offered, which the transfer keeps however long it
+        /// outlives the offer.
+        name: String,
+        size: u64,
+        ice_servers: Vec<IceServer>,
+    },
+    /// Part of `peer`'s side of the transfer's peer connection.
+    TransferSignal {
+        offer: Uuid,
+        peer: Uuid,
+        signal: Value,
+    },
+    /// The transfer between the client and `peer` ended; the client closes it at once.
+    TransferEnded {
+        offer: Uuid,
+        peer: Uuid,
+        reason: TransferEnd,
+    },
+    /// To everyone in the call: a transfer between two participants began (`active`) or ended.
+    /// Sent once for each transfer, so two between the same people are two starts and two ends.
+    TransferLinkChanged {
+        link: TransferLink,
+        active: bool,
     },
     /// A request could not be honoured; the connection stays open unless `fatal`.
     Error {

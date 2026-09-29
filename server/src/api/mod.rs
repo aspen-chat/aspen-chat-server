@@ -353,6 +353,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             deployment::remove_user_deployment_role
         ))
         .routes(routes!(deployment::read_moderation_log))
+        .routes(routes!(deployment::read_file_transfer_log))
         .routes(routes!(deployment::list_user_dms))
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))

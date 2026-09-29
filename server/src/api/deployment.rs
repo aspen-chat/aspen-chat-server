@@ -7,6 +7,7 @@ use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_ADMIN};
 use crate::app::deployment::{DeploymentPermission, DeploymentRoleRow, from_names, to_names};
+use crate::app::file_transfer::{FileTransferMode, FileTransferOutcome};
 use crate::app::{self, ChannelId, CommunityId, DeploymentRoleId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -326,6 +327,113 @@ pub async fn read_moderation_log(
                 channel: e.channel,
                 subject: e.subject,
                 at: e.at,
+            })
+            .collect(),
+    ))
+}
+
+/// A file offered in a call, as the deployment's record of transfers keeps it: never its
+/// contents, which never reach the server.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOfferEntry {
+    pub id: uuid::Uuid,
+    /// The call's channel; `null` once it is gone.
+    pub channel: Option<ChannelId>,
+    /// Who offered it; `null` once their account is gone.
+    pub sender: Option<UserId>,
+    pub file_name: String,
+    /// In bytes, as the sender stated it.
+    pub file_size: i64,
+    /// Whether the sender let receivers connect to them directly.
+    pub allow_direct: bool,
+    pub valid_for_seconds: i32,
+    pub offered_at: DateTime<Utc>,
+    /// Everyone who accepted it, in the order they did; someone who accepted again after a
+    /// transfer stopped appears again.
+    pub transfers: Vec<FileTransferEntry>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferEntry {
+    /// `null` once their account is gone.
+    pub receiver: Option<UserId>,
+    pub mode: FileTransferMode,
+    pub started_at: DateTime<Utc>,
+    /// `null` while it is under way, or when its end was never reported.
+    pub ended_at: Option<DateTime<Utc>>,
+    pub outcome: Option<FileTransferOutcome>,
+    /// Which side ended it.
+    pub ended_by: Option<UserId>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct FileTransferLogQuery {
+    /// Continue before this offer, the last of the previous page.
+    pub before: Option<uuid::Uuid>,
+    /// Only offers this user made or received.
+    #[serde(rename = "filter[user]")]
+    #[param(rename = "filter[user]")]
+    pub user: Option<UserId>,
+    /// How many offers to return, at most 100; 50 when absent.
+    pub limit: Option<u32>,
+}
+
+/// The record of files offered in calls and who received them, newest offer first, a page at a
+/// time. Anyone who may view the dashboard may read it.
+#[utoipa::path(
+    get,
+    path = "/admin/file-transfers",
+    tag = TAG_ADMIN,
+    params(FileTransferLogQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<FileOfferEntry>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn read_file_transfer_log(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Query(query): Query<FileTransferLogQuery>,
+) -> ApiResult<Json<Vec<FileOfferEntry>>> {
+    access.require(DeploymentPermission::ViewDashboard)?;
+    let entries = app::file_transfer::read_log(
+        &state,
+        query.before,
+        query.user,
+        i64::from(query.limit.unwrap_or(50).clamp(1, 100)),
+    )
+    .await?;
+    Ok(Json(
+        entries
+            .into_iter()
+            .map(|(offer, transfers)| FileOfferEntry {
+                id: offer.id,
+                channel: offer.channel,
+                sender: offer.sender,
+                file_name: offer.file_name,
+                file_size: offer.file_size,
+                allow_direct: offer.allow_direct,
+                valid_for_seconds: offer.valid_for_seconds,
+                offered_at: offer.offered_at,
+                transfers: transfers
+                    .into_iter()
+                    .map(|t| FileTransferEntry {
+                        receiver: t.receiver,
+                        mode: t.mode,
+                        started_at: t.started_at,
+                        ended_at: t.ended_at,
+                        outcome: t.outcome,
+                        ended_by: t.ended_by,
+                    })
+                    .collect(),
             })
             .collect(),
     ))

@@ -20,6 +20,7 @@ import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError } from "./problem";
+import { FileTransfers, type FilesState, NO_FILES, type TransferMode } from "./transfers";
 
 type VoiceJoinOffer = components["schemas"]["VoiceJoinOffer"];
 type VoiceServerCandidate = components["schemas"]["VoiceServerCandidate"];
@@ -59,6 +60,10 @@ export interface VoiceCallState {
    */
   readonly canSpeak: boolean;
   readonly canShare: boolean;
+  /** Whether the channel lets the user offer files to the call (Transfer files). */
+  readonly canTransfer: boolean;
+  /** Files offered in the call, this user's transfers, and everyone's transfers under way. */
+  files: FilesState;
   /** Whether this client is sending a screen, window, or game into the call. */
   sharingScreen: boolean;
   /** The video this client is sending, for a local preview; `null` when not sharing. */
@@ -211,6 +216,8 @@ export interface VoiceCallOptions {
   random?: () => number;
   /** How loud each other user should be to this one; consulted as their audio arrives. */
   userVolume?: (userId: string) => number;
+  /** Makes file transfers' peer connections; the browser's own by default. */
+  createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection;
 }
 
 export type VoiceCallListener = () => void;
@@ -242,6 +249,8 @@ const IDLE: VoiceCallState = {
   deafened: false,
   canSpeak: false,
   canShare: false,
+  canTransfer: false,
+  files: NO_FILES,
   sharingScreen: false,
   localScreen: null,
   screens: [],
@@ -370,6 +379,7 @@ export class VoiceCall {
   readonly #userVolume: (userId: string) => number;
   /** Increments on every join and leave so a stale async step can notice and bail. */
   #generation = 0;
+  readonly #files: FileTransfers;
 
   constructor(options: VoiceCallOptions) {
     this.#client = options.client;
@@ -380,6 +390,18 @@ export class VoiceCall {
     this.#userVolume = options.userVolume ?? (() => 1);
     this.#now = options.now ?? (() => Date.now());
     this.#random = options.random ?? Math.random;
+    this.#files = new FileTransfers({
+      send: (frame) => {
+        this.#signal?.send(frame);
+      },
+      onChange: () => {
+        this.#set({ files: this.#files.state });
+      },
+      ...(options.createPeerConnection === undefined
+        ? {}
+        : { createPeerConnection: options.createPeerConnection }),
+      now: this.#now,
+    });
   }
 
   get state(): VoiceCallState {
@@ -450,6 +472,35 @@ export class VoiceCall {
     if (this.#state.endedReason !== null) {
       this.#set({ endedReason: null });
     }
+  }
+
+  /**
+   * Offers a file to everyone else in the call for `validForSeconds`. Every acceptance then
+   * starts sending on its own, whether or not the user is watching. `allowDirect` lets
+   * receivers connect directly, which could expose this device's address to them.
+   */
+  offerFile(file: Blob, name: string, allowDirect: boolean, validForSeconds: number): string {
+    return this.#files.offer(file, name, allowDirect, validForSeconds);
+  }
+
+  /** Takes back one of the user's offers; transfers already started go on. */
+  withdrawOffer(offer: string): void {
+    this.#files.withdraw(offer);
+  }
+
+  /** Accepts an offer in the transfer mode the user acknowledged. */
+  acceptOffer(offer: string, mode: TransferMode): void {
+    this.#files.accept(offer, mode);
+  }
+
+  /** Cancels one transfer, which ends at once on both sides. */
+  cancelTransfer(offer: string, peer: string): void {
+    this.#files.cancel(offer, peer);
+  }
+
+  /** Forgets a finished transfer, and any file it received. */
+  dismissTransfer(offer: string, peer: string): void {
+    this.#files.dismiss(offer, peer);
   }
 
   setMuted(muted: boolean): void {
@@ -742,6 +793,7 @@ export class VoiceCall {
   }
 
   #teardown(): void {
+    this.#files.closeAll();
     this.stopScreenShare();
     if (this.#state.screens.length > 0) {
       this.#set({ screens: [] });
@@ -772,7 +824,11 @@ export class VoiceCall {
     if (generation !== this.#generation) {
       return;
     }
-    this.#set({ canSpeak: offer.speak, canShare: offer.shareScreen });
+    this.#set({
+      canSpeak: offer.speak,
+      canShare: offer.shareScreen,
+      canTransfer: offer.transferFiles,
+    });
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.
     // Someone who may not speak joins to listen and never opens it.
@@ -886,6 +942,7 @@ export class VoiceCall {
       }
       this.#signal = signal;
       this.#lastReady = frame;
+      this.#files.reset(frame);
       this.#set({ session: frame.session, channelId });
       signal.onClose = () => {
         // The server went away without a word: treat it as lost and rejoin.
@@ -1036,6 +1093,9 @@ export class VoiceCall {
   }
 
   #onFrame(frame: ServerMessage): void {
+    if (this.#files.handle(frame)) {
+      return;
+    }
     switch (frame.type) {
       case "newConsumer":
         void this.#consume(frame);

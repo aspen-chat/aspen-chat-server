@@ -29,6 +29,10 @@ pub struct JoinClaims {
     /// Whether they may share a screen or game, picture and sound, the channel's Share screen
     /// permission when the token was issued.
     pub share_screen: bool,
+    /// Whether they may offer files to the others in the call, the channel's Transfer files
+    /// permission when the token was issued. A token without it grants nothing.
+    #[serde(default)]
+    pub transfer_files: bool,
 }
 
 impl JoinClaims {
@@ -111,6 +115,7 @@ mod tests {
             nonce: Uuid::now_v7(),
             speak: true,
             share_screen: false,
+            transfer_files: false,
         }
     }
 

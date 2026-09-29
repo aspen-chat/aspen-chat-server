@@ -84,6 +84,12 @@ pub mod voice {
     pub const WORKER_CPU: &str = "aspen_voice_worker_cpu_seconds";
     /// 1 while a suspension of the rate limits is in force.
     pub const RATE_LIMITS_SUSPENDED: &str = "aspen_voice_rate_limits_suspended";
+    /// File transfers under way, by `mode` as the receiver chose it.
+    pub const TRANSFERS: &str = "aspen_voice_transfers";
+    /// Bytes the TURN relay forwarded between two transfers' allocations.
+    pub const RELAYED_BYTES: &str = "aspen_voice_relayed_bytes_total";
+    /// Bytes the TURN relay dropped for exceeding `[transfer] relay_mbps`.
+    pub const RELAY_DROPPED_BYTES: &str = "aspen_voice_relay_dropped_bytes_total";
 }
 
 /// Latency buckets, in seconds, for every `_duration_seconds` histogram: fine below 10 ms, where

@@ -65,6 +65,7 @@ export type Growth = components["schemas"]["Growth"];
 export type DeploymentRole = components["schemas"]["DeploymentRole"];
 export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
 export type ModerationEntry = components["schemas"]["ModerationEntry"];
+export type FileOfferEntry = components["schemas"]["FileOfferEntry"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
 export type MessageHolding = components["schemas"]["MessageHolding"];
 
@@ -1365,6 +1366,20 @@ export class AspenSync {
     return this.#adminRead(
       await this.#client.api.GET("/api/v1/admin/moderation-log", {
         params: { query: before === undefined ? {} : { before } },
+      }),
+    );
+  }
+
+  /** A page of the record of files offered in calls, newest first, optionally one user's. */
+  async fileTransferLog(before?: string, user?: string): Promise<FileOfferEntry[]> {
+    return this.#adminRead(
+      await this.#client.api.GET("/api/v1/admin/file-transfers", {
+        params: {
+          query: {
+            ...(before === undefined ? {} : { before }),
+            ...(user === undefined ? {} : { "filter[user]": user }),
+          },
+        },
       }),
     );
   }

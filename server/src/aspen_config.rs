@@ -440,6 +440,10 @@ pub struct VoiceConfig {
     /// voice server slot indefinitely.
     #[default(24 * 60 * 60)]
     pub idle_session_seconds: u64,
+    /// Whether people may offer files to one another in calls. Off, no join token grants
+    /// Transfer files, whatever the channel's permissions say.
+    #[default = true]
+    pub file_transfers: bool,
     pub servers: Vec<VoiceServerSeed>,
 }
 

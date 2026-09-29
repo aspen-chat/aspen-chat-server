@@ -181,6 +181,10 @@ Clients reach a voice server in two ways, and both must be open to them:
   `max_port`. `announced_address` is the address clients send media to: set it to the
   server's public address when it is behind NAT. Leave it out only when the machine has a
   public address on an interface. Never set it to a loopback address.
+- **File transfers**, over UDP port `[transfer] port` (3478): STUN, so that two people's
+  devices can connect directly, and the TURN relay for transfers that go through the server,
+  at no more than `[transfer] relay_mbps` (50) in all. Set `relay_mbps = 0` not to relay
+  transfers at all.
 
 A voice server that stops reporting for a minute is no longer offered to people joining calls;
 one that people fail to reach is disabled after `failure_threshold` of them try in

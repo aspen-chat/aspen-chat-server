@@ -47,6 +47,7 @@ export const CHANNEL_PERMISSIONS: readonly Permission[] = [
   "mentionMembers",
   "mentionRoles",
   "mentionEveryone",
+  "transferFiles",
 ];
 
 export const ALL_PERMISSIONS: readonly Permission[] = [

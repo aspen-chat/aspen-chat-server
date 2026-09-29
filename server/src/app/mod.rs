@@ -26,6 +26,7 @@ pub mod dm;
 mod error;
 pub mod event_feed;
 pub mod federation;
+pub mod file_transfer;
 pub mod fleet;
 pub mod icon;
 pub mod invite;
