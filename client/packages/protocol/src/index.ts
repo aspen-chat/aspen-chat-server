@@ -147,6 +147,22 @@ export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
 export { acceptLanguage, setPreferredLanguages } from "./languages";
 export { identityOf } from "./identity";
 export {
+  EMPTY_PUSH_STATE,
+  RelayClient,
+  RelayError,
+  base64UrlDecode,
+  decryptWebPush,
+  generatePushKeys,
+  parsePointer,
+  syncPush,
+  type PushAccount,
+  type PushDevice,
+  type PushKeys,
+  type PushPointer,
+  type PushSource,
+  type PushState,
+} from "./push";
+export {
   MEMBER_SEARCH_PAGE,
   PRESENCE_BATCH,
   PRESENCE_POLL_MS,

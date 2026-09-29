@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
 import { useOneCallAtATime } from "@/api/calls";
 import { ShareBlocksAcrossDeployments } from "@/api/identity";
+import { WakeThisPhone } from "@/api/push";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { LoginForm } from "@/features/auth/LoginForm";
@@ -88,6 +89,7 @@ function SignedIn() {
     <SyncProvider client={client}>
       <OneCall />
       <ShareBlocksAcrossDeployments />
+      <WakeThisPhone />
       <FollowLanguagePreference />
       <div className="flex h-full flex-col">
         <SyncBanner />

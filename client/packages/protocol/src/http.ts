@@ -320,6 +320,20 @@ export class AspenClient {
   }
 
   /**
+   * Registers this sign-in's phone to be woken (`spec/push.md`): the endpoint its relay gave
+   * it, and its keys, base64url.
+   */
+  async registerPushSubscription(
+    body: Schemas["PushSubscriptionRequest"],
+  ): Promise<Schemas["PushSubscription"]> {
+    const result = await this.api.POST(`${API_PREFIX}/users/@me/push-subscriptions`, { body });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.data;
+  }
+
+  /**
    * Forgets the session locally without telling the server, as when another deployment's
    * session is abandoned and its server may be unreachable.
    */

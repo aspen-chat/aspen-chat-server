@@ -20,6 +20,7 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "^8.5.1",
+    "@capacitor/push-notifications": "^8.1.2",
     "@phosphor-icons/react": "^2.1.10",
     "@tanstack/react-router": "^1.170.39",
     "emoji-picker-react": "^4.22.2",

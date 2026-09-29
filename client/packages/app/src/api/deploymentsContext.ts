@@ -1,6 +1,7 @@
 import type { Deployments, ForeignDeployment } from "@aspen/protocol";
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import { useHomeClient } from "./context";
+import { forgetPushAccounts } from "./pushBridge";
 
 /**
  * The deployment whose client and sync are in scope: `null` for the user's home, or another
@@ -38,6 +39,7 @@ export function useSignOut(): () => Promise<void> {
   const hub = useContext(DeploymentsContext);
   const home = useHomeClient();
   return useCallback(async () => {
+    await forgetPushAccounts().catch(() => undefined);
     await hub?.signOutAll().catch(() => undefined);
     await home.logout();
   }, [hub, home]);

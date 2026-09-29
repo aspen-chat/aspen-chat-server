@@ -621,6 +621,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   a deployment that has more to give, so a later page never lands above what is shown. Each
   result renders in its deployment's `SourceScope`, as a plain-text preview with tags as names
   (`decodeTags`), since a result is a link and a message's Markdown may hold links of its own.
+- Push (`spec/push.md`): on the mobile app, `WakeThisPhone` (`src/api/push.tsx`) asks to notify,
+  registers with `@capacitor/push-notifications`, and keeps a relay subscription with every
+  deployment of `useSources` through `syncPush` (`packages/protocol/src/push.ts`, which also
+  decrypts a push, RFC 8291, as the native code must), saving the `PushState` through the native
+  plugin `AspenPush` (`src/api/pushBridge.ts`), which says which platform, app, and relay the
+  build is. A build without that plugin simply has no push. Signing out forgets every account.
+  Tapping a notification opens its message.
 - Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
   `pnpm build:shell` (`--base ./`, used by the desktop and mobile packages, which load the bundle
   from `file://` or an app-local origin and route after a `#`). Never write an absolute

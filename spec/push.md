@@ -207,6 +207,57 @@ The deployment POSTs only to HTTPS endpoints at public addresses (`app::outbound
 to other deployments), since an endpoint is a URL a client chose. It drops a subscription whose
 endpoint answers `403`, `404`, or `410`, and one made for a push key since replaced.
 
+## The app
+
+The app registers the phone with its relay, and each account with its deployment, whenever it
+starts, gets a new platform token, or signs in or out anywhere (`syncPush` in
+`client/packages/protocol/src/push.ts`). A subscription is made again when the deployment's key
+or the sign-in changes; one no longer needed is ended at the relay.
+
+What the notification code needs while the app is closed is one JSON object, `PushState`, which
+the app keeps through its native plugin `AspenPush` (`saveState`, `loadState`) where that code
+can read it: on iOS in a keychain access group shared with the notification service extension,
+on Android in the app's private storage.
+
+```json
+{
+  "version": 1,
+  "device": { "id": "…", "secret": "…", "token": "…" },
+  "accounts": [
+    {
+      "subscription": "<the relay's subscription id, a push's s>",
+      "origin": "https://chat.example.org",
+      "userId": "…",
+      "refreshToken": "…",
+      "sessionToken": "…",
+      "keys": { "privateKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…", "d": "…" },
+                "publicKey": "…", "auth": "…" },
+      "applicationServerKey": "…",
+      "deploymentSubscription": "…"
+    }
+  ]
+}
+```
+
+For a push, the notification code:
+
+1. finds the account whose `subscription` is the push's `s`, and decrypts `c` with its keys;
+2. for `message`, fetches `GET {origin}/api/v1/messages/{message}?include=authors,channels`
+   with `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and
+   `refreshToken`, and keeps it), and shows who wrote it, where, and what it says (tags as
+   names), grouped by channel, with the message id as the notification's identifier;
+3. for `read`, removes that channel's notifications up to `message`; for `deleted`, that one;
+   either shows nothing;
+4. sets the badge to the sum of every account's latest `badge`.
+
+A notification it posts carries `{ origin, channel, message, community, parentChannel }`, the
+channel's community (`null` in a DM) and, for a message in a thread, the channel the thread is
+in, so that tapping it opens the message.
+
+`AspenPush.describe()` says what the build is: `platform` (`apns` or `fcm`), `app` (the bundle id
+or Firebase project), `environment`, and `relay`, the URL of the relay of whoever published
+the build, which alone can wake it.
+
 ## Who is woken, and for what
 
 The deployment decides; the relay and the phone only carry it out. A person is sent a `message`
