@@ -13,6 +13,10 @@ pub struct AspenConfig {
     #[serde(default = "default_event_feed_shards")]
     pub event_feed_shards: usize,
     pub database_url: String,
+    /// The most database connections this server holds at once; left out, two per logical CPU. Every
+    /// write holds one until its event is acknowledged, so a busy server may want more, within
+    /// what PostgreSQL's `max_connections` allows for every server together.
+    pub database_pool_size: Option<usize>,
     pub nats_url: String,
     pub nats_auth_token: String,
     pub valkey_url: String,

@@ -55,6 +55,7 @@ Federation, letting a user of one deployment use others, is being built in phase
    ```
    The server reads configuration from `aspen.toml` and from environment variables with the `ASPEN_` prefix, which override the file (`__` separates nested keys: `ASPEN_VOICE__IDLE_SESSION_SECONDS`). Key config values:
    - `database_url` — PostgreSQL connection string
+   - `database_pool_size` — the most database connections the server holds (two per logical CPU by default); every write holds one until its event is acknowledged
    - `nats_url` — NATS server address
    - `nats_auth_token` — NATS authentication token
    - `[voice]` — `token_secret` shared with the voice servers, the failure threshold and window, the join token lifetime, the candidate cap, the two silence limits, the idle call limit, and `[[voice.servers]]` entries (`name`, `url`, `capacity`) seeded at startup

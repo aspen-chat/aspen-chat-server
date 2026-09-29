@@ -710,7 +710,12 @@ impl GlobalServerContext {
             connection_pool: {
                 let conn_manager =
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-                Pool::builder(conn_manager).build()?
+                let pool = Pool::builder(conn_manager);
+                match config.database_pool_size {
+                    Some(size) => pool.max_size(size),
+                    None => pool,
+                }
+                .build()?
             },
             event_feed: app::event_feed::EventFeed::start(
                 context.clone(),

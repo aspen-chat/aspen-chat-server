@@ -16,6 +16,7 @@ see [the voice server](#voice_servertoml) at the end.
 | Setting | Default | |
 | --- | --- | --- |
 | `database_url` | required | PostgreSQL, as `postgres://user:password@host/database`. |
+| `database_pool_size` | two per logical CPU | The most PostgreSQL connections this server holds at once. Every write holds one until NATS acknowledges its event, so a busy server may run out of connections before PostgreSQL runs out of CPU; the database connections metric shows requests waiting. Keep the total over every API server below PostgreSQL's `max_connections`. |
 | `nats_url` | required | NATS with JetStream, as `host:4222`. |
 | `nats_auth_token` | required | The token NATS was started with. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |
