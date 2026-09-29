@@ -150,6 +150,12 @@ test("an invite link naming another server opens there, and one naming home stay
 
 test("a pasted invite link opens on the server it names", async ({ page }) => {
   await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: true }));
+  // The rail renders again as each deployment syncs, and a press that lands meanwhile can be
+  // lost, so it is left to settle first.
+  await expect(
+    rail(page).getByRole("row", { name: `Beta club on ${foreignDomain}` }),
+  ).toBeVisible();
+  await expect(rail(page).getByRole("row", { name: /^Family/ })).toBeVisible();
   await rail(page).getByRole("button", { name: "Create or join a community" }).click();
   await page.getByRole("button", { name: /Join a community/ }).click();
   await page
