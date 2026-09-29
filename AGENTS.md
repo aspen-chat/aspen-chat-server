@@ -104,7 +104,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the client's typecheck, lint, and tests against the schemas that job writes; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts. Clippy warnings fail the build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts. Clippy warnings fail the build.
 
 ### CLI Flags
 

@@ -93,6 +93,47 @@ jobs:
           pnpm --filter @aspen/app exec playwright install --with-deps chromium
           pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium
 
+  android:
+    name: Android — build and unit test
+    needs: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: client
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      # Capacitor 8's Android build wants JDK 21; the runner already has the Android SDK.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      - name: Build the web shell and copy it into the Android project
+        run: |
+          pnpm --filter @aspen/app build:shell
+          cd packages/mobile && npx cap sync android
+      # The JVM tests; the push handler's end-to-end test needs a device (`pnpm --filter
+      # @aspen/mobile test:android` locally).
+      - name: Build and unit test
+        working-directory: client/packages/mobile/android
+        run: ./gradlew --console=plain :app:testDebugUnitTest :app:assembleDebug
+
   arm64-native:
     name: ARM64 (Debian 12) — build and test natively
     runs-on: ubuntu-24.04-arm
