@@ -293,8 +293,8 @@ message is deleted, `deleted`.
 1. **The relay** is its own repository (`aspen-push-relay`), run by the Foundation for the apps
    it publishes; deployments never run one.
 2. **The free tier** needs no registration: each deployment key may send a fixed number of
-   pushes a month, generous for a community of a few hundred, and a relay's operators give a
-   key a tier of its own when it needs more.
+   pushes a month (200,000 at the Foundation's relay, which costs it little more than
+   bandwidth), and a relay's operators give a key a tier of its own when it needs more.
 3. **Calls** will ring phones with a later kind, `call`, once calls ring anywhere; it needs
    Apple's VoIP push and CallKit, with rules of their own.
 4. **The relay trusts any app that registers**, without App Attest or Play Integrity: a
