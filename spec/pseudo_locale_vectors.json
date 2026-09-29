@@ -1,0 +1,71 @@
+{
+  "description": "Pseudo-locale cases both the server (app::locale) and the client (i18n/pseudo.ts) pass. Placeholders are written as the server writes them, %{name}; the client's tests rewrite them to its own {name} on both sides.",
+  "accented": [
+    {
+      "input": "Settings",
+      "output": "[\u0160\u00e9\u00e9\u0163\u0163\u00ee\u00ee\u00f1\u011d\u0161]"
+    },
+    {
+      "input": "Sign in",
+      "output": "[\u0160\u00ee\u00ee\u011d\u00f1 \u00ee\u00ee\u00f1]"
+    },
+    {
+      "input": "You're doing that too often. Wait a moment and try again.",
+      "output": "[\u00dd\u00f6\u00f6\u00fb\u00fb'\u0155\u00e9\u00e9 \u00f0\u00f6\u00f6\u00ee\u00ee\u00f1\u011d \u0163\u0125\u00e1\u00e1\u0163 \u0163\u00f6\u00f6\u00f6\u00f6 \u00f6\u00f6\u0192\u0163\u00e9\u00e9\u00f1. \u0174\u00e1\u00e1\u00ee\u00ee\u0163 \u00e1\u00e1 \u0271\u00f6\u00f6\u0271\u00e9\u00e9\u00f1\u0163 \u00e1\u00e1\u00f1\u00f0 \u0163\u0155\u00fd \u00e1\u00e1\u011d\u00e1\u00e1\u00ee\u00ee\u00f1.]"
+    },
+    {
+      "input": "%{domain} refused the connection.",
+      "output": "[%{domain} \u0155\u00e9\u00e9\u0192\u00fb\u00fb\u0161\u00e9\u00e9\u00f0 \u0163\u0125\u00e9\u00e9 \u00e7\u00f6\u00f6\u00f1\u00f1\u00e9\u00e9\u00e7\u0163\u00ee\u00ee\u00f6\u00f6\u00f1.]"
+    },
+    {
+      "input": "Passwords must be at least %{min} characters long.",
+      "output": "[\u00de\u00e1\u00e1\u0161\u0161\u0175\u00f6\u00f6\u0155\u00f0\u0161 \u0271\u00fb\u00fb\u0161\u0163 \u0180\u00e9\u00e9 \u00e1\u00e1\u0163 \u013c\u00e9\u00e9\u00e1\u00e1\u0161\u0163 %{min} \u00e7\u0125\u00e1\u00e1\u0155\u00e1\u00e1\u00e7\u0163\u00e9\u00e9\u0155\u0161 \u013c\u00f6\u00f6\u00f1\u011d.]"
+    },
+    {
+      "input": "A\u2013Z, 0\u20139: ok?",
+      "output": "[\u00c5\u00c5\u2013\u017d, 0\u20139: \u00f6\u00f6\u0137?]"
+    },
+    {
+      "input": "",
+      "output": "[]"
+    },
+    {
+      "input": "  two  spaces ",
+      "output": "[  \u0163\u0175\u00f6\u00f6  \u0161\u00fe\u00e1\u00e1\u00e7\u00e9\u00e9\u0161 ]"
+    }
+  ],
+  "mirrored": [
+    {
+      "input": "Settings",
+      "output": "\u202eSettings\u202c"
+    },
+    {
+      "input": "Sign in",
+      "output": "\u202eSign\u202c \u202ein\u202c"
+    },
+    {
+      "input": "You're doing that too often. Wait a moment and try again.",
+      "output": "\u202eYou're\u202c \u202edoing\u202c \u202ethat\u202c \u202etoo\u202c \u202eoften.\u202c \u202eWait\u202c \u202ea\u202c \u202emoment\u202c \u202eand\u202c \u202etry\u202c \u202eagain.\u202c"
+    },
+    {
+      "input": "%{domain} refused the connection.",
+      "output": "%{domain} \u202erefused\u202c \u202ethe\u202c \u202econnection.\u202c"
+    },
+    {
+      "input": "Passwords must be at least %{min} characters long.",
+      "output": "\u202ePasswords\u202c \u202emust\u202c \u202ebe\u202c \u202eat\u202c \u202eleast\u202c %{min} \u202echaracters\u202c \u202elong.\u202c"
+    },
+    {
+      "input": "A\u2013Z, 0\u20139: ok?",
+      "output": "\u202eA\u2013Z,\u202c \u202e0\u20139:\u202c \u202eok?\u202c"
+    },
+    {
+      "input": "",
+      "output": ""
+    },
+    {
+      "input": "  two  spaces ",
+      "output": "  \u202etwo\u202c  \u202espaces\u202c "
+    }
+  ]
+}

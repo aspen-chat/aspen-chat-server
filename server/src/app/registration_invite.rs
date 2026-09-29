@@ -7,10 +7,10 @@
 
 use crate::app::{self, UserId};
 use crate::database::schema::registration_invite;
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 
 /// The most accounts one invite may create.
 pub const MAX_USES: i32 = 1000;

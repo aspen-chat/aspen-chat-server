@@ -111,7 +111,7 @@ function SourceGroup({
               onPress={() => {
                 onPick(source.id);
               }}
-              className="flex w-full flex-col gap-1.5 rounded-md border border-line p-2 text-left outline-none hover:border-accent hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="flex w-full flex-col gap-1.5 rounded-md border border-line p-2 text-start outline-none hover:border-accent hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <img
                 src={source.thumbnail}

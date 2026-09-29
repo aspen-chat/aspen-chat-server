@@ -1154,7 +1154,7 @@ async function answer(
 async function events(page: Page): Promise<Publish> {
   let send: (frame: string) => void = () => undefined;
   let sequence = 0;
-  await page.routeWebSocket(/\/api\/v1\/events$/, (ws) => {
+  await page.routeWebSocket(/\/api\/v1\/events(\?.*)?$/, (ws) => {
     send = (frame) => {
       ws.send(frame);
     };

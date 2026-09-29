@@ -142,6 +142,7 @@ export type {
   VoiceSessionEndReason,
 } from "./generated/events";
 export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
+export { acceptLanguage, setPreferredLanguages } from "./languages";
 export {
   MEMBER_SEARCH_PAGE,
   PRESENCE_BATCH,
@@ -181,6 +182,7 @@ export {
   DEFAULT_DEVICE,
   NOTIFICATION_OUTPUT,
   DEVELOPER_MODE,
+  LANGUAGE,
   RAIL_ORDER,
   MAX_USER_VOLUME,
   PreferenceStore,

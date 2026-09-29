@@ -4,6 +4,7 @@ import {
   AspenClient,
   MemorySessionStore,
   PasskeyCancelledError,
+  setPreferredLanguages,
   type Session,
 } from "../src";
 
@@ -25,6 +26,7 @@ interface Recorded {
   url: string;
   method: string;
   authorization: string | null;
+  language: string | null;
   body: string;
 }
 
@@ -37,6 +39,7 @@ function scriptedFetch(responders: ((r: Recorded) => Response)[]) {
       url: request.url,
       method: request.method,
       authorization: request.headers.get("authorization"),
+      language: request.headers.get("accept-language"),
       body: await request.text(),
     };
     calls.push(recorded);
@@ -63,6 +66,22 @@ function liveSession(): Session {
 }
 
 describe("AspenClient", () => {
+  it("names the languages the user reads in every request", async () => {
+    const { fetch, calls } = scriptedFetch([
+      () => problem(401, "invalidCredentials"),
+      () => problem(401, "invalidCredentials"),
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    await client.login("kate", "wrong").catch(() => undefined);
+    setPreferredLanguages(["en-XA", "en"]);
+    try {
+      await client.login("kate", "wrong").catch(() => undefined);
+    } finally {
+      setPreferredLanguages([]);
+    }
+    expect(calls.map((call) => call.language)).toEqual([null, "en-XA, en"]);
+  });
+
   it("logs in and stores the session", async () => {
     const store = new MemorySessionStore();
     const { fetch, calls } = scriptedFetch([

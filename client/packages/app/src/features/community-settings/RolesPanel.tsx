@@ -303,7 +303,7 @@ function RoleEditor({
           </Button>
           {dirty && <span className="text-sm text-ink-muted">{m.roles.unsaved}</span>}
           {!role.everyone && role.bot == null && (
-            <span className="ml-auto flex items-center gap-2">
+            <span className="ms-auto flex items-center gap-2">
               {confirmingDelete ? (
                 <>
                   <span className="text-sm">

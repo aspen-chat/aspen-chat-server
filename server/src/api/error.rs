@@ -8,11 +8,11 @@
 //! are mapped in the handler that knows the context.
 
 use crate::app;
+use crate::t;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use diesel::result::DatabaseErrorKind;
-use rust_i18n::t;
 use serde::Serialize;
 use std::borrow::Cow;
 use tracing::error;

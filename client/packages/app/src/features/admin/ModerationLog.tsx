@@ -7,9 +7,10 @@ import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import type { Messages } from "@/i18n/messages";
 
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
 /** A page of the log is what the server gives by default. */
 const PAGE = 50;
@@ -20,6 +21,7 @@ const PAGE = 50;
  * in it. It is how the deployment's administrators oversee its moderators.
  */
 export function ModerationLog() {
+  const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const sync = useSync();
   const [entries, setEntries] = useState<readonly ModerationEntry[]>([]);

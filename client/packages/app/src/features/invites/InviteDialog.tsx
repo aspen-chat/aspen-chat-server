@@ -29,6 +29,7 @@ import { shareableInviteLink } from "@/features/invites/inviteCode";
 import { copyText } from "@/features/layout/clipboard";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 
 /** How long a new invite stays valid, as a key into the `expiry` messages. */
@@ -40,7 +41,7 @@ const EXPIRY_OPTIONS = {
 } as const;
 type ExpiryOption = keyof typeof EXPIRY_OPTIONS;
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
 /** The invite control in a community's sidebar and the dialog that manages its invites. */
 export function InviteDialog({ community }: { community: Community }) {
@@ -125,7 +126,7 @@ export function InviteManager({ communityId }: { communityId: string }) {
             className="flex flex-1 flex-col gap-1"
           >
             <Label className="text-sm font-medium text-ink-muted">{m.expiryLabel}</Label>
-            <Button className="flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-left outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
+            <Button className="flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-start outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
               <SelectValue />
               <CaretDownIcon size={14} aria-hidden="true" />
             </Button>
@@ -185,6 +186,7 @@ function InviteRow({
   now: number;
   revocable: boolean;
 }) {
+  const dateFormat = useDateFormat(DATE);
   const m = useMessages();
   const sync = useSync();
   const [copied, setCopied] = useState(false);

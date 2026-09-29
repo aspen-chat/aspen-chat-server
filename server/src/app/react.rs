@@ -3,13 +3,13 @@ use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::{EventScope, MessageId, UserId, publish_event};
 use crate::database::schema::react;
+use crate::t;
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, QueryableByName,
     Selectable,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use rust_i18n::t;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = react)]

@@ -181,17 +181,17 @@ body {
   background: none;
 }
 .message-body blockquote {
-  border-left: 3px solid var(--color-line);
-  padding-left: 0.75rem;
+  border-inline-start: 3px solid var(--color-line);
+  padding-inline-start: 0.75rem;
   color: var(--color-ink-muted);
 }
 .message-body ul {
   list-style: disc;
-  padding-left: 1.5rem;
+  padding-inline-start: 1.5rem;
 }
 .message-body ol {
   list-style: decimal;
-  padding-left: 1.5rem;
+  padding-inline-start: 1.5rem;
 }
 .message-body li > ul,
 .message-body li > ol {
@@ -227,7 +227,7 @@ body {
   border-top: 1px solid var(--color-line);
 }
 .message-body input[type="checkbox"] {
-  margin-right: 0.4rem;
+  margin-inline-end: 0.4rem;
 }
 /* Spoilers: a solid block until revealed, then a faint tint so the reader can see what was hidden. */
 .message-body .spoiler {

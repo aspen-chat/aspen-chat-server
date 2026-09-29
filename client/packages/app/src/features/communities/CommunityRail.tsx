@@ -133,7 +133,7 @@ export function CommunityRail() {
   return (
     <nav
       aria-label={m.communitiesLabel}
-      className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-line bg-surface-rail py-3"
+      className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-e border-line bg-surface-rail py-3"
     >
       {/* The dot sits beside the link rather than in it, so the link's own round background
           covers it; see `UnreadDot`. */}
@@ -210,7 +210,7 @@ export function CommunityRail() {
               <Button
                 slot="drag"
                 aria-label={format(m.dragCommunity, { community: community.name })}
-                className="absolute -right-1 -bottom-1 rounded-full border border-line bg-surface-raised p-0.5 text-ink-faint opacity-0 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+                className="absolute -end-1 -bottom-1 rounded-full border border-line bg-surface-raised p-0.5 text-ink-faint opacity-0 outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
               >
                 <DotsSixVerticalIcon size={12} aria-hidden="true" />
               </Button>
@@ -267,7 +267,7 @@ function ForeignMark() {
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute -top-1 -right-1 z-10 rounded-full bg-surface-raised p-0.5 text-ink-muted ring-2 ring-surface-rail"
+      className="pointer-events-none absolute -top-1 -end-1 z-10 rounded-full bg-surface-raised p-0.5 text-ink-muted ring-2 ring-surface-rail"
     >
       <GlobeSimpleIcon size={12} weight="bold" />
     </span>
@@ -279,7 +279,7 @@ function RailBadge({ count }: { count: number }) {
   return (
     <MentionBadge
       count={count}
-      className="pointer-events-none absolute -right-1 -bottom-1 z-10 ring-2 ring-surface-rail"
+      className="pointer-events-none absolute -end-1 -bottom-1 z-10 ring-2 ring-surface-rail"
     />
   );
 }
@@ -288,7 +288,7 @@ function UnreadDot() {
   return (
     <span
       aria-hidden="true"
-      className="absolute top-1/2 -left-1 -z-10 h-2 w-2 -translate-y-1/2 rounded-full bg-ink"
+      className="absolute top-1/2 -start-1 -z-10 h-2 w-2 -translate-y-1/2 rounded-full bg-ink"
     />
   );
 }

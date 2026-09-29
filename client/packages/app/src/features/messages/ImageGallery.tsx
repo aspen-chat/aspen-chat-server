@@ -1,6 +1,6 @@
 import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { Button, Dialog, Link, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, Link, Modal, ModalOverlay, useLocale } from "react-aria-components";
 import type { Picture } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -56,6 +56,7 @@ function GalleryBody({
   close: () => void;
 }) {
   const m = useMessages();
+  const { direction } = useLocale();
   const [index, setIndex] = useState(Math.min(initial, pictures.length - 1));
   const current = pictures[index];
   const previous = () => {
@@ -65,13 +66,16 @@ function GalleryBody({
     setIndex((i) => Math.min(pictures.length - 1, i + 1));
   };
   // The dialog itself holds focus when the gallery opens, so the arrow keys are read from the
-  // window rather than from a control inside it.
+  // window rather than from a control inside it. The key towards the previous picture's button
+  // goes back, which is the right arrow when the page is laid out right to left.
   useEffect(() => {
+    const back = direction === "rtl" ? "ArrowRight" : "ArrowLeft";
+    const forward = direction === "rtl" ? "ArrowLeft" : "ArrowRight";
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "ArrowLeft") {
+      if (event.key === back) {
         event.preventDefault();
         setIndex((i) => Math.max(0, i - 1));
-      } else if (event.key === "ArrowRight") {
+      } else if (event.key === forward) {
         event.preventDefault();
         setIndex((i) => Math.min(pictures.length - 1, i + 1));
       }
@@ -80,7 +84,7 @@ function GalleryBody({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [pictures.length]);
+  }, [pictures.length, direction]);
   // The gallery fills the page, so the overlay's own click-outside never fires; a click that
   // lands on nothing in particular closes it instead. The press must start here too: the
   // control that opened the gallery fires its press on pointer-up, and the browser's click
@@ -137,7 +141,7 @@ function GalleryBody({
           aria-label={m.gallery.previous}
           className={navButtonClass}
         >
-          <CaretLeftIcon size={24} aria-hidden="true" />
+          <CaretLeftIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
         </Button>
         {/* Stretched so its height is definite and the picture's `max-h-full` has something to
             resolve against; centred only, the wrapper would take the picture's own height and a
@@ -157,7 +161,7 @@ function GalleryBody({
           aria-label={m.gallery.next}
           className={navButtonClass}
         >
-          <CaretRightIcon size={24} aria-hidden="true" />
+          <CaretRightIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
         </Button>
       </div>
       <ul className="flex justify-center gap-2 overflow-x-auto py-1">

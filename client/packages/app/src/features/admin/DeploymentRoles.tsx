@@ -269,7 +269,7 @@ function DeploymentRoleEditor({
           >
             {saving ? m.roles.saving : m.roles.save}
           </Button>
-          <span className="ml-auto flex items-center gap-2">
+          <span className="ms-auto flex items-center gap-2">
             {confirmingDelete && (
               <span className="text-sm">{format(m.roles.deleteConfirm, { role: role.name })}</span>
             )}

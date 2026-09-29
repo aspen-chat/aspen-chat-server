@@ -80,7 +80,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
     // A landmark named by its heading, holding the DMs and the user's own controls.
     <section
       aria-labelledby={headingId}
-      className="flex h-full flex-col border-r border-line bg-surface-raised"
+      className="flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
@@ -163,13 +163,13 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
       ? format(m.withMentions, { name: stateName ?? title, mentions: mentionsText(m, tags) })
       : stateName;
   const rowClass =
-    "flex w-full items-center gap-2 rounded-md text-left text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+    "flex w-full items-center gap-2 rounded-md text-start text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
     (current
-      ? "bg-surface-hover py-1.5 pr-8 pl-2 font-medium text-ink"
+      ? "bg-surface-hover py-1.5 pe-8 ps-2 font-medium text-ink"
       : unread && !muted
         ? // The border and this padding make up the usual padding, so nothing moves.
-          "py-[5px] pr-[31px] pl-[7px] " + unreadMarkClass
-        : "py-1.5 pr-8 pl-2 " + (muted ? "text-ink-faint" : "text-ink-muted"));
+          "py-[5px] pe-[31px] ps-[7px] " + unreadMarkClass
+        : "py-1.5 pe-8 ps-2 " + (muted ? "text-ink-faint" : "text-ink-muted"));
   const content = (
     <>
       {dm.ty === "groupDm" ? (
@@ -230,7 +230,7 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
         </Link>
       )}
       {/* Placed by a wrapper, since the button's own touch area keeps it `relative`. */}
-      <span className="absolute top-1/2 right-2 flex -translate-y-1/2">
+      <span className="absolute top-1/2 end-2 flex -translate-y-1/2">
         <ChannelMenuButton
           name={title}
           isOpen={menuOpen}

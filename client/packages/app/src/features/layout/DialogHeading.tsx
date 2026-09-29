@@ -22,7 +22,7 @@ export function DialogHeading({ children }: { children: ReactNode }) {
         <Button
           slot="close"
           aria-label={m.close}
-          className="tap-target -mt-0.5 -mr-1 shrink-0 rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="tap-target -mt-0.5 -me-1 shrink-0 rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <XIcon size={18} aria-hidden="true" />
         </Button>

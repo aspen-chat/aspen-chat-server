@@ -61,7 +61,7 @@ export function BlockedRun({
     );
   }
   return (
-    <div className="flex flex-col gap-1 border-l-2 border-line pl-2">
+    <div className="flex flex-col gap-1 border-s-2 border-line ps-2">
       <div className="flex items-center gap-2 px-2 py-1 text-sm text-ink-faint">
         <ProhibitIcon size={16} aria-hidden="true" />
         <span>{count}</span>

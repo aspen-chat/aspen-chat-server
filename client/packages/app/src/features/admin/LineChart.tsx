@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useNumberFormat } from "@/i18n/format";
 
 /** One point of a series: when, and how many. */
 export interface ChartPoint {
@@ -22,8 +23,6 @@ function niceStep(span: number, ticks: number): number {
   const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
   return Math.max(1, nice * magnitude);
 }
-
-const ticksFormat = new Intl.NumberFormat(undefined);
 
 /**
  * A single-series line over time, to the dataviz rules: a 2px line over a 10% wash of its
@@ -49,6 +48,7 @@ export function LineChart({
   /** Shown faded, as while the next range loads. */
   dimmed?: boolean;
 }) {
+  const ticksFormat = useNumberFormat();
   const frame = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [active, setActive] = useState<number | null>(null);
@@ -117,9 +117,12 @@ export function LineChart({
     }
   }
 
+  // Time runs left to right on the chart whichever way the page is written, as charts of time
+  // conventionally do in right-to-left languages too; the keys follow the picture.
   return (
     <div
       ref={frame}
+      dir="ltr"
       role="group"
       tabIndex={0}
       aria-label={label}

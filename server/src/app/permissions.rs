@@ -29,10 +29,10 @@ use crate::database::schema::{
     category_override, channel, channel_override, community, community_member_role, community_role,
     community_user, dm_recipient,
 };
+use crate::t;
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -237,7 +237,7 @@ function ParticipantTile({
             onPress={() => {
               setMenuOpen((open) => !open);
             }}
-            className="absolute top-1 right-1"
+            className="absolute top-1 end-1"
           />
           <ParticipantMenu
             channelId={channelId}

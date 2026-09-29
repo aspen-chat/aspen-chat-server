@@ -75,7 +75,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
     // A landmark named by its heading, holding the channels and the user's own controls.
     <section
       aria-labelledby={headingId}
-      className="flex h-full flex-col border-r border-line bg-surface-raised"
+      className="flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
@@ -141,7 +141,7 @@ function CategorySection({
             onPress={() => {
               void sync.setCategoryCollapsed(category.id, !collapsed).catch(() => undefined);
             }}
-            className="flex w-full min-w-0 items-center gap-1 rounded text-left text-xs font-semibold tracking-wide text-ink-faint uppercase outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="flex w-full min-w-0 items-center gap-1 rounded text-start text-xs font-semibold tracking-wide text-ink-faint uppercase outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             <CaretDownIcon
               size={10}
@@ -325,7 +325,7 @@ function ChannelGroup({
             <Button
               slot="drag"
               aria-label={format(m.dragChannel, { channel: channel.name })}
-              className="ml-auto rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
+              className="ms-auto rounded p-0.5 text-ink-faint opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <DotsSixVerticalIcon size={14} aria-hidden="true" />
             </Button>
@@ -417,12 +417,12 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
           <span className="sr-only">{accessibleName}</span>
         </>
       )}
-      <MentionBadge count={tags} className="ml-auto" />
+      <MentionBadge count={tags} className="ms-auto" />
       {muted && (
         <BellSlashIcon
           size={14}
           aria-hidden="true"
-          className={(tags > 0 ? "" : "ml-auto ") + "shrink-0"}
+          className={(tags > 0 ? "" : "ms-auto ") + "shrink-0"}
         />
       )}
       {hasMenu && (
@@ -433,7 +433,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             onPress={() => {
               setMenuOpen((open) => !open);
             }}
-            className={muted || tags > 0 ? "" : "ml-auto"}
+            className={muted || tags > 0 ? "" : "ms-auto"}
           />
           <ChannelMenu
             channelId={channel.id}

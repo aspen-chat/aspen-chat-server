@@ -9,6 +9,7 @@ import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
+import { FollowLanguagePreference } from "@/features/settings/LanguageSection";
 import { SourcePickerDialog } from "@/features/voice/SourcePickerDialog";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -85,6 +86,7 @@ function SignedIn() {
   return (
     <SyncProvider client={client}>
       <OneCall />
+      <FollowLanguagePreference />
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />

@@ -184,7 +184,7 @@ function ReauthDialog({
                       client.runPasskeyCeremony({ purpose: "reauthenticate" }, transport),
                     );
                   }}
-                  className={secondaryButtonClass + " mr-auto"}
+                  className={secondaryButtonClass + " me-auto"}
                 >
                   {m.twoFactor.usePasskey}
                 </Button>

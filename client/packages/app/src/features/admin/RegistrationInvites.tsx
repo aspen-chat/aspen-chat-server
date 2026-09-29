@@ -27,7 +27,7 @@ import {
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Status, Table } from "@/features/admin/FleetHealth";
-import { count, day, moment } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import {
   alertClass,
@@ -83,6 +83,7 @@ export function RegistrationInvites({
   inviteRequired: boolean | undefined;
 }) {
   const m = useMessages();
+  const { count, day, moment } = useFigures();
   const sync = useSync();
   const load = useCallback(() => sync.registrationInvites(), [sync]);
   const invites = useAdminRead(load);

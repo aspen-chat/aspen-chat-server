@@ -38,7 +38,7 @@ import { useDmTitle } from "@/features/dms/useDmTitle";
 import { markClass } from "@/features/layout/choices";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table, type Heading } from "@/features/admin/FleetHealth";
-import { count, day } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import { fieldClass, inputClass, labelClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
 import {
@@ -75,6 +75,7 @@ export interface Column<T, S extends string> {
  */
 export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
+  const { day } = useFigures();
   const sync = useSync();
   const manage = useDeploymentCan("manageDeploymentRoles");
   const moderator = useDeploymentCan("moderateCommunities");
@@ -411,6 +412,7 @@ function DmLink({ dm }: { dm: Channel }) {
  */
 export function CommunityDirectory() {
   const m = useMessages();
+  const { count, day } = useFigures();
   const sync = useSync();
   const moderator = useDeploymentCan("moderateCommunities");
   const load = useCallback(
@@ -494,6 +496,7 @@ export function Directory<T extends { id: string }, S extends string>({
   version?: number;
 }) {
   const m = useMessages();
+  const { count } = useFigures();
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<S | undefined>(defaultSort);
@@ -605,9 +608,9 @@ export function Directory<T extends { id: string }, S extends string>({
           <MagnifyingGlassIcon
             size={16}
             aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-muted"
+            className="pointer-events-none absolute top-1/2 start-3 -translate-y-1/2 text-ink-muted"
           />
-          <Input className={inputClass + " w-full pl-9"} />
+          <Input className={inputClass + " w-full ps-9"} />
         </div>
       </SearchField>
       {error !== null && (
@@ -669,7 +672,7 @@ export function Directory<T extends { id: string }, S extends string>({
             })}
           </span>
         )}
-        <span className="ml-auto flex gap-2">
+        <span className="ms-auto flex gap-2">
           <Button
             isDisabled={page === 0 || loading}
             onPress={() => {

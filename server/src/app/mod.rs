@@ -30,6 +30,7 @@ pub mod fleet;
 pub mod icon;
 pub mod invite;
 pub mod link_preview;
+pub mod locale;
 pub mod login;
 pub mod markdown;
 pub mod media_store;

@@ -12,6 +12,7 @@ import {
 import { useMute, useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
 
 /** The lengths of mute offered, in the menu's order; `null` lasts until the user unmutes. */
@@ -29,12 +30,12 @@ const MUTE_DURATIONS: readonly {
 ];
 
 /** When a mute ends: the date and time, which a mute of a week at most needs no year for. */
-const untilFormat = new Intl.DateTimeFormat(undefined, {
+const UNTIL: Intl.DateTimeFormatOptions = {
   month: "short",
   day: "numeric",
   hour: "numeric",
   minute: "2-digit",
-});
+};
 
 const itemClass = "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover";
 const headerClass = "px-2 pt-1 pb-0.5 text-xs font-semibold text-ink-faint";
@@ -70,6 +71,7 @@ export function ChannelMenu({
   onDelete?: () => void;
 }) {
   const m = useMessages();
+  const until = useDateFormat(UNTIL);
   const sync = useSync();
   const mute = useMute(channelId);
   const label = format(m.mute.options, { name });
@@ -124,7 +126,7 @@ export function ChannelMenu({
                 {mute.until == null
                   ? m.mute.mutedForGood
                   : format(m.mute.mutedUntil, {
-                      time: untilFormat.format(new Date(mute.until)),
+                      time: until.format(new Date(mute.until)),
                     })}
               </Header>
               <MenuItem id="unmute" className={itemClass}>

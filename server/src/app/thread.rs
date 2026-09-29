@@ -17,11 +17,11 @@ use crate::app::{
     self, ChannelId, EventScope, GlobalServerContext, MaybeLoaded, MessageId, UserId, publish_event,
 };
 use crate::database::schema::{channel, message};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 
 /// The thread a message started, making it if this is its first opening; and whether this
 /// call made it.

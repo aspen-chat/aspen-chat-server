@@ -10,11 +10,11 @@ use crate::app::{
     self, ChannelId, CommunityId, EventScope, GlobalServerContext, UserId, publish_event,
 };
 use crate::database::schema::{channel, channel_mute};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use rust_i18n::t;
 
 /// The longest a timed mute may last: a year. Longer is an indefinite mute.
 pub const MAX_MUTE_SECONDS: u32 = 366 * 24 * 60 * 60;

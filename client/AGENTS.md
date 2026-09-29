@@ -597,6 +597,18 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   modal that must not be left before the reader acts, such as the recovery codes.
 - User-facing strings live in `packages/app/src/i18n/messages.ts` with camelCase keys, matching
   the server's locale files. Server Problem text is already localized and is shown as-is.
+  The language shown (`src/i18n/locales.ts`, `I18nProvider`) is the account preference
+  `LANGUAGE`, which Settings sets and `FollowLanguagePreference` applies once the account's
+  preferences are read, or `automatic`, which follows the browser's languages; this install
+  remembers the last one for the sign-in screen. It picks the catalogue (English, or the
+  pseudo-locales `en-XA` and `ar-XB` made from it by `src/i18n/pseudo.ts`), React Aria's
+  locale, the document's `lang` and `dir`, and the languages every `AspenClient` request and
+  event stream asks servers to write in (`setPreferredLanguages`). Dates and numbers are
+  formatted in that locale through `useDateFormat` and `useNumberFormat` (`src/i18n/format.ts`)
+  and the dashboard's `useFigures`, never `Intl` with the browser's default. Layout is written
+  for both directions: logical utilities (`ms-`, `pe-`, `start-`, `border-s`, `text-start`),
+  never `ml-`, `pr-`, `left-`, `border-l`, or `text-left`, and an icon that points somewhere
+  (a back arrow, a next caret) mirrors with `rtl:-scale-x-100`; a chart of time keeps `dir="ltr"`.
 - Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
   `pnpm build:shell` (`--base ./`, used by the desktop and mobile packages, which load the bundle
   from `file://` or an app-local origin and route after a `#`). Never write an absolute

@@ -12,13 +12,13 @@ use crate::database::schema::channel;
 use crate::database::schema::community;
 use crate::database::schema::community_member_role;
 use crate::database::schema::community_user;
+use crate::t;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     QueryableByName, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = community)]

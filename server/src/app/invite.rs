@@ -5,6 +5,7 @@ use crate::app;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::invite;
+use crate::t;
 use chrono::Utc;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
@@ -13,7 +14,6 @@ use diesel::{
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::RngExt;
-use rust_i18n::t;
 
 const INVITE_CODE_LENGTH: usize = 16;
 /// How long after it stops working an invite, a community's or a registration invite, is still

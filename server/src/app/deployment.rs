@@ -21,11 +21,11 @@ use crate::app::{
     self, ChannelId, CommunityId, DeploymentRoleId, EventScope, UserId, publish_event,
 };
 use crate::database::schema::{deployment_role, moderation_log, user, user_deployment_role};
+use crate::t;
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

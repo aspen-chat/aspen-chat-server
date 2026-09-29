@@ -15,6 +15,7 @@ use crate::app::permissions::{Permissions, require_member};
 use crate::app::user::{User, UserPg, validate_profile, validate_username, with_online_status};
 use crate::app::{self, CommunityId, EventScope, GlobalServerContext, UserId, publish_event};
 use crate::database::schema::{bot_token, community_user, user};
+use crate::t;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::Utc;
@@ -22,7 +23,6 @@ use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::RngExt;
-use rust_i18n::t;
 use sha2::{Digest, Sha256};
 
 /// How every bot token begins, so the server can tell one from a session token without a

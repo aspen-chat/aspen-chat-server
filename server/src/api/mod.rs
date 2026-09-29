@@ -502,7 +502,8 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     }
     app::federation::standing::spawn_confirmer(context.clone());
     let cors = cors_layer(&context.config.cors, &context.config.federation);
-    let router: axum::Router = router.with_state(context).into();
+    let router: axum::Router = axum::Router::from(router.with_state(context))
+        .layer(axum::middleware::from_fn(app::locale::layer));
     Ok(match cors {
         Some(cors) => router.layer(cors),
         None => router,

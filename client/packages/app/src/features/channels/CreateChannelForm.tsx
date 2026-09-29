@@ -30,7 +30,7 @@ import { useDomain, channelLink } from "@/features/messages/links";
 const NO_CATEGORY = "none";
 
 const selectButtonClass =
-  "flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-left outline-none " +
+  "flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-start outline-none " +
   "hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 const popoverClass =
   "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";

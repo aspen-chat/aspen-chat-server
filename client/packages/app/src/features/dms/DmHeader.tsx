@@ -50,7 +50,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
         aria-label={m.dms.back}
         className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >
-        <ArrowLeftIcon size={18} aria-hidden="true" />
+        <ArrowLeftIcon size={18} aria-hidden="true" className="rtl:-scale-x-100" />
       </Link>
       <Heading className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
         <span aria-hidden="true" className="text-ink-faint">

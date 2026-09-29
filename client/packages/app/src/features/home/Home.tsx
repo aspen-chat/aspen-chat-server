@@ -30,7 +30,7 @@ export function Home() {
         trigger={<Button className={primaryButtonClass + " mt-2"}>{m.createCommunity}</Button>}
       />
       <p className="mt-4 text-sm text-ink-faint">{m.orJoin}</p>
-      <div className="w-full max-w-sm text-left">
+      <div className="w-full max-w-sm text-start">
         <JoinForm />
       </div>
     </main>

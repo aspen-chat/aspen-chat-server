@@ -300,7 +300,7 @@ pub async fn add_deployment(
 ) -> ApiResult<Created<FederatedDeployment>> {
     access.require(DeploymentPermission::ManageFederation)?;
     let domain = Domain::parse(&request.domain).map_err(|_| {
-        ApiError::new(ProblemCode::Validation).with_detail(rust_i18n::t!("federationNotADomain"))
+        ApiError::new(ProblemCode::Validation).with_detail(crate::t!("federationNotADomain"))
     })?;
     let mut conn = state
         .connection_pool
@@ -639,7 +639,7 @@ pub async fn issue_assertion(
     Json(request): Json<AssertionRequest>,
 ) -> ApiResult<Json<Issued>> {
     let audience = Domain::parse(&request.audience).map_err(|_| {
-        ApiError::new(ProblemCode::Validation).with_detail(rust_i18n::t!("federationNotADomain"))
+        ApiError::new(ProblemCode::Validation).with_detail(crate::t!("federationNotADomain"))
     })?;
     Ok(Json(
         abroad::issue(&state, &caller, &user, &audience).await?,

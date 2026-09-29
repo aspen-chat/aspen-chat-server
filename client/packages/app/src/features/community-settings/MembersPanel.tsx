@@ -124,7 +124,7 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
             </span>
           ))}
         </span>
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ms-auto flex items-center gap-2">
           {mayAssign && (
             <RolePicker
               communityId={communityId}

@@ -7,11 +7,11 @@
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::{self, EventScope, GlobalServerContext, UserId, publish_event};
 use crate::database::schema::user_preferences;
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use rust_i18n::t;
 use serde_json::{Map, Value};
 
 /// The most the object may take when serialised. Enough for hundreds of settings; a client

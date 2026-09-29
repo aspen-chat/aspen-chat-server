@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EventStream, compileValidator, reconnectDelayMs } from "../src";
+import { EventStream, compileValidator, reconnectDelayMs, setPreferredLanguages } from "../src";
 
 const uuid = "0190f0a0-0000-7000-8000-000000000001";
 
@@ -136,6 +136,19 @@ function harness(tokens: (string | null)[] = ["token-1", "token-2", "token-3"]) 
 }
 
 describe("EventStream", () => {
+  it("names the languages the user reads in its address", async () => {
+    setPreferredLanguages(["ar-XB"]);
+    try {
+      const { stream, sockets } = harness();
+      stream.start();
+      await flush();
+      expect(sockets[0]?.url).toBe("wss://aspen.test/api/v1/events?locale=ar-XB");
+      stream.stop();
+    } finally {
+      setPreferredLanguages([]);
+    }
+  });
+
   it("identifies on open, then delivers validated events", async () => {
     const { stream, log, sockets, authCalls } = harness();
     stream.start();

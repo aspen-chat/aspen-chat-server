@@ -217,7 +217,7 @@ export function useTagging({
       id={listId}
       role="listbox"
       aria-label={m.tagging.suggestions}
-      className="absolute bottom-full left-0 z-20 mb-1 flex max-h-72 w-72 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg"
+      className="absolute bottom-full start-0 z-20 mb-1 flex max-h-72 w-72 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg"
     >
       {shown.map((suggestion, index) => (
         <li

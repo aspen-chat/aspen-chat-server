@@ -14,21 +14,27 @@
 //! and reports `resumed: false`, which tells the client its cached state has a gap it must
 //! repair from REST.
 //!
+//! Errors are written in the language `?locale=` names on the upgrade URL, which the client
+//! sets from its own language setting as it would `Accept-Language` (which a browser does not
+//! let it set on a WebSocket), or else the one the upgrade's `Accept-Language` negotiates
+//! (`app::locale`).
+//!
 //! Every frame in both directions is JSON. The full protocol is described by
 //! `event_schema.json` (root type [`EventStreamProtocol`]).
 
 use crate::api::GlobalServerContext;
+use crate::api::extract::Query;
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app;
 use crate::app::UserId;
 use crate::app::event_feed::{Delivery, FeedEvent, Subscription};
 use crate::app::user::UserPg;
+use crate::t;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
 use bytes::Bytes;
 use futures_util::SinkExt;
-use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -166,10 +172,22 @@ pub struct EventStreamProtocol {
     pub server: ServerMessage<'static>,
 }
 
+/// The event stream's query parameters.
+#[derive(Debug, Deserialize)]
+pub struct EventStreamQuery {
+    /// The languages to write errors in, as `Accept-Language` names them.
+    locale: Option<String>,
+}
+
 pub async fn event_stream(
     ws: WebSocketUpgrade,
     State(state): State<GlobalServerContext>,
+    Query(query): Query<EventStreamQuery>,
 ) -> Response {
+    let locale = query
+        .locale
+        .as_deref()
+        .map_or_else(app::locale::current, app::locale::negotiate);
     // Client frames are small (`identify`, `activity`), and events are written a few at a
     // time, so the buffers are a small fraction of tungstenite's defaults, which are sized for
     // bulk transfer and would otherwise dominate each connection's memory.
@@ -178,7 +196,7 @@ pub async fn event_stream(
         .max_write_buffer_size(MAX_WRITE_BUFFER_BYTES)
         .max_message_size(MAX_CLIENT_MESSAGE_BYTES)
         .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket_conn(socket, state))
+        .on_upgrade(move |socket| app::locale::scope(locale, handle_socket_conn(socket, state)))
 }
 
 struct Rejection(EventStreamErrorCode);

@@ -31,11 +31,11 @@ pub use keys::{
 use crate::app::{self, UserId};
 use crate::aspen_config::{FederationConfig, Gate, MigrationRules};
 use crate::database::schema::{federated_deployment, federation_list_entry};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

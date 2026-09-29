@@ -149,7 +149,7 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
         onChange={toggle}
         aria-label={format(mine ? m.poll.unvote : m.poll.vote, { option: optionName(option) })}
         className={
-          "relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-md border px-3 py-1.5 text-left text-sm outline-none " +
+          "relative flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-md border px-3 py-1.5 text-start text-sm outline-none " +
           "focus-visible:ring-2 focus-visible:ring-accent/50 " +
           (mine ? "border-accent" : "border-line") +
           (open ? " hover:bg-surface-hover pressed:opacity-80" : " cursor-default")
@@ -158,7 +158,7 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
         <span
           aria-hidden="true"
           className={
-            "absolute inset-y-0 left-0 transition-[width] " +
+            "absolute inset-y-0 start-0 transition-[width] " +
             (mine ? "bg-accent-soft" : "bg-surface-sunken")
           }
           style={{ width: `${String(sharePercent(poll, index))}%` }}

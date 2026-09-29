@@ -138,6 +138,17 @@ export const RAIL_ORDER: PreferenceDefinition<readonly string[]> = {
     Array.isArray(raw) && raw.every((entry) => typeof entry === "string") ? raw : undefined,
 };
 
+/**
+ * The language the app shows, a BCP 47 tag of a catalogue it has, or `automatic` to follow the
+ * platform's languages. It follows the account, so every device shows the same one.
+ */
+export const LANGUAGE: PreferenceDefinition<string> = {
+  key: "language",
+  scope: "account",
+  fallback: "automatic",
+  parse: (raw) => (typeof raw === "string" ? raw : undefined),
+};
+
 /** Whether this user has silenced one other person for themself, keeping their volume for later. */
 export function userMuted(userId: string): PreferenceDefinition<boolean> {
   return {
@@ -177,6 +188,7 @@ export class PreferenceStore {
   readonly #client: AspenClient | null;
   readonly #device = new Map<string, unknown>();
   #account: Record<string, unknown> = {};
+  #accountLoaded = false;
   /**
    * Parsed values by scope and key. `get` returns the same object for the same stored value,
    * as React's external-store hook requires of a snapshot; parsing afresh each time would
@@ -188,6 +200,14 @@ export class PreferenceStore {
   constructor(options: PreferenceStoreOptions = {}) {
     this.#storage = options.storage ?? null;
     this.#client = options.client ?? null;
+  }
+
+  /**
+   * Whether the account preferences have been read from the server since sign-in; until they
+   * are, an account preference reads as its fallback.
+   */
+  get accountLoaded(): boolean {
+    return this.#accountLoaded;
   }
 
   get<T>(definition: PreferenceDefinition<T>): T {
@@ -229,6 +249,7 @@ export class PreferenceStore {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.#account = result.data.values;
+    this.#accountLoaded = true;
     this.#forgetAccountParses();
     this.#notify();
   }
@@ -252,6 +273,7 @@ export class PreferenceStore {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.#account = result.data.values;
+    this.#accountLoaded = true;
     this.#forgetAccountParses();
     this.#notify();
   }
@@ -259,6 +281,7 @@ export class PreferenceStore {
   /** Forgets the account preferences, at sign-out; device preferences stay with the install. */
   clearAccount(): void {
     this.#account = {};
+    this.#accountLoaded = false;
     this.#forgetAccountParses();
     this.#notify();
   }

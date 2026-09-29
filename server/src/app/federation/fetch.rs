@@ -5,8 +5,8 @@ use crate::app;
 use crate::app::federation::{DeploymentDocument, Domain};
 use crate::app::outbound::{PublicResolver, ResolveError};
 use crate::aspen_config::FederationConfig;
+use crate::t;
 use futures_util::StreamExt;
-use rust_i18n::t;
 use std::time::Duration;
 
 /// How long one call to another deployment may take, connecting included.

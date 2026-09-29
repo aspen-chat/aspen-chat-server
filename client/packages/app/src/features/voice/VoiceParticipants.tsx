@@ -32,7 +32,7 @@ export function VoiceParticipants({ channelId }: { channelId: string }) {
   }
   const shown = visibleParticipants(voice.participants);
   return (
-    <ul aria-label={m.voice.participantsLabel} className="mb-1 ml-6 flex flex-col gap-0.5">
+    <ul aria-label={m.voice.participantsLabel} className="mb-1 ms-6 flex flex-col gap-0.5">
       {shown.map((participant) => (
         <ParticipantRow
           key={participant.user}
@@ -144,7 +144,7 @@ function ParticipantRow({
             onPress={() => {
               setMenuOpen((open) => !open);
             }}
-            className="tap-target ml-auto opacity-0 group-hover/participant:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
+            className="tap-target ms-auto opacity-0 group-hover/participant:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
           />
           <ParticipantMenu
             channelId={channelId}
@@ -181,7 +181,7 @@ export function Identity({
     <Button
       aria-label={format(m.profile.show, { name })}
       className={
-        "flex min-w-0 items-center gap-1.5 rounded-md text-left outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        "flex min-w-0 items-center gap-1.5 rounded-md text-start outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 " +
         (className ?? "")
       }
     >

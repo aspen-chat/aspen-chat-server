@@ -11,12 +11,12 @@ use crate::app::channel::{Channel, record};
 use crate::app::events::dm_recipients;
 use crate::app::{self, ChannelId, EventScope, GlobalServerContext, UserId, publish_event};
 use crate::database::schema::{channel, community_user, dm_recipient, message, user};
+use crate::t;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 
 /// The most people a group DM holds, its creator included. Every message in a DM is published

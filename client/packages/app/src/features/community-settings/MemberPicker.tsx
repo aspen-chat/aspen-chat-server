@@ -59,8 +59,8 @@ export function MemberPicker({
     >
       <Label className={labelClass}>{label}</Label>
       <div className="relative">
-        <Input className={inputClass + " w-full pr-9"} />
-        <Button className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-ink-muted outline-none">
+        <Input className={inputClass + " w-full pe-9"} />
+        <Button className="absolute top-1/2 end-2 -translate-y-1/2 rounded p-1 text-ink-muted outline-none">
           <CaretDownIcon size={14} aria-hidden="true" />
         </Button>
       </div>
@@ -76,7 +76,7 @@ export function MemberPicker({
           {(user: User) => (
             <ListBoxItem id={user.id} textValue={displayNameOf(user)} className={optionClass}>
               {displayNameOf(user)}
-              <span className="ml-2 text-xs text-ink-muted">{user.name}</span>
+              <span className="ms-2 text-xs text-ink-muted">{user.name}</span>
             </ListBoxItem>
           )}
         </ListBox>

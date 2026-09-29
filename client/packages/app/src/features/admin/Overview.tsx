@@ -1,6 +1,6 @@
 import type { AdminOverview } from "@aspen/protocol";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
-import { headline } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import type { AdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -8,6 +8,7 @@ import { format } from "@/i18n/messages";
 /** The deployment's totals, as a row of figures. */
 export function Overview({ read }: { read: AdminRead<AdminOverview> }) {
   const m = useMessages();
+  const { headline } = useFigures();
   const { data, error, reload } = read;
   return (
     <Section id="admin-overview" title={m.admin.overview}>

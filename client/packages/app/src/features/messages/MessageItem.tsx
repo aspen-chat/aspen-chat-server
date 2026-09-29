@@ -35,9 +35,10 @@ import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
 // On a touch screen the actions sit side by side at finger size.
 const actionClass =
@@ -73,6 +74,7 @@ export function MessageItem({
   /** Whether the message may start or show a thread here; not for a thread's own header. */
   threadable?: boolean;
 }) {
+  const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
@@ -152,7 +154,7 @@ export function MessageItem({
       tabIndex={-1}
       className={
         "group relative flex gap-3 rounded-md py-1.5 outline-none " +
-        (tagsMe ? "border-l-2 border-accent pr-2 pl-1.5 " : "px-2 ") +
+        (tagsMe ? "border-s-2 border-accent pe-2 ps-1.5 " : "px-2 ") +
         (highlighted
           ? "bg-accent-soft"
           : tagsMe
@@ -192,7 +194,7 @@ export function MessageItem({
           {author?.bot === true && <BotBadge />}
           {message.kind === "threadEcho" && (
             <span className="flex items-center gap-1 text-xs whitespace-nowrap text-ink-muted">
-              <ArrowBendDownRightIcon size={12} aria-hidden="true" />
+              <ArrowBendDownRightIcon size={12} aria-hidden="true" className="rtl:-scale-x-100" />
               {m.threads.repliedInThread}
             </span>
           )}
@@ -209,7 +211,7 @@ export function MessageItem({
             <span
               role="group"
               aria-label={m.messageActionsLabel}
-              className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:invisible pointer-coarse:absolute pointer-coarse:-top-4 pointer-coarse:right-2 pointer-coarse:z-10 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-line pointer-coarse:bg-surface-raised pointer-coarse:shadow-md pointer-coarse:group-focus-within:visible"
+              className="ms-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:invisible pointer-coarse:absolute pointer-coarse:-top-4 pointer-coarse:end-2 pointer-coarse:z-10 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-line pointer-coarse:bg-surface-raised pointer-coarse:shadow-md pointer-coarse:group-focus-within:visible"
             >
               {permissions.has("addReactions") && (
                 <ReactionPicker messageId={id} triggerClassName={actionClass} />
@@ -362,6 +364,7 @@ function ThreadSummary({
   home: ChannelHome;
   channelId: string;
 }) {
+  const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const thread = useChannel(threadId);
   const count = thread?.replyCount ?? 0;

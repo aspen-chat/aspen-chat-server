@@ -140,6 +140,13 @@ export const en = {
     account: "Account",
     audio: "Audio",
     appearance: "Appearance",
+    language: "Language",
+    languageLabel: "Show Aspen in",
+    languageAutomatic: "Automatic ({language})",
+    languageHint:
+      "Automatic follows your browser's languages. Your choice follows your account to every device, and servers write their messages in it too.",
+    pseudoAccented: "Accented English (for testing)",
+    pseudoMirrored: "Mirrored English (for testing right-to-left)",
     microphone: "Microphone",
     speaker: "Speaker",
     notificationOutput: "Notification sounds",
@@ -1073,7 +1080,10 @@ export const en = {
   },
 } as const;
 
-export type Messages = typeof en;
+/** A catalogue: the shape of `en`, with any text in place of its strings. */
+type Catalogue<T> = { readonly [K in keyof T]: T[K] extends string ? string : Catalogue<T[K]> };
+
+export type Messages = Catalogue<typeof en>;
 
 export function format(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (match, key: string) => values[key] ?? match);

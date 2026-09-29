@@ -128,7 +128,23 @@ thread_local! {
     pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::try_from_rng(&mut SysRng).expect("failed to initialize system randomness"));
 }
 
-i18n!("locales");
+i18n!(
+    "locales",
+    fallback = "en",
+    backend = app::locale::PseudoLocales::default()
+);
+
+/// `rust_i18n::t!` in the locale of the request being handled (`app::locale`). Every
+/// client-facing string goes through this one, never `rust_i18n::t!` directly.
+macro_rules! t {
+    ($key:expr) => {
+        rust_i18n::t!($key, locale = $crate::app::locale::current())
+    };
+    ($key:expr, $($rest:tt)+) => {
+        rust_i18n::t!($key, locale = $crate::app::locale::current(), $($rest)+)
+    };
+}
+pub(crate) use t;
 
 fn main() {
     let opt = Opt::parse();

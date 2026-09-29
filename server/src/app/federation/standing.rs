@@ -131,7 +131,7 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
         lists,
     } = receive::<StandingRequest>(state, token, &[Direction::Emigration]).await?;
     let here = own_domain(&state.config.federation)
-        .ok_or_else(|| app::Error::FederationRefused(rust_i18n::t!("federationOff")))?;
+        .ok_or_else(|| app::Error::FederationRefused(crate::t!("federationOff")))?;
     let asked: Vec<Uuid> = claims.users.into_iter().take(MAX_USERS).collect();
     let mut conn = state.connection_pool.get().await?;
     let found: Vec<(UserId, bool)> = user::table
@@ -359,10 +359,7 @@ async fn ask(
         standing: String,
     }
     let unreachable = || {
-        app::Error::DeploymentUnreachable(rust_i18n::t!(
-            "federationNoAnswer",
-            domain = home.as_str()
-        ))
+        app::Error::DeploymentUnreachable(crate::t!("federationNoAnswer", domain = home.as_str()))
     };
     let response = state
         .federation_client

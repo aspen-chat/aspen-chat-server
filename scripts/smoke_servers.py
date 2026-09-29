@@ -61,10 +61,13 @@ def psql(sql: str) -> str:
     return compose("exec", "-T", "database", "psql", "-U", "postgres", "-tAc", sql).stdout.strip()
 
 
-def request(method: str, url: str, body: dict | None = None, token: str | None = None) -> tuple[int, str]:
+def request(method: str, url: str, body: dict | None = None, token: str | None = None,
+            language: str | None = None) -> tuple[int, str]:
     headers = {"content-type": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    if language:
+        headers["accept-language"] = language
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, method=method, data=data, headers=headers)
     try:
@@ -199,6 +202,13 @@ def smoke(bins: Path, work: Path, processes: list) -> None:
     me = api("GET", "/users/@me", token=token)
     if me.get("name") != name:
         raise Failed(f"GET /users/@me answered {me}")
+
+    say("refusing a wrong password in the language asked for")
+    status, text = request("POST", f"http://127.0.0.1:{API_PORT}/api/v1/auth/login",
+                           {"username": name, "password": "wrong"}, language="en-XA, en;q=0.5")
+    title = json.loads(text).get("title", "")
+    if status != 401 or not (title.startswith("[") and title.endswith("]")):
+        raise Failed(f"a refusal asked for in en-XA answered {status} {text[:300]}")
 
     say("joining a call, which needs the voice server to have reported in")
     community = api("POST", "/communities", {"name": "Smoke"}, token)

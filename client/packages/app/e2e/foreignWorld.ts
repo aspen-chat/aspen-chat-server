@@ -189,7 +189,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
       404,
     );
   });
-  await page.routeWebSocket(`wss://${foreignDomain}/api/v1/events`, (ws) => {
+  await page.routeWebSocket(new RegExp(`^wss://${foreignDomain}/api/v1/events(\\?.*)?$`), (ws) => {
     ws.onMessage((frame) => {
       const parsed = JSON.parse(String(frame)) as { type?: string };
       if (parsed.type === "identify") {

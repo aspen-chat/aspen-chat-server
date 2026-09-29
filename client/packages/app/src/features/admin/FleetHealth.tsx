@@ -4,7 +4,7 @@ import type { ComponentType, ReactNode } from "react";
 import { useCallback } from "react";
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
-import { ago, bytes, count, rate, since } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -67,6 +67,7 @@ export function FleetHealth() {
 
 function ApiServerRow({ server, now }: { server: ApiServerHealth; now: number }) {
   const m = useMessages();
+  const { count, rate, bytes, since } = useFigures();
   const failing = server.serverErrorsPerMinute > 0;
   return (
     <tr>
@@ -98,6 +99,7 @@ function ApiServerRow({ server, now }: { server: ApiServerHealth; now: number })
 
 function VoiceServerRow({ server, now }: { server: VoiceServerHealth; now: number }) {
   const m = useMessages();
+  const { count, ago } = useFigures();
   return (
     <tr>
       <Cell>
@@ -183,7 +185,7 @@ export function Table({
         (dimmed ? " opacity-50" : "")
       }
     >
-      <table aria-label={label} className="w-full text-left text-sm">
+      <table aria-label={label} className="w-full text-start text-sm">
         <thead className="border-b border-line text-xs text-ink-muted">
           <tr>
             {headings.map((heading, i) => (
@@ -193,7 +195,7 @@ export function Table({
                 aria-sort={typeof heading === "string" ? undefined : heading.sort}
                 className={
                   "px-3 py-2 font-medium whitespace-nowrap" +
-                  (numeric.includes(i) ? " text-right" : "")
+                  (numeric.includes(i) ? " text-end" : "")
                 }
               >
                 {typeof heading === "string" ? heading : heading.content}
@@ -211,7 +213,7 @@ export function Cell({ numeric = false, children }: { numeric?: boolean; childre
   return (
     <td
       className={
-        "px-3 py-2 align-top" + (numeric ? " text-right whitespace-nowrap tabular-nums" : "")
+        "px-3 py-2 align-top" + (numeric ? " text-end whitespace-nowrap tabular-nums" : "")
       }
     >
       {children}

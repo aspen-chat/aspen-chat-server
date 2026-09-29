@@ -21,13 +21,13 @@ use crate::app;
 use crate::app::media_store::PresignedUpload;
 use crate::app::{AttachmentId, Loadable};
 use crate::database::schema::attachment;
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,
     SelectableHelper,
 };
 use diesel_async::RunQueryDsl;
-use rust_i18n::t;
 use tracing::warn;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]

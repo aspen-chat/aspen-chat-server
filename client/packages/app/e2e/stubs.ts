@@ -65,7 +65,7 @@ export async function stubSignedInBackend(page: Page, name: string): Promise<voi
       }),
     }),
   );
-  await page.routeWebSocket(/\/api\/v1\/events$/, (ws) => {
+  await page.routeWebSocket(/\/api\/v1\/events(\?.*)?$/, (ws) => {
     ws.onMessage((message) => {
       const frame: unknown = JSON.parse(String(message));
       if (

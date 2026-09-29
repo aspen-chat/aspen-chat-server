@@ -12,11 +12,11 @@ use crate::app::federation::{
     contact, jws, lists_of, own_domain,
 };
 use crate::database::schema::federated_deployment;
+use crate::t;
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use fred::prelude::KeysInterface as _;
-use rust_i18n::t;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;

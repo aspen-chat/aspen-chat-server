@@ -10,13 +10,13 @@ use crate::app::react::validate_emoji;
 use crate::app::registration_invite;
 use crate::app::{IconId, Loadable, MaybeLoaded, UserId, publish_event};
 use crate::database::schema::{self, bot_token, refresh_token, session, user};
+use crate::t;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::{BoolExpressionMethods, ExpressionMethods, Queryable, Selectable};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::prelude::KeysInterface;
-use rust_i18n::t;
 
 #[derive(Debug, Clone, Queryable, QueryableByName, Selectable, Insertable)]
 #[diesel(table_name = user)]

@@ -1,4 +1,5 @@
 import createClient, { type Client } from "openapi-fetch";
+import { acceptLanguage } from "./languages";
 import type { components, paths } from "./generated/openapi";
 import {
   handoffPageUrl,
@@ -98,7 +99,21 @@ export class AspenClient {
   constructor(options: AspenClientOptions) {
     this.baseUrl = options.baseUrl;
     this.#store = options.sessionStore;
-    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    const fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    this.#fetch = (input, init) => {
+      const languages = acceptLanguage();
+      if (languages === null) {
+        return fetch(input, init);
+      }
+      // Set in place: rebuilding a request would have to copy a body that is a stream.
+      if (input instanceof Request) {
+        input.headers.set("accept-language", languages);
+        return fetch(input, init);
+      }
+      const headers = new Headers(init?.headers);
+      headers.set("accept-language", languages);
+      return fetch(input, { ...init, headers });
+    };
     this.#refreshLeewayMs = options.refreshLeewayMs ?? 60_000;
     this.#onSessionChange = options.onSessionChange;
     this.#sleep =

@@ -17,11 +17,11 @@
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::{self, EventScope, GlobalServerContext, UserId, publish_event};
 use crate::database::schema::{user, user_block};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 
 /// Someone the user has blocked, and since when.
 #[derive(Debug, Clone, PartialEq, Eq, Queryable, Selectable)]

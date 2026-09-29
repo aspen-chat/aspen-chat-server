@@ -7,11 +7,11 @@ use crate::app::federation::keys::{DeploymentDocument, current_of, follow_handov
 use crate::app::federation::{Domain, Listed, Origin, fetch, get, own_domain};
 use crate::aspen_config::FederationConfig;
 use crate::database::schema::federated_deployment;
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use serde::Serialize;
 use utoipa::ToSchema;
 

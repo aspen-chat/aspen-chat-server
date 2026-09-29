@@ -17,6 +17,7 @@ use crate::database::schema::attachment;
 use crate::database::schema::channel;
 use crate::database::schema::message;
 use crate::database::schema::message_attachment;
+use crate::t;
 use chrono::Utc;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl,
@@ -25,7 +26,6 @@ use diesel::{
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use rust_i18n::t;
 
 #[derive(Selectable, Queryable, Insertable)]
 #[diesel(table_name=message)]

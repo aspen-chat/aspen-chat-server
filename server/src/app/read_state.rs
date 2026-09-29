@@ -22,12 +22,12 @@ use crate::app::{
     self, ChannelId, CommunityId, EventScope, GlobalServerContext, MessageId, UserId, publish_event,
 };
 use crate::database::schema::{channel, message};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Nullable, Timestamptz, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 
 /// Where a user has read a channel up to, and the newest message there by anyone else.
 #[derive(Debug, Clone, PartialEq, Eq)]

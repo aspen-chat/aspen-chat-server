@@ -1,13 +1,14 @@
 import type { Growth as GrowthSeries, GrowthRange } from "@aspen/protocol";
 import { useCallback, useState } from "react";
-import { ToggleButton, ToggleButtonGroup } from "react-aria-components";
+import { ToggleButton, ToggleButtonGroup, useLocale } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
-import { count } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import { LineChart } from "@/features/admin/LineChart";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
+import { dateFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
 
 const RANGES: readonly GrowthRange[] = [
@@ -18,12 +19,14 @@ const RANGES: readonly GrowthRange[] = [
   "allTime",
 ];
 
-const dayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const monthFormat = new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" });
-const shortMonthFormat = new Intl.DateTimeFormat(undefined, { month: "short", year: "2-digit" });
+const DAY: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+const MONTH: Intl.DateTimeFormatOptions = { month: "short", year: "numeric" };
+const SHORT_MONTH: Intl.DateTimeFormatOptions = { month: "short", year: "2-digit" };
 
-/** How a step of `unit` is named, in the tooltip and the table. */
-function describer(m: Messages, unit: GrowthSeries["unit"]) {
+/** How a step of `unit` is named in `locale`, in the tooltip and the table. */
+function describer(m: Messages, locale: string, unit: GrowthSeries["unit"]) {
+  const dayFormat = dateFormat(locale, DAY);
+  const monthFormat = dateFormat(locale, MONTH);
   return (at: string) => {
     const date = new Date(at);
     switch (unit) {
@@ -37,7 +40,9 @@ function describer(m: Messages, unit: GrowthSeries["unit"]) {
   };
 }
 
-function axisDate(unit: GrowthSeries["unit"]) {
+function axisDate(locale: string, unit: GrowthSeries["unit"]) {
+  const dayFormat = dateFormat(locale, DAY);
+  const shortMonthFormat = dateFormat(locale, SHORT_MONTH);
   return (at: string) =>
     unit === "month" ? shortMonthFormat.format(new Date(at)) : dayFormat.format(new Date(at));
 }
@@ -49,6 +54,8 @@ function axisDate(unit: GrowthSeries["unit"]) {
  */
 export function Growth() {
   const m = useMessages();
+  const { count } = useFigures();
+  const { locale } = useLocale();
   const sync = useSync();
   const [range, setRange] = useState<GrowthRange>("threeMonths");
   const [asTable, setAsTable] = useState(false);
@@ -61,7 +68,7 @@ export function Growth() {
   }
   const series = shown?.series;
   const loading = shown?.range !== range;
-  const describe = series === undefined ? () => "" : describer(m, series.unit);
+  const describe = series === undefined ? () => "" : describer(m, locale, series.unit);
   return (
     <Section id="admin-growth" title={m.admin.growth}>
       <div className="flex flex-wrap items-center gap-2">
@@ -91,7 +98,7 @@ export function Growth() {
         <ToggleButton
           isSelected={asTable}
           onChange={setAsTable}
-          className="ml-auto rounded-md px-2 py-1 text-sm text-ink-muted underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="ms-auto rounded-md px-2 py-1 text-sm text-ink-muted underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           {asTable ? m.admin.showCharts : m.admin.showTable}
         </ToggleButton>
@@ -127,7 +134,7 @@ export function Growth() {
                   })}
                   points={series.points.map((p) => ({ at: p.at, value: p[key] }))}
                   describe={describe}
-                  axisDate={axisDate(series.unit)}
+                  axisDate={axisDate(locale, series.unit)}
                   dimmed={loading}
                 />
               </figure>

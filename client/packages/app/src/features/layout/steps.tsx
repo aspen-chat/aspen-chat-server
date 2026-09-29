@@ -18,7 +18,7 @@ export function OptionButton({
   return (
     <Button
       onPress={onPress}
-      className="flex flex-col gap-1 rounded-lg border border-line bg-surface px-4 py-3 text-left outline-none hover:border-accent hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="flex flex-col gap-1 rounded-lg border border-line bg-surface px-4 py-3 text-start outline-none hover:border-accent hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <span className="font-medium">{title}</span>
       <span className="text-sm text-ink-muted">{hint}</span>
@@ -36,7 +36,7 @@ export function StepHeading({ onBack, children }: { onBack: () => void; children
         aria-label={m.back}
         className="rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
       >
-        <ArrowLeftIcon size={18} aria-hidden="true" />
+        <ArrowLeftIcon size={18} aria-hidden="true" className="rtl:-scale-x-100" />
       </Button>
       <DialogHeading>{children}</DialogHeading>
     </div>

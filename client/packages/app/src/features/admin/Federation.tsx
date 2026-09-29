@@ -21,7 +21,7 @@ import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Directory, type Column } from "@/features/admin/Directories";
 import { Cell, Status, Table } from "@/features/admin/FleetHealth";
-import { moment } from "@/features/admin/format";
+import { useFigures } from "@/features/admin/format";
 import { useAdminRead, type AdminRead } from "@/features/admin/useAdminRead";
 import {
   alertClass,
@@ -72,6 +72,7 @@ function problemText(e: unknown): string {
  */
 export function FederationSection() {
   const m = useMessages();
+  const { moment } = useFigures();
   const sync = useSync();
   const loadOverview = useCallback(() => sync.federation(), [sync]);
   const overview = useAdminRead(loadOverview);

@@ -363,7 +363,7 @@ pub async fn set_foreign_user_banned(
                 .first(conn)
                 .await?;
             if !foreign {
-                return Err(app::Error::Validation(rust_i18n::t!("banOnlyForeign")));
+                return Err(app::Error::Validation(crate::t!("banOnlyForeign")));
             }
             if was_banned == banned {
                 return Ok(false);

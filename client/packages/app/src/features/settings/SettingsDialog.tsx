@@ -39,6 +39,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
 import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { DeveloperSection } from "@/features/settings/DeveloperSection";
+import { LanguageSection } from "@/features/settings/LanguageSection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -47,10 +48,10 @@ import { ThemePicker } from "@/theme/ThemePicker";
 
 /**
  * The user's preferences: the microphone and speaker voice chat uses and the speaker for
- * notification sounds, then the colour palette, all kept with this install; the people the
- * user has blocked; developer mode, with the user's bots; the account's sign-in and security
- * settings; and the way out of the account. Sections for account-wide
- * preferences slot in beside them.
+ * notification sounds, then the colour palette, all kept with this install; the language, kept
+ * with the account; the people the user has blocked; developer mode, with the user's bots; the
+ * account's sign-in and security settings; and the way out of the account. Sections for
+ * account-wide preferences slot in beside them.
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
   const m = useMessages();
@@ -75,6 +76,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   </h3>
                   <ThemePicker />
                 </section>
+                <LanguageSection />
                 <BlockedUsersSection />
                 <OtherServersSection />
                 <DeveloperSection />

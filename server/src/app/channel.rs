@@ -14,13 +14,13 @@ use crate::app::{
 };
 use crate::database::schema::message_attachment;
 use crate::database::schema::{channel, message};
+use crate::t;
 use diesel::{
     AsChangeset, BoolExpressionMethods, CombineDsl, ExpressionMethods, Insertable, QueryDsl,
     Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use vecmap::VecMap;
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]

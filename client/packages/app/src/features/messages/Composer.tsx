@@ -174,7 +174,7 @@ export function Composer({
             <li
               key={p.key}
               className={
-                "relative flex items-center gap-2 rounded-md border p-1.5 pr-8 text-sm " +
+                "relative flex items-center gap-2 rounded-md border p-1.5 pe-8 text-sm " +
                 (p.state.kind === "failed" ? "border-danger text-danger" : "border-line")
               }
             >
@@ -203,7 +203,7 @@ export function Composer({
                 onPress={() => {
                   setPending((list) => list.filter((other) => other.key !== p.key));
                 }}
-                className="absolute top-1 right-1 rounded p-0.5 text-ink-faint outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+                className="absolute top-1 end-1 rounded p-0.5 text-ink-faint outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
               >
                 <XIcon size={14} aria-hidden="true" />
               </Button>

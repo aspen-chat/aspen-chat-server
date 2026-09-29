@@ -22,7 +22,7 @@ export function MemberList({ communityId }: { communityId: string }) {
   return (
     <aside
       aria-label={m.membersLabel}
-      className="flex w-56 shrink-0 flex-col overflow-y-auto border-l border-line bg-surface-raised px-2 py-3"
+      className="flex w-56 shrink-0 flex-col overflow-y-auto border-s border-line bg-surface-raised px-2 py-3"
     >
       <MemberGroup
         heading={format(m.onlineGroup, { count: String(online.length) })}
@@ -68,7 +68,7 @@ function MemberRow({ user }: { user: User }) {
       <ProfilePopover user={user}>
         <Button
           aria-label={format(m.profile.show, { name })}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-start outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <span className="relative">
             <Avatar name={name} iconId={user.icon} size="sm" />
@@ -102,7 +102,7 @@ function StatusDot({ status, label }: { status: UserOnlineStatus; label: string 
     <span
       role="img"
       aria-label={label}
-      className={`absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface-raised ${colour}`}
+      className={`absolute -end-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface-raised ${colour}`}
     />
   );
 }

@@ -35,7 +35,7 @@ export function ChannelHeader({
         aria-label={m.backToChannels}
         className="tap-target rounded-md p-1 text-ink-muted outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 md:hidden"
       >
-        <ArrowLeftIcon size={18} aria-hidden="true" />
+        <ArrowLeftIcon size={18} aria-hidden="true" className="rtl:-scale-x-100" />
       </Link>
       <Heading className="flex min-w-0 flex-1 items-center gap-1.5 truncate font-semibold">
         <span aria-hidden="true" className="text-ink-faint">
@@ -51,9 +51,9 @@ export function ChannelHeader({
           className="hidden rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 lg:block"
         >
           {membersPanel.open ? (
-            <ArrowSquareRightIcon size={20} aria-hidden="true" />
+            <ArrowSquareRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
           ) : (
-            <ArrowSquareLeftIcon size={20} aria-hidden="true" />
+            <ArrowSquareLeftIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
           )}
         </Button>
       </Tooltip>

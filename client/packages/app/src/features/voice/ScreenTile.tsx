@@ -34,7 +34,7 @@ export function ScreenTile({
         aria-label={label}
         className="h-full w-full object-contain"
       />
-      <figcaption className="absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-0.5 text-xs text-white">
+      <figcaption className="absolute bottom-2 start-2 rounded-md bg-black/60 px-2 py-0.5 text-xs text-white">
         {label}
       </figcaption>
     </figure>

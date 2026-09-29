@@ -7,9 +7,9 @@
 //! The web client runs the same ceremonies in its own page when its origin is under the relying
 //! party's domain, with the same base64url conversions in `@aspen/protocol`'s `passkeys.ts`.
 
+use crate::t;
 use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY};
 use axum::response::IntoResponse;
-use rust_i18n::t;
 use std::borrow::Cow;
 
 const TEMPLATE: &str = include_str!("passkey_page/page.html");

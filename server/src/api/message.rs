@@ -16,10 +16,10 @@ type PollSideload = (
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_MESSAGES};
 use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use crate::app::{AttachmentId, ChannelId, MessageId, PollId, UserId};
+use crate::t;
 use crate::{api, app};
 use axum::extract::State;
 use axum::http::StatusCode;
-use rust_i18n::t;
 use serde::Deserialize;
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};

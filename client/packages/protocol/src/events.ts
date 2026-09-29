@@ -2,6 +2,7 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import eventSchema from "./generated/event_schema.json";
 import type { ClientMessage, ServerEvent, ServerMessage } from "./generated/events";
+import { acceptLanguage } from "./languages";
 
 export type { ClientMessage, ServerEvent, ServerMessage };
 
@@ -172,7 +173,7 @@ export class EventStream {
     const WS = this.#options.WebSocket ?? globalThis.WebSocket;
     let socket: WebSocket;
     try {
-      socket = new WS(this.#options.url);
+      socket = new WS(withLocale(this.#options.url));
     } catch (error) {
       this.#onDropped(error instanceof Error ? error.message : String(error));
       return;
@@ -319,4 +320,15 @@ export function compileValidator(): ValidateFunction<ServerMessage> {
     cachedValidator = validator;
   }
   return cachedValidator;
+}
+
+/** `url` naming the languages the user reads, so the server writes its errors in them. */
+function withLocale(url: string): string {
+  const languages = acceptLanguage();
+  if (languages === null) {
+    return url;
+  }
+  const located = new URL(url);
+  located.searchParams.set("locale", languages);
+  return located.toString();
 }

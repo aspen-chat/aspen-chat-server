@@ -27,6 +27,7 @@ use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
 use crate::database::schema::{message, poll, poll_option, poll_vote};
+use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods, QueryDsl,
@@ -34,7 +35,6 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::error;

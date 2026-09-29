@@ -517,10 +517,10 @@ function CheckAccess({ target }: { target: AccessTarget }) {
               );
               return (
                 <tr key={permission} className="border-t border-line align-top">
-                  <th scope="row" className="py-1.5 pr-2 text-left font-normal">
+                  <th scope="row" className="py-1.5 pe-2 text-start font-normal">
                     {m.permissionNames[permission].name}
                   </th>
-                  <td className="py-1.5 pr-2 whitespace-nowrap">
+                  <td className="py-1.5 pe-2 whitespace-nowrap">
                     <span className="flex items-center gap-1">
                       {decision.allowed ? (
                         <CheckIcon size={14} aria-hidden="true" className="text-online" />

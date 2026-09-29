@@ -89,7 +89,7 @@ function BotsBody() {
                   onPress={() => {
                     setSelected(bot.id);
                   }}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent-strong"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent-strong"
                 >
                   <Avatar name={displayNameOf(bot)} iconId={bot.icon} size="sm" />
                   <span className="min-w-0 flex-1 truncate">{displayNameOf(bot)}</span>

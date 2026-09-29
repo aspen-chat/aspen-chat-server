@@ -20,10 +20,10 @@ use crate::database::schema::{
     category, category_override, channel, channel_override, community, community_member_role,
     community_role,
 };
+use crate::t;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rust_i18n::t;
 use std::collections::HashMap;
 
 /// The longest a role's name may be, in characters.

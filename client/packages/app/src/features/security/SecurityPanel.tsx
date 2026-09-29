@@ -19,6 +19,7 @@ import {
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import * as api from "./api";
 import { QrCode } from "./QrCode";
@@ -34,7 +35,7 @@ function errorText(e: unknown): string | null {
   return e instanceof ApiProblemError ? e.message : String(e);
 }
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
 
 /**
  * Authenticator app, passkeys, and recovery codes. Changes that need a fresh verification ask
@@ -316,6 +317,7 @@ function PasskeySection({
 }
 
 function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
+  const dateFormat = useDateFormat(DATE);
   const m = useMessages();
   const client = useAspenClient();
   const withReauth = useReauth();

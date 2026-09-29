@@ -21,6 +21,7 @@ use crate::app::{
 use crate::database::schema::{
     channel, voice_participant, voice_server, voice_server_failure, voice_session,
 };
+use crate::t;
 use chrono::{DateTime, Duration, Utc};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
@@ -30,7 +31,6 @@ use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use futures_util::StreamExt;
 use rand::seq::SliceRandom;
-use rust_i18n::t;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 use voice_protocol::control::{

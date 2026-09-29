@@ -81,7 +81,7 @@ export function ThreadPanel({
     <section
       role={onePane ? "main" : "complementary"}
       aria-label={m.threads.heading}
-      className="flex min-h-0 w-full flex-col border-l border-line bg-surface md:w-96"
+      className="flex min-h-0 w-full flex-col border-s border-line bg-surface md:w-96"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-3">
         <ChatsCircleIcon size={18} aria-hidden="true" className="text-ink-faint" />
