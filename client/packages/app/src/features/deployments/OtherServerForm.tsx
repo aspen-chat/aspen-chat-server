@@ -11,9 +11,10 @@ import {
   labelClass,
   primaryButtonClass,
 } from "@/features/auth/styles";
-import { parseInviteCode } from "@/features/invites/inviteCode";
+import { parseInvite } from "@/features/invites/inviteCode";
 import { deploymentLink, inviteLink } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 
 /**
  * Signs in at another deployment with the user's home account: its domain, and optionally an
@@ -33,18 +34,22 @@ export function OtherServerForm({ onDone }: { onDone?: () => void }) {
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const target = domain.trim().toLowerCase();
-    const code = communityInvite.trim() === "" ? null : parseInviteCode(communityInvite);
-    if (communityInvite.trim() !== "" && code === null) {
+    const invite = communityInvite.trim() === "" ? null : parseInvite(communityInvite);
+    if (communityInvite.trim() !== "" && invite === null) {
       setError(m.inviteInputInvalid);
+      return;
+    }
+    if (invite?.domain != null && invite.domain !== target) {
+      setError(format(m.deployments.inviteElsewhere, { domain: invite.domain, target }));
       return;
     }
     setPending(true);
     setError(null);
     try {
-      const invite = registrationInvite?.trim();
-      await hub.join(target, invite === undefined || invite === "" ? undefined : invite);
+      const registration = registrationInvite?.trim();
+      await hub.join(target, registration === "" ? undefined : registration);
       onDone?.();
-      await navigate(code === null ? deploymentLink(target) : inviteLink(target, code));
+      await navigate(invite === null ? deploymentLink(target) : inviteLink(target, invite.code));
     } catch (e) {
       if (e instanceof ApiProblemError && e.problem.code === "registrationInviteRequired") {
         setRegistrationInvite((current) => current ?? "");
@@ -71,7 +76,18 @@ export function OtherServerForm({ onDone }: { onDone?: () => void }) {
           className={inputClass}
         />
       </TextField>
-      <TextField value={communityInvite} onChange={setCommunityInvite} className={fieldClass}>
+      <TextField
+        value={communityInvite}
+        onChange={(value) => {
+          setCommunityInvite(value);
+          // A link names its deployment, which fills in the domain when none is given.
+          const named = parseInvite(value)?.domain;
+          if (named != null && domain.trim() === "") {
+            setDomain(named);
+          }
+        }}
+        className={fieldClass}
+      >
         <Label className={labelClass}>{m.deployments.communityInvite}</Label>
         <Input className={inputClass} />
         <Text slot="description" className={hintClass}>

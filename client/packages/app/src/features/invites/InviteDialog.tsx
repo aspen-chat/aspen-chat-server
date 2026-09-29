@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useCan, useInvites, useMe, useSync } from "@/api/hooks";
+import { useScopeDomain } from "@/api/identity";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -24,7 +25,7 @@ import {
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
-import { inviteLink } from "@/features/invites/inviteCode";
+import { shareableInviteLink } from "@/features/invites/inviteCode";
 import { copyText } from "@/features/layout/clipboard";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
@@ -189,7 +190,8 @@ function InviteRow({
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const [revoking, setRevoking] = useState(false);
-  const link = inviteLink(invite.code);
+  const domain = useScopeDomain();
+  const link = shareableInviteLink(invite.code, domain);
   const expiresAt = invite.expiresAt == null ? null : new Date(invite.expiresAt);
   const expired = expiresAt !== null && expiresAt.getTime() < now;
 

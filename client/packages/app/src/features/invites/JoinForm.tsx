@@ -2,11 +2,14 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState, type SyntheticEvent } from "react";
 import { Button, FieldError, Form, Input, Label, TextField } from "react-aria-components";
 import { fieldClass, inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
-import { inviteLinkExample, parseInviteCode } from "@/features/invites/inviteCode";
-import { inviteLink, useDomain } from "@/features/messages/links";
+import { inviteLinkExample, parseInvite } from "@/features/invites/inviteCode";
+import { openInviteLink, useDomain } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 
-/** Takes a pasted invite link or code and opens its invite screen, on the deployment shown. */
+/**
+ * Takes a pasted invite link or code and opens its invite screen: on the deployment the link
+ * names, or for a bare code, the deployment shown.
+ */
 export function JoinForm({ onDone }: { onDone?: () => void }) {
   const m = useMessages();
   const domain = useDomain();
@@ -16,13 +19,13 @@ export function JoinForm({ onDone }: { onDone?: () => void }) {
   function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = new FormData(event.currentTarget).get("invite");
-    const code = parseInviteCode(typeof value === "string" ? value : "");
-    if (code === null) {
+    const invite = parseInvite(typeof value === "string" ? value : "");
+    if (invite === null) {
       setInvalid(true);
       return;
     }
     onDone?.();
-    void navigate(inviteLink(domain, code));
+    void navigate(openInviteLink(invite, domain));
   }
 
   return (

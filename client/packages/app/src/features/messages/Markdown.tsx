@@ -1,8 +1,11 @@
 import type { Mentions } from "@aspen/protocol";
 import { isValidElement, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
 import { CodeBlock } from "@/features/messages/CodeBlock";
+import { openInviteLink, useDomain } from "@/features/messages/links";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
 import { MentionContext } from "@/features/messages/mentionContext";
@@ -10,22 +13,41 @@ import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
 
+const linkClass =
+  "text-accent underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
+
 /**
- * Links open elsewhere and take the palette accent. `react-markdown` has already dropped any
+ * A link in a message. An Aspen invite link that names its deployment opens its invite screen
+ * here (`InviteMessageLink`), whichever client made it; every other link opens elsewhere.
+ */
+function MessageLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+  const invite = href === undefined ? null : parseInvite(href);
+  if (invite?.domain != null) {
+    return <InviteMessageLink invite={invite}>{children}</InviteMessageLink>;
+  }
+  return (
+    <a href={href} target="_blank" rel="noreferrer noopener" className={linkClass}>
+      {children}
+    </a>
+  );
+}
+
+function InviteMessageLink({ invite, children }: { invite: InviteRef; children: ReactNode }) {
+  const current = useDomain();
+  return (
+    <Link {...openInviteLink(invite, current)} className={linkClass}>
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * Links take the palette accent (see `MessageLink`). `react-markdown` has already dropped any
  * URL whose scheme is not http, https, mailto, or a relative path, so `href` is safe to use.
  * Fenced blocks go through `CodeBlock` for highlighting; inline code is left to the stylesheet.
  */
 const components: Components = {
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      className="text-accent underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none"
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => <MessageLink href={href}>{children}</MessageLink>,
   // `remarkSpoilers` marks its spans with `data-spoiler` and `remarkMentions` with
   // `data-mention`; every other span is left as it is.
   span: ({ children, ...props }) => {

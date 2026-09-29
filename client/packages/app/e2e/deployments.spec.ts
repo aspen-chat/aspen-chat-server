@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { foreignCommunity, foreignDomain, stubForeignDeployment } from "./foreignWorld";
-import { signInToWorld } from "./world";
+import {
+  foreignCommunity,
+  foreignDomain,
+  foreignInviteCode,
+  stubForeignDeployment,
+} from "./foreignWorld";
+import { inviteCode, signInToWorld } from "./world";
 
 /**
  * Other deployments beside the home, against the stubbed world in `world.ts` and a stubbed
@@ -106,4 +111,58 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
   await row.getByRole("button", { name: "Lift the ban on Stranger" }).click();
   await expect(row.getByRole("button", { name: "Ban Stranger from this server" })).toBeVisible();
   expect(bans).toEqual(["PUT", "DELETE"]);
+});
+
+test("an invite's link names its server", async ({ page }) => {
+  await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: true }));
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: (text: string) => {
+          document.body.dataset.copied = text;
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Invite people" }).click();
+  const invite = page.getByRole("dialog").locator("li").first();
+  await invite.getByRole("button", { name: "Copy link" }).click();
+  await expect(page.locator("body")).toHaveAttribute(
+    "data-copied",
+    new RegExp(`/invite/${inviteCode}\\?at=home\\.example$`),
+  );
+});
+
+test("an invite link naming another server opens there, and one naming home stays", async ({
+  page,
+}) => {
+  await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: true }));
+  await expect(rail(page).getByRole("row", { name: /^Family/ })).toBeVisible();
+  await page.goto(`/invite/${foreignInviteCode}?at=${foreignDomain}`);
+  await expect(page).toHaveURL(new RegExp(`/at/beta\\.example/invite/${foreignInviteCode}$`));
+  await expect(page.getByRole("heading", { name: /Beta club/ })).toBeVisible();
+
+  await page.goto(`/invite/${inviteCode}?at=home.example`);
+  await expect(page.getByRole("heading", { name: /Family/ })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`^[^#]*/invite/${inviteCode}\\?at=home\\.example$`));
+});
+
+test("a pasted invite link opens on the server it names", async ({ page }) => {
+  await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: true }));
+  await rail(page).getByRole("button", { name: "Create or join a community" }).click();
+  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page
+    .getByRole("textbox", { name: "Invite link or code" })
+    .fill(`https://elsewhere.example/invite/${foreignInviteCode}?at=${foreignDomain}`);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page).toHaveURL(new RegExp(`/at/beta\\.example/invite/${foreignInviteCode}$`));
+  await expect(page.getByRole("heading", { name: /Beta club/ })).toBeVisible();
+});
+
+test("signed out, an invite link says the account can be on any server", async ({ page }) => {
+  await page.goto(`/invite/${foreignInviteCode}?at=${foreignDomain}`);
+  await expect(
+    page.getByText(`This invite is to a community on ${foreignDomain}.`, { exact: false }),
+  ).toBeVisible();
 });

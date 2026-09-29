@@ -53,6 +53,8 @@ export const en = {
     communityInvite: "Community invite",
     communityInviteHint: "An invite from that server, if you have one; it opens once you're in.",
     registrationInvite: "Registration invite",
+    inviteElsewhere:
+      "That invite is for a community on {domain}, not {target}. Change the server to {domain} to use it.",
     signingInShort: "Signing in…",
     otherServers: "Other servers",
     leave: "Leave",
@@ -551,7 +553,10 @@ export const en = {
   inviteInputInvalid: "That does not look like an invite link or code.",
   lookingUpInvite: "Checking the invite…",
   inviteUnusableHeading: "This invite cannot be used",
-  inviteNotFound: "It does not exist or has been revoked.",
+  inviteNotFound:
+    "It doesn't exist here: it may have been mistyped or revoked. Ask whoever shared it for a new one.",
+  inviteOnDomain:
+    "This invite is to a community on {domain}. Sign in, and it opens next; your account doesn't need to be on {domain}.",
   inviteExpiredHeading: "This invite has expired",
   inviteExpiredHint: "Ask for a new one from someone in the community.",
   invitedTo: "You have been invited to {community}",

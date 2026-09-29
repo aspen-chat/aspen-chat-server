@@ -7,6 +7,8 @@ const origin = `https://${foreignDomain}`;
 const meThere = "0290f0a0-0000-7000-8000-000000000001";
 const host = "0290f0a0-0000-7000-8000-000000000002";
 export const foreignCommunity = "0290f0a0-0000-7000-8000-000000000010";
+/** An invite to its community. */
+export const foreignInviteCode = "BetaClub7";
 const foreignChannel = "0290f0a0-0000-7000-8000-000000000011";
 const foreignDm = "0290f0a0-0000-7000-8000-000000000012";
 const everyone = "0290f0a0-0000-7000-8000-000000000040";
@@ -149,6 +151,20 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
           readStates: [
             { channel: foreignDm, lastRead: null, lastMessage: dmMessageId, mentions: 0 },
           ],
+        },
+      });
+    }
+    if (path === `/invites/${foreignInviteCode}`) {
+      return json(route, {
+        data: {
+          code: foreignInviteCode,
+          community: foreignCommunity,
+          createdAt: later(-60),
+          createdBy: host,
+          expiresAt: null,
+        },
+        included: {
+          communities: [{ id: foreignCommunity, name: "Beta club", icon: null, owner: host }],
         },
       });
     }

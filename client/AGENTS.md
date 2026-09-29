@@ -72,7 +72,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `useSources` and `useEverywhere` (`src/api/everywhere.ts`) read across every deployment: the
   rail, ordered by the account preference `RAIL_ORDER` with a globe on another deployment's
   communities, and the one DM list, ordered by `RecordStore.dmActivity`. Links carry the
-  deployment (`ChannelHome.domain`, `src/features/messages/links.ts`; `useDomain`). Adding a
+  deployment (`ChannelHome.domain`, `src/features/messages/links.ts`; `useDomain`). An invite's
+  shared link names its deployment, `/invite/{code}?at={domain}` (`shareableInviteLink`,
+  `src/features/invites/inviteCode.ts`), so whoever opens it is taken there whatever their home:
+  the invite screen goes on to `/at/{domain}/invite/{code}` when the domain is not the home's,
+  and one pasted into the join form (`parseInvite`, which also reads `/at/{domain}/invite/…`)
+  or posted in a message (`MessageLink`) opens the same way; a signed-out visitor is told their
+  account may be on any deployment. Adding a
   server is the add dialog's last option (`OtherServerForm`), leaving one is in Settings
   (`OtherServersSection`), and signing out at home signs out everywhere (`useSignOut`). A user
   is in one call at a time across deployments (`useOneCallAtATime`, `src/api/calls.ts`), and

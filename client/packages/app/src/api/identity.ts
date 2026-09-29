@@ -25,8 +25,26 @@ export function identityOf(
 
 /** The domain of the viewer's home among deployments; `null` while unknown or when it has none. */
 export function useHomeDomain(): string | null {
+  return useHomeDomainState() ?? null;
+}
+
+/**
+ * The domain of the deployment in scope: the one `ScopeDomainContext` names, or the viewer's
+ * home. `null` while the home's is unknown, or when it takes no part in federation.
+ */
+export function useScopeDomain(): string | null {
+  const scope = useContext(ScopeDomainContext);
+  const home = useHomeDomain();
+  return scope ?? home;
+}
+
+/**
+ * The domain of the viewer's home among deployments: `undefined` while unknown, `null` when it
+ * takes no part in federation.
+ */
+export function useHomeDomainState(): string | null | undefined {
   const home = useContext(HomeClientContext);
-  const [domain, setDomain] = useState<string | null>(null);
+  const [domain, setDomain] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     if (home === null) {
       return;

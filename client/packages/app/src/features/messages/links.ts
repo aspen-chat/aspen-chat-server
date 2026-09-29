@@ -1,4 +1,5 @@
 import { linkOptions, useParams } from "@tanstack/react-router";
+import type { InviteRef } from "@/features/invites/inviteCode";
 
 /**
  * The deployment a route belongs to: `null` for the user's home, whose routes are at the root,
@@ -50,6 +51,21 @@ export function inviteLink(domain: Domain, code: string) {
   return domain === null
     ? linkOptions({ to: "/invite/$code", params: { code } })
     : linkOptions({ to: "/at/$domain/invite/$code", params: { domain, code } });
+}
+
+/**
+ * The route an invite pasted or clicked while `current` is shown opens: one naming its
+ * deployment opens the invite route with `?at=`, which goes on to that deployment; one that
+ * does not is taken to be `current`'s.
+ */
+export function openInviteLink(invite: InviteRef, current: Domain) {
+  return invite.domain === null
+    ? inviteLink(current, invite.code)
+    : linkOptions({
+        to: "/invite/$code",
+        params: { code: invite.code },
+        search: { at: invite.domain },
+      });
 }
 
 /** The route of a channel's history. */

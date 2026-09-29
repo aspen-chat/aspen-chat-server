@@ -1,13 +1,14 @@
 import { ApiProblemError, type InviteLookup } from "@aspen/protocol";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import { useSync, useSyncStatus } from "@/api/hooks";
+import { useHomeDomainState } from "@/api/identity";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-import { useDomain, communityLink } from "@/features/messages/links";
+import { useDomain, communityLink, inviteLink } from "@/features/messages/links";
 
 type Lookup =
   | { state: "loading" }
@@ -16,7 +17,9 @@ type Lookup =
 
 /**
  * `/invite/{code}`: what an invite link opens. Shows which community the invite is for and
- * joins it on request; if the user already belongs, it just opens the community.
+ * joins it on request; if the user already belongs, it just opens the community. A link whose
+ * `?at=` names a deployment other than the user's home goes on to that deployment's invite
+ * route, which signs in there first.
  */
 export function InviteScreen() {
   const m = useMessages();
@@ -26,12 +29,26 @@ export function InviteScreen() {
   const status = useSyncStatus();
   const navigate = useNavigate();
   const domain = useDomain();
+  const { at }: { at?: unknown } = useSearch({ strict: false });
+  const home = useHomeDomainState();
+  // Where the invite belongs: `null` for here, the domain to go on to, or `undefined` while the
+  // home's own domain is not yet known.
+  const named = domain === null && typeof at === "string" ? at.toLowerCase() : null;
+  const elsewhere =
+    named === null ? null : home === undefined ? undefined : named === home ? null : named;
   const [lookup, setLookup] = useState<Lookup>({ state: "loading" });
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
 
-  // The membership check needs the bootstrap, so wait until the cache is loaded.
-  const ready = status !== "bootstrapping" && status !== "stopped";
+  useEffect(() => {
+    if (typeof elsewhere === "string") {
+      void navigate({ ...inviteLink(elsewhere, code), replace: true });
+    }
+  }, [elsewhere, code, navigate]);
+
+  // The membership check needs the bootstrap, so wait until the cache is loaded; an invite of
+  // another deployment is looked up there.
+  const ready = status !== "bootstrapping" && status !== "stopped" && elsewhere === null;
   useEffect(() => {
     if (!ready) {
       return;

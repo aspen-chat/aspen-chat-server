@@ -32,7 +32,10 @@ import { BotAddScreen } from "@/features/bots/BotAddScreen";
  *   /dms                                                the caller's DMs and group DMs
  *   /dms/{channel}, /dms/{channel}/messages/{message}, /dms/{channel}/threads/{thread}
  *                                                       a DM, as a channel is above
- *   /invite/{code}                                      what an invite link opens: join or open
+ *   /invite/{code}?at={domain}                          what an invite link opens: join or open;
+ *                                                       `at` names the invite's deployment, and
+ *                                                       one other than the home redirects to
+ *                                                       `/at/{domain}/invite/{code}`
  *   /register?invite={code}                             create an account with a registration
  *                                                       invite; signed in, the home screen
  *   /admin                                              the Administration Dashboard
@@ -95,6 +98,8 @@ export const botAddRoute = createRoute({
 export const inviteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/invite/$code",
+  validateSearch: (search: Record<string, unknown>): { at?: string } =>
+    typeof search.at === "string" ? { at: search.at } : {},
   component: InviteScreen,
 });
 

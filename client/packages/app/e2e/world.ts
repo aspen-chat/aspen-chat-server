@@ -961,6 +961,20 @@ async function answer(
     ],
     [
       "GET",
+      new RegExp(`^/invites/${inviteCode}$`),
+      () => ({
+        data: {
+          code: inviteCode,
+          community,
+          createdAt: minutesAgo(60),
+          createdBy: me,
+          expiresAt: null,
+        },
+        included: { communities: [{ id: community, name: "Family", icon: null, owner: bob }] },
+      }),
+    ],
+    [
+      "GET",
       new RegExp(`^/communities/${community}/invites$`),
       () => [
         {

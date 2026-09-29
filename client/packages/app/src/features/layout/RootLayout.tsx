@@ -10,6 +10,8 @@ import { useServerChoice } from "@/features/auth/serverChoice";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
 import { SourcePickerDialog } from "@/features/voice/SourcePickerDialog";
+import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 
 /**
  * Signed out: the sign-in or create-account screen, leaving the URL alone so a shared link
@@ -29,19 +31,29 @@ export function RootLayout() {
 }
 
 /**
- * Signed out. A registration link (`/register`, with `?invite=` from the Administration
+ * Signed out. An invite link naming another deployment says the user's account may be on any
+ * deployment. A registration link (`/register`, with `?invite=` from the Administration
  * Dashboard) opens on the create-account screen with the invite filled in.
  */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
   const { pathname } = useLocation();
-  const search: { invite?: unknown } = useSearch({ strict: false });
+  const m = useMessages();
+  const search: { invite?: unknown; at?: unknown } = useSearch({ strict: false });
+  // An invite link naming its deployment opens once the user is in, wherever their account is.
+  const inviteAt =
+    pathname.startsWith("/invite/") && typeof search.at === "string" ? search.at : null;
   const invite = typeof search.invite === "string" ? search.invite : undefined;
   const [screen, setScreen] = useState<"login" | "register">(
     pathname === "/register" || invite !== undefined ? "register" : "login",
   );
   return (
-    <main className="flex min-h-full items-center justify-center p-6">
+    <main className="flex min-h-full flex-col items-center justify-center gap-4 p-6">
+      {inviteAt !== null && (
+        <p className="max-w-sm text-center text-sm text-ink-muted">
+          {format(m.inviteOnDomain, { domain: inviteAt })}
+        </p>
+      )}
       {screen === "register" ? (
         <RegisterForm
           initialInvite={invite}
