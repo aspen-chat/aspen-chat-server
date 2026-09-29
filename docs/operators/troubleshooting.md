@@ -90,7 +90,8 @@ not the address clients can reach (behind NAT it must be the public one).
 
 **Phones are not woken.** The app registers each phone when it signs in, and the server then
 calls the phone's relay over HTTPS. Check that `[push] enabled` is on and that the server can
-reach the internet (`curl https://push.aspen.chat`, or the relay the app names). The log warns
+reach the relay the phones' app names over HTTPS (its address appears in the log beside any
+push that failed). The log warns
 of every push a relay refuses: `quotaExhausted` means the deployment has sent more pushes this
 month than its tier with that relay allows, and pushes resume next month or when its tier is
 raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
