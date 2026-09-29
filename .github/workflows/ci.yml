@@ -1,5 +1,6 @@
 # Every push and pull request: the Rust workspace is formatted, lint-free, and tested on
-# x86-64; the client typechecks, lints, and passes its tests; and the servers are built for
+# x86-64; the client typechecks, lints, and passes its tests; two deployments federate and
+# wake a stand-in phone over real TLS; and the servers are built for
 # 64-bit ARM two ways, natively and with the cross-compile script, and each build is started
 # against real services on an ARM machine.
 #
@@ -94,10 +95,10 @@ jobs:
           pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium
 
   android:
-    name: Android — build and unit test
+    name: Android — build, unit, and device tests
     needs: rust
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: client
@@ -128,11 +129,51 @@ jobs:
         run: |
           pnpm --filter @aspen/app build:shell
           cd packages/mobile && npx cap sync android
-      # The JVM tests; the push handler's end-to-end test needs a device (`pnpm --filter
-      # @aspen/mobile test:android` locally).
       - name: Build and unit test
         working-directory: client/packages/mobile/android
         run: ./gradlew --console=plain :app:testDebugUnitTest :app:assembleDebug
+      # The push handler's test posts and cancels real notifications, so it runs on an emulator,
+      # which the runner accelerates with KVM once its device node is opened to the runner's user.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Instrumented tests on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          working-directory: client/packages/mobile/android
+          script: ./gradlew --console=plain :app:connectedDebugAndroidTest
+
+  federation-and-push:
+    name: Federation and push — two deployments over TLS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libpq-dev openssl python3-pip
+          pip install cryptography
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: federation-and-push
+      - run: cargo build --locked -p aspen-chat-server -p aspen-migrate
+      - name: Start both deployments
+        run: python3 scripts/dev_federation.py up --start-services
+      - name: Federation between them
+        run: python3 scripts/dev_federation.py check
+      - name: Waking phones
+        run: python3 scripts/dev_push.py
+      - name: Server logs
+        if: failure()
+        run: tail -n 200 target/dev-federation/*/server.log
 
   arm64-native:
     name: ARM64 (Debian 12) — build and test natively

@@ -20,7 +20,8 @@ servers are the debug builds in `target/debug` (`cargo build` first), or, with `
 `--beta-bin`, builds of other versions, which is how two versions are checked against each other;
 `up` leaves them running and `down` stops them. Databases are kept between runs; `down --drop` drops them too.
 
-Needs Python 3.10, `openssl`, and `docker compose` with the database and SeaweedFS services up.
+Needs Python 3.10, `openssl`, and `docker compose` with the database and SeaweedFS services up
+(`up --start-services` starts them).
 """
 
 from __future__ import annotations
@@ -305,7 +306,30 @@ def restart(deployment: Deployment, extra_env: dict[str, str] | None = None) -> 
     wait_for_server(deployment)
 
 
+def start_shared_services() -> None:
+    """Starts the docker-compose PostgreSQL and SeaweedFS both deployments use, and waits for them."""
+    say("starting the database and SeaweedFS")
+    run("docker", "compose", "up", "-d", "database", "seaweedfs", cwd=REPO, check=True)
+    deadline = time.monotonic() + 90
+    while run("docker", "compose", "exec", "-T", "database", "pg_isready", "-U", "postgres", cwd=REPO).returncode != 0:
+        if time.monotonic() > deadline:
+            raise Failed("PostgreSQL did not come up within 90 s")
+        time.sleep(1)
+    while True:
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8333/", timeout=5)
+            break
+        except urllib.error.HTTPError:
+            break
+        except OSError:
+            if time.monotonic() > deadline:
+                raise Failed("SeaweedFS's S3 did not come up within 90 s")
+            time.sleep(1)
+
+
 def up(args: argparse.Namespace) -> None:
+    if args.start_services:
+        start_shared_services()
     for deployment, chosen in [(ALPHA, args.alpha_bin), (BETA, args.beta_bin)]:
         deployment.dir.mkdir(parents=True, exist_ok=True)
         bins = Path(chosen).resolve() if chosen is not None else BIN
@@ -693,6 +717,8 @@ def main() -> int:
     start = commands.add_parser("up", help="start both deployments")
     start.add_argument("--alpha-bin", help="directory of the builds alpha runs (target/debug by default)")
     start.add_argument("--beta-bin", help="directory of the builds beta runs, such as an older release's")
+    start.add_argument("--start-services", action="store_true",
+                       help="docker compose up the database and SeaweedFS first, and wait for them")
     start.set_defaults(run=up)
     commands.add_parser("check", help="exercise federation between them").set_defaults(run=check)
     stop = commands.add_parser("down", help="stop both deployments")
