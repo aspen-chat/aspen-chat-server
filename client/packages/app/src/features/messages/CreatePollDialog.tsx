@@ -33,8 +33,10 @@ import {
 import {
   dialogClass,
   modalClass,
+  optionClass,
   overlayClass,
   secondaryButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
@@ -61,10 +63,6 @@ const DURATIONS: readonly { key: keyof Messages["poll"]["durations"]; seconds: n
 const selectButtonClass =
   "flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-start outline-none " +
   "hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
-const popoverClass =
-  "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";
-const listOptionClass =
-  "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent";
 const iconButtonClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent/50";
@@ -257,10 +255,10 @@ function PollForm({ channelId, close }: { channelId: string; close: () => void }
           <SelectValue />
           <CaretDownIcon size={16} aria-hidden="true" className="text-ink-muted" />
         </Button>
-        <Popover className={popoverClass}>
+        <Popover className={selectPopoverClass}>
           <ListBox>
             {DURATIONS.map((d) => (
-              <ListBoxItem key={d.key} id={d.key} className={listOptionClass}>
+              <ListBoxItem key={d.key} id={d.key} className={optionClass}>
                 {m.poll.durations[d.key]}
               </ListBoxItem>
             ))}

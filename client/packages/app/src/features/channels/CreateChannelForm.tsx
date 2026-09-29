@@ -26,16 +26,13 @@ import {
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { useDomain, channelLink } from "@/features/messages/links";
+import { optionClass, selectPopoverClass } from "@/features/invites/dialog";
 
 const NO_CATEGORY = "none";
 
 const selectButtonClass =
   "flex justify-between rounded-md border border-line bg-surface px-3 py-2 text-start outline-none " +
   "hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
-const popoverClass =
-  "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";
-const optionClass =
-  "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent";
 
 /**
  * Names a new channel of a fixed type, files it under a category (a given one, or one chosen
@@ -113,7 +110,7 @@ export function CreateChannelForm({
             <SelectValue />
             <CaretDownIcon size={14} aria-hidden="true" />
           </Button>
-          <Popover className={popoverClass}>
+          <Popover className={selectPopoverClass}>
             <ListBox className="outline-none">
               <ListBoxItem id={NO_CATEGORY} textValue={m.noCategory} className={optionClass}>
                 {m.noCategory}

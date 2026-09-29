@@ -11,6 +11,7 @@ import {
 } from "react-aria-components";
 import { useMessages } from "@/i18n/context";
 import { PALETTES, applyPalette, isPalette, storedPalette, type Palette } from "./palettes";
+import { selectPopoverClass } from "@/features/invites/dialog";
 
 /**
  * Lets the user switch the colour palette, as a labelled select in the settings dialog. The
@@ -35,7 +36,7 @@ export function ThemePicker() {
         <SelectValue className="truncate" />
         <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
       </Button>
-      <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+      <Popover className={selectPopoverClass}>
         <ListBox className="outline-none">
           {PALETTES.map((name) => (
             <ListBoxItem

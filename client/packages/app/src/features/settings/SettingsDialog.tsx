@@ -34,6 +34,7 @@ import {
   overlayClass,
   secondaryButtonClass,
   selectButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
@@ -203,7 +204,7 @@ function DeviceSelect({
           <SelectValue className="truncate" />
           <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
         </Button>
-        <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+        <Popover className={selectPopoverClass}>
           <ListBox items={options}>
             {(device) => (
               <ListBoxItem id={device.id} textValue={device.label} className={optionClass}>

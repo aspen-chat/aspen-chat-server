@@ -20,6 +20,7 @@ import {
   optionClass,
   overlayClass,
   selectButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import {
   applicationAudioShare,
@@ -266,7 +267,7 @@ function AudioSelect({
         <SelectValue className="truncate" />
         <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
       </Button>
-      <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+      <Popover className={selectPopoverClass}>
         <ListBox items={items}>
           {(item) => (
             <ListBoxItem id={item.id} textValue={item.label} className={optionClass}>

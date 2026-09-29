@@ -46,6 +46,7 @@ import {
   optionClass,
   secondaryButtonClass,
   selectButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { BotBadge } from "@/features/users/BotBadge";
 import { useMessages } from "@/i18n/context";
@@ -654,7 +655,7 @@ export function Directory<T extends { id: string }, S extends string>({
             <SelectValue />
             <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />
           </Button>
-          <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+          <Popover className={selectPopoverClass}>
             <ListBox>
               {PAGE_SIZES.map((size) => (
                 <ListBoxItem key={size} id={size} className={optionClass}>

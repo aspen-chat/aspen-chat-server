@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
-import { optionClass, selectButtonClass } from "@/features/invites/dialog";
+import { optionClass, selectButtonClass, selectPopoverClass } from "@/features/invites/dialog";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { AUTOMATIC, LANGUAGES, type Language } from "@/i18n/locales";
 import { format, type Messages } from "@/i18n/messages";
@@ -63,7 +63,7 @@ export function LanguageSection() {
           <SelectValue className="truncate" />
           <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
         </Button>
-        <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+        <Popover className={selectPopoverClass}>
           <ListBox items={options}>
             {(option) => (
               <ListBoxItem id={option.id} textValue={option.label} className={optionClass}>

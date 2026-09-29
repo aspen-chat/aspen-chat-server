@@ -43,6 +43,7 @@ import {
   optionClass,
   overlayClass,
   selectButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { copyText } from "@/features/layout/clipboard";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -259,7 +260,7 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
             <SelectValue />
             <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />
           </Button>
-          <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+          <Popover className={selectPopoverClass}>
             <ListBox>
               {EXPIRIES.map((e) => (
                 <ListBoxItem key={e.key} id={e.key} className={optionClass}>

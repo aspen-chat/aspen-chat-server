@@ -24,6 +24,7 @@ import {
   modalClass,
   overlayClass,
   secondaryButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { shareableInviteLink } from "@/features/invites/inviteCode";
 import { copyText } from "@/features/layout/clipboard";
@@ -130,7 +131,7 @@ export function InviteManager({ communityId }: { communityId: string }) {
               <SelectValue />
               <CaretDownIcon size={14} aria-hidden="true" />
             </Button>
-            <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+            <Popover className={selectPopoverClass}>
               <ListBox className="outline-none">
                 {(Object.keys(EXPIRY_OPTIONS) as ExpiryOption[]).map((option) => (
                   <ListBoxItem

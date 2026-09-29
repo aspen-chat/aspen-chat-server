@@ -22,9 +22,11 @@ export const dangerButtonClass =
 export const secondaryButtonClass =
   "rounded-md border border-line px-3 py-1.5 text-sm outline-none hover:bg-surface-hover " +
   "pressed:bg-surface-hover disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50";
-/** A `Select`'s trigger and its options, as the settings and share dialogs draw them. */
+/** A `Select`'s trigger, its list, and its options, as every select in the app draws them. */
 export const selectButtonClass =
   "flex w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2 text-start text-sm outline-none " +
   "focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60";
 export const optionClass =
   "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent";
+export const selectPopoverClass =
+  "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";

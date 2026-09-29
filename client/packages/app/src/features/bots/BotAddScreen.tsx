@@ -15,7 +15,7 @@ import { useCommunities, useMe, useStore, useSync, useUser } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { suggestedPermissions } from "@/features/bots/botLink";
 import { Avatar } from "@/features/communities/Avatar";
-import { optionClass, selectButtonClass } from "@/features/invites/dialog";
+import { optionClass, selectButtonClass, selectPopoverClass } from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { BotBadge } from "@/features/users/BotBadge";
 import { displayNameOf } from "@/features/users/profile";
@@ -109,7 +109,7 @@ export function BotAddScreen({
               <SelectValue className="truncate" />
               <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
             </Button>
-            <Popover className="min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+            <Popover className={selectPopoverClass}>
               <ListBox items={places}>
                 {(community) => (
                   <ListBoxItem id={community.id} textValue={community.name} className={optionClass}>
