@@ -80,6 +80,15 @@ smart-default = "0.7.1"
 strum = { version = "0.28.0", features = ["derive"] }
 humantime = "2.4.0"
 bitflags = "2.13.2"
+console-subscriber = { version = "0.5.0", optional = true }
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"
+
+[features]
+# tokio-console (https://github.com/tokio-rs/console) for development: build with
+# RUSTFLAGS="--cfg tokio_unstable" cargo build --features console, then run `tokio-console`.
+console = ["dep:console-subscriber", "tokio/tracing"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tokio_unstable)"] }

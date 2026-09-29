@@ -31,6 +31,9 @@ use tokio::{net::TcpListener, runtime, sync::oneshot};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as _;
 use tracing::{error, info, level_filters::LevelFilter, warn};
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 mod api;
 mod app;
@@ -146,6 +149,12 @@ macro_rules! t {
 }
 pub(crate) use t;
 
+// tokio-console reads instrumentation Tokio compiles only under this flag.
+#[cfg(all(feature = "console", not(tokio_unstable)))]
+compile_error!(
+    "the console feature needs Tokio's instrumentation: build with RUSTFLAGS=\"--cfg tokio_unstable\""
+);
+
 fn main() {
     let opt = Opt::parse();
     // Writing the API schemas reads no configuration, so it runs where there is none, as in CI.
@@ -159,14 +168,7 @@ fn main() {
     // the `log` crate (the Valkey client among them) show up under `ASPEN_LOG=...,fred=debug`.
     // An operator command's answer is its standard output, so its logs go to standard error.
     let operator_command = opt.command.is_some();
-    tracing_subscriber::FmtSubscriber::builder()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .with_env_var("ASPEN_LOG")
-                .from_env()
-                .expect("invalid logging filter set in env var ASPEN_LOG"),
-        )
+    let log = tracing_subscriber::fmt::layer()
         .with_writer(move || -> Box<dyn io::Write> {
             if operator_command {
                 Box::new(io::stderr())
@@ -174,7 +176,19 @@ fn main() {
                 Box::new(io::stdout())
             }
         })
-        .init();
+        .with_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .with_env_var("ASPEN_LOG")
+                .from_env()
+                .expect("invalid logging filter set in env var ASPEN_LOG"),
+        );
+    let logging = tracing_subscriber::registry().with(log);
+    // tokio-console's server, on 127.0.0.1:6669 unless `TOKIO_CONSOLE_BIND` says otherwise. It
+    // reads Tokio's own instrumentation, which `ASPEN_LOG` does not filter.
+    #[cfg(feature = "console")]
+    let logging = logging.with(console_subscriber::spawn());
+    logging.init();
     panic::set_hook(Box::new(tracing_panic::panic_hook));
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()

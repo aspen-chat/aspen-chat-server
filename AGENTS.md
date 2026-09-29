@@ -104,6 +104,13 @@ Federation, letting a user of one deployment use others, is being built in phase
    ```
    It migrates a database of its own, starts both servers on ports of their own (a development stack keeps running beside it), registers and signs in a user, joins a call through the voice server, reads both metrics endpoints, and runs `estimate-capacity`, then drops the database.
 
+9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console), which shows each task's busy and idle time, how often it is woken, and which have waited longest, for finding what a slow request or a stalled stream is waiting on:
+   ```
+   RUSTFLAGS="--cfg tokio_unstable" cargo build --release -p aspen-chat-server --features console --target-dir target/console
+   cargo install --locked tokio-console && tokio-console
+   ```
+   The `console` feature serves the instrumentation on `127.0.0.1:6669` (`TOKIO_CONSOLE_BIND` moves it; keep it on loopback, like the metrics). Tokio compiles that instrumentation only under `--cfg tokio_unstable`, which the feature refuses to build without and which no other build sets; a target directory of its own keeps the flag from rebuilding the usual one. `ASPEN_LOG` filters the log output alone, not what the console reads.
+
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts. Clippy warnings fail the build.
