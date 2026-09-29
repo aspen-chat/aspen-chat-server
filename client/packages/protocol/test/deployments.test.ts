@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { Deployments, REACQUIRE_INTERVAL_MS } from "../src/deployments";
+import {
+  Deployments,
+  IncompatibleDeploymentError,
+  REACQUIRE_INTERVAL_MS,
+} from "../src/deployments";
 import type { AspenClient } from "../src/http";
 import { ApiProblemError } from "../src/problem";
 import type { Session } from "../src/session";
@@ -13,10 +17,11 @@ const session: Session = {
 };
 
 /** A client of another deployment: a session that tests can end, and sign-in by assertion. */
-function foreignClient(signedIn = false) {
+function foreignClient(signedIn = false, protocol = { version: 1, minimum: 1 }) {
   const listeners = new Set<(s: Session | null) => void>();
   const client = {
     session: signedIn ? session : null,
+    authMethods: vi.fn(() => Promise.resolve({ protocol })),
     subscribe: (listener: (s: Session | null) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -46,7 +51,9 @@ function fakeSync() {
   return { start: vi.fn(), stop: vi.fn() };
 }
 
-function world(options: { listed?: string[]; refuse?: string; signedIn?: string[] } = {}) {
+function world(
+  options: { listed?: string[]; refuse?: string; signedIn?: string[]; future?: string } = {},
+) {
   let assertions = 0;
   const home = {
     foreignDeployments: vi.fn(() =>
@@ -73,7 +80,10 @@ function world(options: { listed?: string[]; refuse?: string; signedIn?: string[
   const deployments = new Deployments({
     home: home as unknown as AspenClient,
     client: (domain) => {
-      const client = foreignClient(options.signedIn?.includes(domain) ?? false);
+      const client = foreignClient(
+        options.signedIn?.includes(domain) ?? false,
+        domain === options.future ? { version: 9, minimum: 7 } : { version: 1, minimum: 1 },
+      );
       clients.set(domain, client);
       return client as unknown as AspenClient;
     },
@@ -120,6 +130,13 @@ describe("Deployments", () => {
       status: "failed",
       problem: "Federation does not allow this.",
     });
+  });
+
+  it("signs in nowhere that speaks no protocol version this client does", async () => {
+    const { deployments, home } = world({ future: "future.example" });
+    await expect(deployments.join("future.example")).rejects.toThrow(IncompatibleDeploymentError);
+    expect(deployments.get("future.example")?.status).toBe("incompatible");
+    expect(home.issueAssertion).not.toHaveBeenCalled();
   });
 
   it("replaces a lost session through the home, but not again at once", async () => {

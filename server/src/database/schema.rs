@@ -182,6 +182,11 @@ diesel::table! {
         last_contact_at -> Nullable<Timestamptz>,
         offered_key -> Nullable<Bytea>,
         offered_key_at -> Nullable<Timestamptz>,
+        protocol_version -> Nullable<Int4>,
+        protocol_minimum -> Nullable<Int4>,
+        capabilities -> Array<Nullable<Text>>,
+        software_name -> Nullable<Text>,
+        software_version -> Nullable<Text>,
     }
 }
 

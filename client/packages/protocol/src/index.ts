@@ -216,9 +216,11 @@ export {
 } from "./permissions";
 export {
   Deployments,
+  IncompatibleDeploymentError,
   REACQUIRE_INTERVAL_MS,
   deploymentUrl,
   type DeploymentStatus,
   type DeploymentsOptions,
   type ForeignDeployment,
 } from "./deployments";
+export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";

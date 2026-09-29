@@ -280,7 +280,18 @@ pub struct MigrationRules {
 }
 
 /// One direction's gate.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum Gate {
     /// No one crosses.
@@ -292,6 +303,10 @@ pub enum Gate {
     AllowList,
     /// To or from any deployment but those on this direction's block list.
     BlockList,
+    /// A gate another deployment publishes that this one does not know, as a newer one may.
+    /// Never configured here: `aspen.toml` names only the gates above.
+    #[serde(other)]
+    Unknown,
 }
 
 crate::app::wire_name_traits!(Gate);
@@ -337,6 +352,11 @@ impl FederationConfig {
             })?;
         }
         for (name, rules) in [("users", &self.users), ("bots", &self.bots)] {
+            if rules.emigration == Gate::Unknown || rules.immigration == Gate::Unknown {
+                return Err(config::ConfigError::Message(format!(
+                    "federation.{name} names a gate other than closed, open, allowList, or blockList"
+                )));
+            }
             let listed = |gate: Gate| matches!(gate, Gate::AllowList | Gate::BlockList);
             if rules.shared_list
                 && !(listed(rules.emigration) && rules.emigration == rules.immigration)

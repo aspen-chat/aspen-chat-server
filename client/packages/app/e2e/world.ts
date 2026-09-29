@@ -577,6 +577,9 @@ interface WorldDeployment {
   offeredKeyFingerprint: string | null;
   offeredKeyAt: string | null;
   lists: string[];
+  protocol: { version: number; minimum: number; capabilities: string[] } | null;
+  software: { name: string; version: string } | null;
+  compatible: boolean;
   admission: {
     usersEmigration: boolean;
     usersImmigration: boolean;
@@ -616,6 +619,9 @@ function federationWorld() {
     offeredKeyAt: null,
     lists: [],
     admission: admission([]),
+    protocol: { version: 1, minimum: 1, capabilities: [] },
+    software: { name: "aspen", version: "0.1.0" },
+    compatible: true,
     ...extra,
   });
   const deployments: WorldDeployment[] = [
@@ -639,6 +645,8 @@ function federationWorld() {
       botsSharedList: false,
       listsInForce: ["usersEmigrationAllow"],
       document: null,
+      protocol: { version: 1, minimum: 1, capabilities: [] },
+      software: { name: "aspen", version: "0.1.0" },
     }),
     list: (url: URL) => {
       const name = (url.searchParams.get("filter[name]") ?? "").toLowerCase();

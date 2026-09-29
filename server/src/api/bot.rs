@@ -227,7 +227,7 @@ pub async fn update_bot(
 
 /// A bot joining a community through its link.
 #[derive(Debug, Default, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct BotAddRequest {
     /// What the bot is given, on a role of its own; none when absent. Granting any takes Manage
     /// roles and Assign roles, and each must be held by the caller.

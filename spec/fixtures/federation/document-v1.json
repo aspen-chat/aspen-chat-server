@@ -1,0 +1,13 @@
+{
+  "domain": "alpha.localhost:8443",
+  "keys": [
+    {
+      "id": "01a0ea00-0bd5-71ab-987e-5d0fee7b0de4",
+      "algorithm": "ed25519",
+      "publicKey": "1aOluXa7Z6rpKiMNOI0OX02-IgODF1cLNOYJk28eahI",
+      "createdAt": "2026-09-28T21:51:06.710247Z"
+    }
+  ],
+  "users": { "emigration": "allowList", "immigration": "open" },
+  "bots": { "emigration": "closed", "immigration": "blockList" }
+}

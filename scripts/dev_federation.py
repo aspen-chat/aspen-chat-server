@@ -16,8 +16,9 @@ docker-compose PostgreSQL, and a NATS and a Valkey of its own in containers this
 so neither shares an event stream, rate limits, or fleet heartbeats with the other or with a
 development stack on the usual ports. Everything else it makes is in `target/dev-federation/`:
 the authority and certificates, each deployment's `aspen.toml`, and the servers' logs. The
-servers are the debug builds in `target/debug` (`cargo build` first); `up` leaves them running
-and `down` stops them. Databases are kept between runs; `down --drop` drops them too.
+servers are the debug builds in `target/debug` (`cargo build` first), or, with `--alpha-bin` and
+`--beta-bin`, builds of other versions, which is how two versions are checked against each other;
+`up` leaves them running and `down` stops them. Databases are kept between runs; `down --drop` drops them too.
 
 Needs Python 3.10, `openssl`, and `docker compose` with the database and SeaweedFS services up.
 """
@@ -244,6 +245,12 @@ def wait_for_server(deployment: Deployment, seconds: float = 60) -> None:
     raise Failed(f"{deployment.name} did not come up within {seconds:.0f} s; see {deployment.dir / 'server.log'}")
 
 
+def bin_of(deployment: Deployment) -> Path:
+    """The build a deployment runs: the one `up` was given for it, or `target/debug`."""
+    chosen = deployment.dir / "bin"
+    return Path(chosen.read_text().strip()) if chosen.exists() else BIN
+
+
 # The servers this run started, which it must wait for when it stops them.
 STARTED: dict[str, subprocess.Popen] = {}
 
@@ -252,7 +259,7 @@ def start_server(deployment: Deployment, extra_env: dict[str, str] | None = None
     say(f"starting {deployment.name} at https://{deployment.domain}")
     log = open(deployment.dir / "server.log", "a")
     process = subprocess.Popen(
-        [str(BIN / "aspen-chat-server"), "--port", str(deployment.port),
+        [str(bin_of(deployment) / "aspen-chat-server"), "--port", str(deployment.port),
          "--listen-addr", "::1", "--listen-addr", "127.0.0.1",
          "--key", str(WORK / f"{deployment.host}.key"), "--cert", str(WORK / f"{deployment.host}.pem")],
         cwd=deployment.dir, env={**clean_env(), **(extra_env or {})}, stdout=log, stderr=subprocess.STDOUT,
@@ -292,10 +299,14 @@ def restart(deployment: Deployment, extra_env: dict[str, str] | None = None) -> 
     wait_for_server(deployment)
 
 
-def up(_args: argparse.Namespace) -> None:
-    for name in ["aspen-chat-server", "aspen-migrate"]:
-        if not (BIN / name).exists():
-            raise Failed(f"{BIN / name} does not exist; run `cargo build` first")
+def up(args: argparse.Namespace) -> None:
+    for deployment, chosen in [(ALPHA, args.alpha_bin), (BETA, args.beta_bin)]:
+        deployment.dir.mkdir(parents=True, exist_ok=True)
+        bins = Path(chosen).resolve() if chosen is not None else BIN
+        for name in ["aspen-chat-server", "aspen-migrate"]:
+            if not (bins / name).exists():
+                raise Failed(f"{bins / name} does not exist; run `cargo build` first")
+        (deployment.dir / "bin").write_text(str(bins))
     make_certificates()
     for deployment in DEPLOYMENTS:
         start_services(deployment)
@@ -303,7 +314,7 @@ def up(_args: argparse.Namespace) -> None:
         if psql(f"SELECT 1 FROM pg_database WHERE datname = '{deployment.database}'") != "1":
             say(f"making the database {deployment.database}")
             psql(f"CREATE DATABASE {deployment.database}")
-        migrated = run(str(BIN / "aspen-migrate"), "up", cwd=deployment.dir, env=clean_env())
+        migrated = run(str(bin_of(deployment) / "aspen-migrate"), "up", cwd=deployment.dir, env=clean_env())
         if migrated.returncode != 0:
             raise Failed(f"migrating {deployment.name} failed: {migrated.stderr[-1000:]}")
     for deployment in DEPLOYMENTS:
@@ -331,7 +342,7 @@ def down(args: argparse.Namespace) -> None:
 
 def terminal(deployment: Deployment, *args: str) -> str:
     """Runs an operator command on `deployment` and returns what it printed."""
-    done = run(str(BIN / "aspen-chat-server"), *args, cwd=deployment.dir, env=clean_env())
+    done = run(str(bin_of(deployment) / "aspen-chat-server"), *args, cwd=deployment.dir, env=clean_env())
     if done.returncode != 0:
         raise Failed(f"`{' '.join(args)}` on {deployment.name} failed: {done.stderr[-1000:]}")
     return done.stdout
@@ -402,6 +413,9 @@ def check(_args: argparse.Namespace) -> None:
            "contacting beta over TLS pins the key beta reports")
     again = api(ALPHA, "POST", f"{beta_path}/contact", token=admin)
     expect(again["outcome"] == "confirmed", "contacting it again confirms the pinned key")
+    peer = again["deployment"]
+    expect(peer["protocol"]["version"] == 1 and peer["software"]["name"] == "aspen" and peer["compatible"],
+           "alpha records the protocol and software beta says it runs")
 
     listed = api(ALPHA, "PUT", f"{beta_path}/lists/usersEmigrationAllow", token=admin, expect=(201,))
     expect(listed["admission"]["usersEmigration"] and listed["lists"] == ["usersEmigrationAllow"],
@@ -569,7 +583,10 @@ def check_abroad(admin: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("up", help="start both deployments").set_defaults(run=up)
+    start = commands.add_parser("up", help="start both deployments")
+    start.add_argument("--alpha-bin", help="directory of the builds alpha runs (target/debug by default)")
+    start.add_argument("--beta-bin", help="directory of the builds beta runs, such as an older release's")
+    start.set_defaults(run=up)
     commands.add_parser("check", help="exercise federation between them").set_defaults(run=check)
     stop = commands.add_parser("down", help="stop both deployments")
     stop.add_argument("--drop", action="store_true", help="drop their databases too")

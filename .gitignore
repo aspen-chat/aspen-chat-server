@@ -3,6 +3,7 @@
 /aspen.toml
 /openapi.yaml
 /event_schema.json
+/federation_schema.json
 .idea/
 .vscode/
 /voice_server.toml

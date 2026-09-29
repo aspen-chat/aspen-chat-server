@@ -13,6 +13,7 @@ use crate::api::GlobalServerContext;
 use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::federation::keys::signing_key;
+use crate::app::federation::protocol::Protocol;
 use crate::app::federation::{
     self, Direction, Domain, Subject, admits, contact, jws, lists_of, own_domain,
 };
@@ -47,9 +48,9 @@ pub const HOME_ICON_PATH: &str = "/federation/icons";
 const MAX_AVATAR_BYTES: usize = 8 * 1024 * 1024;
 
 /// What a home says of one of its users to one other deployment.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct Assertion {
+pub struct Assertion {
     /// The home.
     iss: Domain,
     /// The one deployment it is for.
@@ -65,9 +66,9 @@ struct Assertion {
 }
 
 /// A user's profile as their home keeps it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct Profile {
+pub struct Profile {
     name: String,
     display_name: Option<String>,
     pronouns: Option<String>,
@@ -255,20 +256,20 @@ pub async fn sign_in(
     {
         return Err(refused());
     }
-    let pinned: Option<Vec<u8>> = federated_deployment::table
+    let known: Option<federation::FederatedDeployment> = federated_deployment::table
         .find(&home)
-        .select(federated_deployment::public_key)
-        .first::<Option<Vec<u8>>>(&mut conn)
+        .select(federation::FederatedDeployment::as_select())
+        .first(&mut conn)
         .await
-        .optional()?
-        .flatten();
+        .optional()?;
     drop(conn);
-    let verified = pinned
-        .as_deref()
+    let verified = known
+        .as_ref()
+        .and_then(|d| d.public_key.as_deref())
         .and_then(|key| unverified.verify::<Assertion>(ASSERTION_TYPE, key).ok());
-    let claims = match verified {
-        Some(claims) => claims,
-        None => {
+    let (claims, home_deployment) = match (verified, known) {
+        (Some(claims), Some(known)) => (claims, known),
+        _ => {
             // A key never pinned, or one the home has since handed over from: contacting it
             // pins or follows the handover, and a key that changed unannounced stays refused.
             let (listed, outcome) = contact(state, &home).await?;
@@ -278,12 +279,26 @@ pub async fn sign_in(
             let key = listed
                 .deployment
                 .public_key
+                .clone()
                 .ok_or_else(|| invalid(Some(&home), "no key"))?;
-            unverified
+            let claims = unverified
                 .verify::<Assertion>(ASSERTION_TYPE, &key)
-                .map_err(|_| invalid(Some(&home), "signature"))?
+                .map_err(|_| invalid(Some(&home), "signature"))?;
+            (claims, listed.deployment)
         }
     };
+    // A home last contacted before it said which protocol it speaks speaks the first version.
+    if home_deployment
+        .protocol()
+        .unwrap_or_default()
+        .common_version(&Protocol::ours())
+        .is_none()
+    {
+        return Err(app::Error::FederationRefused(t!(
+            "federationIncompatible",
+            domain = home.as_str()
+        )));
+    }
     let now = Utc::now();
     if claims.iss != home || claims.aud != here {
         return Err(invalid(Some(&home), "issuer or audience"));

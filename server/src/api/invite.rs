@@ -112,7 +112,6 @@ pub enum InviteInclude {
 pub type InviteRead = Sideloaded<message_enum::Invite>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct InviteReadQuery {
     /// Related records to return alongside the invite, comma separated.

@@ -37,6 +37,8 @@ export const en = {
     failed: "Couldn't sign in at {domain}. {detail}",
     retry: "Try again",
     communityAt: "{community} on {domain}",
+    incompatible:
+      "{domain} runs a version of Aspen this app can't talk to. One of them needs updating before you can use it here.",
     onDomain: "{name}, on {domain}",
     useOther: "Use another server",
     useOtherHint: "Sign in at another Aspen server with this account, and join its communities.",
@@ -757,6 +759,7 @@ export const en = {
       open: "Open",
       allowList: "Allow list",
       blockList: "Block list",
+      unknown: "Unknown",
     },
     add: "Add a deployment",
     addHint: "It is contacted as soon as it is added, and the key it presents is pinned.",
@@ -771,6 +774,9 @@ export const en = {
     search: "Search deployments",
     notContacted: "Not contacted",
     lastContact: "Last contact",
+    protocol: "Runs",
+    runs: "{software}, protocol {versions}",
+    incompatible: "No protocol version in common",
     admits: "Admits",
     admitsNone: "No one",
     admission: {

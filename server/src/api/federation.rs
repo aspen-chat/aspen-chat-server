@@ -12,6 +12,7 @@ use crate::api::{
     API_PREFIX, GlobalServerContext, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS, double_option,
 };
 use crate::app::federation::abroad::{self, ForeignDeployment, Issued};
+use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{
     self, ContactOutcome, DeploymentDocument, Direction, Domain, FederationList, Gates, Origin,
     Subject,
@@ -68,6 +69,8 @@ pub struct FederationOverview {
     /// The document this deployment publishes, as other deployments read it; `null` without a
     /// domain.
     pub document: Option<DeploymentDocument>,
+    pub protocol: Protocol,
+    pub software: Software,
 }
 
 #[utoipa::path(
@@ -107,6 +110,8 @@ pub async fn get_federation(
         bots_shared_list: config.bots.shared_list,
         lists_in_force: FederationList::all_in_force(config),
         document: federation::document(&state).await?,
+        protocol: Protocol::ours(),
+        software: Software::ours(),
     }))
 }
 
@@ -147,6 +152,13 @@ pub struct FederatedDeployment {
     /// Every list it is on, those not in force included.
     pub lists: Vec<FederationList>,
     pub admission: Admission,
+    /// The protocol it said it speaks when last contacted; `null` before any contact.
+    pub protocol: Option<Protocol>,
+    /// The software it said it runs, for people to read.
+    pub software: Option<Software>,
+    /// Whether it and this deployment speak a protocol version in common. One contacted before
+    /// it said which it speaks speaks the first version.
+    pub compatible: bool,
 }
 
 impl FederatedDeployment {
@@ -161,6 +173,16 @@ impl FederatedDeployment {
             bots_immigration: admits(Subject::Bots, Direction::Immigration),
         };
         let d = listed.deployment;
+        let protocol = d.protocol();
+        let compatible = protocol
+            .clone()
+            .unwrap_or_default()
+            .common_version(&Protocol::ours())
+            .is_some();
+        let software = d.software_name.clone().map(|name| Software {
+            name,
+            version: d.software_version.clone().unwrap_or_default(),
+        });
         let encode = |key: &Option<Vec<u8>>| key.as_ref().map(|k| URL_SAFE_NO_PAD.encode(k));
         let print = |key: &Option<Vec<u8>>| key.as_deref().map(federation::fingerprint);
         FederatedDeployment {
@@ -178,6 +200,9 @@ impl FederatedDeployment {
             offered_key_at: d.offered_key_at,
             lists: listed.lists,
             admission,
+            protocol,
+            software,
+            compatible,
         }
     }
 }
@@ -623,7 +648,7 @@ pub async fn issue_assertion(
 
 /// An assertion to sign in with.
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct FederatedSignInRequest {
     /// From the home deployment's `POST /auth/assertions`.
     pub assertion: String,

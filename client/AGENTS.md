@@ -77,7 +77,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   (`OtherServersSection`), and signing out at home signs out everywhere (`useSignOut`). A user
   is in one call at a time across deployments (`useOneCallAtATime`, `src/api/calls.ts`), and
   the call bar shows whichever deployment's it is. Another deployment's users are shown by
-  their handle `@name@domain` (`handleOf`).
+  their handle `@name@domain` (`handleOf`). Before signing in at another deployment the hub
+  reads its `GET /auth/methods` and signs in only where it shares a protocol version with this
+  client (`CLIENT_PROTOCOL`, `commonVersion`, `packages/protocol/src/protocol.ts`); a deployment
+  that shares none is `incompatible`, and `ForeignScope` says so. Code that reads what a server
+  sends ignores what it does not know, as `spec/federation.md` requires: an unknown event type
+  or field changes nothing in `RecordStore`, and a feature that is a capability is used only
+  where `supports` says the deployment has it.
 - Every endpoint is rate limited and may answer `429` `rateLimited` with `Retry-After`.
   `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
   refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized

@@ -1,9 +1,13 @@
 import type { AspenClient } from "./http";
 import { ApiProblemError } from "./problem";
+import { CLIENT_PROTOCOL, commonVersion } from "./protocol";
 import type { AspenSync } from "./sync";
 
-/** Where signing in at another deployment stands. */
-export type DeploymentStatus = "connecting" | "ready" | "failed";
+/**
+ * Where signing in at another deployment stands. `incompatible`: it speaks no version of the
+ * Aspen protocol this client does (`spec/federation.md`), so it is not signed in to.
+ */
+export type DeploymentStatus = "connecting" | "ready" | "failed" | "incompatible";
 
 /** Another deployment the user signs in to from their home, with its own client and sync. */
 export interface ForeignDeployment {
@@ -31,6 +35,14 @@ export type DeploymentsListener = () => void;
 
 /** How soon after one a lost session abroad may be replaced again, so a refusal cannot loop. */
 export const REACQUIRE_INTERVAL_MS = 30_000;
+
+/** Another deployment speaks no version of the Aspen protocol this client does. */
+export class IncompatibleDeploymentError extends Error {
+  constructor(readonly domain: string) {
+    super(`${domain} speaks no version of the Aspen protocol this client does`);
+    this.name = "IncompatibleDeploymentError";
+  }
+}
 
 /** The API origin of the deployment named `domain`. */
 export function deploymentUrl(domain: string): string {
@@ -191,6 +203,12 @@ export class Deployments {
     }
     this.#publish();
     try {
+      const { protocol } = await entry.client.authMethods();
+      if (commonVersion(CLIENT_PROTOCOL, protocol) === null) {
+        entry.status = "incompatible";
+        this.#publish();
+        throw new IncompatibleDeploymentError(entry.domain);
+      }
       if (entry.client.session === null) {
         await this.#acquire(entry, inviteCode);
       }
@@ -201,6 +219,9 @@ export class Deployments {
       entry.sync.start();
       entry.status = "ready";
     } catch (e) {
+      if (e instanceof IncompatibleDeploymentError) {
+        throw e;
+      }
       entry.status = "failed";
       entry.problem = e instanceof ApiProblemError ? e.message : String(e);
       this.#publish();

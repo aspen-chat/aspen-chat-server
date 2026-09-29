@@ -434,6 +434,12 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
 pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
     if write_schema {
         fs::write("openapi.yaml", openapi().to_yaml()?)?;
+        fs::write(
+            "federation_schema.json",
+            serde_json::to_string_pretty(&schema_for!(
+                app::federation::protocol::FederationProtocol
+            ))?,
+        )?;
         let event_schema = schema_for!(event_stream::EventStreamProtocol);
         fs::write(
             "event_schema.json",

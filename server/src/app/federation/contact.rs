@@ -111,6 +111,28 @@ pub async fn record_contact(
                 .await?;
             let row = federated_deployment::table.find(&domain);
             let now = diesel::dsl::now;
+            // What it says of itself is recorded whatever its key: it is only read, never
+            // trusted with anything.
+            let software = document.software.clone();
+            diesel::update(row)
+                .set((
+                    federated_deployment::protocol_version
+                        .eq(i32::try_from(document.protocol.version).unwrap_or(i32::MAX)),
+                    federated_deployment::protocol_minimum
+                        .eq(i32::try_from(document.protocol.minimum).unwrap_or(i32::MAX)),
+                    federated_deployment::capabilities.eq(document
+                        .protocol
+                        .capabilities
+                        .iter()
+                        .map(|c| Some(c.clone()))
+                        .collect::<Vec<_>>()),
+                    federated_deployment::software_name
+                        .eq(software.as_ref().map(|s| s.name.clone())),
+                    federated_deployment::software_version
+                        .eq(software.as_ref().map(|s| s.version.clone())),
+                ))
+                .execute(conn)
+                .await?;
             let outcome = match pinned {
                 None => {
                     diesel::update(row)
@@ -198,6 +220,8 @@ mod tests {
                 emigration: Gate::Closed,
                 immigration: Gate::Closed,
             },
+            protocol: Default::default(),
+            software: None,
         };
         let key = URL_SAFE_NO_PAD.encode([7u8; 32]);
         assert!(check_document(&domain, &document("b.example", &key)).is_ok());

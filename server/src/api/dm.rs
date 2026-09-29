@@ -13,7 +13,7 @@ use utoipa::{IntoParams, ToSchema};
 
 /// Opens a DM: with one other person their one-to-one DM, with more a new group DM.
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct DmCreateRequest {
     /// The people to talk to, besides the caller: one for a DM, up to nine for a group DM. Each
     /// must share a community with the caller.
@@ -36,7 +36,6 @@ pub enum DmInclude {
 pub type DmList = SideloadedList<Channel>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct DmListQuery {
     /// Related records to return alongside the DMs, comma separated.

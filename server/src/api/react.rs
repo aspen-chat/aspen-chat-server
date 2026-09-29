@@ -49,7 +49,6 @@ impl From<app::react::ReactionSummary> for ReactionSummary {
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct ReactorsQuery {
     /// Continue after this person, the last of the previous page.

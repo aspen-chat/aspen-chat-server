@@ -63,7 +63,6 @@ pub type CommunityRead = Sideloaded<message_enum::Community>;
 pub type CommunityList = SideloadedList<message_enum::Community>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct CommunityReadQuery {
     /// Related records to return alongside the community, comma separated.
@@ -365,7 +364,6 @@ pub async fn delete_community(
 pub type MemberList = SideloadedList<User>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct MemberListQuery {
     /// Search: members whose username or display name contains this, ignoring case.

@@ -566,6 +566,26 @@ fn print_deployment(config: &AspenConfig, listed: &crate::app::federation::Liste
             federation::fingerprint(offered)
         );
     }
+    if let Some(protocol) = d.protocol() {
+        let software = match (&d.software_name, &d.software_version) {
+            (Some(name), Some(version)) => format!("{name} {version}"),
+            (Some(name), None) => name.clone(),
+            _ => "unnamed software".into(),
+        };
+        println!(
+            "  runs {software}, protocol {}..={}{}",
+            protocol.minimum,
+            protocol.version,
+            if protocol
+                .common_version(&federation::protocol::Protocol::ours())
+                .is_none()
+            {
+                ", no version in common with this deployment"
+            } else {
+                ""
+            }
+        );
+    }
     if !listed.lists.is_empty() {
         let lists: Vec<String> = listed.lists.iter().map(ToString::to_string).collect();
         println!("  on {}", lists.join(", "));

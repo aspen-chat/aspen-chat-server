@@ -18,6 +18,7 @@ pub mod contact;
 pub mod fetch;
 pub mod jws;
 pub mod keys;
+pub mod protocol;
 
 pub use contact::{ContactOutcome, contact, fetch_document, record_contact};
 pub use keys::{
@@ -151,6 +152,21 @@ impl From<Domain> for String {
 
 app::text_sql_traits!(Domain);
 
+impl JsonSchema for Domain {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Domain".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A deployment's name: a DNS name of two or more labels, in lowercase, \
+                with `:port` when it is not served on 443.",
+            "examples": ["chat.example.org"]
+        })
+    }
+}
+
 /// Whose crossing a gate governs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Subject {
@@ -263,7 +279,7 @@ impl FederationList {
         let kind = match gate(rules, direction) {
             Gate::AllowList => ListKind::Allow,
             Gate::BlockList => ListKind::Block,
-            Gate::Closed | Gate::Open => return None,
+            Gate::Closed | Gate::Open | Gate::Unknown => return None,
         };
         let direction = match (rules.shared_list, direction) {
             (true, _) => ListDirection::Shared,
@@ -311,7 +327,7 @@ pub fn admits(
     lists: &[FederationList],
 ) -> bool {
     match gate(rules_for(config, subject), direction) {
-        Gate::Closed => false,
+        Gate::Closed | Gate::Unknown => false,
         Gate::Open => true,
         Gate::AllowList | Gate::BlockList => {
             let list = FederationList::in_force(config, subject, direction)
@@ -369,6 +385,23 @@ pub struct FederatedDeployment {
     /// A key it presented other than the pinned one, refused until accepted.
     pub offered_key: Option<Vec<u8>>,
     pub offered_key_at: Option<DateTime<Utc>>,
+    /// The range of protocol versions it said it speaks when last contacted.
+    pub protocol_version: Option<i32>,
+    pub protocol_minimum: Option<i32>,
+    pub capabilities: Vec<Option<String>>,
+    pub software_name: Option<String>,
+    pub software_version: Option<String>,
+}
+
+impl FederatedDeployment {
+    /// The protocol it said it speaks when last contacted; `None` before any contact.
+    pub fn protocol(&self) -> Option<protocol::Protocol> {
+        Some(protocol::Protocol {
+            version: u32::try_from(self.protocol_version?).ok()?,
+            minimum: u32::try_from(self.protocol_minimum?).ok()?,
+            capabilities: self.capabilities.iter().flatten().cloned().collect(),
+        })
+    }
 }
 
 /// A deployment with the lists it is on.

@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { passkeyTransport } from "./passkeyTransport";
 
-const withPasskeys = {
-  passkeys: { rpId: "localhost" },
+const server = {
   twoFactorRequired: false,
   registrationInviteRequired: false,
+  protocol: { version: 1, minimum: 1 },
+  software: { name: "aspen", version: "0.1.0" },
 };
-const withoutPasskeys = {
-  passkeys: null,
-  twoFactorRequired: false,
-  registrationInviteRequired: false,
-};
+const withPasskeys = { ...server, passkeys: { rpId: "localhost" } };
+const withoutPasskeys = { ...server, passkeys: null };
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -27,11 +25,7 @@ describe("passkeyTransport", () => {
     vi.stubGlobal("PublicKeyCredential", {});
     expect(passkeyTransport("web", withPasskeys)).toEqual({ kind: "inPage" });
     expect(
-      passkeyTransport("web", {
-        passkeys: { rpId: "chat.example.org" },
-        twoFactorRequired: false,
-        registrationInviteRequired: false,
-      }),
+      passkeyTransport("web", { ...server, passkeys: { rpId: "chat.example.org" } }),
     ).toBeNull();
   });
 

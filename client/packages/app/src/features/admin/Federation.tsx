@@ -53,6 +53,13 @@ const smallButtonClass =
 /** A deployment as a directory row, which keys its rows by `id`. */
 type Row = FederatedDeployment & { id: string };
 
+/** A protocol's versions as people read them: `1`, or `2–4`. */
+function protocolRange(protocol: { version: number; minimum: number }): string {
+  return protocol.minimum === protocol.version
+    ? String(protocol.version)
+    : `${String(protocol.minimum)}–${String(protocol.version)}`;
+}
+
 function problemText(e: unknown): string {
   return e instanceof ApiProblemError ? e.message : String(e);
 }
@@ -110,7 +117,22 @@ export function FederationSection() {
     },
     {
       heading: m.federation.lastContact,
-      cell: (d) => (d.lastContactAt == null ? "" : moment(d.lastContactAt)),
+      cell: (d) => (
+        <span className="flex flex-col gap-1">
+          {d.lastContactAt != null && <span>{moment(d.lastContactAt)}</span>}
+          {d.protocol != null && (
+            <span className="text-xs text-ink-muted">
+              {format(m.federation.runs, {
+                software: d.software == null ? "?" : `${d.software.name} ${d.software.version}`,
+                versions: protocolRange(d.protocol),
+              })}
+            </span>
+          )}
+          {!d.compatible && (
+            <Status icon={WarningIcon} tone="text-danger" label={m.federation.incompatible} />
+          )}
+        </span>
+      ),
     },
     {
       heading: m.federation.admits,
@@ -158,6 +180,13 @@ function Identity({ read }: { read: AdminRead<FederationOverview> }) {
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
         <dt className="text-ink-muted">{m.federation.domain}</dt>
         <dd className="font-medium break-all">{overview.domain}</dd>
+        <dt className="text-ink-muted">{m.federation.protocol}</dt>
+        <dd>
+          {format(m.federation.runs, {
+            software: `${overview.software.name} ${overview.software.version}`,
+            versions: protocolRange(overview.protocol),
+          })}
+        </dd>
         <dt className="text-ink-muted">{m.federation.key}</dt>
         <dd className="flex flex-wrap items-center gap-2">
           {overview.keyFingerprint == null ? (

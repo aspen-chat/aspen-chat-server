@@ -48,7 +48,6 @@ pub enum BlockInclude {
 pub type BlockList = SideloadedList<UserBlock>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct BlockListQuery {
     /// Related records to return alongside the blocks, comma separated.

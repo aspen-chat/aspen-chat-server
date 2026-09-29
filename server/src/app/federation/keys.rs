@@ -9,6 +9,7 @@
 //! that pinned it refuses the new one until its administrators accept it.
 
 use crate::api::GlobalServerContext;
+use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{Domain, jws, own_domain};
 use crate::app::{self, FederationKeyId};
 use crate::aspen_config::{Gate, MigrationRules};
@@ -134,9 +135,9 @@ pub enum Rotation {
 }
 
 /// A key handover: `iss` says that its key `key` is `public_key`, signed by the key before it.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct Handover {
+pub struct Handover {
     iss: Domain,
     key: FederationKeyId,
     public_key: String,
@@ -200,7 +201,7 @@ pub async fn rotate_key(
 
 /// What a deployment publishes at [`super::WELL_KNOWN_PATH`]: its name, its keys, and its
 /// gates.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentDocument {
     pub domain: Domain,
@@ -209,9 +210,15 @@ pub struct DeploymentDocument {
     pub keys: Vec<DocumentKey>,
     pub users: Gates,
     pub bots: Gates,
+    /// The protocol it speaks; a document that does not say speaks the first version.
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// The software it runs, for people to read.
+    #[serde(default)]
+    pub software: Option<Software>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentKey {
     pub id: FederationKeyId,
@@ -227,14 +234,22 @@ pub struct DocumentKey {
     pub handover: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum KeyAlgorithm {
     Ed25519,
+    /// An algorithm another deployment publishes that this one does not know, as a newer one
+    /// may; such a key is never used.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One kind of account's gates, as a deployment publishes them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Gates {
     pub emigration: Gate,
@@ -291,6 +306,8 @@ pub async fn document(state: &GlobalServerContext) -> app::Result<Option<Deploym
         keys: keys.into_iter().map(DocumentKey::from).collect(),
         users: (&config.users).into(),
         bots: (&config.bots).into(),
+        protocol: Protocol::ours(),
+        software: Some(Software::ours()),
     }))
 }
 
@@ -301,6 +318,9 @@ pub fn current_of(document: &DeploymentDocument) -> Option<Vec<u8>> {
 }
 
 fn decode_key(key: &DocumentKey) -> Option<Vec<u8>> {
+    if key.algorithm != KeyAlgorithm::Ed25519 {
+        return None;
+    }
     URL_SAFE_NO_PAD
         .decode(&key.public_key)
         .ok()
@@ -386,6 +406,8 @@ mod tests {
             keys,
             users: open,
             bots: open,
+            protocol: Protocol::default(),
+            software: None,
         };
         (document, publics)
     }
@@ -411,6 +433,30 @@ mod tests {
         let (mut document, keys) = chain(&[true]);
         document.domain = Domain::parse("c.example").unwrap();
         assert_eq!(follow_handovers(&document, &keys[0]), None);
+    }
+
+    /// A deployment newer than this one may publish gates, algorithms, and fields this one does
+    /// not know; its document still reads, and a key of an unknown algorithm is never used.
+    #[test]
+    fn a_document_from_a_newer_deployment_reads() {
+        let document: DeploymentDocument = serde_json::from_str(include_str!(
+            "../../../../spec/fixtures/federation/document-from-newer.json"
+        ))
+        .unwrap();
+        assert_eq!(document.users.immigration, Gate::Unknown);
+        assert_eq!(document.keys[0].algorithm, KeyAlgorithm::Unknown);
+        assert_eq!(current_of(&document), None);
+        assert_eq!(document.protocol.version, 7);
+    }
+
+    #[test]
+    fn the_first_documents_still_read() {
+        let document: DeploymentDocument = serde_json::from_str(include_str!(
+            "../../../../spec/fixtures/federation/document-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(document.protocol, Protocol::default());
+        assert!(current_of(&document).is_some());
     }
 
     #[test]

@@ -72,7 +72,7 @@ pub struct WriteInResult {
 
 /// A voter's own answer to add to a poll.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct WriteInRequest {
     pub label: String,
 }
@@ -96,7 +96,6 @@ pub enum PollInclude {
 pub type PollRead = Sideloaded<Poll>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct PollReadQuery {
     /// Related records to return alongside the poll, comma separated.

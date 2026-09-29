@@ -41,7 +41,7 @@ impl From<app::read_state::ReadState> for ReadState {
 
 /// Where the caller has read a channel up to.
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadStateUpdate {
     /// A message of the channel, deleted or not, that the caller has now seen.
     pub last_read: MessageId,

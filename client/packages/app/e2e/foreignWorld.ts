@@ -72,14 +72,15 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
     visited = true;
     return json(route, { assertion: "signed", audience: foreignDomain, expiresAt: later(2) });
   });
-  await page.route(/\/api\/v1\/auth\/methods$/, (route) =>
-    json(route, {
-      passkeys: null,
-      twoFactorRequired: false,
-      registrationInviteRequired: false,
-      federationDomain: "home.example",
-    }),
-  );
+  const methods = (federationDomain: string) => ({
+    passkeys: null,
+    twoFactorRequired: false,
+    registrationInviteRequired: false,
+    federationDomain,
+    protocol: { version: 1, minimum: 1, capabilities: [] },
+    software: { name: "aspen", version: "0.1.0" },
+  });
+  await page.route(/\/api\/v1\/auth\/methods$/, (route) => json(route, methods("home.example")));
   await page.route(`${origin}/api/v1/**`, (route) => {
     const url = new URL(route.request().url());
     const path = decodeURIComponent(url.pathname.replace("/api/v1", ""));
@@ -92,6 +93,9 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
         sessionTokenExpires: later(60),
         twoFactorEnrollmentRequired: false,
       });
+    }
+    if (path === "/auth/methods") {
+      return json(route, methods(foreignDomain));
     }
     if (path === "/users/@me") {
       return json(route, users[0]);

@@ -65,7 +65,6 @@ pub type MessageRead = Sideloaded<Message>;
 pub type MessageList = SideloadedList<Message>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
-#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct MessageReadQuery {
     /// Related records to return alongside the message, comma separated.
@@ -233,7 +232,7 @@ const DEFAULT_MESSAGE_LIMIT: u32 = 50;
 /// Selects a window of a channel's history. At most one of `before`, `after`, and `around` may be
 /// given; with none of them the newest messages are returned.
 #[derive(Debug, Deserialize, IntoParams)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct MessageListQuery {
     /// Return messages older than this message id (exclusive).

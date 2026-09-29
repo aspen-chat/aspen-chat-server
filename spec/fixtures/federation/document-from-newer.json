@@ -1,0 +1,17 @@
+{
+  "domain": "future.example",
+  "keys": [
+    {
+      "id": "01a0ea00-0bd5-71ab-987e-5d0fee7b0de5",
+      "algorithm": "mlDsa65",
+      "publicKey": "AAAA",
+      "createdAt": "2031-01-01T00:00:00Z",
+      "rotationPolicy": "yearly"
+    }
+  ],
+  "users": { "emigration": "open", "immigration": "inviteOnly" },
+  "bots": { "emigration": "closed", "immigration": "closed" },
+  "protocol": { "version": 7, "minimum": 5, "capabilities": ["dms.v2", "org.example.fork"] },
+  "software": { "name": "aspen-fork", "version": "9.0.0" },
+  "contact": { "abuse": "abuse@future.example" }
+}

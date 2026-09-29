@@ -130,6 +130,10 @@ export function ForeignScope({ domain, children }: { domain: string; children: R
               {m.deployments.signIn}
             </Button>
           </>
+        ) : entry?.status === "incompatible" ? (
+          <p role="alert" className="text-sm text-danger">
+            {format(m.deployments.incompatible, { domain })}
+          </p>
         ) : entry?.status === "failed" && !joining ? (
           <>
             <p role="alert" className="text-sm text-danger">

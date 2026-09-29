@@ -34,6 +34,7 @@ pub const PASSWORD_MIN_LENGTH: usize = 8;
     Serialize,
     Deserialize,
     utoipa::ToSchema,
+    schemars::JsonSchema,
     diesel::FromSqlRow,
     diesel::AsExpression,
 )]

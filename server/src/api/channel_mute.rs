@@ -33,7 +33,7 @@ impl From<app::channel_mute::ChannelMute> for ChannelMute {
 
 /// How long to mute a channel for.
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ChannelMuteRequest {
     /// Seconds from now, at most `app::channel_mute::MAX_MUTE_SECONDS` (a year); absent or
     /// `null` to mute until the caller unmutes it.
