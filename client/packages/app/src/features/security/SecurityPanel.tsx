@@ -274,7 +274,7 @@ function PasskeySection({
         <p className={hintClass}>{m.security.passkeysUnavailable}</p>
       ) : (
         <Form
-          className="flex items-end gap-2"
+          className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             const form = event.currentTarget;
@@ -294,9 +294,14 @@ function PasskeySection({
             });
           }}
         >
-          <TextField name="name" maxLength={64} className={fieldClass + " flex-1"}>
+          {/* The name shrinks to leave the button room, down to a width that still reads, and
+              the button wraps below it on a screen narrower than that. */}
+          <TextField name="name" maxLength={64} className={fieldClass + " min-w-40 flex-1"}>
             <Label className={labelClass}>{m.security.passkeyNameLabel}</Label>
-            <Input className={inputClass} placeholder={m.security.passkeyNamePlaceholder} />
+            <Input
+              className={inputClass + " w-full min-w-0"}
+              placeholder={m.security.passkeyNamePlaceholder}
+            />
           </TextField>
           <Button
             type="submit"
@@ -335,7 +340,7 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
     return (
       <li>
         <Form
-          className="flex items-end gap-2"
+          className="flex flex-wrap items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             const name = formString(new FormData(event.currentTarget), "name");
