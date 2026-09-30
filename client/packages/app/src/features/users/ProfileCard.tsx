@@ -1,5 +1,5 @@
 import type { User } from "@aspen/protocol";
-import { ChatCircleIcon, PlusIcon, ProhibitIcon, XIcon } from "@phosphor-icons/react";
+import { ChatCircleIcon, PhoneIcon, PlusIcon, ProhibitIcon, XIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import {
@@ -93,7 +93,12 @@ export function ProfileCard({ user }: { user: User }) {
       )}
       {me !== null && me.id !== user.id && (
         <>
-          {!blocked && !inTheirDm && <MessageButton userId={user.id} />}
+          {!blocked && (!inTheirDm || !user.bot) && (
+            <div className="flex gap-2">
+              {!inTheirDm && <MessageButton userId={user.id} />}
+              {!user.bot && <CallButton userId={user.id} name={name} />}
+            </div>
+          )}
           <BlockControl userId={user.id} name={name} blocked={blocked} />
         </>
       )}
@@ -329,6 +334,57 @@ function BotMaker({ ownerId }: { ownerId: string | null }) {
   );
 }
 
+/**
+ * Calls the user: opens the caller's DM with them, making it the first time, and joins its call,
+ * starting it when no one is in it yet.
+ */
+function CallButton({ userId, name }: { userId: string; name: string }) {
+  const m = useMessages();
+  const sync = useSync();
+  const navigate = useNavigate();
+  const domain = useDomain();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const label = format(m.profile.call, { name });
+  return (
+    <div className="flex flex-col gap-1">
+      <Tooltip text={label}>
+        <Button
+          aria-label={label}
+          isDisabled={pending}
+          onPress={() => {
+            setPending(true);
+            setError(null);
+            sync
+              .openDm([userId])
+              .then((dm) => {
+                void navigate(channelLink({ domain, community: null }, dm.id));
+                return sync.voice.join(dm.id);
+              })
+              .then(
+                () => {
+                  setPending(false);
+                },
+                (failure: unknown) => {
+                  setError(failure instanceof Error ? failure.message : String(failure));
+                  setPending(false);
+                },
+              );
+          }}
+          className={secondaryButtonClass + " flex items-center justify-center px-3"}
+        >
+          <PhoneIcon size={16} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      {error !== null && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Opens the caller's DM with the user, making it the first time. */
 function MessageButton({ userId }: { userId: string }) {
   const m = useMessages();
@@ -338,7 +394,7 @@ function MessageButton({ userId }: { userId: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
       <Button
         isDisabled={pending}
         onPress={() => {

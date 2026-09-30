@@ -10,6 +10,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { Fragment, useState } from "react";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { useMe, useSync, useUsers } from "@/api/hooks";
+import { DmCallButton } from "@/features/dms/DmCall";
 import { otherRecipients } from "@/features/dms/dmName";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import { useDmTitle } from "@/features/dms/useDmTitle";
@@ -32,8 +33,9 @@ const iconButtonClass =
   "rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
- * The bar above a DM: a way back to the DM list on small screens, and the other people's
- * names, each opening that person's card, from which they can be messaged or blocked. A group
+ * The bar above a DM: a way back to the DM list on small screens, the other people's names,
+ * each opening that person's card, from which they can be messaged or blocked, and a way to
+ * start or join the DM's call. A group
  * DM also offers to add people and to leave.
  */
 export function DmHeader({ channel }: { channel: Channel }) {
@@ -59,6 +61,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
         </span>
         <PeopleNames channel={channel} fallback={title} />
       </Heading>
+      <DmCallButton channel={channel} className={iconButtonClass} />
       <SearchButton channelId={channel.id} channelName={title} communityId={null} />
       <PinsButton channelId={channel.id} channelName={title} home={{ domain, community: null }} />
       {group && (

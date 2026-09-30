@@ -264,7 +264,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   voice channel row joins it (a call the user is already in, or joining, is left alone) and
   opens `VoiceScreen`, the channel's screen in place of a
   history: the shared screens (one large, the others as thumbnails to pick), everyone in the
-  call as tiles, and a Join button when the user is not in it. The large screen goes full
+  call as tiles, and a Join button when the user is not in it (`CallStage`, which a DM's call
+  shares). A DM or group DM holds a call too: its header's phone button starts or joins it,
+  `DmCall` shows it between the header and the messages while one is under way or the user is
+  in it, the DM's row carries a phone meanwhile, `CallBar` names the DM's people, and a user
+  card's Call button opens the DM with that person and joins its call. No one is offered
+  moderation there, since the resolver gives no one Manage calls in a DM. The large screen goes full
   screen with its corner button, a double click, or F (`ScreenTile`, `fullScreen.ts`), through
   the Fullscreen API where it works and otherwise by filling the app's window, left the same
   ways or with Escape; the mobile apps always fill the window, since Capacitor's WebView

@@ -1,11 +1,19 @@
 import type { Channel } from "@aspen/protocol";
-import { BellSlashIcon, NotePencilIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { BellSlashIcon, NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button, Label, RadioButton, RadioField, RadioGroup } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, useSources, type Source } from "@/api/everywhere";
-import { useDms, useMe, useMentions, useMute, useUnread, useUser } from "@/api/hooks";
+import {
+  useChannelVoice,
+  useDms,
+  useMe,
+  useMentions,
+  useMute,
+  useUnread,
+  useUser,
+} from "@/api/hooks";
 import { mergeDms } from "@/features/dms/mergeDms";
 import { channelLink, useDomain } from "@/features/messages/links";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
@@ -138,7 +146,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
 
 /**
  * One DM in the list, marked while it holds something the caller has not read, or dimmed with a
- * muted bell while they have muted it. Its menu opens on a right click or from its options
+ * muted bell while they have muted it, and with a phone while a call is under way in it. Its menu opens on a right click or from its options
  * button, which sits over the row's right end, in room the link leaves for it. The row of the
  * one-to-one DM already open opens the other person's card instead, beside the row, so an
  * unwanted conversation is a press away from a block.
@@ -151,6 +159,7 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
   const unread = useUnread(dm.id);
   const tags = useMentions(dm.id);
   const muted = useMute(dm.id) !== undefined;
+  const calling = useChannelVoice(dm.id).participants.length > 0;
   const row = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const stateName = muted
@@ -198,6 +207,15 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
         </>
       )}
       <MentionBadge count={tags} />
+      {calling && (
+        <PhoneIcon
+          size={14}
+          weight="fill"
+          role="img"
+          aria-label={m.voice.callUnderWay}
+          className="shrink-0 text-online"
+        />
+      )}
       {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
     </>
   );

@@ -14,6 +14,7 @@ import { ThreadPanel } from "@/features/threads/ThreadPanel";
 import { VoiceScreen } from "@/features/voice/VoiceScreen";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { DmCall } from "@/features/dms/DmCall";
 
 /**
  * A channel's screen, in a community or among the caller's DMs: a text channel's or DM's
@@ -108,6 +109,7 @@ export function ChannelScreen() {
             <PinsButton channelId={channelId} channelName={channel.name} home={home} />
           </ChannelHeader>
         )}
+        {isDm(channel) && <DmCall channel={channel} />}
         {loadError !== null && (
           <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
             {loadError}

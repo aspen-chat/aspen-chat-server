@@ -6,7 +6,9 @@ import {
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
+import { isDm, type Channel } from "@aspen/protocol";
 import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
+import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
@@ -15,7 +17,10 @@ const buttonClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover " +
   "focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-2.5";
 
-/** The call the user is in, above their user bar: where they are, and mute, deafen, leave. */
+/**
+ * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
+ * people), and mute, deafen, leave.
+ */
 export function CallBar() {
   const m = useMessages();
   const sync = useSync();
@@ -49,7 +54,11 @@ export function CallBar() {
           {status}
         </span>
         <span className="truncate text-xs text-ink-muted">
-          {call.status === "failed" ? (call.error ?? channel?.name ?? "") : (channel?.name ?? "")}
+          {call.status === "failed" && call.error !== null ? (
+            call.error
+          ) : channel === undefined ? null : (
+            <CallPlace channel={channel} />
+          )}
         </span>
       </span>
       {/* Someone who may not speak here listens only, and has no microphone to mute. */}
@@ -107,4 +116,13 @@ export function CallBar() {
       </Tooltip>
     </div>
   );
+}
+
+/** Where the call is: a voice channel's name, or a DM's people. */
+function CallPlace({ channel }: { channel: Channel }) {
+  return isDm(channel) ? <DmTitle channel={channel} /> : channel.name;
+}
+
+function DmTitle({ channel }: { channel: Channel }) {
+  return useDmTitle(channel);
 }

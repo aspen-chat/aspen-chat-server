@@ -37,12 +37,58 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
- * A voice channel's screen: the shared screens, one of them large and the rest as thumbnails
- * to pick from, then everyone in the call as tiles, with the transfers under way between them
- * drawn over the tiles, the call's files, and the way in or the share control. The screens and
- * file offers of people the user blocked, here or on another deployment, are not shown.
+ * A voice channel's screen: its header, with the share control while the user is in its call,
+ * above the call itself (`CallStage`).
  */
 export function VoiceScreen({ channel, communityId }: { channel: Channel; communityId: string }) {
+  const m = useMessages();
+  const call = useVoiceCall();
+  const inThisCall = call.status === "connected" && call.channelId === channel.id;
+  const [shareError, setShareError] = useState<string | null>(null);
+  return (
+    <main className="flex min-h-0 flex-1 flex-col">
+      <ChannelHeader
+        communityId={communityId}
+        glyph={<SpeakerHighIcon size={16} aria-hidden="true" />}
+        name={channel.name}
+      >
+        {/* A narrow screen shares from the call bar below instead. */}
+        {inThisCall && (
+          <div className="hidden md:flex">
+            <ShareControl variant="panel" onError={setShareError} />
+          </div>
+        )}
+      </ChannelHeader>
+      {shareError !== null && (
+        <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
+          {shareError}
+        </p>
+      )}
+      <CallStage
+        channel={channel}
+        joinLabel={format(m.voice.join, { channel: channel.name })}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+      />
+    </main>
+  );
+}
+
+/**
+ * A channel's call, in a voice channel or a DM: the shared screens, one of them large and the
+ * rest as thumbnails to pick from, then everyone in the call as tiles, with the transfers under
+ * way between them drawn over the tiles, the call's files, and the way in, labelled
+ * `joinLabel`. The screens and file offers of people the user blocked, here or on another
+ * deployment, are not shown. `className` lays out the scrolling area that holds it all.
+ */
+export function CallStage({
+  channel,
+  joinLabel,
+  className,
+}: {
+  channel: Channel;
+  joinLabel: string;
+  className: string;
+}) {
   const m = useMessages();
   const sync = useSync();
   const call = useVoiceCall();
@@ -50,7 +96,6 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const inThisCall = call.status === "connected" && call.channelId === channel.id;
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [shareError, setShareError] = useState<string | null>(null);
   const tiles = useRef<HTMLDivElement>(null);
   const silenced = useSilenced(call.status === "connected" ? call.screens.map((s) => s.user) : []);
 
@@ -71,25 +116,8 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
   const focused = screens.find((screen) => screen.id === focusedId) ?? screens[0];
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col">
-      <ChannelHeader
-        communityId={communityId}
-        glyph={<SpeakerHighIcon size={16} aria-hidden="true" />}
-        name={channel.name}
-      >
-        {/* A narrow screen shares from the call bar below instead. */}
-        {inThisCall && (
-          <div className="hidden md:flex">
-            <ShareControl variant="panel" onError={setShareError} />
-          </div>
-        )}
-      </ChannelHeader>
-      {shareError !== null && (
-        <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
-          {shareError}
-        </p>
-      )}
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+    <>
+      <div className={className}>
         {focused !== undefined && (
           <section aria-label={m.voice.screensLabel} className="flex min-h-0 flex-col gap-2">
             <FocusedScreen screen={focused} />
@@ -145,7 +173,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
               className={primaryButtonClass + " flex items-center gap-2"}
             >
               <PhoneIcon size={18} aria-hidden="true" />
-              {format(m.voice.join, { channel: channel.name })}
+              {joinLabel}
             </Button>
           </div>
         )}
@@ -158,7 +186,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
           <CallBar />
         </div>
       )}
-    </main>
+    </>
   );
 }
 

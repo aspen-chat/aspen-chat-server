@@ -104,7 +104,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
       });
     },
     "/api/v1/users/@me/dms": (url) => {
-      expect(url.searchParams.get("include")).toBe("users,readStates,mutes,notifications");
+      expect(url.searchParams.get("include")).toBe("users,readStates,mutes,notifications,voice");
       return json({ data: [], included: { users: [] } });
     },
   };
