@@ -16,6 +16,7 @@ import { FollowLanguagePreference } from "@/features/settings/LanguageSection";
 import { SourcePickerDialog } from "@/features/voice/SourcePickerDialog";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { IncomingCalls } from "@/features/voice/IncomingCall";
 
 /**
  * Signed out: the sign-in or create-account screen, leaving the URL alone so a shared link
@@ -92,6 +93,7 @@ function SignedIn() {
       <ShareBlocksAcrossDeployments />
       <WakeThisPhone />
       <NotifyOnMessages />
+      <IncomingCalls />
       <FollowLanguagePreference />
       <div className="flex h-full flex-col">
         <SyncBanner />

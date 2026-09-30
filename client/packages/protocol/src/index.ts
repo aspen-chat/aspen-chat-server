@@ -143,6 +143,7 @@ export type {
   UserCommunity,
   UserOnlineStatus,
   VoiceParticipant,
+  VoiceRing,
   VoiceSession,
   VoiceSessionEndReason,
 } from "./generated/events";

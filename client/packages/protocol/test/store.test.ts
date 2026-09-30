@@ -929,8 +929,46 @@ describe("RecordStore voice", () => {
       reason: "empty",
     });
     store.applyEvent({ serverEvent: "voiceSession", type: "delete", id: session.id });
-    expect(store.channelVoice(general.id)).toEqual({ session: null, participants: [] });
+    expect(store.channelVoice(general.id)).toEqual({ session: null, participants: [], rings: [] });
     expect(listener).toHaveBeenCalled();
+  });
+
+  it("keeps who a call rings until they join or decline, or the call ends", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen], {
+      channels: [general],
+      categories: [],
+      users: [me],
+      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0, roles: [] }],
+      voiceSessions: [session],
+      voiceParticipants: [],
+    });
+    const other = id(42);
+    const ring = (user: string) => ({
+      session: session.id,
+      user,
+      channel: general.id,
+      caller: other,
+      until: "2026-09-26T00:00:15Z",
+    });
+    const rings = vi.fn();
+    store.subscribe("rings", rings);
+    store.applyEvent({ serverEvent: "voiceRing", type: "create", ...ring(me.id) });
+    store.applyEvent({ serverEvent: "voiceRing", type: "create", ...ring(id(43)) });
+    expect(store.myRings()).toEqual([ring(me.id)]);
+    expect(store.channelVoice(general.id).rings).toHaveLength(2);
+    expect(rings).toHaveBeenCalled();
+    store.applyEvent({
+      serverEvent: "voiceRing",
+      type: "delete",
+      session: session.id,
+      user: me.id,
+    });
+    expect(store.myRings()).toEqual([]);
+    expect(store.channelVoice(general.id).rings).toEqual([ring(id(43))]);
+    // The call's end ends every ring of it.
+    store.applyEvent({ serverEvent: "voiceSession", type: "delete", id: session.id });
+    expect(store.channelVoice(general.id).rings).toEqual([]);
   });
 
   it("drops a call with its channel", () => {

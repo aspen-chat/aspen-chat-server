@@ -1824,6 +1824,19 @@ export class AspenSync {
     }
   }
 
+  /**
+   * Declines the DM call ringing the caller: it stops ringing them on every device, which their
+   * ring's `delete` event tells.
+   */
+  async declineCall(channelId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/channels/{channel}/voice/rings/@me", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /** Removes someone from a channel's call; their participant `delete` event confirms it. */
   async kickVoiceParticipant(channelId: string, userId: string): Promise<void> {
     const result = await this.#client.api.DELETE(

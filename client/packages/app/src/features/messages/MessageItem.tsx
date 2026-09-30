@@ -31,6 +31,7 @@ import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { PollCard } from "@/features/messages/PollCard";
+import { CallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
@@ -93,6 +94,7 @@ export function MessageItem({
     !inThread &&
     message.kind !== "threadEcho" &&
     message.kind !== "pollClosed" &&
+    message.kind !== "call" &&
     (message.thread != null || permissions.has("startThreads"));
   const permalink = inThread
     ? threadLink(home, parentId, channelId)
@@ -129,6 +131,22 @@ export function MessageItem({
     message.content,
     (url) => isImageUrl(url) || previews.some((p) => p.url === url && isPictureOnly(p)),
   );
+  if (message.kind === "call") {
+    return (
+      <article
+        data-message-id={id}
+        className={
+          "flex gap-3 rounded-md px-2 py-1.5 " +
+          (highlighted ? "bg-accent-soft" : "hover:bg-surface-hover/60")
+        }
+      >
+        <div className="w-10 shrink-0" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <CallNotice starter={message.author} seconds={message.callSeconds ?? 0} />
+        </div>
+      </article>
+    );
+  }
   if (message.kind === "pollClosed" && message.poll != null) {
     return (
       <article

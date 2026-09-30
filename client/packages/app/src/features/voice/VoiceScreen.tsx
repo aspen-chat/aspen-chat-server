@@ -35,6 +35,7 @@ import { FilesPanel } from "@/features/voice/FilesPanel";
 import { TransferLinks } from "@/features/voice/TransferLinks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useNow } from "@/features/layout/useNow";
 
 /**
  * A voice channel's screen: its header, with the share control while the user is in its call,
@@ -76,8 +77,8 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
 /**
  * A channel's call, in a voice channel or a DM: the shared screens, one of them large and the
  * rest as thumbnails to pick from, then everyone in the call as tiles, with the transfers under
- * way between them drawn over the tiles, the call's files, and the way in, labelled
- * `joinLabel`. The screens and file offers of people the user blocked, here or on another
+ * way between them drawn over the tiles, those a DM's call is ringing as darkened tiles, the
+ * call's files, and the way in, labelled `joinLabel`. The screens and file offers of people the user blocked, here or on another
  * deployment, are not shown. `className` lays out the scrolling area that holds it all.
  */
 export function CallStage({
@@ -97,6 +98,13 @@ export function CallStage({
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const tiles = useRef<HTMLDivElement>(null);
+  // A ring ends at its `until` by the clock, so the clock is read while any ring is out.
+  const now = useNow(1000, voice.rings.length > 0);
+  const ringing = voice.rings.filter(
+    (ring) =>
+      Date.parse(ring.until) > now &&
+      !voice.participants.some((participant) => participant.user === ring.user),
+  );
   const silenced = useSilenced(call.status === "connected" ? call.screens.map((s) => s.user) : []);
 
   const screens: { id: string; user: string | null; track: MediaStreamTrack }[] = inThisCall
@@ -156,6 +164,9 @@ export function CallStage({
                     deafened={participant.deafened}
                     sharingScreen={participant.sharingScreen}
                   />
+                ))}
+                {ringing.map((ring) => (
+                  <RingingTile key={ring.user} userId={ring.user} />
                 ))}
               </ul>
               {inThisCall && <TransferLinks links={call.files.links} container={tiles} />}
@@ -306,6 +317,26 @@ function ParticipantTile({
           )
         )}
       </span>
+    </li>
+  );
+}
+
+/**
+ * Someone a DM's call is ringing: their tile, darkened until they join or the ring ends. Only
+ * the darkening says so on screen; a screen reader hears it.
+ */
+function RingingTile({ userId }: { userId: string }) {
+  const m = useMessages();
+  const user = useUser(userId);
+  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  return (
+    <li
+      data-ringing={userId}
+      className="relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 brightness-75"
+    >
+      <Avatar name={name} iconId={user?.icon} size="lg" />
+      <span className="max-w-full truncate text-sm">{name}</span>
+      <span className="sr-only">{m.voice.ringing}</span>
     </li>
   );
 }

@@ -32,6 +32,7 @@ import type {
   Role,
   ServerEvent,
   VoiceParticipant,
+  VoiceRing,
   VoiceSession,
   User,
   UserCommunity,
@@ -133,9 +134,14 @@ export interface ChannelVoice {
   readonly session: VoiceSession | null;
   /** In the order they joined. */
   readonly participants: readonly VoiceParticipantState[];
+  /**
+   * Who a DM's call is ringing. A ring ends at its `until` with no event, so these include rings
+   * that have run out; readers compare `until` with the clock.
+   */
+  readonly rings: readonly VoiceRing[];
 }
 
-const NO_VOICE: ChannelVoice = { session: null, participants: [] };
+const NO_VOICE: ChannelVoice = { session: null, participants: [], rings: [] };
 
 /**
  * One emoji's reactions to a message, in brief: how many, whether the caller is among them, and
@@ -221,6 +227,8 @@ export class RecordStore {
   readonly #voiceSessions = new Map<string, VoiceSession>();
   /** `session -> user -> participant`. */
   readonly #voiceParticipants = new Map<string, Map<string, VoiceParticipantState>>();
+  /** Session id → rung user id → ring. */
+  readonly #voiceRings = new Map<string, Map<string, VoiceRing>>();
   /** `community -> user ids`, the sample of members the server returns per community. */
   readonly #members = new Map<string, Set<string>>();
   /** `user -> community ids`, the reverse of `#members`, for invalidating member lists. */
@@ -360,7 +368,21 @@ export class RecordStore {
       const participants = Array.from(this.#voiceParticipants.get(session.id)?.values() ?? []).sort(
         (a, b) => a.joinedAt.localeCompare(b.joinedAt),
       );
-      return { session, participants };
+      const rings = Array.from(this.#voiceRings.get(session.id)?.values() ?? []);
+      return { session, participants, rings };
+    });
+  }
+
+  /**
+   * Topic `rings`: the calls ringing the caller, in DMs and group DMs, including rings that have
+   * run out by the clock (see `ChannelVoice.rings`).
+   */
+  myRings(): readonly VoiceRing[] {
+    return this.#memoized("rings", () => {
+      const me = this.#myUserId;
+      return Array.from(this.#voiceRings.values()).flatMap((rings) =>
+        Array.from(rings.values()).filter((ring) => ring.user === me),
+      );
     });
   }
 
@@ -600,7 +622,9 @@ export class RecordStore {
     if (message.author === this.#myUserId || this.silenced(message.author)) {
       return false;
     }
-    if (message.kind === "threadEcho" || message.kind === "pollClosed") {
+    // An echo and a poll's result say nothing of their own, and a call's record follows the
+    // ring that already told of the call.
+    if (message.kind === "threadEcho" || message.kind === "pollClosed" || message.kind === "call") {
       return false;
     }
     const channel = this.#channels.get(message.channelId);
@@ -1069,6 +1093,8 @@ export class RecordStore {
       }
       this.#voiceSessions.clear();
       this.#voiceParticipants.clear();
+      this.#voiceRings.clear();
+      this.#touch("rings");
       this.ingest({
         voiceSessions: included.voiceSessions ?? [],
         voiceParticipants: included.voiceParticipants ?? [],
@@ -1139,6 +1165,16 @@ export class RecordStore {
         for (const session of included.voiceSessions ?? []) {
           this.#touch(`voice:${session.channel}`);
         }
+      }
+      // Rings likewise come whole for the sessions they come with.
+      if (included.voiceRings !== undefined) {
+        for (const session of included.voiceSessions ?? []) {
+          this.#voiceRings.set(session.id, new Map());
+        }
+        for (const ring of included.voiceRings) {
+          this.#putVoiceRing(ring);
+        }
+        this.#touch("rings");
       }
       // The caller's votes come with the polls they are on, and a poll with no vote listed
       // is one they have not voted on.
@@ -1535,6 +1571,8 @@ export class RecordStore {
       this.#icons.clear();
       this.#voiceSessions.clear();
       this.#voiceParticipants.clear();
+      this.#voiceRings.clear();
+      this.#touch("rings");
       this.#members.clear();
       this.#memberOf.clear();
       this.#reactions.clear();
@@ -1752,6 +1790,13 @@ export class RecordStore {
             this.#putVoiceSession(created(event));
           } else {
             this.#removeVoiceSession(event.id);
+          }
+          break;
+        case "voiceRing":
+          if (event.type === "create") {
+            this.#putVoiceRing(created(event));
+          } else {
+            this.#removeVoiceRing(event.session, event.user);
           }
           break;
         case "voiceParticipant":
@@ -2422,7 +2467,31 @@ export class RecordStore {
     }
     this.#voiceSessions.delete(id);
     this.#voiceParticipants.delete(id);
+    if (this.#voiceRings.delete(id)) {
+      this.#touch("rings");
+    }
     this.#touch(`voice:${session.channel}`);
+  }
+
+  #putVoiceRing(ring: VoiceRing): void {
+    let rings = this.#voiceRings.get(ring.session);
+    if (rings === undefined) {
+      rings = new Map();
+      this.#voiceRings.set(ring.session, rings);
+    }
+    rings.set(ring.user, ring);
+    this.#touch(`voice:${ring.channel}`);
+    this.#touch("rings");
+  }
+
+  #removeVoiceRing(session: string, user: string): void {
+    const ring = this.#voiceRings.get(session)?.get(user);
+    if (ring === undefined) {
+      return;
+    }
+    this.#voiceRings.get(session)?.delete(user);
+    this.#touch(`voice:${ring.channel}`);
+    this.#touch("rings");
   }
 
   #putVoiceParticipant(participant: VoiceParticipant): void {
