@@ -845,6 +845,12 @@ export const en = {
     unavailable: "This poll is no longer available.",
   },
   paletteLabel: "Colour palette",
+  themeModeLabel: "Theme",
+  themeModes: {
+    system: "System",
+    light: "Light",
+    dark: "Dark",
+  },
   cannotSendHere: "You can't send messages here.",
   channelActions: {
     rename: "Rename channel",

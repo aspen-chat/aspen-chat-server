@@ -594,7 +594,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 - Colour comes only from the semantic tokens in `src/styles.css` (`bg-surface`, `text-ink-muted`,
   `border-line`, `bg-accent`, `text-danger`, ...). Do not use Tailwind's named colours or
   `dark:` variants: each token is a `light-dark()` pair inside a palette, and a palette is a
-  `[data-theme]` block of variables that `src/theme/palettes.ts` switches at runtime.
+  `[data-theme]` block of variables that `src/theme/palettes.ts` switches at runtime. Which of
+  each pair shows is the root's `color-scheme`: `light dark`, following the system, unless the
+  user chose Light or Dark under Appearance (`applyThemeMode`, kept per install like the
+  palette). Nothing may read `prefers-color-scheme` itself, since that ignores the user's choice.
 - Icon-only controls get a `Tooltip` (`src/features/layout/Tooltip.tsx`) whose text is also their
   `aria-label`, so the tooltip and the accessible name never disagree.
 - Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken).

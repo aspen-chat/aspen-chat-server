@@ -32,7 +32,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /** The dashboard's tabs, in the rail's order. */
-export const ADMIN_TABS = [
+const ADMIN_TABS = [
   "overview",
   "fleet",
   "invites",
@@ -43,7 +43,7 @@ export const ADMIN_TABS = [
   "moderation",
   "transfers",
 ] as const;
-export type AdminTab = (typeof ADMIN_TABS)[number];
+type AdminTab = (typeof ADMIN_TABS)[number];
 
 /** Which tabs the caller may open: each needs the deployment permission its content does. */
 function useAllowedTabs(): AdminTab[] {
