@@ -38,7 +38,8 @@ import { BotAddScreen } from "@/features/bots/BotAddScreen";
  *                                                       `/at/{domain}/invite/{code}`
  *   /register?invite={code}                             create an account with a registration
  *                                                       invite; signed in, the home screen
- *   /admin                                              the Administration Dashboard
+ *   /admin, /admin/{tab}                                the Administration Dashboard, at its first
+ *                                                       tab the caller may open, or at one
  *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
  *                                                       community, with the permissions named
  *   /at/{domain}/communities/…, /at/{domain}/dms/…, /at/{domain}/invite/{code}
@@ -74,7 +75,16 @@ export const registerRoute = createRoute({
 export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
-  component: AdminDashboard,
+  component: () => <AdminDashboard tab={undefined} />,
+});
+
+export const adminTabRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/$tab",
+  component: function AdminTab() {
+    const { tab } = adminTabRoute.useParams();
+    return <AdminDashboard tab={tab} />;
+  },
 });
 
 export const botAddRoute = createRoute({
@@ -253,6 +263,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   registerRoute,
   adminRoute,
+  adminTabRoute,
   botAddRoute,
   inviteRoute,
   communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),

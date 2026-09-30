@@ -146,22 +146,28 @@ for (const { palette, scheme } of combinations) {
         .getByRole("link", { name: "Administration" })
         .click();
       await expect(page.getByRole("heading", { name: "Administration", level: 1 })).toBeVisible();
-      await expect(page.getByRole("region", { name: "Users" }).getByText("1–15")).toBeVisible();
-      // Every table has loaded and faded back in: a table fades while its page loads.
-      await expect
-        .poll(() =>
-          page
-            .locator("table")
-            .evaluateAll((tables) =>
-              tables.every(
-                (table) =>
-                  table.parentElement !== null &&
-                  getComputedStyle(table.parentElement).opacity === "1",
+      const tabs = page.getByRole("navigation", { name: "Administration sections" });
+      for (const tab of await tabs.getByRole("link").all()) {
+        const name = await tab.innerText();
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-current", "page");
+        await expect(page.getByRole("region").first()).toBeVisible();
+        // Every table has loaded and faded back in: a table fades while its page loads.
+        await expect
+          .poll(() =>
+            page
+              .locator("table")
+              .evaluateAll((tables) =>
+                tables.every(
+                  (table) =>
+                    table.parentElement !== null &&
+                    getComputedStyle(table.parentElement).opacity === "1",
+                ),
               ),
-            ),
-        )
-        .toBe(true);
-      await expectAccessible(page, "administration");
+          )
+          .toBe(true);
+        await expectAccessible(page, `administration: ${name}`);
+      }
       await page.goto(`/bots/${helper}/add?permissions=sendMessages`);
       await expect(page.getByRole("heading", { name: "Add Helper to a community" })).toBeVisible();
       await expectAccessible(page, "adding a bot");

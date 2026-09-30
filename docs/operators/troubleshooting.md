@@ -80,8 +80,8 @@ reachable from the client, over HTTPS when the page is, and allow the page's ori
 without credentials.
 
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
-enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Fleet
-section shows each voice server's last report. Check that the voice server is running, reaches
+enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet
+tab shows each voice server's last report. Check that the voice server is running, reaches
 NATS with the same token, and has the `id` the registry gave it.
 
 **People join a call but hear nothing.** Signalling works but media does not flow: the media

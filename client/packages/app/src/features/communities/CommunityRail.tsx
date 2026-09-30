@@ -90,7 +90,7 @@ export function CommunityRail() {
   const inDms =
     matchRoute({ to: "/dms", fuzzy: true }) !== false ||
     matchRoute({ to: "/at/$domain/dms", fuzzy: true }) !== false;
-  const inAdmin = matchRoute({ to: "/admin" }) !== false;
+  const inAdmin = matchRoute({ to: "/admin", fuzzy: true }) !== false;
   const admin = useIsAdmin();
   const { dragAndDropHooks } = useDragAndDrop({
     getItems: (keys) => Array.from(keys, (key) => ({ [COMMUNITY_DRAG_TYPE]: String(key) })),

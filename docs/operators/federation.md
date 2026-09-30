@@ -61,7 +61,7 @@ block list never turns the allowed into the blocked.
 
 ## The directory
 
-Every deployment this one knows is in the dashboard's Federation section, with its key's
+Every deployment this one knows is in the dashboard's Federation tab, with its key's
 fingerprint, the lists it is on, and whether it is admitted each way. Administrators with Manage
 federation add deployments, put them on lists, and contact them there; the terminal does the
 same:

@@ -17,6 +17,10 @@ test.beforeEach(async ({ page }) => {
     .getByRole("navigation", { name: "Communities" })
     .getByRole("link", { name: "Administration" })
     .click();
+  await page
+    .getByRole("navigation", { name: "Administration sections" })
+    .getByRole("link", { name: "Federation" })
+    .click();
   await expect(page.getByRole("region", { name: "Federation" })).toBeVisible();
 });
 

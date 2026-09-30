@@ -482,11 +482,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   counts the rest. `ReactionsDialog`, opened from the `+N` chip or the message's "View
   reactions" action, lists every emoji and, for the chosen one, everyone who reacted, a page at
   a time (`AspenSync.loadReactors`).
-- The Administration Dashboard is `/admin` (`src/features/admin`), offered in the community
+- The Administration Dashboard is `/admin/{tab}` (`src/features/admin`; `/admin` opens the first
+  tab the caller may), a rail of tabs beside the one open, set across the top on a one-pane
+  screen, each section on it a plane; it is offered in the community
   rail to anyone with a deployment permission (`RecordStore.deploymentPermissions`, topic
   `admin`, read at bootstrap from `GET /users/@me/admin` and kept by `deploymentAccessChanged`
-  events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each section shows
-  only with the permission it needs: the totals, growth, and fleet with `viewDashboard`,
+  events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each tab shows
+  only with the permission it needs: the totals and growth, and the fleet, with `viewDashboard`,
   registration invites with `manageRegistrationInvites`, the directories with `viewDashboard`
   or `moderateCommunities`, the moderation log with `viewDashboard`, federation with
   `manageFederation` (`Federation.tsx`: this deployment's domain, key fingerprint, and gates;

@@ -13,7 +13,27 @@ async function openDashboard(page: Page) {
   await expect(page.getByRole("heading", { name: "Administration", level: 1 })).toBeVisible();
 }
 
-const section = (page: Page, name: string) => page.getByRole("region", { name });
+/** The tab each section of the dashboard is on. */
+const TAB_OF: Record<string, string> = {
+  Overview: "Overview",
+  Growth: "Overview",
+  "Server fleet": "Server fleet",
+  "Registration invites": "Registration invites",
+  "Deployment roles": "Deployment roles",
+  Users: "Users",
+  Communities: "Communities",
+  "Moderation log": "Moderation log",
+};
+
+const tabs = (page: Page) => page.getByRole("navigation", { name: "Administration sections" });
+
+/** Opens the tab a section is on, and finds the section there. */
+async function openSection(page: Page, name: string) {
+  await tabs(page)
+    .getByRole("link", { name: TAB_OF[name] ?? name, exact: true })
+    .click();
+  return page.getByRole("region", { name });
+}
 
 test.beforeEach(async ({ page }) => {
   await signInToWorld(page);
@@ -21,13 +41,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("the overview counts users and communities and says how people join", async ({ page }) => {
-  const overview = section(page, "Overview");
+  const overview = await openSection(page, "Overview");
   await expect(overview.getByText("+2 this week")).toBeVisible();
   await expect(overview.getByText("Invite only")).toBeVisible();
 });
 
 test("the fleet names each server's state in words", async ({ page }) => {
-  const fleet = section(page, "Server fleet");
+  const fleet = await openSection(page, "Server fleet");
   const api = fleet.getByRole("table", { name: "API servers" });
   await expect(api.getByRole("row").filter({ hasText: "api-1" })).toContainText("Healthy");
   await expect(api.getByRole("row").filter({ hasText: "api-2" })).toContainText("Errors");
@@ -39,7 +59,7 @@ test("the fleet names each server's state in words", async ({ page }) => {
 });
 
 test("an administrator makes an invite, copies it, and revokes it", async ({ page }) => {
-  const invites = section(page, "Registration invites");
+  const invites = await openSection(page, "Registration invites");
   await expect(invites.getByRole("row").filter({ hasText: standingInvite })).toContainText(
     "1 of 2",
   );
@@ -61,7 +81,7 @@ test("an administrator makes an invite, copies it, and revokes it", async ({ pag
 test("the growth charts follow the range buttons, and read out on hover and keys", async ({
   page,
 }) => {
-  const growth = section(page, "Growth");
+  const growth = await openSection(page, "Growth");
   const users = growth.getByRole("group", { name: "Users over 3 months" });
   await expect(users).toBeVisible();
   await expect(growth.getByRole("group", { name: "Communities over 3 months" })).toBeVisible();
@@ -80,7 +100,7 @@ test("the growth charts follow the range buttons, and read out on hover and keys
 });
 
 test("users and communities are searched, sorted, and paged", async ({ page }) => {
-  const users = section(page, "Users");
+  const users = await openSection(page, "Users");
   const rows = users.getByRole("row");
   // Fifteen to a page, newest first.
   await expect(rows).toHaveCount(16);
@@ -115,33 +135,44 @@ test("users and communities are searched, sorted, and paged", async ({ page }) =
   await expect(rows.nth(1)).toContainText(standingInvite);
   await users.getByRole("searchbox", { name: "Search users" }).fill("nobody");
   await expect(users.getByText("Nothing matches.")).toBeVisible();
-  const communities = section(page, "Communities");
+  const communities = await openSection(page, "Communities");
   await communities.getByRole("columnheader", { name: "Members" }).getByRole("button").click();
   await expect(communities.getByRole("row").nth(1)).toContainText("Book club");
 });
 
-test("nothing on the dashboard makes the screen scroll sideways", async ({ page }) => {
+test("the dashboard opens at its first tab, and no tab makes the screen scroll sideways", async ({
+  page,
+}) => {
+  await expect(page).toHaveURL(/\/admin\/overview$/);
+  await expect(tabs(page).getByRole("link", { name: "Overview" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(
-    section(page, "Server fleet").getByText("voice-east", { exact: true }),
+    (await openSection(page, "Server fleet")).getByText("voice-east", { exact: true }),
   ).toBeVisible();
-  const widths = await page.evaluate(() => ({
-    page: document.documentElement.scrollWidth,
-    screen: window.innerWidth,
-  }));
-  expect(widths.page).toBeLessThanOrEqual(widths.screen);
+  for (const link of await tabs(page).getByRole("link").all()) {
+    await link.click();
+    await expect(link).toHaveAttribute("aria-current", "page");
+    const widths = await page.evaluate(() => ({
+      page: document.documentElement.scrollWidth,
+      screen: window.innerWidth,
+    }));
+    expect(widths.page, await link.innerText()).toBeLessThanOrEqual(widths.screen);
+  }
 });
 
 test("deployment roles list, and the caller's own top role is theirs but not theirs to change", async ({
   page,
 }) => {
-  const roles = section(page, "Deployment roles");
+  const roles = await openSection(page, "Deployment roles");
   await expect(roles.getByRole("row", { name: "Administrator" })).toBeVisible();
   await expect(roles.getByText("This role is at or above your highest role")).toBeVisible();
   // Moderation is not the Administrator's, so it cannot be given from here.
   await expect(roles.getByRole("checkbox", { name: /Moderate any community/ })).not.toBeChecked();
-  const users = section(page, "Users");
+  const users = await openSection(page, "Users");
   await expect(
     users.getByRole("row").filter({ hasText: "Kate" }).getByText("Administrator"),
   ).toBeVisible();
-  await expect(section(page, "Moderation log").getByText("Nothing yet.")).toBeVisible();
+  await expect((await openSection(page, "Moderation log")).getByText("Nothing yet.")).toBeVisible();
 });

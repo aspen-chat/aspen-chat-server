@@ -102,6 +102,10 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
     });
   });
   await rail(page).getByRole("link", { name: "Administration" }).click();
+  await page
+    .getByRole("navigation", { name: "Administration sections" })
+    .getByRole("link", { name: "Users" })
+    .click();
   const users = page.getByRole("region", { name: "Users" });
   const row = users.getByRole("row").filter({ hasText: "Stranger" });
   await expect(row).toContainText(`stranger@${foreignDomain}`);

@@ -460,6 +460,7 @@ export const en = {
   admin: {
     open: "Administration",
     title: "Administration",
+    tabs: "Administration sections",
     notAllowed: "The Administration Dashboard is for this server's administrators.",
     loadFailed: "This could not be loaded. {detail}",
     retry: "Try again",
