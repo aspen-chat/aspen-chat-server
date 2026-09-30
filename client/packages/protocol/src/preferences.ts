@@ -24,6 +24,17 @@ export interface PreferenceDefinition<T> {
   readonly parse: (raw: unknown) => T | undefined;
 }
 
+/** One preference and a value for it, for `PreferenceStore.setAccount`. */
+export interface PreferenceValue {
+  readonly definition: PreferenceDefinition<unknown>;
+  readonly value: unknown;
+}
+
+/** Pairs a preference with a value of its own type. */
+export function preferenceValue<T>(definition: PreferenceDefinition<T>, value: T): PreferenceValue {
+  return { definition: definition, value };
+}
+
 /** The subset of `Storage` the store uses, so tests and shells can supply their own. */
 export interface PreferenceStorage {
   getItem(key: string): string | null;
@@ -166,6 +177,63 @@ export const RAIL_ORDER: PreferenceDefinition<readonly string[]> = {
     Array.isArray(raw) && raw.every((entry) => typeof entry === "string") ? raw : undefined,
 };
 
+/** The tints a rail folder may take; `accent` is the palette's own. */
+export const FOLDER_COLORS = ["accent", "sky", "violet", "rose", "amber", "slate"] as const;
+export type FolderColor = (typeof FOLDER_COLORS)[number];
+
+/**
+ * A folder of communities on the rail. `members` are rail keys, as `RAIL_ORDER` names
+ * communities, in the folder's order; `RAIL_ORDER` names the folder itself as
+ * `folder:{id}` where it stands among the rest.
+ */
+export interface RailFolder {
+  readonly id: string;
+  /** What the user called it; empty until they name it. */
+  readonly name: string;
+  readonly color: FolderColor;
+  /** Whether it is unfolded in the rail, which follows the account like the rest. */
+  readonly open: boolean;
+  readonly members: readonly string[];
+}
+
+/**
+ * The user's folders of communities on the rail. A folder written by a newer client may carry
+ * more than this one knows, which is ignored, and a colour this one does not know reads as the
+ * accent; an entry that is not a folder at all is dropped.
+ */
+export const RAIL_FOLDERS: PreferenceDefinition<readonly RailFolder[]> = {
+  key: "rail.folders",
+  scope: "account",
+  fallback: [],
+  parse: (raw) => {
+    if (!Array.isArray(raw)) {
+      return undefined;
+    }
+    const folders: RailFolder[] = [];
+    for (const entry of raw as unknown[]) {
+      if (typeof entry !== "object" || entry === null) {
+        continue;
+      }
+      const { id, name, color, open, members } = entry as Record<string, unknown>;
+      if (
+        typeof id !== "string" ||
+        !Array.isArray(members) ||
+        !members.every((member) => typeof member === "string")
+      ) {
+        continue;
+      }
+      folders.push({
+        id,
+        name: typeof name === "string" ? name : "",
+        color: FOLDER_COLORS.find((known) => known === color) ?? "accent",
+        open: open === true,
+        members: members,
+      });
+    }
+    return folders;
+  },
+};
+
 /**
  * The language the app shows, a BCP 47 tag of a catalogue it has, or `automatic` to follow the
  * platform's languages. It follows the account, so every device shows the same one.
@@ -266,12 +334,23 @@ export class PreferenceStore {
       this.#notify();
       return;
     }
+    await this.setAccount(preferenceValue(definition, value));
+  }
+
+  /**
+   * Writes several account preferences in one request, so no reader, on this device or
+   * another, ever sees some changed without the rest.
+   */
+  async setAccount(...values: readonly PreferenceValue[]): Promise<void> {
+    if (values.some((entry) => entry.definition.scope !== "account")) {
+      throw new Error("setAccount writes account preferences only");
+    }
     if (this.#client === null) {
       throw new Error("account preferences need a server");
     }
     const result = await this.#client.api.PATCH("/api/v1/users/{user}/preferences", {
       params: { path: { user: "@me" } },
-      body: { [definition.key]: value },
+      body: Object.fromEntries(values.map((entry) => [entry.definition.key, entry.value])),
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));

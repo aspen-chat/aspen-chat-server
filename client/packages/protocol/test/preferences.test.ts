@@ -7,6 +7,9 @@ import {
   MemorySessionStore,
   NOTIFICATION_OUTPUT,
   PreferenceStore,
+  RAIL_FOLDERS,
+  RAIL_ORDER,
+  preferenceValue,
   SAME_AS_VOICE,
   effectiveUserVolume,
   resolveDevice,
@@ -160,5 +163,40 @@ describe("PreferenceStore", () => {
     await expect(new PreferenceStore({ storage: null }).set(theme, "dark")).rejects.toThrow(
       "server",
     );
+  });
+
+  it("writes several account preferences in one request", async () => {
+    const { client, calls } = accountClient({});
+    const store = new PreferenceStore({ storage: null, client });
+    await store.setAccount(
+      preferenceValue(RAIL_ORDER, ["folder:f", "c"]),
+      preferenceValue(RAIL_FOLDERS, [
+        { id: "f", name: "", color: "accent", open: false, members: ["a", "b"] },
+      ]),
+    );
+    expect(calls).toEqual(["PATCH /api/v1/users/%40me/preferences"]);
+    expect(store.get(RAIL_ORDER)).toEqual(["folder:f", "c"]);
+    expect(store.get(RAIL_FOLDERS)[0]?.members).toEqual(["a", "b"]);
+    await expect(store.setAccount(preferenceValue(AUDIO_INPUT, DEFAULT_DEVICE))).rejects.toThrow(
+      "account",
+    );
+  });
+});
+
+describe("RAIL_FOLDERS", () => {
+  it("reads what it knows of each folder, and drops what is not one", () => {
+    expect(
+      RAIL_FOLDERS.parse([
+        { id: "f", name: "Games", color: "rose", open: true, members: ["a"], pinned: true },
+        { id: "g", color: "tartan", members: ["b"] },
+        { id: "h", members: "not a list" },
+        "not a folder",
+        null,
+      ]),
+    ).toEqual([
+      { id: "f", name: "Games", color: "rose", open: true, members: ["a"] },
+      { id: "g", name: "", color: "accent", open: false, members: ["b"] },
+    ]);
+    expect(RAIL_FOLDERS.parse({ not: "a list" })).toBeUndefined();
   });
 });

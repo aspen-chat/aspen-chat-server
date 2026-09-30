@@ -230,6 +230,22 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `arrangeChannels` sets its `parentCategory` along with its position. Rows carry a private
   drag type so channel groups accept only channels and the rail accepts only communities.
   Categories keep their own order for now.
+- Communities gather into folders on the rail, as apps do on an iPhone's home screen
+  (`CommunityRail`, `RailFolder.tsx`). Folders are the account preference `RAIL_FOLDERS`
+  (`rail.folders`: each folder's id, name, tint from `FOLDER_COLORS`, whether it is open, and
+  its members' rail keys in order), and `RAIL_ORDER` names a folder where it stands as
+  `folder:{id}`; the two are written together in one request (`PreferenceStore.setAccount`),
+  and a client that knows nothing of folders shows their communities at the end of its rail.
+  The rail stays one `GridList`, an open folder's communities following its row on its tint,
+  so pointer, touch, and keyboard dragging and screen readers work the same throughout. What
+  a drop means is `moveInRail` (`railOrder.ts`, whose tests list every case): a community
+  dropped on another makes a folder of the two, on a folder or one of its communities joins
+  it, among an open folder's communities goes in there, and after its last comes out; a folder
+  moves whole and never onto anything; a folder left with one community goes. A closed folder
+  shows its first four icons two by two and speaks for its communities (unread mark, tag
+  count, the current community's ring); pressing it opens it in place. Its menu, from a right
+  click or its options button, renames, tints, and ungroups it. Each deployment still gets its
+  own share of the order, folders opened in place (`railSequence`).
 - Icons (user avatars and community icons) are uploaded through `AspenSync.uploadIcon`, the
   server's two-phase flow, and then named by id on the user or community. `IconPicker.tsx` in
   `src/features/media` runs the whole thing: file chooser, the `CropDialog` where the reader

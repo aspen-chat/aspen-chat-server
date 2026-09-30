@@ -12,11 +12,15 @@ export function Avatar({
 }: {
   name: string;
   iconId?: string | null | undefined;
-  size?: "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg";
 }) {
   const icon = useIcon(iconId ?? undefined);
-  const dimensions =
-    size === "lg" ? "h-12 w-12 text-base" : size === "md" ? "h-9 w-9 text-sm" : "h-6 w-6 text-xs";
+  const dimensions = {
+    lg: "h-12 w-12 text-base",
+    md: "h-9 w-9 text-sm",
+    sm: "h-6 w-6 text-xs",
+    xs: "h-5 w-5 text-[0.5rem]",
+  }[size];
   if (icon !== undefined) {
     return (
       <img

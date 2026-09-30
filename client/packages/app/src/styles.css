@@ -45,6 +45,21 @@
   --color-code-number: var(--palette-code-number);
   --color-code-type: var(--palette-code-type);
   --color-code-attr: var(--palette-code-attr);
+
+  /* The tints a community folder on the rail may take (`FOLDER_COLORS`): the palette's own
+     accent, and a few hues that stay the same whatever the palette. They sit behind icons,
+     never behind text. */
+  /* Quieter than the accent-soft that initials sit on, so a folder's icons stand out on it. */
+  --color-folder-accent: color-mix(
+    in oklab,
+    var(--palette-accent) 16%,
+    var(--palette-surface-raised)
+  );
+  --color-folder-sky: light-dark(#dbeafe, #1e3a5f);
+  --color-folder-violet: light-dark(#ede9fe, #3b1f6e);
+  --color-folder-rose: light-dark(#ffe4e6, #5c1426);
+  --color-folder-amber: light-dark(#fef3c7, #4a2c08);
+  --color-folder-slate: light-dark(#e2e8f0, #26303d);
 }
 
 /* Aspen: the default palette. Neutral greys with a forest-green accent. */
