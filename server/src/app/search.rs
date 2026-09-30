@@ -109,7 +109,11 @@ pub async fn search_messages(
         )
         // Echoes and poll announcements say nothing of their own; the reply and the poll are
         // found where they were posted.
-        .filter(message::kind.ne_all([MessageKind::ThreadEcho, MessageKind::PollClosed]))
+        .filter(message::kind.ne_all([
+            MessageKind::ThreadEcho,
+            MessageKind::PollClosed,
+            MessageKind::Call,
+        ]))
         .filter(not(exists(
             user_block::table.filter(
                 user_block::blocker

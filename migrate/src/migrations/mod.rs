@@ -62,3 +62,4 @@ pub mod m20260929_063942_notification_setting;
 pub mod m20260929_111437_foreign_key_indexes;
 pub mod m20260929_224750_transfer_files_permission;
 pub mod m20260929_233735_file_transfer_log;
+pub mod m20260930_024332_dm_call_rings;

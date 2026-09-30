@@ -168,7 +168,7 @@ pub struct VoiceServerFailureOutcome {
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = VoiceJoinOffer),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a voice channel, or no voice server is available)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a voice channel, DM, or group DM, or no voice server is available)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -202,6 +202,32 @@ pub async fn join_voice(
 }
 
 /// Reads the call on a channel and who is in it.
+/// Declines the call in a DM or group DM that is ringing the caller: it stops ringing them
+/// on every device, which their `voiceRing` delete event tells. A call that is not ringing
+/// them, or no call at all, is left as it is, and still answers `204`.
+#[utoipa::path(
+    delete,
+    path = "/channels/{channel}/voice/rings/@me",
+    tag = TAG_VOICE,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or not one the caller is in", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn decline_call(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+) -> ApiResult<NoContent> {
+    app::voice::decline_ring(&state, user.id, channel).await?;
+    Ok(NoContent)
+}
+
 #[utoipa::path(
     get,
     path = "/channels/{channel}/voice",

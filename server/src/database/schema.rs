@@ -285,6 +285,7 @@ diesel::table! {
         thread -> Nullable<Uuid>,
         echo_of -> Nullable<Uuid>,
         mentions -> Jsonb,
+        call_seconds -> Nullable<Int4>,
     }
 }
 
@@ -552,6 +553,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    voice_ring (session, user) {
+        session -> Uuid,
+        user -> Uuid,
+        caller -> Uuid,
+        rung_at -> Timestamptz,
+        until -> Timestamptz,
+    }
+}
+
+diesel::table! {
     voice_server (id) {
         id -> Uuid,
         name -> Text,
@@ -579,6 +590,7 @@ diesel::table! {
         voice_server -> Uuid,
         created_at -> Timestamptz,
         alone_since -> Nullable<Timestamptz>,
+        started_by -> Nullable<Uuid>,
     }
 }
 
@@ -654,9 +666,11 @@ diesel::joinable!(user_foreign_deployment -> user (user));
 diesel::joinable!(user_preferences -> user (user));
 diesel::joinable!(voice_participant -> user (user));
 diesel::joinable!(voice_participant -> voice_session (session));
+diesel::joinable!(voice_ring -> voice_session (session));
 diesel::joinable!(voice_server_failure -> user (user));
 diesel::joinable!(voice_server_failure -> voice_server (voice_server));
 diesel::joinable!(voice_session -> channel (channel));
+diesel::joinable!(voice_session -> user (started_by));
 diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -710,6 +724,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_foreign_deployment,
     user_preferences,
     voice_participant,
+    voice_ring,
     voice_server,
     voice_server_failure,
     voice_session,

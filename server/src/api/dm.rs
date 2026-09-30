@@ -33,7 +33,7 @@ pub enum DmInclude {
     /// The caller's notification settings for the DMs, as `included.notificationSettings`.
     Notifications,
     /// The calls under way in the DMs, as `included.voiceSessions`, with who is in each, as
-    /// `included.voiceParticipants`.
+    /// `included.voiceParticipants`, and who each is ringing, as `included.voiceRings`.
     Voice,
 }
 
@@ -163,13 +163,15 @@ pub async fn list_dms(
     } else {
         None
     };
-    let (voice_sessions, voice_participants) = if query.include.contains(DmInclude::Voice) {
-        let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
-        let (sessions, participants) = app::voice::read_channels_voice(&state, &ids).await?;
-        (Some(sessions), Some(participants))
-    } else {
-        (None, None)
-    };
+    let (voice_sessions, voice_participants, voice_rings) =
+        if query.include.contains(DmInclude::Voice) {
+            let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
+            let (sessions, participants) = app::voice::read_channels_voice(&state, &ids).await?;
+            let rings = app::voice::read_channels_rings(&state, &ids).await?;
+            (Some(sessions), Some(participants), Some(rings))
+        } else {
+            (None, None, None)
+        };
     let records = dms
         .into_iter()
         .map(|(dm, recipients)| app::channel::record(&dm, recipients))
@@ -183,6 +185,7 @@ pub async fn list_dms(
             notification_settings,
             voice_sessions,
             voice_participants,
+            voice_rings,
             ..Included::default()
         },
     )))

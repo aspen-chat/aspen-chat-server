@@ -239,6 +239,7 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         thread: None,
         echo_of: None,
         mentions: crate::app::mention::Mentions::default(),
+        call_seconds: None,
     }
 }
 

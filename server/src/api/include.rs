@@ -18,7 +18,7 @@ use crate::api::category_collapse::CategoryCollapse;
 use crate::api::channel_mute::ChannelMute;
 use crate::api::message_enum::{
     Category, CategoryOverride, Channel, ChannelOverride, Community, Message, Poll, Role, User,
-    UserCommunity, VoiceParticipant, VoiceSession,
+    UserCommunity, VoiceParticipant, VoiceRing, VoiceSession,
 };
 use crate::api::notification_setting::NotificationSetting;
 use crate::api::poll::{OwnWriteIn, PollVote};
@@ -140,6 +140,11 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub voice_participants: Option<Vec<VoiceParticipant>>,
+    /// Who the DMs' calls are ringing, as long as each ring lasts. Present with the calls
+    /// whenever a DM list asks for voice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub voice_rings: Option<Vec<VoiceRing>>,
     /// The communities' roles, lowest first within each, with their channel and category
     /// overrides as `channelOverrides` and `categoryOverrides`. Present together whenever
     /// roles were requested.

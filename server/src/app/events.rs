@@ -130,6 +130,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::React(_)
         | ServerEvent::VoiceSession(_)
         | ServerEvent::VoiceParticipant(_)
+        | ServerEvent::VoiceRing(_)
         | ServerEvent::VoiceSessionEnded { .. }
         | ServerEvent::VoiceSpeaking { .. } => ScopeKind::Channel,
         ServerEvent::Community(_)

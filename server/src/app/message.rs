@@ -43,6 +43,8 @@ pub struct Message {
     pub echo_of: Option<MessageId>,
     /// Who it tags, as far as its author was allowed to (`app::mention`).
     pub mentions: Mentions,
+    /// For a `Call`, how long the call lasted, in seconds.
+    pub call_seconds: Option<i32>,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -65,6 +67,7 @@ pub fn record(
         thread: row.thread,
         echo_of: row.echo_of,
         mentions: row.mentions.clone(),
+        call_seconds: row.call_seconds,
     }
 }
 
@@ -171,6 +174,7 @@ pub async fn create_message(
                     thread: None,
                     echo_of: None,
                     mentions,
+                    call_seconds: None,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)

@@ -151,6 +151,9 @@ enum MessageEnumSource {
         // changes the text tags afresh, announced by an `Update` event carrying the new set.
         #[message_gen(server_authoritative = "mutable")]
         mentions: crate::app::mention::Mentions,
+        // For a `Call`, how long the DM's call lasted, in seconds; `None` for every other kind.
+        #[message_gen(server_authoritative)]
+        call_seconds: Option<i32>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -339,6 +342,24 @@ enum MessageEnumSource {
         // Whether they are sharing a screen, window, or game into the call.
         #[message_gen(server_authoritative = "mutable")]
         sharing_screen: bool,
+    },
+    // Someone a DM's call is ringing: everyone in the DM who was not in the call when it
+    // started, until they join it or decline it, or `until` passes, which every client
+    // observes by its own clock, with no event. Its `delete` says they joined or declined; the
+    // session's own `delete` ends every ring of it.
+    #[message_gen(no_commands)]
+    VoiceRing {
+        #[message_gen(id = "client_authoritative")]
+        session: VoiceSessionId,
+        #[message_gen(id)]
+        user: UserId,
+        #[message_gen(server_authoritative)]
+        channel: ChannelId,
+        // Who started the call.
+        #[message_gen(server_authoritative)]
+        caller: UserId,
+        #[message_gen(server_authoritative)]
+        until: chrono::DateTime<Utc>,
     },
     // Why a call ended, sent just before the session's `delete` event. A client that was in
     // the call uses `reason` to tell its user, in particular that an idle call was ended to
