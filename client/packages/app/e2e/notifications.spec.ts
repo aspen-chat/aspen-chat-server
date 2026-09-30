@@ -93,7 +93,11 @@ test("a channel's menu sets what it tells of", async ({ page }) => {
   const publish = await signInToWorld(page);
   await turnOnSystemNotifications(page);
   await page.getByText("roadmap", { exact: true }).click({ button: "right" });
-  const menu = page.getByRole("menu", { name: "Options for roadmap" });
+  const options = page.getByRole("menu", { name: "Options for roadmap" });
+  // The item that opens the submenu names the level in force.
+  await options.getByRole("menuitem", { name: /^Notifications\s*Only tags/ }).click();
+  // A submenu is named by the item that opens it.
+  const menu = page.getByRole("menu", { name: /^Notifications/ });
   await expect(menu.getByRole("menuitemradio", { name: "Default (Only tags)" })).toHaveAttribute(
     "aria-checked",
     "true",
@@ -107,6 +111,7 @@ test("a channel's menu sets what it tells of", async ({ page }) => {
   await expect.poll(() => page.evaluate(() => window.shownNotifications.length)).toBe(1);
 
   await page.getByText("roadmap", { exact: true }).click({ button: "right" });
+  await options.getByRole("menuitem", { name: /^Notifications\s*All messages/ }).click();
   await expect(menu.getByRole("menuitemradio", { name: "All messages" })).toHaveAttribute(
     "aria-checked",
     "true",

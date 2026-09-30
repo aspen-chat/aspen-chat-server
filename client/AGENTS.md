@@ -399,10 +399,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   server announces no end it did not make. A muted channel or DM (`useMute`) is drawn in
   `text-ink-faint` with a muted bell, is never marked unread, and does not count toward
   `unreadPlaces`; its read position is kept, so it is unread again once the mute ends, and the
-  "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) mutes for
-  one of the offered lengths or unmutes, showing when a mute ends; it opens on a right click on
-  a text channel's or DM's row, or from the row's `ChannelMenuButton`, which keyboards and touch
-  screens use, since a long press on a row starts dragging it.
+  "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) holds two
+  submenus, Mute (one of the offered lengths, or, while muted, until when and Unmute) and
+  Notifications (naming the level in force), above the channel's other actions; it opens on a
+  right click on a text channel's or DM's row, or from the row's `ChannelMenuButton`, which
+  keyboards and touch screens use, since a long press on a row starts dragging it. It opens
+  beside the row, and below it on a one-pane screen, where there is no room beside it.
 - Tags (`<@user>`, `<@&role>`, `@everyone`) are drawn by `remarkMentions` and `Mention`
   (`src/features/messages`): a tag the message's `mentions` says counts is a chip, a person's
   opening their card; any other is plain text naming whom it would have tagged, as the server

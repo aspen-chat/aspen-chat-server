@@ -850,6 +850,7 @@ export const en = {
     poll: "Posted a poll",
     attachment: "Sent an attachment",
     newMessage: "New message",
+    menu: "Notifications",
     notifyMe: "Notify me about",
     default: "Default ({level})",
     levels: {

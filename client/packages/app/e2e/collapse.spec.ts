@@ -24,7 +24,11 @@ test("a folded category keeps only what needs attention in view", async ({ page 
 
   // Muted, it needs no attention, and goes too.
   await planningList(page).getByText("roadmap", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "For 1 hour" }).click();
+  await page.getByRole("menuitem", { name: "Mute" }).click();
+  await page
+    .getByRole("menu", { name: "Mute" })
+    .getByRole("menuitem", { name: "For 1 hour" })
+    .click();
   await expect(planningList(page).getByText("roadmap", { exact: true })).toHaveCount(0);
   // Nothing left in view, but the category is not empty, and must never say it is.
   await expect(planningList(page).getByText("No channels yet; drop one here")).toHaveCount(0);
