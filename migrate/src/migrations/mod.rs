@@ -69,3 +69,4 @@ pub mod m20260930_075132_attachment_dimensions;
 pub mod m20260930_081607_link_preview_image_size;
 pub mod m20260930_083535_bot_commands;
 pub mod m20260930_084411_command_messages;
+pub mod m20260930_150734_everyone_mention_limit;

@@ -4,7 +4,14 @@ import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } fro
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
-import { useBlockedDmPeer, useChannel, useChannelAccess, useSync, useUser } from "@/api/hooks";
+import {
+  useBlockedDmPeer,
+  useChannel,
+  useChannelAccess,
+  useSync,
+  useSystemDmPeer,
+  useUser,
+} from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -37,8 +44,9 @@ const toolButtonClass =
  * upload at once and are sent with the next message; a message may be files alone. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
  * clears after each message. Only what the caller may do here is offered: without sending (or,
- * in a thread, sending in threads) the box gives way to a note saying so, and in a DM with
- * someone the caller blocked, to a note offering to unblock them.
+ * in a thread, sending in threads) the box gives way to a note saying so, in a DM with
+ * someone the caller blocked, to a note offering to unblock them, and in the system account's
+ * DM, to a note that its notices are not answered.
  */
 export function Composer({
   channelId,
@@ -61,6 +69,7 @@ export function Composer({
   const permissions = useChannelAccess(channelId);
   const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
   const blockedPeer = useBlockedDmPeer(channelId);
+  const systemPeer = useSystemDmPeer(channelId);
   const commands = useCommandLine({ channelId, draft, setDraft });
   const tagging = useTagging({ channelId, draft, setDraft, off: commands.active });
 
@@ -172,6 +181,9 @@ export function Composer({
   }
 
   if (!mayPost) {
+    if (systemPeer !== null) {
+      return <SystemNote userId={systemPeer} />;
+    }
     return blockedPeer === null ? (
       <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">{m.cannotSendHere}</p>
     ) : (
@@ -313,6 +325,18 @@ export function Composer({
         </label>
       )}
     </form>
+  );
+}
+
+/** In place of the box in the system account's DM: its notices are read, not answered. */
+function SystemNote({ userId }: { userId: string }) {
+  const m = useMessages();
+  const user = useUser(userId);
+  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  return (
+    <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">
+      {format(m.system.readOnly, { name })}
+    </p>
   );
 }
 

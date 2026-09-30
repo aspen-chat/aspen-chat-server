@@ -372,6 +372,7 @@ async fn arrive(
                         status_text: None,
                         status_emoji: None,
                         bot: profile.bot,
+                        system: false,
                         bot_owner: None,
                         bot_public: false,
                         home_domain: Some(home.clone()),

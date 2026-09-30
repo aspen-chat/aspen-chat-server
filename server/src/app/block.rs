@@ -42,11 +42,15 @@ pub async fn block(
     }
     let mut conn = state.connection_pool.get().await?;
     // Not found for an account that does not exist or has been deleted.
-    user::table
-        .select(user::id)
+    let system: bool = user::table
+        .select(user::system)
         .filter(user::id.eq(blocked).and(user::deleted_at.is_null()))
-        .first::<UserId>(conn.as_mut())
+        .first(conn.as_mut())
         .await?;
+    // The system account's notices are the deployment's to send; muting its DM quiets them.
+    if system {
+        return Err(app::Error::Validation(t!("systemAccountNoBlock")));
+    }
     conn.transaction(|conn| {
         async move {
             let inserted: Option<UserBlock> = diesel::insert_into(user_block::table)

@@ -372,6 +372,10 @@ export const en = {
     role: "Role",
     everyone: "Everyone here",
   },
+  system: {
+    badge: "System",
+    readOnly: "These are notices from {name}, and can't be answered here.",
+  },
   commands: {
     suggestions: "Bots' commands",
     oneSuggestion: "1 command. Enter or Tab picks it; Escape closes.",

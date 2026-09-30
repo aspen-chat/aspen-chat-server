@@ -22,7 +22,7 @@ import {
 import { Avatar } from "@/features/communities/Avatar";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { Tooltip } from "@/features/layout/Tooltip";
-import { BotBadge } from "@/features/users/BotBadge";
+import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
@@ -215,6 +215,7 @@ export function MessageItem({
             </ProfilePopover>
           )}
           {author?.bot === true && <BotBadge />}
+          {author?.system === true && <SystemBadge />}
           {message.kind === "command" && message.commandBot != null && (
             <span className="flex items-center gap-1 text-xs text-ink-muted">
               <RobotIcon size={12} aria-hidden="true" />

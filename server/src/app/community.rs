@@ -249,18 +249,21 @@ pub(crate) async fn join_community(
     invite_code: String,
 ) -> app::error::Result<message_enum::UserCommunity> {
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let invite_community = app::invite::validate_invite(conn, &invite_code).await?;
-            if invite_community != community {
-                return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
+    let membership = conn
+        .transaction(|conn| {
+            async move {
+                let invite_community = app::invite::validate_invite(conn, &invite_code).await?;
+                if invite_community != community {
+                    return Err(app::Error::Validation(t!("inviteCodeCommunityMismatch")));
+                }
+                ensure_room_for_another(state, conn, user).await?;
+                add_member(state, conn, user, community, &[]).await
             }
-            ensure_room_for_another(state, conn, user).await?;
-            add_member(state, conn, user, community, &[]).await
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    app::everyone_limit::after_join(state, community).await;
+    Ok(membership)
 }
 
 /// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
@@ -515,8 +518,8 @@ pub(crate) async fn read_community_members(
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
         SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
-               deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, bot_owner,
-               bot_public, home_domain, home_id, home_icon
+               deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
+               bot_owner, bot_public, home_domain, home_id, home_icon
         FROM (
             SELECT cu.community, cu.sort_index, u.*,
                    ROW_NUMBER() OVER (PARTITION BY cu.community ORDER BY u.last_seen_at DESC) AS recency_rank
@@ -623,8 +626,8 @@ pub(crate) async fn search_community_members(
         r#"
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
-               u.status_emoji, u.bot, u.bot_owner, u.bot_public, u.home_domain, u.home_id,
-               u.home_icon
+               u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
+               u.home_id, u.home_icon
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
@@ -673,8 +676,8 @@ pub(crate) async fn read_community_member(
         r#"
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
-               u.status_emoji, u.bot, u.bot_owner, u.bot_public, u.home_domain, u.home_id,
-               u.home_icon
+               u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
+               u.home_id, u.home_icon
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND cu."user" = $2 AND u.deleted_at IS NULL

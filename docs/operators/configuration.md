@@ -82,6 +82,20 @@ Passkeys are offered only when this section is present.
 | `enabled` | `true` | Whether people may make bots. Bots already made keep working either way. |
 | `max_per_user` | `25` | The most bots one person may own. |
 
+## `[communities]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `everyone_mention_limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the system account and may turn it back on. `0` never turns it off. |
+
+## `[system_account]`
+
+The deployment's own account, which sends people notices from the deployment itself (so far, the notice above). It is made the first time it is needed, is marked as the system wherever it is named, cannot be signed in to, messaged, or blocked, and its username (`system`) takes no name from anyone.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `display_name` | `"Aspen"` | What the account is called. A change shows as each person next reads the account. |
+
 ## `[limits]`
 
 | Setting | Default | |

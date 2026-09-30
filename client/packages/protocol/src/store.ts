@@ -527,7 +527,11 @@ export class RecordStore {
           channel.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
         const recipient =
           this.#myUserId !== null && (parent?.recipients ?? []).includes(this.#myUserId);
-        if (recipient && this.blockedDmPeer(channelId) !== null) {
+        // A block, or notices from the system account, leave a DM to be read and nothing more.
+        if (
+          recipient &&
+          (this.blockedDmPeer(channelId) !== null || this.systemDmPeer(channelId) !== null)
+        ) {
           return DM_BLOCKED;
         }
         return recipient || !this.moderator ? DM_PERMISSIONS : DM_MODERATION;
@@ -747,6 +751,20 @@ export class RecordStore {
     }
     const other = dm.recipients.find((user) => user !== this.#myUserId);
     return other !== undefined && this.#blocked.has(other) ? other : null;
+  }
+
+  /**
+   * Topic `channelAccess:<channelId>`: the system account, when it is the other person of a
+   * one-to-one DM (or of the DM a thread is in), whose notices are read and not answered.
+   */
+  systemDmPeer(channelId: string): string | null {
+    const channel = this.#channels.get(channelId);
+    const dm = channel?.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
+    if (dm?.ty !== "dm") {
+      return null;
+    }
+    const other = dm.recipients.find((user) => user !== this.#myUserId);
+    return other !== undefined && this.#users.get(other)?.system === true ? other : null;
   }
 
   /**
@@ -2078,6 +2096,14 @@ export class RecordStore {
     }
     if (user.bot || previous?.bot === true) {
       this.#touch("bots");
+    }
+    // What the caller may do in a DM follows whether its other person is the system account.
+    if (user.system && previous?.system !== true) {
+      for (const channel of this.#channels.values()) {
+        if (channel.ty === "dm" && channel.recipients.includes(user.id)) {
+          this.#touch(`channelAccess:${channel.id}`);
+        }
+      }
     }
     if (user.id === this.#myUserId) {
       this.#touch("me");

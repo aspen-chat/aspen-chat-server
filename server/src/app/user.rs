@@ -36,6 +36,8 @@ pub struct UserPg {
     pub status_emoji: Option<String>,
     /// Whether this is a bot, which signs in only with a token (`app::bot`).
     pub bot: bool,
+    /// Whether this is the deployment's own account (`app::system_account`).
+    pub system: bool,
     /// Who made the bot and manages it; `None` for a person, or a bot whose maker is gone.
     pub bot_owner: Option<UserId>,
     /// Whether anyone allowed to add bots to a community may add this one.
@@ -219,6 +221,7 @@ pub async fn create_user(
                     status_text: command.status.as_ref().map(|s| s.text.clone()),
                     status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
                     bot: false,
+                    system: false,
                     bot_owner: None,
                     bot_public: false,
                     home_domain: None,

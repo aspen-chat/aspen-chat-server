@@ -31,6 +31,10 @@ pub struct AspenConfig {
     #[serde(default)]
     pub bots: BotsConfig,
     #[serde(default)]
+    pub communities: CommunitiesConfig,
+    #[serde(default)]
+    pub system_account: SystemAccountConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub presence: PresenceConfig,
@@ -391,6 +395,27 @@ pub struct PushConfig {
     /// Whether apps may ask to be woken, and messages wake them.
     #[default = true]
     pub enabled: bool,
+}
+
+/// What changes in a community as it grows (`app::everyone_limit`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct CommunitiesConfig {
+    /// How many members a community gains before Mention everyone is turned off for its
+    /// everyone role, its owner told why by the system account, and left to turn it back on.
+    /// 0 never turns it off.
+    #[default = 200]
+    pub everyone_mention_limit: u32,
+}
+
+/// The deployment's own account, which sends people notices from the deployment itself
+/// (`app::system_account`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct SystemAccountConfig {
+    /// What the account is called wherever it is named.
+    #[default = "Aspen"]
+    pub display_name: String,
 }
 
 /// Bots: accounts that sign in only with a token, each made and managed by a person

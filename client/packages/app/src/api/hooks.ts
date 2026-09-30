@@ -304,6 +304,11 @@ export function useBlockedDmPeer(channelId: string): string | null {
   return useTopic(`channelAccess:${channelId}`, (s) => s.blockedDmPeer(channelId));
 }
 
+/** The system account, when it is the other person of this DM, whose notices are only read. */
+export function useSystemDmPeer(channelId: string): string | null {
+  return useTopic(`channelAccess:${channelId}`, (s) => s.systemDmPeer(channelId));
+}
+
 /** The bots the caller owns, as far as the cache holds them (`AspenSync.loadBots`). */
 export function useOwnedBots(): readonly User[] {
   return useTopic("bots", (s) => s.ownedBots());

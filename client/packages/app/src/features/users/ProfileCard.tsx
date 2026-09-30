@@ -30,7 +30,7 @@ import {
   planeSurfaceClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
-import { BotBadge } from "@/features/users/BotBadge";
+import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
 import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -44,7 +44,8 @@ import { CopyIdButton } from "@/features/layout/CopyId";
  * control that names the user, such as a message author or a member row. Opened within a
  * community it shows the roles they hold there, with a way to give them another for those who
  * may. Inside the reader's one-to-one DM with them it offers no way to message them, which is
- * where the reader already is.
+ * where the reader already is. The system account's card offers none of these: it sends
+ * notices, and is not messaged, called, or blocked.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
@@ -64,6 +65,7 @@ export function ProfileCard({ user }: { user: User }) {
             <div className="flex items-center gap-1.5">
               <span className="truncate text-base font-semibold">{name}</span>
               {user.bot && <BotBadge />}
+              {user.system && <SystemBadge />}
             </div>
             <div className="truncate text-sm text-ink-muted">
               {handleOf(user)}
@@ -95,7 +97,7 @@ export function ProfileCard({ user }: { user: User }) {
       {communityId !== undefined && (
         <CommunityRoles communityId={communityId} userId={user.id} name={name} />
       )}
-      {me !== null && me.id !== user.id && (
+      {me !== null && me.id !== user.id && !user.system && (
         <>
           {!blocked && (!inTheirDm || !user.bot) && (
             <div className="flex gap-2">

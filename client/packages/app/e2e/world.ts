@@ -87,6 +87,7 @@ const user = (id: string, name: string, displayName: string | null) => ({
   bio: null,
   status: null,
   bot: false,
+  system: false,
   botOwner: null as string | null,
   botPublic: false,
 });

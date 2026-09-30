@@ -8,6 +8,7 @@ const kate: User = {
   icon: null,
   onlineStatus: "online",
   bot: false,
+  system: false,
   botPublic: false,
   displayName: "Kate",
   pronouns: "she/her",
@@ -45,6 +46,7 @@ describe("profiles", () => {
       icon: null,
       onlineStatus: "offline",
       bot: false,
+      system: false,
       botPublic: false,
     };
     expect(profilePatch(plain, { ...profileForm(plain), statusEmoji: "🍕" })).toEqual({});

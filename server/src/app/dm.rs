@@ -60,6 +60,19 @@ async fn ensure_shared_community(
     }
 }
 
+/// Refuses a DM with the system account, whose notices are the only DMs it is in.
+async fn refuse_system_account(conn: &mut AsyncPgConnection, others: &[UserId]) -> app::Result<()> {
+    let system: bool = diesel::select(diesel::dsl::exists(
+        user::table.filter(user::id.eq_any(others).and(user::system)),
+    ))
+    .get_result(conn)
+    .await?;
+    if system {
+        return Err(app::Error::Validation(t!("systemAccountNoDm")));
+    }
+    Ok(())
+}
+
 fn new_dm(ty: ChannelType, dm_key: Option<String>) -> Channel {
     Channel {
         id: ChannelId::new(),
@@ -102,6 +115,7 @@ pub async fn open_dm(
         )));
     }
     let mut conn = state.connection_pool.get().await?;
+    refuse_system_account(conn.as_mut(), &others).await?;
     ensure_shared_community(conn.as_mut(), caller, &others).await?;
     let mut everyone = others.clone();
     everyone.push(caller);
@@ -134,58 +148,7 @@ pub async fn open_dm(
                     let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
                     return Ok((existing, recipients, false));
                 }
-                let (ty, key) = if others.len() == 1 {
-                    (ChannelType::Dm, Some(pair_key(caller, others[0])))
-                } else {
-                    (ChannelType::GroupDm, None)
-                };
-                let dm = new_dm(ty, key.clone());
-                // Concurrent first messages between the same two people make one DM: the second
-                // insert yields to the first, and the existing one is returned.
-                let inserted = diesel::insert_into(channel::table)
-                    .values(&dm)
-                    .on_conflict(channel::dm_key)
-                    .do_nothing()
-                    .execute(conn.as_mut())
-                    .await?;
-                if inserted == 0 {
-                    let existing: Channel = channel::table
-                        .select(Channel::as_select())
-                        .filter(channel::dm_key.eq(key))
-                        .first(conn.as_mut())
-                        .await?;
-                    let recipients = dm_recipients(conn.as_mut(), existing.id).await?;
-                    return Ok((existing, recipients, false));
-                }
-                let now = Utc::now();
-                let mut recipients = vec![caller];
-                recipients.extend(others.iter().copied());
-                diesel::insert_into(dm_recipient::table)
-                    .values(
-                        recipients
-                            .iter()
-                            .map(|user| {
-                                (
-                                    dm_recipient::channel.eq(dm.id),
-                                    dm_recipient::user.eq(*user),
-                                    dm_recipient::joined_at.eq(now),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .execute(conn.as_mut())
-                    .await?;
-                publish_event(
-                    state,
-                    conn.as_mut(),
-                    EventScope::ChannelDefinition {
-                        channel: dm.id,
-                        departed: None,
-                    },
-                    &ServerEvent::Channel(ChannelEvent::Create(record(&dm, recipients.clone()))),
-                )
-                .await?;
-                Ok((dm, recipients, true))
+                insert_dm(state, conn.as_mut(), caller, &others).await
             }
             .scope_boxed()
         })
@@ -195,6 +158,68 @@ pub async fn open_dm(
         app::federation::notices::announce_dm(state, dm.id, recipients.clone(), caller);
     }
     Ok(opened)
+}
+
+/// Makes the DM between `caller` and `others` and announces it: their one-to-one DM with one
+/// other person, returned as it is when it exists already, or a new group DM with more.
+pub(crate) async fn insert_dm(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    others: &[UserId],
+) -> app::Result<(Channel, Vec<UserId>, bool)> {
+    let (ty, key) = if others.len() == 1 {
+        (ChannelType::Dm, Some(pair_key(caller, others[0])))
+    } else {
+        (ChannelType::GroupDm, None)
+    };
+    let dm = new_dm(ty, key.clone());
+    // Concurrent first messages between the same two people make one DM: the second
+    // insert yields to the first, and the existing one is returned.
+    let inserted = diesel::insert_into(channel::table)
+        .values(&dm)
+        .on_conflict(channel::dm_key)
+        .do_nothing()
+        .execute(conn)
+        .await?;
+    if inserted == 0 {
+        let existing: Channel = channel::table
+            .select(Channel::as_select())
+            .filter(channel::dm_key.eq(key))
+            .first(conn)
+            .await?;
+        let recipients = dm_recipients(conn, existing.id).await?;
+        return Ok((existing, recipients, false));
+    }
+    let now = Utc::now();
+    let mut recipients = vec![caller];
+    recipients.extend(others.iter().copied());
+    diesel::insert_into(dm_recipient::table)
+        .values(
+            recipients
+                .iter()
+                .map(|user| {
+                    (
+                        dm_recipient::channel.eq(dm.id),
+                        dm_recipient::user.eq(*user),
+                        dm_recipient::joined_at.eq(now),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::ChannelDefinition {
+            channel: dm.id,
+            departed: None,
+        },
+        &ServerEvent::Channel(ChannelEvent::Create(record(&dm, recipients.clone()))),
+    )
+    .await?;
+    Ok((dm, recipients, true))
 }
 
 /// The caller's DMs and group DMs with their recipients, the most recently active first.
@@ -267,6 +292,7 @@ pub async fn add_recipient(
     if dm.ty != ChannelType::GroupDm {
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
+    refuse_system_account(conn.as_mut(), &[user]).await?;
     ensure_shared_community(conn.as_mut(), caller, &[user]).await?;
     let added = conn
         .transaction(|conn| {

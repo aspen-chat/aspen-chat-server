@@ -39,6 +39,10 @@ enum MessageEnumSource {
         // `app::bot`.
         #[message_gen(server_authoritative)]
         bot: bool,
+        // The deployment's own account, which sends notices from the deployment itself and is
+        // labelled as the system wherever it is named; see `app::system_account`.
+        #[message_gen(server_authoritative)]
+        system: bool,
         // Who made the bot and manages it: `None` for a person, and for a bot whose maker
         // deleted their account. Handing the bot on changes it.
         #[message_gen(server_authoritative = "mutable")]

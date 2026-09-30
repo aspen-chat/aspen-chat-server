@@ -131,6 +131,7 @@ diesel::table! {
         icon -> Nullable<Uuid>,
         deleted_at -> Nullable<Timestamptz>,
         owner -> Nullable<Uuid>,
+        everyone_limited_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -519,6 +520,7 @@ diesel::table! {
         home_confirmed_at -> Nullable<Timestamptz>,
         banned_at -> Nullable<Timestamptz>,
         banned_by -> Nullable<Uuid>,
+        system -> Bool,
     }
 }
 

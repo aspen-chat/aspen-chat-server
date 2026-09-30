@@ -519,6 +519,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   give (Manage roles and Assign roles, and each permission held), and calls `AspenSync.addBot`.
   A role made for a bot says whose it is in the role editor and is offered for neither
   deletion nor assigning. With `manageBots`, the admin users directory deletes ownerless bots.
+- The system account (`User.system`, the deployment's own, which sends notices) is marked by
+  `SystemBadge` beside `BotBadge`, and its card offers no way to message, call, or block it.
+  Its DM is read-only: `RecordStore.channelAccess` gives only View channel there, as in a
+  blocked DM (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's
+  record arrives), and the Composer shows a note in place of the box.
 - Bots' commands (`src/features/commands`) are offered in the message box by `useCommandLine`,
   which the Composer runs beside `useTagging` and which turns tagging off while the draft
   begins with `/`. The channel's commands are store state (`RecordStore.commands`, topic

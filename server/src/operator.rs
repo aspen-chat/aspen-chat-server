@@ -357,6 +357,7 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
             user::name
                 .eq(username)
                 .and(user::home_domain.is_null())
+                .and(user::system.eq(false))
                 .and(user::deleted_at.is_null()),
         )
     };
@@ -446,6 +447,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                         .eq(id)
                         .and(user::name.eq(&username))
                         .and(user::home_domain.is_null())
+                        .and(user::system.eq(false))
                         .and(user::deleted_at.is_null()),
                 )
                 .first(&mut conn)

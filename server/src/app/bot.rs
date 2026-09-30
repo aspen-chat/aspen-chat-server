@@ -210,6 +210,7 @@ pub async fn create(
                         status_text: None,
                         status_emoji: None,
                         bot: true,
+                        system: false,
                         bot_owner: Some(owner),
                         bot_public: false,
                         home_domain: None,
@@ -408,73 +409,79 @@ pub async fn add_to_community(
     permissions: Permissions,
 ) -> app::Result<(message_enum::UserCommunity, bool)> {
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let access = require_member(conn.as_mut(), caller, community).await?;
-            access.require(Permissions::ADD_BOTS)?;
-            let row: UserPg = user::table
-                .select(UserPg::as_select())
-                .filter(user::id.eq(bot).and(user::deleted_at.is_null()))
-                .first(conn.as_mut())
+    let added = conn
+        .transaction(|conn| {
+            async move {
+                let access = require_member(conn.as_mut(), caller, community).await?;
+                access.require(Permissions::ADD_BOTS)?;
+                let row: UserPg = user::table
+                    .select(UserPg::as_select())
+                    .filter(user::id.eq(bot).and(user::deleted_at.is_null()))
+                    .first(conn.as_mut())
+                    .await?;
+                if !row.bot {
+                    return Err(app::Error::Validation(t!("notABot")));
+                }
+                if !row.bot_public && row.bot_owner != Some(caller) {
+                    return Err(app::Error::Forbidden(t!("botPrivate")));
+                }
+                let member: bool = diesel::select(diesel::dsl::exists(
+                    community_user::table.filter(
+                        community_user::community
+                            .eq(community)
+                            .and(community_user::user.eq(bot)),
+                    ),
+                ))
+                .get_result(conn.as_mut())
                 .await?;
-            if !row.bot {
-                return Err(app::Error::Validation(t!("notABot")));
-            }
-            if !row.bot_public && row.bot_owner != Some(caller) {
-                return Err(app::Error::Forbidden(t!("botPrivate")));
-            }
-            let member: bool = diesel::select(diesel::dsl::exists(
-                community_user::table.filter(
-                    community_user::community
-                        .eq(community)
-                        .and(community_user::user.eq(bot)),
-                ),
-            ))
-            .get_result(conn.as_mut())
-            .await?;
-            if member {
-                let roles = app::role::roles_of_members(conn.as_mut(), &[(community, bot)])
-                    .await?
-                    .remove(&(community, bot))
-                    .unwrap_or_default();
-                return Ok((
-                    message_enum::UserCommunity {
+                if member {
+                    let roles = app::role::roles_of_members(conn.as_mut(), &[(community, bot)])
+                        .await?
+                        .remove(&(community, bot))
+                        .unwrap_or_default();
+                    return Ok((
+                        message_enum::UserCommunity {
+                            community,
+                            user: bot,
+                            sort_index: None,
+                            roles,
+                        },
+                        false,
+                    ));
+                }
+                let permissions = permissions.valid();
+                let mut roles = Vec::new();
+                if !permissions.is_empty() {
+                    access.require(Permissions::MANAGE_ROLES)?;
+                    access.require(Permissions::ASSIGN_ROLES)?;
+                    access.require_holds(permissions)?;
+                    let name = row.display_name.unwrap_or(row.name);
+                    let role = app::role::insert_role(
+                        state,
+                        conn.as_mut(),
                         community,
-                        user: bot,
-                        sort_index: None,
-                        roles,
-                    },
-                    false,
-                ));
+                        name,
+                        permissions,
+                        Some(bot),
+                    )
+                    .await?;
+                    roles.push(role.id);
+                }
+                app::community::ensure_room_for_another(state, conn.as_mut(), bot).await?;
+                let mut membership =
+                    app::community::add_member(state, conn.as_mut(), bot, community, &roles)
+                        .await?;
+                // The list position is the bot's own business.
+                membership.sort_index = None;
+                Ok((membership, true))
             }
-            let permissions = permissions.valid();
-            let mut roles = Vec::new();
-            if !permissions.is_empty() {
-                access.require(Permissions::MANAGE_ROLES)?;
-                access.require(Permissions::ASSIGN_ROLES)?;
-                access.require_holds(permissions)?;
-                let name = row.display_name.unwrap_or(row.name);
-                let role = app::role::insert_role(
-                    state,
-                    conn.as_mut(),
-                    community,
-                    name,
-                    permissions,
-                    Some(bot),
-                )
-                .await?;
-                roles.push(role.id);
-            }
-            app::community::ensure_room_for_another(state, conn.as_mut(), bot).await?;
-            let mut membership =
-                app::community::add_member(state, conn.as_mut(), bot, community, &roles).await?;
-            // The list position is the bot's own business.
-            membership.sort_index = None;
-            Ok((membership, true))
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    if added.1 {
+        app::everyone_limit::after_join(state, community).await;
+    }
+    Ok(added)
 }
 
 /// Leaves every bot `owner` owned working and ownerless, as their account goes, inside the

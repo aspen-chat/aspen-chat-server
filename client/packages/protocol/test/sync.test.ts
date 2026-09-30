@@ -28,6 +28,7 @@ const me: User = {
   icon: null,
   onlineStatus: "online",
   bot: false,
+  system: false,
   botPublic: false,
 };
 const bob: User = {
@@ -36,6 +37,7 @@ const bob: User = {
   icon: null,
   onlineStatus: "offline",
   bot: false,
+  system: false,
   botPublic: false,
 };
 const aspen: Community = { id: id(10), name: "Aspen", icon: null };

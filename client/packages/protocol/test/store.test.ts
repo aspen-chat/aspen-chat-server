@@ -24,6 +24,7 @@ const me: User = {
   icon: null,
   onlineStatus: "online",
   bot: false,
+  system: false,
   botPublic: false,
 };
 const bob: User = {
@@ -32,6 +33,7 @@ const bob: User = {
   icon: null,
   onlineStatus: "offline",
   bot: false,
+  system: false,
   botPublic: false,
 };
 const aspen: Community = { id: id(10), name: "Aspen", icon: null };
@@ -222,6 +224,7 @@ describe("RecordStore events", () => {
       icon: null,
       onlineStatus: "online",
       bot: false,
+      system: false,
       botPublic: false,
     });
     expect(onMembers).toHaveBeenCalledTimes(1);
@@ -1018,6 +1021,18 @@ describe("RecordStore threads and DMs", () => {
     expect(store.channelAccess(group.id).has("sendMessages")).toBe(true);
     store.setBlocked(bob.id, false);
     expect(store.channelAccess(withBob.id).has("sendMessages")).toBe(true);
+  });
+
+  it("leaves only reading in the system account's DM, once its record says what it is", () => {
+    const store = bootstrapped();
+    const system: User = { ...bob, id: id(9), name: "system", system: true };
+    const notices = dm(702, [me.id, system.id]);
+    store.ingest({ channels: [notices] });
+    // Until the record arrives it is a DM like any other.
+    expect(store.channelAccess(notices.id).has("sendMessages")).toBe(true);
+    store.ingest({ users: [system] });
+    expect(store.systemDmPeer(notices.id)).toBe(system.id);
+    expect(Array.from(store.channelAccess(notices.id))).toEqual(["viewChannel"]);
   });
 
   it("keeps threads out of their community's channel list while holding them as channels", () => {

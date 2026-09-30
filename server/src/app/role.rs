@@ -431,6 +431,46 @@ pub async fn update_role(
     .await
 }
 
+/// Takes `permission` from a community's everyone role for the deployment itself, and
+/// announces it; whether the role held it.
+pub(crate) async fn take_from_everyone(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    community_id: CommunityId,
+    permission: Permissions,
+) -> app::Result<bool> {
+    let role: RoleRow = community_role::table
+        .select(RoleRow::as_select())
+        .filter(
+            community_role::community
+                .eq(community_id)
+                .and(community_role::everyone),
+        )
+        .first(conn)
+        .await?;
+    if !role.permissions.contains(permission) {
+        return Ok(false);
+    }
+    let permissions = role.permissions.difference(permission);
+    diesel::update(community_role::table.filter(community_role::id.eq(role.id)))
+        .set(community_role::permissions.eq(permissions))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(community_id),
+        &ServerEvent::Role(RoleEvent::Update {
+            id: role.id,
+            name: None,
+            position: None,
+            permissions: Some(to_names(permissions)),
+        }),
+    )
+    .await?;
+    Ok(true)
+}
+
 /// Deletes a role below the caller; its holders and overrides lose it.
 pub async fn delete_role(
     state: &GlobalServerContext,
