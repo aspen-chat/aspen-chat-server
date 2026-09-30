@@ -2,13 +2,14 @@ import type { ApiServerHealth, VoiceServerHealth } from "@aspen/protocol";
 import { CheckCircleIcon, ProhibitIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
 import type { ComponentType, ReactNode } from "react";
 import { useCallback } from "react";
-import { useSync } from "@/api/hooks";
+import { useSync, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /** How often the fleet is read again while the dashboard is visible, as the servers report. */
 const FLEET_REFRESH_MS = 10_000;
@@ -22,6 +23,7 @@ export function FleetHealth() {
   const sync = useSync();
   const load = useCallback(() => sync.fleet(), [sync]);
   const { data, at: now, error, reload } = useAdminRead(load, FLEET_REFRESH_MS);
+  const wizard = useIdWizard();
   return (
     <Section id="admin-fleet" title={m.admin.fleet} hint={m.admin.fleetUpdated}>
       {error !== null && <ReadFailed error={error} onRetry={reload} />}
@@ -55,7 +57,13 @@ export function FleetHealth() {
       ) : (
         <Table
           label={m.admin.voiceServers}
-          headings={[m.admin.name, m.admin.status, m.admin.load, m.admin.lastReport]}
+          headings={[
+            m.admin.name,
+            m.admin.status,
+            m.admin.load,
+            m.admin.lastReport,
+            ...(wizard ? [m.bots.idColumn] : []),
+          ]}
           numeric={[2]}
           skeletonRows={data === undefined && error === null ? 2 : 0}
         >
@@ -102,6 +110,7 @@ function ApiServerRow({ server, now }: { server: ApiServerHealth; now: number })
 
 function VoiceServerRow({ server, now }: { server: VoiceServerHealth; now: number }) {
   const m = useMessages();
+  const wizard = useIdWizard();
   const { count, ago } = useFigures();
   return (
     <tr>
@@ -125,6 +134,11 @@ function VoiceServerRow({ server, now }: { server: VoiceServerHealth; now: numbe
         })}
       </Cell>
       <Cell>{server.lastReportAt == null ? m.admin.never : ago(server.lastReportAt, now)}</Cell>
+      {wizard && (
+        <Cell>
+          <CopyIdButton id={server.id} thing="voiceServer" />
+        </Cell>
+      )}
     </tr>
   );
 }

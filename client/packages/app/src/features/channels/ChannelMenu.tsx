@@ -12,12 +12,13 @@ import {
   Separator,
   SubmenuTrigger,
 } from "react-aria-components";
-import { useMute, useNotificationLevel, useSync } from "@/api/hooks";
+import { useChannel, useMute, useNotificationLevel, useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
+import { CopyIdMenuItem } from "@/features/layout/CopyId";
 
 /** The lengths of mute offered, in the menu's order; `null` lasts until the user unmutes. */
 const MUTE_DURATIONS: readonly {
@@ -85,6 +86,7 @@ export function ChannelMenu({
   const until = useDateFormat(UNTIL);
   const sync = useSync();
   const mute = useMute(channelId);
+  const channel = useChannel(channelId);
   const notify = useNotificationLevel(channelId);
   const label = format(m.mute.options, { name });
   // Beside the row where there is room for it and its submenus; a phone has none beside a row
@@ -217,6 +219,17 @@ export function ChannelMenu({
               {m.channelActions.delete}
             </MenuItem>
           )}
+          <CopyIdMenuItem
+            id={channelId}
+            thing={
+              channel?.ty === "dm" || channel?.ty === "groupDm"
+                ? "dm"
+                : channel?.ty === "thread"
+                  ? "thread"
+                  : "channel"
+            }
+            className={itemClass}
+          />
         </Menu>
       </Dialog>
     </Popover>

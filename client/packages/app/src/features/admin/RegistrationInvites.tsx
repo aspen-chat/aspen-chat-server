@@ -49,6 +49,7 @@ import { copyText } from "@/features/layout/clipboard";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const EXPIRIES: readonly { key: keyof Messages["admin"]["expiry"]; seconds: number | null }[] = [
   { key: "never", seconds: null },
@@ -147,6 +148,7 @@ export function RegistrationInvites({
                       {m.admin.revoke}
                     </Button>
                   )}
+                  <CopyIdButton id={invite.code} thing="registrationInvite" />
                 </span>
               </Cell>
             </tr>

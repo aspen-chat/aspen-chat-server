@@ -17,6 +17,7 @@ import {
   useSilenced,
   useChannelCan,
   useChannelVoice,
+  useIdWizard,
   useMe,
   usePreference,
   useSync,
@@ -38,6 +39,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useNow } from "@/features/layout/useNow";
 import { dangerButtonClass } from "@/features/invites/dialog";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /**
  * A voice channel's screen: its header, with the share control while the user is in its call,
@@ -100,6 +102,7 @@ export function CallStage({
   const sync = useSync();
   const call = useVoiceCall();
   const voice = useChannelVoice(channel.id);
+  const wizard = useIdWizard();
   const inThisCall = call.status === "connected" && call.channelId === channel.id;
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -152,7 +155,7 @@ export function CallStage({
   return (
     <>
       <div className={className}>
-        {(here || toolbarEnd !== undefined) && (
+        {(here || toolbarEnd !== undefined || (wizard && voice.session !== null)) && (
           <div className="flex items-center justify-between gap-2">
             {here ? (
               <Button
@@ -167,7 +170,10 @@ export function CallStage({
             ) : (
               <span />
             )}
-            {toolbarEnd}
+            <span className="flex items-center gap-2">
+              {toolbarEnd}
+              {voice.session !== null && <CopyIdButton id={voice.session.id} thing="call" />}
+            </span>
           </div>
         )}
         {focused !== undefined && (

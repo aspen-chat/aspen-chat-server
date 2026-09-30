@@ -25,6 +25,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const iconButtonClass =
   "rounded p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -304,6 +305,7 @@ function DeploymentRoleEditor({
           </span>
         </div>
       )}
+      <CopyIdButton id={role.id} thing="deploymentRole" className="self-end" />
     </form>
   );
 }

@@ -9,6 +9,7 @@ import { isImageType, splitInline, type Picture } from "@/features/messages/imag
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
@@ -95,6 +96,7 @@ export function MessageMedia({
               }}
             />
           )}
+          <CopyIdButton id={attachment.id} thing="attachment" />
         </li>
       ))}
       {shown.map((picture, i) => (
@@ -105,15 +107,22 @@ export function MessageMedia({
               setGallery(i);
             }}
           />
-          {onRemove !== undefined && picture.attachmentId !== undefined && (
-            <span className="absolute top-1 end-1">
-              <RemoveButton
-                name={picture.name}
-                onPress={() => {
-                  if (picture.attachmentId !== undefined) {
-                    onRemove(picture.attachmentId);
-                  }
-                }}
+          {picture.attachmentId !== undefined && (
+            <span className="absolute top-1 end-1 flex gap-1">
+              {onRemove !== undefined && (
+                <RemoveButton
+                  name={picture.name}
+                  onPress={() => {
+                    if (picture.attachmentId !== undefined) {
+                      onRemove(picture.attachmentId);
+                    }
+                  }}
+                />
+              )}
+              <CopyIdButton
+                id={picture.attachmentId}
+                thing="attachment"
+                className="bg-surface-raised/90 shadow-sm"
               />
             </span>
           )}

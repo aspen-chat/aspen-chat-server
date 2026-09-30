@@ -19,6 +19,7 @@ import {
   useRoles,
   useSync,
   useUser,
+  useIdWizard,
 } from "@/api/hooks";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -35,6 +36,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
@@ -48,6 +50,7 @@ export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
   const me = useMe();
   const blocked = useBlocked(user.id);
+  const wizard = useIdWizard();
   const { channelId, communityId } = useParams({ strict: false });
   const open = useChannel(channelId ?? "");
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
@@ -102,6 +105,11 @@ export function ProfileCard({ user }: { user: User }) {
           )}
           <BlockControl userId={user.id} name={name} blocked={blocked} />
         </>
+      )}
+      {wizard && (
+        <div className="flex justify-end">
+          <CopyIdButton id={user.id} thing={user.bot ? "bot" : "user"} />
+        </div>
       )}
     </div>
   );

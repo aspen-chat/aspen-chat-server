@@ -34,6 +34,7 @@ import type {
   User,
   VoiceCallState,
 } from "@aspen/protocol";
+import { DEVELOPER_MODE, ID_WIZARD } from "@aspen/protocol";
 import { useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useBlockedAnywhere } from "./identity";
 import { AspenSyncContext } from "./syncContext";
@@ -166,6 +167,13 @@ export function useUserLoading(id: string | undefined): boolean {
   return useTopic(`user:${id ?? ""}`, (s) =>
     id === undefined ? false : s.user(id) === undefined && !s.missing("user", id),
   );
+}
+
+/** Whether the ID wizard is on: developer mode, and its offer to copy ids, both. */
+export function useIdWizard(): boolean {
+  const developer = usePreference(DEVELOPER_MODE);
+  const wizard = usePreference(ID_WIZARD);
+  return developer && wizard;
 }
 
 /** An attachment record by id, fetched on demand when the cache lacks it. */

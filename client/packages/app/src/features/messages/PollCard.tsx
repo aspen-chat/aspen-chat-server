@@ -47,6 +47,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /**
  * A poll in its message: the question, one bar per answer showing its share of the votes, the
@@ -113,6 +114,7 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
             ? format(m.poll.closesIn, { remaining: remainingText(m, poll.closesAt, now) })
             : m.poll.closed}
         </span>
+        <CopyIdButton id={poll.id} thing="poll" className="ms-auto -my-1 p-0.5" />
       </p>
     </section>
   );

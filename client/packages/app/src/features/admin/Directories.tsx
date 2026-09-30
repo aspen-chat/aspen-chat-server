@@ -32,7 +32,7 @@ import {
   Select,
   SelectValue,
 } from "react-aria-components";
-import { useDeploymentCan, useMe, useSync } from "@/api/hooks";
+import { useDeploymentCan, useMe, useSync, useIdWizard } from "@/api/hooks";
 import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoles";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { markClass } from "@/features/layout/choices";
@@ -51,6 +51,7 @@ import {
 import { BotBadge } from "@/features/users/BotBadge";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { CopyIdButton, type IdThing } from "@/features/layout/CopyId";
 
 /** How long typing pauses before the search is sent. */
 const SEARCH_DELAY_MS = 300;
@@ -84,6 +85,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
   const load = useCallback((query: AdminListQuery<UserSort>) => sync.adminUsers(query), [sync]);
   return (
     <Directory<AdminUserEntry, UserSort>
+      idThing="user"
       id="admin-users"
       title={m.admin.users}
       searchLabel={m.admin.searchUsers}
@@ -422,6 +424,7 @@ export function CommunityDirectory() {
   );
   return (
     <Directory<AdminCommunityEntry, CommunitySort>
+      idThing="community"
       id="admin-communities"
       title={m.admin.communities}
       searchLabel={m.admin.searchCommunities}
@@ -484,8 +487,9 @@ export function Directory<T extends { id: string }, S extends string>({
   searchLabel,
   load,
   defaultSort,
-  columns,
+  columns: given,
   version = 0,
+  idThing,
 }: {
   id: string;
   title: string;
@@ -495,8 +499,22 @@ export function Directory<T extends { id: string }, S extends string>({
   defaultSort?: S;
   columns: readonly Column<T, S>[];
   version?: number;
+  /** What each row's id belongs to, for the ID wizard's column; none without it. */
+  idThing?: IdThing;
 }) {
   const m = useMessages();
+  const wizard = useIdWizard();
+  // The ID wizard's column comes last, after everything else a row holds.
+  const columns: readonly Column<T, S>[] =
+    wizard && idThing !== undefined
+      ? [
+          ...given,
+          {
+            heading: m.bots.idColumn,
+            cell: (item) => <CopyIdButton id={item.id} thing={idThing} />,
+          },
+        ]
+      : given;
   const { count } = useFigures();
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");

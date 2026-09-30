@@ -36,6 +36,7 @@ import { messageLink, threadLink, type ChannelHome } from "@/features/messages/l
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -269,6 +270,7 @@ export function MessageItem({
                   triggerClassName={actionClass + " text-danger"}
                 />
               )}
+              <CopyIdButton id={id} thing="message" className={actionClass} />
             </span>
           )}
         </div>

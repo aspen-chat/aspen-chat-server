@@ -12,6 +12,7 @@ import { MessageList } from "@/features/messages/MessageList";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /**
  * A thread beside its channel: the message that started it, its replies, and a composer whose
@@ -101,6 +102,7 @@ export function ThreadPanel({
             <XIcon size={18} aria-hidden="true" />
           </Button>
         </Tooltip>
+        <CopyIdButton id={threadId} thing="thread" />
       </header>
       {error !== null ? (
         <p role="alert" className="p-4 text-sm text-danger">

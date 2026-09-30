@@ -28,6 +28,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const iconButtonClass =
   "rounded p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -335,6 +336,7 @@ function RoleEditor({
               )}
             </span>
           )}
+          <CopyIdButton id={role.id} thing="role" className="ms-auto" />
         </div>
       )}
     </form>

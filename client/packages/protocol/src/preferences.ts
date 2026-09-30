@@ -165,6 +165,17 @@ export const DEVELOPER_MODE: PreferenceDefinition<boolean> = {
 };
 
 /**
+ * The ID wizard, a part of developer mode: while both are on, everything with an id offers to
+ * copy it, last in whatever shows it. On with developer mode unless turned off.
+ */
+export const ID_WIZARD: PreferenceDefinition<boolean> = {
+  key: "developer.idWizard",
+  scope: "account",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
+/**
  * How the user arranged the community rail, across every deployment they use: each entry's
  * `railKey`. Communities it does not name follow the ones it does. It follows the account, so
  * the rail looks the same on every device.

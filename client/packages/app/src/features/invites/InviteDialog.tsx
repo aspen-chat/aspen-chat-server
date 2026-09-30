@@ -32,6 +32,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /** How long a new invite stays valid, as a key into the `expiry` messages. */
 const EXPIRY_OPTIONS = {
@@ -266,6 +267,7 @@ function InviteRow({
             {m.revoke}
           </Button>
         )}
+        <CopyIdButton id={invite.code} thing="invite" />
       </div>
     </li>
   );

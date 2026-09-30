@@ -50,6 +50,7 @@ import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 /**
  * The drag type channel rows carry, so a channel can be dropped into any channel group but
@@ -83,6 +84,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
         </h1>
         <CommunitySettingsDialog community={community} triggerClassName={headerIconButtonClass} />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
+        <CopyIdButton id={community.id} thing="community" className="p-1.5" />
       </div>
       {moderating && (
         <p className="border-b border-line bg-accent-soft px-4 py-2 text-xs text-accent-strong">
@@ -154,6 +156,7 @@ function CategorySection({
         </h2>
         <CategoryAccessButton category={category} />
         <AddToCategoryDialog category={category} />
+        <CopyIdButton id={category.id} thing="category" className="p-0.5" />
       </div>
       <ChannelGroup
         communityId={category.community}

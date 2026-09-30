@@ -7,7 +7,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
-import { useSync, useUser, useUserLoading } from "@/api/hooks";
+import { useSync, useUser, useUserLoading, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
@@ -24,6 +24,7 @@ import { useDateFormat } from "@/i18n/format";
 import { formatNodes } from "@/i18n/formatNodes";
 import { format, type Messages } from "@/i18n/messages";
 import { PersonName } from "@/features/users/PersonName";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -42,6 +43,7 @@ export function ModerationLog() {
   const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const sync = useSync();
+  const wizard = useIdWizard();
   const [entries, setEntries] = useState<readonly ModerationEntry[]>([]);
   const [complete, setComplete] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -99,6 +101,7 @@ export function ModerationLog() {
             { content: m.admin.logWho },
             { content: m.admin.logWhat },
             { content: m.admin.logWhere },
+            ...(wizard ? [{ content: m.bots.idColumn }] : []),
           ]}
           numeric={[]}
           dimmed={loading && entries.length > 0}
@@ -117,6 +120,11 @@ export function ModerationLog() {
               <Cell>
                 <Place entry={entry} />
               </Cell>
+              {wizard && (
+                <Cell>
+                  <CopyIdButton id={entry.id} thing="logEntry" />
+                </Cell>
+              )}
             </tr>
           ))}
         </Table>

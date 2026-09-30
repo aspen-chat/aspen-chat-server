@@ -1,7 +1,7 @@
 import { ApiProblemError, type FileOfferEntry } from "@aspen/protocol";
 import { useCallback, useEffect, useState } from "react";
 import { Button, useLocale } from "react-aria-components";
-import { useSync } from "@/api/hooks";
+import { useSync, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
@@ -10,6 +10,7 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { PersonName } from "@/features/users/PersonName";
 import { formatNodes } from "@/i18n/formatNodes";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -25,6 +26,7 @@ export function FileTransferLog() {
   const { locale } = useLocale();
   const m = useMessages();
   const sync = useSync();
+  const wizard = useIdWizard();
   const [entries, setEntries] = useState<readonly FileOfferEntry[]>([]);
   const [complete, setComplete] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -86,6 +88,7 @@ export function FileTransferLog() {
             { content: m.admin.logWho },
             { content: m.admin.logFile },
             { content: m.admin.logReceivers },
+            ...(wizard ? [{ content: m.bots.idColumn }] : []),
           ]}
           numeric={[]}
           dimmed={loading && entries.length > 0}
@@ -114,6 +117,11 @@ export function FileTransferLog() {
                   </ul>
                 )}
               </Cell>
+              {wizard && (
+                <Cell>
+                  <CopyIdButton id={entry.id} thing="fileOffer" />
+                </Cell>
+              )}
             </tr>
           ))}
         </Table>

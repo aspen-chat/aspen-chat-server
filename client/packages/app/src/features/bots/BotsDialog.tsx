@@ -32,6 +32,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { CopyIdButton } from "@/features/layout/CopyId";
 
 const EVERY_PERMISSION: ReadonlySet<Permission> = new Set(ALL_PERMISSIONS);
 
@@ -310,6 +311,7 @@ function BotEditor({
         >
           {m.bots.delete}
         </Button>
+        <CopyIdButton id={bot.id} thing="bot" />
       </div>
     </section>
   );
