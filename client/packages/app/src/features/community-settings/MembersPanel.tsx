@@ -23,6 +23,7 @@ import {
 } from "@/api/hooks";
 import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/features/auth/styles";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
+import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { markClass } from "@/features/layout/choices";
@@ -88,7 +89,7 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
   const theirs = store.access(communityId, member.id);
   const outranked = access !== null && theirs !== null && access.outranks(theirs.rank);
   const mayRemove = access?.has("removeMembers") === true && !self && !owner && outranked;
-  const mayAssign = access?.has("assignRoles") === true && (self || (!owner && outranked));
+  const assignable = useAssignableRoles(communityId, member.id);
   const shown = roles.filter((r) => !r.everyone && (held ?? []).includes(r.id));
 
   async function remove() {
@@ -125,14 +126,14 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
           ))}
         </span>
         <span className="ms-auto flex items-center gap-2">
-          {mayAssign && (
+          {assignable.length > 0 && (
             <RolePicker
               communityId={communityId}
               userId={member.id}
               name={name}
               roles={roles.filter((r) => !r.everyone && r.bot == null)}
               held={held ?? []}
-              canGive={(role) => access.outranks(role.position)}
+              canGive={(role) => assignable.includes(role)}
               onError={setError}
             />
           )}

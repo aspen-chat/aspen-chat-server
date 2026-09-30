@@ -220,7 +220,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `{ text, emoji? }`), edited by `AspenSync.updateProfile` as a merge patch built by
   `src/features/users/profile.ts`, which also decides what to call a user (`displayNameOf`).
   Show that name wherever a user is named, never `name` directly; `ProfileCard.tsx` is the card
-  any user control opens, and `EditProfileDialog.tsx` the signed-in user's editor.
+  any user control opens, and `EditProfileDialog.tsx` the signed-in user's editor. Opened within
+  a community (a `communityId` in the route) the card lists the roles the user holds there,
+  read with `AspenSync.loadMember` when they are outside the member sample, and offers those
+  who may give them a role the ones they could give (`useAssignableRoles`, which the members
+  panel's role picker shares).
 - Voice lives in `packages/protocol/src/voice.ts`. `AspenSync.voice` is a `VoiceCall`: `join(channelId)`
   asks the API server for a join offer (`POST /channels/{channel}/voice/join`), opens the
   microphone (a refusal fails the join with `errorKind: "microphone"` before any server is

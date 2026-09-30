@@ -1935,6 +1935,24 @@ export class AspenSync {
     return result.data.data;
   }
 
+  /**
+   * Reads one member's roles in a community into the cache, for a member outside the sample, and
+   * answers whether they are a member at all.
+   */
+  async loadMember(communityId: string, userId: string): Promise<boolean> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/members/{user}", {
+      params: { path: { community: communityId, user: userId } },
+    });
+    if (result.response.status === 404) {
+      return false;
+    }
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.noteMemberRoles([result.data]);
+    return true;
+  }
+
   /** Leaves a community, which drops it from the caller's list at once. */
   async leaveCommunity(communityId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/communities/{community}/members/@me", {

@@ -1,9 +1,26 @@
 import type { User } from "@aspen/protocol";
-import { ChatCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
+import { ChatCircleIcon, PlusIcon, ProhibitIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useState, type ReactNode, type RefObject } from "react";
-import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useBlocked, useChannel, useMe, useSync, useUser } from "@/api/hooks";
+import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import {
+  Button,
+  Dialog,
+  DialogTrigger,
+  Menu,
+  MenuItem,
+  MenuTrigger,
+  Popover,
+} from "react-aria-components";
+import {
+  useBlocked,
+  useChannel,
+  useMe,
+  useMemberRoles,
+  useRoles,
+  useSync,
+  useUser,
+} from "@/api/hooks";
+import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { BotBadge } from "@/features/users/BotBadge";
@@ -15,14 +32,16 @@ import { useDomain, channelLink } from "@/features/messages/links";
 /**
  * A user's profile as a card: who they are, their pronouns, what they are up to, and their
  * bio, with ways to message and to block them when they are someone else. Opens from any
- * control that names the user, such as a message author or a member row. Inside the reader's
- * one-to-one DM with them it offers no way to message them, which is where the reader already is.
+ * control that names the user, such as a message author or a member row. Opened within a
+ * community it shows the roles they hold there, with a way to give them another for those who
+ * may. Inside the reader's one-to-one DM with them it offers no way to message them, which is
+ * where the reader already is.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
   const me = useMe();
   const blocked = useBlocked(user.id);
-  const { channelId } = useParams({ strict: false });
+  const { channelId, communityId } = useParams({ strict: false });
   const open = useChannel(channelId ?? "");
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
   const name = displayNameOf(user);
@@ -60,6 +79,9 @@ export function ProfileCard({ user }: { user: User }) {
           </h3>
           <p className="mt-1 text-sm break-words whitespace-pre-wrap">{user.bio}</p>
         </section>
+      )}
+      {communityId !== undefined && (
+        <CommunityRoles communityId={communityId} userId={user.id} name={name} />
       )}
       {me !== null && me.id !== user.id && (
         <>
@@ -141,6 +163,121 @@ function BlockControl({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The roles a member holds in the community the card was opened in, highest first, read from
+ * the server when they are not among the members already known. Those who may give them a role
+ * get a button listing the ones they could give. A card of someone who is not a member shows
+ * nothing here.
+ */
+function CommunityRoles({
+  communityId,
+  userId,
+  name,
+}: {
+  communityId: string;
+  userId: string;
+  name: string;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const roles = useRoles(communityId);
+  const held = useMemberRoles(communityId, userId);
+  const assignable = useAssignableRoles(communityId, userId);
+  const [member, setMember] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const known = held !== undefined;
+  useEffect(() => {
+    if (known) {
+      return;
+    }
+    let current = true;
+    sync.loadMember(communityId, userId).then(
+      (isMember) => {
+        if (current) {
+          setMember(isMember);
+        }
+      },
+      (failure: unknown) => {
+        if (current) {
+          setError(failure instanceof Error ? failure.message : String(failure));
+        }
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [sync, communityId, userId, known]);
+  if (!member || (held === undefined && error === null)) {
+    return null;
+  }
+  const holding = new Set(held);
+  // Roles are kept lowest first; a card lists the highest first.
+  const shown = [...roles].reverse().filter((role) => !role.everyone && holding.has(role.id));
+  const addable = [...assignable].reverse().filter((role) => !holding.has(role.id));
+  const give = (roleId: string) => {
+    setError(null);
+    sync.setMemberRole(communityId, userId, roleId, true).catch((failure: unknown) => {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    });
+  };
+  return (
+    <section aria-labelledby={`roles-${userId}`} className="flex flex-col gap-1">
+      <h3
+        id={`roles-${userId}`}
+        className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
+      >
+        {m.profile.roles}
+      </h3>
+      <ul className="flex flex-wrap items-center gap-1">
+        {shown.map((role) => (
+          <li key={role.id} className="rounded-full border border-line px-2 py-0.5 text-xs">
+            {role.name}
+          </li>
+        ))}
+        {shown.length === 0 && addable.length === 0 && (
+          <li className="text-xs text-ink-muted">{m.profile.noRoles}</li>
+        )}
+        {addable.length > 0 && (
+          <li>
+            <MenuTrigger>
+              <Button
+                aria-label={format(m.profile.addRole, { name })}
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-line text-ink-muted outline-none hover:border-accent hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                <PlusIcon size={12} aria-hidden="true" />
+              </Button>
+              <Popover className="w-48 rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+                <Menu
+                  aria-label={format(m.profile.addRole, { name })}
+                  onAction={(key) => {
+                    give(String(key));
+                  }}
+                  className="max-h-64 overflow-y-auto outline-none"
+                >
+                  {addable.map((role) => (
+                    <MenuItem
+                      key={role.id}
+                      id={role.id}
+                      className="cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover"
+                    >
+                      {role.name}
+                    </MenuItem>
+                  ))}
+                </Menu>
+              </Popover>
+            </MenuTrigger>
+          </li>
+        )}
+      </ul>
+      {error !== null && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
