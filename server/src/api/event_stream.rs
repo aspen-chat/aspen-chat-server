@@ -262,7 +262,14 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
         log_send_error(&e);
         return;
     }
-    pump_events(socket, subscription, &state, session.user.id, session.user.bot).await;
+    pump_events(
+        socket,
+        subscription,
+        &state,
+        session.user.id,
+        session.user.bot,
+    )
+    .await;
 }
 
 struct Identified {
