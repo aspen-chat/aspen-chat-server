@@ -276,7 +276,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   and Decline (`AspenSync.declineCall`, as Escape does too; it has no X); while it shows,
   `startRingtone` (`src/features/notifications/ringtone.ts`, made like the chime by
   `tone.ts`) plays through the notification sound's speaker and, when the app is not focused
-  and the user turned system notifications on, the system notifies. A muted DM rings silently.
+  and the user turned system notifications on, the system notifies, once per ring
+  (`ringNotifications.ts`: a desktop may refuse a notification posted again in quick
+  succession, which an effect run twice would do). A muted DM rings silently.
   A ring ends at its `until` by the clock (`useNow`). While the user is in a DM's call that
   still rings someone, `startDialTone` plays a quiet ringback (440 and 480 Hz, 1.2 seconds in
   every 4) through the voice chat's speaker. In the call, those being rung show as

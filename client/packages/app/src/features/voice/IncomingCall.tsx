@@ -2,6 +2,7 @@ import { DESKTOP_NOTIFICATIONS, type VoiceRing } from "@aspen/protocol";
 import { PhoneIcon, PhoneXIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useContext, useEffect, useState } from "react";
+import { closeRingNotifications, postRingNotification } from "./ringNotifications";
 import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, type Source } from "@/api/everywhere";
@@ -42,18 +43,23 @@ export function IncomingCalls() {
   );
   const now = useNow(500, rings.length > 0);
   const current = rings.find(({ ring }) => Date.parse(ring.until) > now);
-  if (current === undefined) {
+  const key = current === undefined ? null : ringKey(current);
+  // A ring that stopped showing (answered, declined, over, or run out) takes its notification.
+  useEffect(() => {
+    closeRingNotifications(key);
+  }, [key]);
+  if (current === undefined || key === null) {
     return null;
   }
   return (
     <SourceScope source={current.source}>
-      <IncomingCall
-        key={`${current.source.domain ?? ""}/${current.ring.session}`}
-        ring={current.ring}
-        source={current.source}
-      />
+      <IncomingCall key={key} ringId={key} ring={current.ring} source={current.source} />
     </SourceScope>
   );
+}
+
+function ringKey({ ring, source }: Ringing): string {
+  return `ring/${source.domain ?? ""}/${ring.session}`;
 }
 
 /**
@@ -63,7 +69,15 @@ export function IncomingCalls() {
  * shows, the ringtone plays and, if the app is not focused, the system notifies, unless the
  * user muted the DM, which rings silently.
  */
-function IncomingCall({ ring, source }: { ring: VoiceRing; source: Source }) {
+function IncomingCall({
+  ringId,
+  ring,
+  source,
+}: {
+  ringId: string;
+  ring: VoiceRing;
+  source: Source;
+}) {
   const m = useMessages();
   const home = useContext(HomeSyncContext);
   const navigate = useNavigate();
@@ -81,8 +95,12 @@ function IncomingCall({ ring, source }: { ring: VoiceRing; source: Source }) {
     return startRingtone(notificationOutputDevice(home.preferences));
   }, [muted, answered, home]);
 
+  // Posted once the caller is known, so its title never changes, and once per ring whatever
+  // runs this again (`postRingNotification`); the ring's end closes it.
+  const known = caller !== undefined;
   useEffect(() => {
     if (
+      !known ||
       muted ||
       home === null ||
       document.hasFocus() ||
@@ -93,19 +111,15 @@ function IncomingCall({ ring, source }: { ring: VoiceRing; source: Source }) {
     ) {
       return;
     }
-    const notification = new Notification(heading, {
-      body: m.voice.incomingCallBody,
-      tag: `ring/${source.domain ?? ""}/${ring.session}`,
-      requireInteraction: true,
-    });
-    notification.onclick = () => {
-      window.focus();
-      notification.close();
-    };
-    return () => {
-      notification.close();
-    };
-  }, [muted, home, heading, m, source.domain, ring.session]);
+    postRingNotification(
+      ringId,
+      heading,
+      { body: m.voice.incomingCallBody, requireInteraction: true },
+      () => {
+        window.focus();
+      },
+    );
+  }, [known, muted, home, heading, m, ringId]);
 
   if (answered || channel === undefined) {
     return null;

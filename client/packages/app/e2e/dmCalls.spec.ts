@@ -230,3 +230,37 @@ test("a DM call no one else joined is recorded as missed", async ({ page }) => {
   await record.getByRole("button", { name: `Show profile of ${bobName}` }).click();
   await expect(page.getByRole("dialog", { name: `Profile of ${bobName}` })).toBeVisible();
 });
+
+test("a ring posts one system notification however long it rings", async ({ page }) => {
+  await page.addInitScript(() => {
+    const shown: string[] = [];
+    Object.assign(window, { shown });
+    class StandIn {
+      static permission = "granted";
+      static requestPermission() {
+        return Promise.resolve("granted");
+      }
+      onclick: (() => void) | null = null;
+      constructor(title: string) {
+        shown.push(title);
+      }
+      close() {
+        return undefined;
+      }
+    }
+    Object.defineProperty(window, "Notification", { value: StandIn });
+    document.hasFocus = () => false;
+  });
+  const publish = await signInToWorld(page);
+  await openDms(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+  await settings.getByText("Show system notifications", { exact: true }).click();
+  await page.keyboard.press("Escape");
+  bobCalls(publish, { untilMs: 4_000 });
+  await expect(page.getByRole("alertdialog", { name: `${bobName} is calling` })).toBeVisible();
+  await page.waitForTimeout(3_000);
+  expect(await page.evaluate(() => (window as unknown as { shown: string[] }).shown)).toEqual([
+    `${bobName} is calling`,
+  ]);
+});
