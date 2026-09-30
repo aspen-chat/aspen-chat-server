@@ -64,4 +64,7 @@
     <!-- Calls: the WebView's getUserMedia asks for both before it hands the page a microphone. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Cameras in calls, asked for the same way; a phone without one still installs the app. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 </manifest>

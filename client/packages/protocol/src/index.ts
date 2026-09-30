@@ -176,6 +176,7 @@ export {
 } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
+  CameraError,
   MicrophoneError,
   PING_TIMEOUT_MS,
   READY_TIMEOUT_MS,
@@ -184,6 +185,7 @@ export {
   rankCandidates,
   signallingUrl,
   type AudioSource,
+  type CameraFailure,
   type ExternalAudio,
   type ExternalShare,
   type ExternalTargets,

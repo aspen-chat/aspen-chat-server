@@ -122,6 +122,11 @@ export interface VoiceCallState {
   /** The cameras other participants have on, in the order they arrived. */
   cameras: readonly RemoteScreen[];
   /**
+   * Why the camera last failed to turn on, until it turns on, the user dismisses it
+   * (`clearCameraError`), or the call ends.
+   */
+  cameraError: CameraFailure | null;
+  /**
    * What failed when `status` is `failed`: the microphone (permission refused, no device, or an
    * insecure page origin, which browsers refuse media on), or every voice server.
    */
@@ -318,6 +323,7 @@ const IDLE: VoiceCallState = {
   localScreen: null,
   screens: [],
   localCamera: null,
+  cameraError: null,
   cameras: [],
   errorKind: null,
   error: null,
@@ -329,6 +335,24 @@ function sameChoice(a: DeviceChoice, b: DeviceChoice): boolean {
     return a === b;
   }
   return a.id === b.id && a.label === b.label;
+}
+
+/**
+ * Why the camera did not turn on: no camera is connected (`none`), the browser or the system
+ * refused access (`denied`), every camera there is failed to start (`failed`), or the voice
+ * server did not take the picture (`unsent`).
+ */
+export type CameraFailure = "none" | "denied" | "failed" | "unsent";
+
+/** The camera could not be turned on, for the reason `failure` names; `cause` is the underlying error. */
+export class CameraError extends Error {
+  constructor(
+    readonly failure: CameraFailure,
+    cause?: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : failure, { cause });
+    this.name = "CameraError";
+  }
 }
 
 /** The microphone could not be opened; `cause` is the browser's error. */
@@ -772,7 +796,8 @@ export class VoiceCall {
   /**
    * Turns the camera on: opens the chosen camera and produces it as `camera`, at up to 1080p and
    * 30 frames a second (`CAMERA_QUALITY`, `CAMERA_ENCODING`). Ends on its own if the camera goes
-   * away. Nothing happens outside a call, in one that does not allow it, or while it is on.
+   * away. Nothing happens outside a call, in one that does not allow it, or while it is on. A
+   * failure is kept as `cameraError` and thrown as a `CameraError`.
    */
   async startCamera(): Promise<void> {
     const transport = this.#sendTransport;
@@ -784,7 +809,16 @@ export class VoiceCall {
     ) {
       return;
     }
-    const track = await this.#media.getCamera(this.#devices.camera);
+    let track: MediaStreamTrack;
+    try {
+      track = await this.#media.getCamera(this.#devices.camera);
+    } catch (error) {
+      const failure = error instanceof CameraError ? error : new CameraError("failed", error);
+      if (this.#sendTransport === transport) {
+        this.#set({ cameraError: failure.failure });
+      }
+      throw failure;
+    }
     // Opening the camera took time; the call may have moved on, or it was turned on meanwhile.
     if (this.#sendTransport !== transport || this.#cameraOn()) {
       track.stop();
@@ -792,7 +826,7 @@ export class VoiceCall {
     }
     const camera: CameraSend = { track, producer: null };
     this.#camera = camera;
-    this.#set({ localCamera: track });
+    this.#set({ localCamera: track, cameraError: null });
     track.addEventListener("ended", () => {
       if (this.#camera === camera) {
         this.stopCamera();
@@ -811,8 +845,16 @@ export class VoiceCall {
       }
     } catch (error) {
       this.stopCamera();
-      throw error;
+      if (this.#sendTransport === transport) {
+        this.#set({ cameraError: "unsent" });
+      }
+      throw new CameraError("unsent", error);
     }
+  }
+
+  /** Dismisses the reason the camera last failed. */
+  clearCameraError(): void {
+    this.#set({ cameraError: null });
   }
 
   /** Whether the camera is on, read afresh where an `await` may have changed it. */
@@ -966,8 +1008,12 @@ export class VoiceCall {
     this.#files.closeAll();
     this.stopScreenShare();
     this.stopCamera();
-    if (this.#state.screens.length > 0 || this.#state.cameras.length > 0) {
-      this.#set({ screens: [], cameras: [] });
+    if (
+      this.#state.screens.length > 0 ||
+      this.#state.cameras.length > 0 ||
+      this.#state.cameraError !== null
+    ) {
+      this.#set({ screens: [], cameras: [], cameraError: null });
     }
     for (const consumer of this.#consumers.values()) {
       consumer.close();

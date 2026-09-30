@@ -267,6 +267,12 @@ export const en = {
     cameraOn: "Turn on camera",
     cameraOff: "Turn off camera",
     usersCamera: "{name}'s camera",
+    cameraNone: "No camera found. Connect a camera, then try again.",
+    cameraDenied:
+      "Aspen isn't allowed to use your camera. Allow camera access in your browser or system settings, then try again.",
+    cameraFailed:
+      "None of your cameras would start. Close any other app using one, then try again.",
+    cameraUnsent: "Your camera couldn't be sent to the call. Try again, or rejoin the call.",
     voiceVolume: "Voice volume",
     streamVolume: "Stream volume",
     muteStreamForMe: "Mute stream for me",

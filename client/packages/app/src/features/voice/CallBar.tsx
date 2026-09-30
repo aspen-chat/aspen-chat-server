@@ -6,11 +6,13 @@ import {
   SpeakerSlashIcon,
   VideoCameraIcon,
   VideoCameraSlashIcon,
+  WarningCircleIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
-import { isDm, type Channel } from "@aspen/protocol";
+import { isDm, type CameraFailure, type Channel } from "@aspen/protocol";
 import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { channelLink, useDomain } from "@/features/messages/links";
@@ -45,81 +47,82 @@ export function CallBar() {
             : m.voice.failed
           : m.voice.joining;
   return (
-    <div
-      role="region"
-      aria-label={m.voice.callBarLabel}
-      className="flex items-center gap-1 border-t border-line px-3 py-2"
-    >
-      <CallPlaceLink channel={channel}>
-        <span
-          className={
-            "truncate text-sm font-medium " + (call.status === "connected" ? "text-online" : "")
-          }
-        >
-          {status}
-        </span>
-        <span className="truncate text-xs text-ink-muted">
-          {call.status === "failed" && call.error !== null ? (
-            call.error
-          ) : channel === undefined ? null : (
-            <CallPlace channel={channel} />
-          )}
-        </span>
-      </CallPlaceLink>
-      {/* Someone who may not speak here listens only, and has no microphone to mute. */}
-      {call.canSpeak || call.status !== "connected" ? (
-        <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
-          <Button
-            aria-label={call.muted ? m.voice.unmute : m.voice.mute}
-            aria-pressed={call.muted}
-            onPress={() => {
-              sync.voice.setMuted(!call.muted);
-            }}
-            className={buttonClass + (call.muted ? " text-danger" : "")}
+    <div role="region" aria-label={m.voice.callBarLabel} className="border-t border-line px-3 py-2">
+      <div className="flex items-center gap-1">
+        <CallPlaceLink channel={channel}>
+          <span
+            className={
+              "truncate text-sm font-medium " + (call.status === "connected" ? "text-online" : "")
+            }
           >
-            {call.muted ? (
+            {status}
+          </span>
+          <span className="truncate text-xs text-ink-muted">
+            {call.status === "failed" && call.error !== null ? (
+              call.error
+            ) : channel === undefined ? null : (
+              <CallPlace channel={channel} />
+            )}
+          </span>
+        </CallPlaceLink>
+        {/* Someone who may not speak here listens only, and has no microphone to mute. */}
+        {call.canSpeak || call.status !== "connected" ? (
+          <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
+            <Button
+              aria-label={call.muted ? m.voice.unmute : m.voice.mute}
+              aria-pressed={call.muted}
+              onPress={() => {
+                sync.voice.setMuted(!call.muted);
+              }}
+              className={buttonClass + (call.muted ? " text-danger" : "")}
+            >
+              {call.muted ? (
+                <MicrophoneSlashIcon size={18} aria-hidden="true" />
+              ) : (
+                <MicrophoneIcon size={18} aria-hidden="true" />
+              )}
+            </Button>
+          </Tooltip>
+        ) : (
+          <Tooltip text={m.voice.listeningOnly}>
+            <span aria-label={m.voice.listeningOnly} className={buttonClass + " text-ink-faint"}>
               <MicrophoneSlashIcon size={18} aria-hidden="true" />
+            </span>
+          </Tooltip>
+        )}
+        <Tooltip text={call.deafened ? m.voice.undeafen : m.voice.deafen}>
+          <Button
+            aria-label={call.deafened ? m.voice.undeafen : m.voice.deafen}
+            aria-pressed={call.deafened}
+            onPress={() => {
+              sync.voice.setDeafened(!call.deafened);
+            }}
+            className={buttonClass + (call.deafened ? " text-danger" : "")}
+          >
+            {call.deafened ? (
+              <SpeakerSlashIcon size={18} aria-hidden="true" />
             ) : (
-              <MicrophoneIcon size={18} aria-hidden="true" />
+              <HeadphonesIcon size={18} aria-hidden="true" />
             )}
           </Button>
         </Tooltip>
-      ) : (
-        <Tooltip text={m.voice.listeningOnly}>
-          <span aria-label={m.voice.listeningOnly} className={buttonClass + " text-ink-faint"}>
-            <MicrophoneSlashIcon size={18} aria-hidden="true" />
-          </span>
+        {call.status === "connected" && call.canCamera && <CameraToggle />}
+        {call.status === "connected" && <ShareControl variant="bar" />}
+        <Tooltip text={m.voice.leave}>
+          <Button
+            aria-label={m.voice.leave}
+            onPress={() => {
+              sync.voice.leave();
+            }}
+            className={buttonClass + " text-danger"}
+          >
+            <PhoneDisconnectIcon size={18} aria-hidden="true" />
+          </Button>
         </Tooltip>
+      </div>
+      {call.status === "connected" && call.cameraError !== null && (
+        <CameraProblem failure={call.cameraError} />
       )}
-      <Tooltip text={call.deafened ? m.voice.undeafen : m.voice.deafen}>
-        <Button
-          aria-label={call.deafened ? m.voice.undeafen : m.voice.deafen}
-          aria-pressed={call.deafened}
-          onPress={() => {
-            sync.voice.setDeafened(!call.deafened);
-          }}
-          className={buttonClass + (call.deafened ? " text-danger" : "")}
-        >
-          {call.deafened ? (
-            <SpeakerSlashIcon size={18} aria-hidden="true" />
-          ) : (
-            <HeadphonesIcon size={18} aria-hidden="true" />
-          )}
-        </Button>
-      </Tooltip>
-      {call.status === "connected" && call.canCamera && <CameraToggle />}
-      {call.status === "connected" && <ShareControl variant="bar" />}
-      <Tooltip text={m.voice.leave}>
-        <Button
-          aria-label={m.voice.leave}
-          onPress={() => {
-            sync.voice.leave();
-          }}
-          className={buttonClass + " text-danger"}
-        >
-          <PhoneDisconnectIcon size={18} aria-hidden="true" />
-        </Button>
-      </Tooltip>
     </div>
   );
 }
@@ -162,7 +165,10 @@ function CallPlaceLink({
   );
 }
 
-/** Turns the camera on and off. A camera that cannot be opened says why beside the call bar. */
+/**
+ * Turns the camera on and off. While the camera's last try failed it shows in the danger
+ * colour, and `CameraProblem` under the bar says why.
+ */
 function CameraToggle() {
   const m = useMessages();
   const sync = useSync();
@@ -178,10 +184,14 @@ function CameraToggle() {
           if (on) {
             sync.voice.stopCamera();
           } else {
+            sync.voice.clearCameraError();
+            // A failure is shown from the call's state, as `CameraProblem`.
             void sync.voice.startCamera().catch(() => undefined);
           }
         }}
-        className={buttonClass + (on ? " text-accent" : "")}
+        className={
+          buttonClass + (on ? " text-accent" : call.cameraError !== null ? " text-danger" : "")
+        }
       >
         {on ? (
           <VideoCameraIcon size={18} aria-hidden="true" />
@@ -190,5 +200,36 @@ function CameraToggle() {
         )}
       </Button>
     </Tooltip>
+  );
+}
+
+/** Why the camera did not turn on, and what to do about it, until dismissed or tried again. */
+function CameraProblem({ failure }: { failure: CameraFailure }) {
+  const m = useMessages();
+  const sync = useSync();
+  const text = {
+    none: m.voice.cameraNone,
+    denied: m.voice.cameraDenied,
+    failed: m.voice.cameraFailed,
+    unsent: m.voice.cameraUnsent,
+  }[failure];
+  return (
+    <div className="mt-2 flex items-start gap-2 rounded-md bg-danger-soft px-2 py-1.5 text-xs text-danger">
+      <WarningCircleIcon size={16} aria-hidden="true" className="mt-px shrink-0" />
+      <p role="alert" className="min-w-0 flex-1">
+        {text}
+      </p>
+      <Tooltip text={m.files.dismiss}>
+        <Button
+          aria-label={m.files.dismiss}
+          onPress={() => {
+            sync.voice.clearCameraError();
+          }}
+          className="shrink-0 rounded outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          <XIcon size={14} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+    </div>
   );
 }

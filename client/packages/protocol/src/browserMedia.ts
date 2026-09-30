@@ -6,7 +6,7 @@
 
 import { Device } from "mediasoup-client";
 import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
-import type { ScreenCapture, VoiceDevice, VoiceMedia } from "./voice";
+import { CameraError, type ScreenCapture, type VoiceDevice, type VoiceMedia } from "./voice";
 
 /** The device id a choice means right now, among the devices of `kind`; `null` is the default. */
 async function deviceIdFor(choice: DeviceChoice, kind: MediaDeviceKind): Promise<string | null> {
@@ -119,31 +119,46 @@ export function browserVoiceMedia(): VoiceMedia {
       await Promise.all(Array.from(players.values(), (player) => route(player.audio)));
     },
     async getCamera(choice: DeviceChoice): Promise<MediaStreamTrack> {
-      const deviceId = await deviceIdFor(choice, "videoinput");
-      const open = (constraints: MediaTrackConstraints) =>
-        navigator.mediaDevices.getUserMedia({ audio: false, video: constraints });
-      let stream: MediaStream;
-      try {
-        stream = await open(
-          deviceId === null ? CAMERA_QUALITY : { ...CAMERA_QUALITY, deviceId: { exact: deviceId } },
-        );
-      } catch (error) {
-        // A remembered camera that is unplugged is no reason to refuse the camera.
-        if (
-          deviceId !== null &&
-          error instanceof DOMException &&
-          error.name === "OverconstrainedError"
-        ) {
-          stream = await open(CAMERA_QUALITY);
-        } else {
-          throw error;
+      const cameras = (await navigator.mediaDevices.enumerateDevices()).filter(
+        (device) => device.kind === "videoinput",
+      );
+      if (cameras.length === 0) {
+        throw new CameraError("none");
+      }
+      // The chosen camera first, then every other one: a camera another app holds, or one
+      // unplugged since it was chosen, is no reason to go without the rest.
+      const chosen = choice === DEFAULT_DEVICE ? null : resolveDevice(choice, cameras);
+      const attempts: (string | null)[] = [
+        chosen,
+        ...cameras.map((camera) => camera.deviceId).filter((id) => id !== "" && id !== chosen),
+      ];
+      let lastError: unknown = null;
+      let onlyMissing = true;
+      for (const deviceId of attempts) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video:
+              deviceId === null
+                ? CAMERA_QUALITY
+                : { ...CAMERA_QUALITY, deviceId: { exact: deviceId } },
+          });
+          const [track] = stream.getVideoTracks();
+          if (track !== undefined) {
+            return track;
+          }
+        } catch (error) {
+          if (
+            error instanceof DOMException &&
+            (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ) {
+            throw new CameraError("denied", error);
+          }
+          lastError = error;
+          onlyMissing &&= error instanceof DOMException && error.name === "NotFoundError";
         }
       }
-      const [track] = stream.getVideoTracks();
-      if (track === undefined) {
-        throw new Error("no camera");
-      }
-      return track;
+      throw new CameraError(onlyMissing ? "none" : "failed", lastError);
     },
     async getScreen(): Promise<ScreenCapture> {
       // Audio is asked for so a shared tab or window can bring its sound; browsers that

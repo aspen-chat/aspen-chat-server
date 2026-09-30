@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
+  CameraError,
   MemorySessionStore,
   REJOIN_DELAY_MAX_MS,
   VoiceCall,
   rankCandidates,
   signallingUrl,
+  type CameraFailure,
   type VoiceDevice,
   type VoiceMedia,
   type VoiceTransport,
@@ -232,6 +234,8 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
   const cameras: (string | null)[] = [];
+  /** Failures the next camera openings meet, in order; an empty queue opens one. */
+  const cameraFailures: CameraFailure[] = [];
   let sendTransports = 0;
   const played: string[] = [];
   const device: VoiceDevice = {
@@ -259,7 +263,10 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     },
     getCamera: (choice) => {
       cameras.push(choice === "default" ? null : choice.id);
-      return Promise.resolve(new FakeTrack("video") as unknown as MediaStreamTrack);
+      const failure = cameraFailures.shift();
+      return failure === undefined
+        ? Promise.resolve(new FakeTrack("video") as unknown as MediaStreamTrack)
+        : Promise.reject(new CameraError(failure));
     },
     setOutput: (choice) => {
       outputs.push(choice === "default" ? null : choice.id);
@@ -280,7 +287,17 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     },
     stop: () => undefined,
   };
-  return { media, transports, played, screens, microphones, outputs, volumes, cameras };
+  return {
+    media,
+    transports,
+    played,
+    screens,
+    microphones,
+    outputs,
+    volumes,
+    cameras,
+    cameraFailures,
+  };
 }
 
 function makeCall(options: {
@@ -346,10 +363,17 @@ function makeCall(options: {
   const store = new MemorySessionStore();
   store.save(liveSession());
   const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
-  const { media, transports, played, screens, microphones, outputs, volumes, cameras } = fakeMedia(
-    options.unreachableSendTransports ?? 0,
-    options.microphone ?? "ok",
-  );
+  const {
+    media,
+    transports,
+    played,
+    screens,
+    microphones,
+    outputs,
+    volumes,
+    cameras,
+    cameraFailures,
+  } = fakeMedia(options.unreachableSendTransports ?? 0, options.microphone ?? "ok");
   const call = new VoiceCall({
     client,
     media,
@@ -372,6 +396,7 @@ function makeCall(options: {
     outputs,
     volumes,
     cameras,
+    cameraFailures,
     timers,
   };
 }
@@ -589,6 +614,29 @@ describe("VoiceCall", () => {
     call.stopCamera();
     expect(call.state.localCamera).toBeNull();
     expect(transports[0]?.closedProducers).toContain("p-camera");
+  });
+
+  it("keeps why the camera failed until it turns on, is dismissed, or the call ends", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, cameraFailures } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    cameraFailures.push("none");
+    await expect(call.startCamera()).rejects.toMatchObject({ failure: "none" });
+    expect(call.state.cameraError).toBe("none");
+    expect(call.state.localCamera).toBeNull();
+    call.clearCameraError();
+    expect(call.state.cameraError).toBeNull();
+    cameraFailures.push("denied");
+    await expect(call.startCamera()).rejects.toBeInstanceOf(CameraError);
+    expect(call.state.cameraError).toBe("denied");
+    await call.startCamera();
+    expect(call.state.cameraError).toBeNull();
+    expect(call.state.localCamera).not.toBeNull();
+    call.stopCamera();
+    cameraFailures.push("failed");
+    await expect(call.startCamera()).rejects.toMatchObject({ failure: "failed" });
+    call.leave();
+    expect(call.state.cameraError).toBeNull();
   });
 
   it("offers no camera where the channel does not allow one", async () => {
