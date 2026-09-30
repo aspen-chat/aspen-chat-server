@@ -662,7 +662,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   forever and "unknown" or "unavailable" never flashes before the record arrives; people are
   named through `PersonName` and `PersonAvatar` for that. A picture keeps its room while it
   loads: an uploader measures it (`measurePicture`) and the attachment records its width and
-  height, and a picture without them keeps a conservative box.
+  height, a link preview's picture carries the size the server read from its header
+  (`imageWidth`, `imageHeight`), and a picture without either keeps a conservative box.
 - Components come from `react-aria-components`. Do not reach for `react-aria` hooks or another
   component library unless React Aria genuinely lacks the primitive; if so, say why in a comment.
 - Every screen and dialog passes axe (`@axe-core/playwright`): `e2e/accessibility.spec.ts`
