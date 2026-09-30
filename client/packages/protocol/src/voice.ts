@@ -43,7 +43,19 @@ export const READY_TIMEOUT_MS = 6_000;
  * producer says otherwise), without discontinuous transmission, which cuts quiet passages of
  * music, and at 128 kbps, where cymbals and other dense sound stay clean.
  */
-export const SCREEN_AUDIO_CODEC = {
+export /**
+ * A shared screen is sent at the best quality the network carries: one layer allowed up to
+ * 25 Mbps at 60 frames a second, the ceiling rather than a target, since the encoder spends only
+ * what the picture needs and the connection's bandwidth estimate brings it down.
+ */
+const SCREEN_ENCODING = { maxBitrate: 25_000_000, maxFramerate: 60 };
+/**
+ * The encoder starts at 10 Mbps (in kbps here) rather than the browser's few hundred kbps, which
+ * it climbs from slowly, so a share is sharp from its first seconds.
+ */
+const SCREEN_VIDEO_CODEC = { videoGoogleStartBitrate: 10_000 };
+
+const SCREEN_AUDIO_CODEC = {
   opusStereo: true,
   opusDtx: false,
   opusMaxAverageBitrate: 128_000,
@@ -165,7 +177,13 @@ export interface VoiceTransport {
   produce(options: {
     track: MediaStreamTrack;
     appData: Record<string, unknown>;
-    codecOptions?: { opusStereo?: boolean; opusDtx?: boolean; opusMaxAverageBitrate?: number };
+    encodings?: { maxBitrate?: number; maxFramerate?: number }[];
+    codecOptions?: {
+      opusStereo?: boolean;
+      opusDtx?: boolean;
+      opusMaxAverageBitrate?: number;
+      videoGoogleStartBitrate?: number;
+    };
   }): Promise<{
     id: string;
     close(): void;
@@ -578,7 +596,12 @@ export class VoiceCall {
     });
     try {
       this.#screenProducers.push(
-        await transport.produce({ track: capture.video, appData: { source: "screen" } }),
+        await transport.produce({
+          track: capture.video,
+          appData: { source: "screen" },
+          encodings: [SCREEN_ENCODING],
+          codecOptions: SCREEN_VIDEO_CODEC,
+        }),
       );
       if (audio !== undefined) {
         const produced = await this.#produceRtp(signal, "screenAudio");

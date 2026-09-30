@@ -27,6 +27,17 @@ export function canChooseOutput(): boolean {
  * gain node that scales it. Web Audio is used because an element's own volume stops at 1 and
  * a quiet person needs more.
  */
+/**
+ * A shared screen is captured at its own full resolution, up to 4K, and 60 frames a second:
+ * the best the screen gives, which the encoder and each viewer's bandwidth then carry as far
+ * as they can.
+ */
+const SCREEN_QUALITY: MediaTrackConstraints = {
+  width: { max: 3840 },
+  height: { max: 2160 },
+  frameRate: { ideal: 60, max: 60 },
+};
+
 interface Player {
   audio: HTMLAudioElement;
   /**
@@ -103,11 +114,17 @@ export function browserVoiceMedia(): VoiceMedia {
     async getScreen(): Promise<ScreenCapture> {
       // Audio is asked for so a shared tab or window can bring its sound; browsers that
       // cannot capture it simply return none.
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: SCREEN_QUALITY,
+        audio: true,
+      });
       const [video] = stream.getVideoTracks();
       if (video === undefined) {
         throw new Error("no screen");
       }
+      // Some capturers (the desktop shell's among them) hand back a track made without the
+      // request's constraints; asked again, it takes them.
+      await video.applyConstraints(SCREEN_QUALITY).catch(() => undefined);
       return { video, audio: stream.getAudioTracks()[0] ?? null };
     },
     play(consumerId: string, track: MediaStreamTrack): void {

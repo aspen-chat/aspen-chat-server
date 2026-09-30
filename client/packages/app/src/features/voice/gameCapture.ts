@@ -203,7 +203,7 @@ export function gameCaptureShare(
           width: 1920,
           height: 1080,
           fps: 60,
-          bitrateKbps: 6000,
+          bitrateKbps: 12000,
           rtp: targets.video,
           ...(audio === null || targets.audio === null
             ? {}

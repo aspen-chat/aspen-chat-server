@@ -27,6 +27,13 @@ use voice_protocol::signal::{
     TransportDirection,
 };
 
+/// What a transport assumes a participant can receive before it has measured, in bits per
+/// second: enough for a screen share at full quality from its first seconds. The voice server
+/// assumes its network can carry the best picture and lets each receiver's own bandwidth
+/// estimate bring it down, rather than starting low (mediasoup's default is 600 kbps) and
+/// making every share blurry while the estimate climbs.
+const INITIAL_OUTGOING_BITRATE: u64 = 10_000_000;
+
 /// Volumes above this, in dBvo, count as speaking.
 const SPEAKING_THRESHOLD_DBVO: i8 = -50;
 /// How often the observer reports volumes; speaking flips at most this often.
@@ -591,6 +598,7 @@ impl Rooms {
         options.enable_udp = true;
         options.enable_tcp = true;
         options.prefer_udp = true;
+        options.initial_available_outgoing_bitrate = INITIAL_OUTGOING_BITRATE;
         let transport = room.router.create_webrtc_transport(options).await?;
         let message = ServerMessage::TransportCreated {
             direction,

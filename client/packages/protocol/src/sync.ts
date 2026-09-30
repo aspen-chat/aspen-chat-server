@@ -2333,7 +2333,9 @@ export class AspenSync {
           },
         }),
         this.#client.api.GET("/api/v1/users/@me/dms", {
-          params: { query: { include: ["users", "readStates", "mutes", "notifications", "voice"] } },
+          params: {
+            query: { include: ["users", "readStates", "mutes", "notifications", "voice"] },
+          },
         }),
         this.#client.api.GET("/api/v1/users/@me/admin"),
         this.#client.api.GET("/api/v1/users/@me/blocks", {

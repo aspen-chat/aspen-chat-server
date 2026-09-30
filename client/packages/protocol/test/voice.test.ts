@@ -550,8 +550,10 @@ describe("VoiceCall", () => {
       "video:screen",
       "audio:screenAudio",
     ]);
-    // the screen's sound goes out in stereo at a music bitrate; the microphone keeps the defaults
+    // the picture starts at a high bitrate rather than climbing to it, the screen's sound goes
+    // out in stereo at a music bitrate, and the microphone keeps the defaults
     expect(transports[0]?.codecOptions).toEqual([
+      { source: "screen", videoGoogleStartBitrate: 10_000 },
       { source: "screenAudio", opusStereo: true, opusDtx: false, opusMaxAverageBitrate: 128_000 },
     ]);
     expect(screens[0]?.video.contentHint).toBe("");
