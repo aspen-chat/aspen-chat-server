@@ -29,6 +29,12 @@ export function canChooseOutput(): boolean {
  */
 interface Player {
   audio: HTMLAudioElement;
+  /**
+   * The remote stream itself, playing muted. Chromium feeds a remote WebRTC track into Web Audio
+   * only while that track also plays through a media element; without one the graph hears
+   * silence, while Firefox needs none. Playing it muted costs nothing and is heard nowhere.
+   */
+  pull: HTMLAudioElement | null;
   source: MediaStreamAudioSourceNode | null;
   gain: GainNode | null;
   destination: MediaStreamAudioDestinationNode | null;
@@ -110,9 +116,14 @@ export function browserVoiceMedia(): VoiceMedia {
       audio.dataset.voiceConsumer = consumerId;
       audio.style.display = "none";
       const stream = new MediaStream([track]);
-      const player: Player = { audio, source: null, gain: null, destination: null };
+      const player: Player = { audio, pull: null, source: null, gain: null, destination: null };
       const ctx = audioContext();
       if (ctx !== null) {
+        const pull = document.createElement("audio");
+        pull.muted = true;
+        pull.srcObject = stream;
+        void pull.play().catch(() => undefined);
+        player.pull = pull;
         player.source = ctx.createMediaStreamSource(stream);
         player.gain = ctx.createGain();
         player.destination = ctx.createMediaStreamDestination();
@@ -135,6 +146,9 @@ export function browserVoiceMedia(): VoiceMedia {
         player.gain?.disconnect();
         player.audio.srcObject = null;
         player.audio.remove();
+        if (player.pull !== null) {
+          player.pull.srcObject = null;
+        }
         players.delete(consumerId);
       }
     },

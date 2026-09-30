@@ -260,7 +260,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   their volume, nothing the server or they can see), and the moderation actions. Both go
   through `AspenSync.setUserVolume` and `setUserMuted`, which apply `effectiveUserVolume` to
   whatever of theirs is playing; playback runs through a Web Audio gain node because an
-  element's own volume stops at 1. `CallBar` above the user footer holds mute, deafen, share, and leave. Clicking a
+  element's own volume stops at 1. Chromium, and so the desktop app, feeds a remote WebRTC
+  track into Web Audio only while the track also plays through a media element, so each
+  participant's raw stream also plays through a muted element (`browserMedia.ts`); without
+  it the graph is silent there, while Firefox plays either way. `CallBar` above the user footer holds mute, deafen, share, and leave. Clicking a
   voice channel row joins it (a call the user is already in, or joining, is left alone) and
   opens `VoiceScreen`, the channel's screen in place of a
   history: the shared screens (one large, the others as thumbnails to pick), everyone in the
