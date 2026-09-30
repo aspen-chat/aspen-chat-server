@@ -53,6 +53,11 @@ test.describe("registration", () => {
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(page.getByText("The passwords do not match.")).toBeVisible();
     expect(called).toBe(false);
+    // Corrected, the form submits again: the error does not keep the field invalid.
+    await page.getByLabel("Confirm password").fill("hunter22!");
+    await expect(page.getByText("The passwords do not match.")).toHaveCount(0);
+    await page.getByRole("button", { name: "Create account" }).click();
+    await expect.poll(() => called).toBe(true);
   });
 
   test("attaches a taken username to the username field", async ({ page }) => {

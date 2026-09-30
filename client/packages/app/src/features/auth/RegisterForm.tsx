@@ -6,13 +6,7 @@ import { useAuthMethods } from "@/features/auth/authMethods";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
-
-/**
- * Mirrors the server's password rule so the form can refuse obviously short passwords before a
- * round trip. The server remains the authority and reports `passwordRequirementsNotMet` when
- * the two disagree.
- */
-const PASSWORD_MIN_LENGTH = 8;
+import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
 
 /**
  * Creates an account, then signs in with the same credentials so the user lands in the app
@@ -99,6 +93,11 @@ export function RegisterForm({
       {askInvite && (
         <TextField
           name="invite"
+          // A field marked invalid blocks the form's next submission, so its error goes as soon
+          // as the field is edited.
+          onChange={() => {
+            setInviteError(null);
+          }}
           isRequired={inviteRequired}
           {...(initialInvite === undefined ? {} : { defaultValue: initialInvite })}
           autoComplete="off"
@@ -118,6 +117,11 @@ export function RegisterForm({
       )}
       <TextField
         name="username"
+        // A field marked invalid blocks the form's next submission, so its error goes as soon
+        // as the field is edited.
+        onChange={() => {
+          setUsernameError(null);
+        }}
         isRequired
         maxLength={32}
         autoComplete="username"
@@ -130,6 +134,11 @@ export function RegisterForm({
       </TextField>
       <TextField
         name="password"
+        // A field marked invalid blocks the form's next submission, so its error goes as soon
+        // as the field is edited.
+        onChange={() => {
+          setPasswordError(null);
+        }}
         type="password"
         isRequired
         autoComplete="new-password"
@@ -148,6 +157,11 @@ export function RegisterForm({
       </TextField>
       <TextField
         name="confirmPassword"
+        // A field marked invalid blocks the form's next submission, so its error goes as soon
+        // as the field is edited.
+        onChange={() => {
+          setConfirmError(null);
+        }}
         type="password"
         isRequired
         autoComplete="new-password"
