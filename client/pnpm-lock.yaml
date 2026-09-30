@@ -56,6 +56,9 @@ importers:
       '@capacitor/push-notifications':
         specifier: ^8.1.2
         version: 8.1.2(@capacitor/core@8.5.1)
+      '@capacitor/screen-orientation':
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.5.1)
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -174,6 +177,9 @@ importers:
       '@capacitor/push-notifications':
         specifier: ^8.1.2
         version: 8.1.2(@capacitor/core@8.5.1)
+      '@capacitor/screen-orientation':
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.5.1)
     devDependencies:
       '@capacitor/cli':
         specifier: ^8.5.1
@@ -370,6 +376,11 @@ packages:
 
   '@capacitor/push-notifications@8.1.2':
     resolution: {integrity: sha512-TQl4XxqJfNF+KbSYBFMXYYT5WXUaleVKXlByhh/8+KySMVNjp+l5OqAUoGe/sY1IAnGXEuUeCjA/WLZEVvGwrA==}
+    peerDependencies:
+      '@capacitor/core': '>=8.0.0'
+
+  '@capacitor/screen-orientation@8.0.1':
+    resolution: {integrity: sha512-DPz/1YGmlAUDMg2ON+AGJp1eFn9IfVNP9VKI5zIU+jD5xAZ4JGxUDlY9MDCvEPQs7UCD53NduJpqvqhcnb32Kw==}
     peerDependencies:
       '@capacitor/core': '>=8.0.0'
 
@@ -4058,6 +4069,10 @@ snapshots:
       '@capacitor/core': 8.5.1
 
   '@capacitor/push-notifications@8.1.2(@capacitor/core@8.5.1)':
+    dependencies:
+      '@capacitor/core': 8.5.1
+
+  '@capacitor/screen-orientation@8.0.1(@capacitor/core@8.5.1)':
     dependencies:
       '@capacitor/core': 8.5.1
 

@@ -260,7 +260,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   the Fullscreen API where it works and otherwise by filling the app's window, left the same
   ways or with Escape; the mobile apps always fill the window, since Capacitor's WebView
   dismisses any element that asks for the whole screen, and there the system's back gesture
-  leaves it too. On a narrow screen the call bar shows under the voice channel from the moment
+  leaves it too. While full screen, the phone turns to the picture's orientation
+  (`@capacitor/screen-orientation`, `useOrientationLock`) and is freed again after; a desktop
+  refuses the lock and nothing changes. On a narrow screen the call bar shows under the voice channel from the moment
   the user presses Join, so joining and a failure to join are visible there. `ChannelHeader` is the bar both
   channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
   (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's

@@ -1,12 +1,13 @@
 import { CornersInIcon, CornersOutIcon } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
-import { isFullScreenKey, useFullScreen } from "@/features/voice/fullScreen";
+import { isFullScreenKey, useFullScreen, useOrientationLock } from "@/features/voice/fullScreen";
 import { useMessages } from "@/i18n/context";
 
 /**
  * One shared screen, playing. The audio that came with it is played by the call itself, so the
  * element is muted and only shows the picture. A local preview is the sender's own track.
- * An `expandable` tile can be made full screen with its button, a double click, or the F key.
+ * An `expandable` tile can be made full screen with its button, a double click, or the F key,
+ * which also turns a phone to the picture's orientation.
  */
 export function ScreenTile({
   track,
@@ -24,6 +25,7 @@ export function ScreenTile({
   const video = useRef<HTMLVideoElement>(null);
   const full = useFullScreen(figure);
   const { toggle } = full;
+  useOrientationLock(full.state, video);
   useEffect(() => {
     if (!expandable) {
       return;

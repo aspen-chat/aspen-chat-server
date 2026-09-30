@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFullScreenKey } from "./fullScreen";
+import { isFullScreenKey, orientationFor } from "./fullScreen";
 
 /** A keydown pressed on `target`, as it reaches the window. */
 function press(init: KeyboardEventInit, target: Element = document.body): KeyboardEvent {
@@ -46,5 +46,14 @@ describe("isFullScreenKey", () => {
         false,
       );
     }
+  });
+});
+
+describe("orientationFor", () => {
+  it("turns to the picture's shape, landscape for a square, and nowhere before it has one", () => {
+    expect(orientationFor(1920, 1080)).toBe("landscape");
+    expect(orientationFor(1080, 2400)).toBe("portrait");
+    expect(orientationFor(720, 720)).toBe("landscape");
+    expect(orientationFor(0, 0)).toBeNull();
   });
 });

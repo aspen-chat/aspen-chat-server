@@ -106,3 +106,39 @@ export function useFullScreen(element: RefObject<HTMLElement | null>) {
 
   return { state, toggle };
 }
+
+/** The orientation that shows a picture of this size largest, or none before it has one. */
+export function orientationFor(width: number, height: number): "landscape" | "portrait" | null {
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+  return width >= height ? "landscape" : "portrait";
+}
+
+/**
+ * Turns the screen to the picture's orientation while it is full screen, and frees it again
+ * after. Where the orientation cannot be locked (a desktop, a browser outside full screen), the
+ * request is refused and nothing changes.
+ */
+export function useOrientationLock(
+  state: FullScreenState,
+  video: RefObject<HTMLVideoElement | null>,
+) {
+  useEffect(() => {
+    const element = video.current;
+    const orientation =
+      state === "off" || element === null
+        ? null
+        : orientationFor(element.videoWidth, element.videoHeight);
+    if (orientation === null) {
+      return;
+    }
+    const plugin = import("@capacitor/screen-orientation").then(
+      ({ ScreenOrientation }) => ScreenOrientation,
+    );
+    void plugin.then((screen) => screen.lock({ orientation })).catch(() => undefined);
+    return () => {
+      void plugin.then((screen) => screen.unlock()).catch(() => undefined);
+    };
+  }, [state, video]);
+}
