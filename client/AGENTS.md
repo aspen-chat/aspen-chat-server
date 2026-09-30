@@ -524,6 +524,29 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   Its DM is read-only: `RecordStore.channelAccess` gives only View channel there, as in a
   blocked DM (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's
   record arrives), and the Composer shows a note in place of the box.
+- Motion. Every animation and transition takes its duration from the tokens in `styles.css`
+  (`--motion-fast`, `--motion-base`, `--motion-slow`, `--motion-highlight`), which scale with
+  the account preference `MOTION_SPEED` (`look.motionSpeed`, 0 for off to 2 for twice as fast,
+  set by `MotionSpeedSlider` in Settings, Appearance): `useFollowMotionSpeed` writes
+  `--motion-scale` on `<html>`, and `data-motion="off"` there stops every animation and
+  transition but those marked `data-motion-essential`. Tailwind's `transition-*` utilities take
+  the scaled duration too. At normal speed nothing takes longer than 200ms but a highlight. A
+  device set to reduce motion keeps fades and drops travel and growth (the distance and scale
+  tokens go to nothing). The utilities are `motion-backdrop` and `motion-dialog` for modals
+  (every modal has them through `overlayClass` and the modal classes), `motion-rise`,
+  `motion-drop`, `motion-fade`, `motion-grow`, and `motion-from-end` for things that appear,
+  `motion-pop` for something that changed, `motion-flash` for a message gone to, and
+  `motion-collapse` for the space a deleted message leaves; every popover, menu, select list,
+  and tooltip moves by one rule on `[data-placement]`, so a new one needs nothing. What moves:
+  modals and overlays; messages that arrive while shown (`RecordStore.arrivedAt`), never
+  history; the space of a message deleted while shown closing (`useDeparting`,
+  `RecordStore.departedAt`); a message gone to flashing; reaction chips and mention badges
+  popping as they grow (`useGrowthKey`); channels revealed by unfolding a category and
+  communities of a folder opened here dropping in; rows gliding to new places when an order
+  changes (`useReorderGlide`); the thread panel and member list sliding in; call tiles, the
+  composer's files (with an upload progress bar, from `uploadAttachment`'s `onProgress`), the
+  sync banner, and the Jump to latest pill appearing; speaking rings fading. Code that moves
+  things itself reads `useMotion` (off, reduced, scale).
 - The channel list (and the DM list in its place), the member list, and the thread panel are
   `ResizablePane`s (`src/features/layout`): each has an edge, a `separator`, that the reader
   drags, moves with the arrow keys (Shift for bigger steps, Home and End for the bounds), or

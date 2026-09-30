@@ -333,7 +333,7 @@ function ParticipantTile({
         }
       }}
       className={
-        "relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 " +
+        "motion-grow relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 " +
         // Twice an avatar tile's width where four columns fit, the whole row where they do not.
         (camera === null ? "" : "col-span-full @min-[33rem]:col-span-4")
       }
@@ -401,7 +401,7 @@ function RingingTile({ userId }: { userId: string }) {
   return (
     <li
       data-ringing={userId}
-      className="relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 brightness-75"
+      className="motion-grow relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 brightness-75"
     >
       <Avatar name={name} iconId={user?.icon} size="lg" />
       <span className="max-w-full truncate text-sm">{name}</span>
@@ -423,7 +423,7 @@ function TileAvatar({
   return (
     <span
       className={
-        "rounded-full " +
+        "rounded-full transition-shadow " +
         (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
       }
       role={speaking ? "img" : undefined}
@@ -456,7 +456,7 @@ function CameraVideo({
       data-camera
       data-speaking={speaking ? "true" : undefined}
       className={
-        "w-full rounded-lg " +
+        "w-full rounded-lg transition-shadow " +
         (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
       }
     >

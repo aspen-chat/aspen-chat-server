@@ -256,6 +256,24 @@ export const LANGUAGE: PreferenceDefinition<string> = {
   parse: (raw) => (typeof raw === "string" ? raw : undefined),
 };
 
+/** The fastest animations may be made, as a multiple of their normal speed. */
+export const MAX_MOTION_SPEED = 2;
+
+/**
+ * How fast the app's animations run, as a multiple of their normal speed, which keeps most
+ * within 200 milliseconds; 0 turns them off. It follows the account, so every device moves
+ * alike, while each device's own "reduce motion" setting still keeps movement out of its fades.
+ */
+export const MOTION_SPEED: PreferenceDefinition<number> = {
+  key: "look.motionSpeed",
+  scope: "account",
+  fallback: 1,
+  parse: (raw) =>
+    typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_MOTION_SPEED
+      ? raw
+      : undefined,
+};
+
 /** Whether this user has silenced one other person for themself, keeping their volume for later. */
 export function userMuted(userId: string): PreferenceDefinition<boolean> {
   return {

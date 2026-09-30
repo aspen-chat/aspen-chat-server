@@ -352,3 +352,197 @@ body {
     }
   }
 }
+
+/*
+ * Motion. Every animation and transition takes its duration from these tokens, which follow the
+ * reader's animation speed (`MOTION_SPEED`): `MotionSpeed` sets `--motion-scale` on <html>, 1 at
+ * normal speed and larger when slower, and `data-motion="off"` when animations are off, which
+ * stops every animation and transition but those marked `data-motion-essential` (whose motion
+ * says something, like which way a file travels). At normal speed nothing takes longer than
+ * 200ms but a highlight, which must last long enough to be seen.
+ *
+ * Where the device asks to reduce motion, things fade but do not travel or grow: the distances
+ * and scales below go to nothing, and a collapse is at once.
+ */
+:root {
+  --motion-scale: 1;
+  --motion-fast: calc(120ms * var(--motion-scale));
+  --motion-base: calc(150ms * var(--motion-scale));
+  --motion-slow: calc(200ms * var(--motion-scale));
+  --motion-highlight: calc(1200ms * var(--motion-scale));
+  --motion-collapse: var(--motion-base);
+  --motion-distance: 4px;
+  --motion-panel-distance: 24px;
+  --motion-zoom: 0.96;
+  --motion-pop: 1.18;
+  --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-distance: 0px;
+    --motion-panel-distance: 0px;
+    --motion-zoom: 1;
+    --motion-pop: 1;
+    --motion-collapse: 0ms;
+  }
+}
+
+:root[data-motion="off"] *:not([data-motion-essential]),
+:root[data-motion="off"] *:not([data-motion-essential])::before,
+:root[data-motion="off"] *:not([data-motion-essential])::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Tailwind's `transition-*` utilities take the scaled duration too. */
+@theme {
+  --default-transition-duration: var(--motion-base);
+}
+
+@keyframes aspen-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes aspen-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* From `--from-x`/`--from-y` and `--from-scale`, faded in. */
+@keyframes aspen-arrive {
+  from {
+    opacity: 0;
+    transform: translate(var(--from-x, 0), var(--from-y, 0)) scale(var(--from-scale, 1));
+  }
+}
+
+/* The way back to where `aspen-arrive` came from. */
+@keyframes aspen-depart {
+  to {
+    opacity: 0;
+    transform: translate(var(--from-x, 0), var(--from-y, 0)) scale(var(--from-scale, 1));
+  }
+}
+
+@keyframes aspen-pop {
+  50% {
+    transform: scale(var(--motion-pop));
+  }
+}
+
+@keyframes aspen-flash {
+  from {
+    background-color: var(--color-accent-soft);
+  }
+}
+
+/* A modal's backdrop. */
+@utility motion-backdrop {
+  &[data-entering] {
+    animation: aspen-fade-in var(--motion-base) var(--motion-ease-out);
+  }
+  &[data-exiting] {
+    animation: aspen-fade-out var(--motion-fast) var(--motion-ease-in) forwards;
+  }
+}
+
+/* A modal: it grows a little into place, and shrinks back as it goes. */
+@utility motion-dialog {
+  --from-scale: var(--motion-zoom);
+  &[data-entering] {
+    animation: aspen-arrive var(--motion-base) var(--motion-ease-out);
+  }
+  &[data-exiting] {
+    animation: aspen-depart var(--motion-fast) var(--motion-ease-in) forwards;
+  }
+}
+
+/* Every popover, menu, select list, and tooltip, which React Aria marks with the side it opened
+   on (`data-placement`): it comes a few pixels from the control that opened it. */
+[data-placement] {
+  --from-y: calc(-1 * var(--motion-distance));
+  &[data-placement="top"] {
+    --from-y: var(--motion-distance);
+  }
+  &[data-placement="left"] {
+    --from-y: 0px;
+    --from-x: var(--motion-distance);
+  }
+  &[data-placement="right"] {
+    --from-y: 0px;
+    --from-x: calc(-1 * var(--motion-distance));
+  }
+  &[data-entering] {
+    animation: aspen-arrive var(--motion-fast) var(--motion-ease-out);
+  }
+  &[data-exiting] {
+    animation: aspen-fade-out var(--motion-fast) var(--motion-ease-in) forwards;
+  }
+}
+
+/* Something that appears in place, for as long as it is shown: it fades in, rising the given
+   way as it does. */
+@utility motion-rise {
+  --from-y: var(--motion-distance);
+  animation: aspen-arrive var(--motion-base) var(--motion-ease-out);
+}
+
+@utility motion-drop {
+  --from-y: calc(-1 * var(--motion-distance));
+  animation: aspen-arrive var(--motion-base) var(--motion-ease-out);
+}
+
+@utility motion-fade {
+  animation: aspen-fade-in var(--motion-base) var(--motion-ease-out);
+}
+
+@utility motion-grow {
+  --from-scale: var(--motion-zoom);
+  animation: aspen-arrive var(--motion-base) var(--motion-ease-out);
+}
+
+/* A panel at the inline end, sliding in from that edge. */
+@utility motion-from-end {
+  --from-x: var(--motion-panel-distance);
+  &:dir(rtl) {
+    --from-x: calc(-1 * var(--motion-panel-distance));
+  }
+  animation: aspen-arrive var(--motion-slow) var(--motion-ease-out);
+}
+
+/* Drawing the eye to something that changed: a quick swell. */
+@utility motion-pop {
+  animation: aspen-pop var(--motion-slow) var(--motion-ease-out);
+}
+
+/* A message just gone to: highlighted, the highlight fading. With animations off it stays. */
+@utility motion-flash {
+  animation: aspen-flash var(--motion-highlight) var(--motion-ease-in) both;
+  :root[data-motion="off"] & {
+    background-color: var(--color-accent-soft);
+  }
+}
+
+/* The space a deleted message leaves, closing: from its height, `--from-h`, to nothing, taking
+   the list's gap between messages (`--collapse-gap`) with it. */
+@keyframes aspen-collapse {
+  from {
+    height: var(--from-h);
+  }
+  to {
+    height: 0;
+    margin-top: var(--collapse-gap, 0px);
+  }
+}
+
+@utility motion-collapse {
+  overflow: hidden;
+  height: 0;
+  margin-top: var(--collapse-gap, 0px);
+  animation: aspen-collapse var(--motion-collapse) var(--motion-ease-out) both;
+}

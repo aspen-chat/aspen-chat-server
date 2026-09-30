@@ -24,7 +24,7 @@ export function MemberList({ communityId }: { communityId: string }) {
     // The list scrolls within the landmark, so the pane's edge stays along its whole side.
     <aside
       aria-label={m.membersLabel}
-      className="relative flex w-full shrink-0 flex-col border-s border-line bg-surface-raised"
+      className="motion-from-end relative flex w-full shrink-0 flex-col border-s border-line bg-surface-raised"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3">
         <MemberGroup

@@ -1258,3 +1258,19 @@ export async function signInToWorld(
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   return publish;
 }
+
+/**
+ * Waits for every animation that ends to end, so what is checked (colour contrast, above all)
+ * is what stays on screen rather than a frame of a fade. Endless ones, such as a skeleton's
+ * pulse, are left running.
+ */
+export async function settleAnimations(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}

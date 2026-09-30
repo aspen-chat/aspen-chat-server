@@ -261,6 +261,8 @@ export class AspenSync {
   readonly #stream: EventStream;
   readonly #now: () => number;
   readonly #uploadFetch: typeof globalThis.fetch;
+  /** Whether uploads go through a `fetch` of the caller's rather than the browser's own. */
+  readonly #customUpload: boolean;
   readonly #listeners = new Set<SyncListener>();
   #status: SyncStatus = "stopped";
   #lastError: Problem | null = null;
@@ -299,6 +301,7 @@ export class AspenSync {
     this.store = options.store ?? new RecordStore({ now: options.now ?? (() => Date.now()) });
     this.#now = options.now ?? (() => Date.now());
     this.#uploadFetch = options.uploadFetch ?? ((input, init) => globalThis.fetch(input, init));
+    this.#customUpload = options.uploadFetch !== undefined;
     this.#random = options.random ?? Math.random;
     const voiceOptions: ConstructorParameters<typeof VoiceCall>[0] = {
       client: options.client,
@@ -555,6 +558,8 @@ export class AspenSync {
     file: File,
     /** A picture's size in pixels, which readers use to make room for it before it loads. */
     size?: { readonly width: number; readonly height: number },
+    /** Told how many of the file's bytes have reached storage, as they go. */
+    onProgress?: (sent: number, total: number) => void,
   ): Promise<Attachment> {
     const init = await this.#client.api.POST("/api/v1/attachments", {
       body: {
@@ -566,12 +571,16 @@ export class AspenSync {
     if (init.data === undefined) {
       throw new ApiProblemError(problemOf(init.error, init.response));
     }
-    const put = await this.#uploadFetch(init.data.uploadUrl, {
-      method: "PUT",
-      headers: { "content-type": file.type || "application/octet-stream" },
-      body: file,
-    });
-    if (!put.ok) {
+    const contentType = file.type || "application/octet-stream";
+    const put =
+      onProgress !== undefined && !this.#customUpload && typeof XMLHttpRequest !== "undefined"
+        ? await putWithProgress(init.data.uploadUrl, file, contentType, onProgress)
+        : await this.#uploadFetch(init.data.uploadUrl, {
+            method: "PUT",
+            headers: { "content-type": contentType },
+            body: file,
+          }).then((response) => ({ status: response.status, statusText: response.statusText }));
+    if (put.status < 200 || put.status >= 300) {
       throw new ApiProblemError(
         transportProblem(`upload failed: ${String(put.status)} ${put.statusText}`, put.status),
       );
@@ -2877,4 +2886,32 @@ function pageStorage(): PreferenceStorage | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * `PUT`s `body` to storage with `XMLHttpRequest`, which, unlike `fetch`, says how much of a
+ * request body has been sent. A failure to reach storage at all rejects, as `fetch`'s would.
+ */
+function putWithProgress(
+  url: string,
+  body: Blob,
+  contentType: string,
+  onProgress: (sent: number, total: number) => void,
+): Promise<{ status: number; statusText: string }> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", url);
+    request.setRequestHeader("content-type", contentType);
+    request.upload.onprogress = (event) => {
+      onProgress(event.loaded, event.lengthComputable ? event.total : body.size);
+    };
+    request.onload = () => {
+      resolve({ status: request.status, statusText: request.statusText });
+    };
+    request.onerror = () => {
+      reject(new TypeError("the upload could not reach storage"));
+    };
+    request.onabort = request.onerror;
+    request.send(body);
+  });
 }

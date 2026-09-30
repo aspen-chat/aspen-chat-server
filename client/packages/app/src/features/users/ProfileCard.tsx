@@ -470,7 +470,7 @@ export function ProfilePopover({
       <Popover
         placement={placement}
         {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
-        className="rounded-lg border border-line bg-surface shadow-lg entering:animate-in exiting:animate-out"
+        className="rounded-lg border border-line bg-surface shadow-lg"
       >
         <Dialog
           aria-label={format(m.profile.cardLabel, { name: displayNameOf(user) })}

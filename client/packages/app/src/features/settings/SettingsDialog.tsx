@@ -50,6 +50,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { PlaneColumns } from "@/features/layout/PlaneColumns";
 import { useMessages } from "@/i18n/context";
 import { ThemePicker } from "@/theme/ThemePicker";
+import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
 
 /**
  * The user's preferences: first the account's sign-in and security settings; then the
@@ -87,6 +88,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                       {m.settings.appearance}
                     </h3>
                     <ThemePicker />
+                    <MotionSpeedSlider />
                   </section>
                   <NotificationsSection />
                   <LanguageSection />

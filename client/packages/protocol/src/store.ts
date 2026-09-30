@@ -177,6 +177,9 @@ const EMPTY_IDS: readonly string[] = [];
 const NO_PERMISSIONS: PermissionSet = new Set();
 const DM_MODERATION: PermissionSet = new Set<Permission>(["viewChannel", "manageMessages"]);
 /** A one-to-one DM with someone the caller blocked: it can be read, and nothing more. */
+/** How many arrivals `arrivedAt`, and departures `departedAt`, remember. */
+const MAX_ARRIVALS = 200;
+
 const DM_BLOCKED: PermissionSet = new Set<Permission>(["viewChannel"]);
 const EMPTY_OVERRIDES: readonly never[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
@@ -272,6 +275,10 @@ export class RecordStore {
   readonly #categoryOverrides = new Map<string, CategoryOverride>();
   /** `channel -> message -> pin`, for the channels whose pins have been loaded. */
   readonly #pins = new Map<string, Map<string, Pin>>();
+  /** When messages that arrived while the app was open came, for drawing them arriving. */
+  readonly #arrivals = new Map<string, number>();
+  /** When messages deleted while the app was open went, for drawing them going. */
+  readonly #departures = new Map<string, number>();
   readonly #commands = new Map<string, readonly BotCommands[]>();
   /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
   readonly #memberRoles = new Map<string, readonly string[]>();
@@ -551,6 +558,19 @@ export class RecordStore {
         this.#setMemberRoles(membership.community, membership.user, membership.roles);
       }
     });
+  }
+
+  /**
+   * When a message arrived, if it came while the app was open, by the stream or as the caller
+   * sent it, rather than with a read of history; for drawing it arriving.
+   */
+  arrivedAt(messageId: string): number | undefined {
+    return this.#arrivals.get(messageId);
+  }
+
+  /** When a message was deleted, if that happened while the app was open; for drawing it going. */
+  departedAt(messageId: string): number | undefined {
+    return this.#departures.get(messageId);
   }
 
   /** Topic `pins:<channelId>`: the channel's pins in their order, or `undefined` until loaded. */
@@ -1418,6 +1438,7 @@ export class RecordStore {
   addMessage(message: Message): void {
     this.#batch(() => {
       if (!this.#messages.has(message.id)) {
+        this.#noteArrival(message.id);
         this.#putMessage(message);
       }
       this.#appendToWindow(message);
@@ -1839,6 +1860,9 @@ export class RecordStore {
         case "message":
           if (event.type === "create") {
             const message = created(event);
+            if (!this.#messages.has(message.id)) {
+              this.#noteArrival(message.id);
+            }
             this.#putMessage(message);
             this.#appendToWindow(message);
             this.#noteDmActivity(message.channelId, message.id);
@@ -1849,6 +1873,10 @@ export class RecordStore {
               this.#putMessage(mergePatch(message, event));
             }
           } else {
+            if (this.#messages.has(event.id)) {
+              this.#departures.set(event.id, this.#now());
+              this.#trimArrivals(this.#departures);
+            }
             this.#removeMessage(event.id);
           }
           break;
@@ -2446,6 +2474,22 @@ export class RecordStore {
    * state yet, one made since the caller's channels were last read, is unread from its start.
    * Threads keep no read state.
    */
+  /** Notes that a message arrived now, forgetting the oldest past `MAX_ARRIVALS`. */
+  #noteArrival(id: string): void {
+    this.#arrivals.set(id, this.#now());
+    this.#trimArrivals(this.#arrivals);
+  }
+
+  /** Forgets the oldest of `times` past `MAX_ARRIVALS`. */
+  #trimArrivals(times: Map<string, number>): void {
+    if (times.size > MAX_ARRIVALS) {
+      const oldest = times.keys().next().value;
+      if (oldest !== undefined) {
+        times.delete(oldest);
+      }
+    }
+  }
+
   #noteNewMessage(message: Message): void {
     const channel = this.#channels.get(message.channelId);
     if (channel === undefined || channel.ty === "thread") {

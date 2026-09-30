@@ -34,7 +34,7 @@ export function SuggestionList<S extends Suggestion>({
     return null;
   }
   return (
-    <div className="absolute bottom-full start-0 z-20 mb-1 flex max-h-72 w-80 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+    <div className="motion-rise absolute bottom-full start-0 z-20 mb-1 flex max-h-72 w-80 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg">
       {header}
       {suggestions.length > 0 && (
         <ul id={id} role="listbox" aria-label={label} className="flex flex-col">

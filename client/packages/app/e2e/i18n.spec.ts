@@ -13,6 +13,8 @@ async function chooseLanguage(page: Page, name: string) {
   const settings = page.getByRole("dialog", { name: "Settings", exact: true });
   await settings.getByRole("button", { name: /Show Aspen in/ }).click();
   await page.getByRole("option", { name }).click();
+  // The list closes before the next key reaches the dialog.
+  await expect(page.getByRole("listbox")).toHaveCount(0);
 }
 
 test("a language chosen in Settings shows at once and is asked of the server", async ({ page }) => {

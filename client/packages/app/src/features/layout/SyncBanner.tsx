@@ -18,7 +18,7 @@ export function SyncBanner() {
     <div
       role="status"
       className={
-        "flex items-center justify-center gap-3 px-3 py-1 text-sm " +
+        "motion-drop flex items-center justify-center gap-3 px-3 py-1 text-sm " +
         (failed ? "bg-danger-soft text-danger" : "bg-accent-soft text-ink")
       }
     >

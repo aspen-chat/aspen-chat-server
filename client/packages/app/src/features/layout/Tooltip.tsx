@@ -12,7 +12,7 @@ export function Tooltip({ text, children }: { text: string; children: ReactNode 
       {children}
       <AriaTooltip
         offset={6}
-        className="rounded-md border border-line bg-surface-raised px-2 py-1 text-xs text-ink shadow-md entering:animate-in exiting:animate-out"
+        className="rounded-md border border-line bg-surface-raised px-2 py-1 text-xs text-ink shadow-md"
       >
         <OverlayArrow>
           <svg

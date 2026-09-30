@@ -4,6 +4,7 @@ import {
   type EmojiReactions,
   type Reactions,
 } from "@aspen/protocol";
+import { useGrowthKey } from "@/features/layout/motion";
 import { SmileyIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
@@ -82,6 +83,8 @@ export function ReactionChips({
   const m = useMessages();
   const reactions = useReactions(messageId);
   const [listOpen, setListOpen] = useState(false);
+  // The emoji the message had when drawn; one added while it is on screen pops in.
+  const [first] = useState(() => new Set(reactions.keys()));
   if (reactions.size === 0) {
     return null;
   }
@@ -92,7 +95,13 @@ export function ReactionChips({
     <ul aria-label={m.reactionsLabel} className="mt-1 flex flex-wrap gap-1">
       {shown.map(({ emoji, reactions: r }) => (
         <li key={emoji}>
-          <ReactionChip messageId={messageId} emoji={emoji} reactions={r} canReact={canReact} />
+          <ReactionChip
+            messageId={messageId}
+            emoji={emoji}
+            reactions={r}
+            canReact={canReact}
+            fresh={!first.has(emoji)}
+          />
         </li>
       ))}
       {hidden > 0 && (
@@ -125,19 +134,23 @@ export function ReactionChips({
 
 /**
  * One emoji's chip. Its tooltip names the first `REACTION_SUMMARY_USERS` to react with it and
- * counts the rest.
+ * counts the rest. A chip `fresh` on a message already shown pops in, and its count pops each
+ * time it grows.
  */
 function ReactionChip({
   messageId,
   emoji,
   reactions,
   canReact,
+  fresh,
 }: {
   messageId: string;
   emoji: string;
   reactions: EmojiReactions;
   canReact: boolean;
+  fresh: boolean;
 }) {
+  const grown = useGrowthKey(reactions.count);
   const m = useMessages();
   const sync = useSync();
   const users = useUsers(reactions.users);
@@ -159,13 +172,19 @@ function ReactionChip({
           ).catch(() => undefined);
         }}
         className={
-          reactions.me
+          (fresh ? "motion-pop " : "") +
+          (reactions.me
             ? chipClass + " border-accent bg-accent-soft text-accent-strong"
-            : plainChipClass
+            : plainChipClass)
         }
       >
         <span>{emoji}</span>
-        <span className="tabular-nums">{reactions.count}</span>
+        <span
+          key={grown}
+          className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}
+        >
+          {reactions.count}
+        </span>
       </ToggleButton>
     </Tooltip>
   );

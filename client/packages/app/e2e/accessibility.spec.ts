@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { helper, signInToWorld } from "./world";
+import { helper, signInToWorld, settleAnimations } from "./world";
 
 /**
  * Every screen and dialog of the app, checked with axe against the WCAG rules it knows (ARIA,
@@ -15,6 +15,7 @@ import { helper, signInToWorld } from "./world";
  * beneath in its other states, and every other rule covers the popover.
  */
 async function problems(page: Page, where: string, popover: boolean): Promise<string[]> {
+  await settleAnimations(page);
   let builder = new AxeBuilder({ page });
   if (popover) {
     builder = builder.disableRules(["region"]);

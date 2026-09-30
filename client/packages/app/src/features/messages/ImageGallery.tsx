@@ -35,9 +35,9 @@ export function ImageGallery({
         }
       }}
       isDismissable
-      className="fixed inset-0 z-20 flex items-center justify-center bg-black/80 entering:animate-in exiting:animate-out"
+      className="fixed inset-0 z-20 flex items-center justify-center bg-black/80 motion-backdrop"
     >
-      <Modal className="h-full w-full outline-none">
+      <Modal className="h-full w-full outline-none motion-dialog">
         <Dialog aria-label={m.gallery.label} className="flex h-full w-full flex-col outline-none">
           {({ close }) => <GalleryBody pictures={pictures} initial={initial} close={close} />}
         </Dialog>

@@ -83,6 +83,8 @@ export function TransferLinks({
             strokeWidth={2}
             strokeDasharray="6 6"
             strokeLinejoin="round"
+            // The march says which way the file goes, so it keeps moving with animations off.
+            data-motion-essential
             className="animate-march stroke-accent motion-reduce:animate-none"
           />
         ))}

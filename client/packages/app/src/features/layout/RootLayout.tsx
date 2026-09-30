@@ -1,4 +1,5 @@
 import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-router";
+import { useFollowMotionSpeed } from "@/features/layout/motion";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
 import { useOneCallAtATime } from "@/api/calls";
@@ -79,6 +80,12 @@ function SignedOut() {
   );
 }
 
+/** Keeps the page moving at the reader's animation speed. */
+function FollowMotionSpeed() {
+  useFollowMotionSpeed();
+  return null;
+}
+
 /**
  * The signed-in app: the community rail beside the route. On a narrow screen a conversation
  * (a channel, a DM, a thread) takes the whole width, and the rail shows with the lists the
@@ -95,6 +102,7 @@ function SignedIn() {
       <NotifyOnMessages />
       <IncomingCalls />
       <FollowLanguagePreference />
+      <FollowMotionSpeed />
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />

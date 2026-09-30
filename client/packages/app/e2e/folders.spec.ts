@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { community, signInToWorld } from "./world";
+import { community, signInToWorld, settleAnimations } from "./world";
 
 /**
  * A folder on the community rail, against the stubbed world in `world.ts`, whose account
@@ -29,6 +29,7 @@ async function withFolder(page: Page) {
 }
 
 async function axeProblems(page: Page, popover = false): Promise<string[]> {
+  await settleAnimations(page);
   let builder = new AxeBuilder({ page });
   if (popover) {
     builder = builder.disableRules(["region"]);

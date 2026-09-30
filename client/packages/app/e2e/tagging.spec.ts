@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { bob, general, signInToWorld } from "./world";
+import { bob, general, signInToWorld, settleAnimations } from "./world";
 
 /**
  * Tagging, against the stubbed world in `world.ts`, where #roadmap holds two unread messages
@@ -71,6 +71,7 @@ test("a screen reader user tags someone from the keyboard alone", async ({ page 
   await expect(list).toHaveRole("listbox");
   await expect(list).toHaveAccessibleName("People and roles to tag");
   // The message box and its suggestions break no rule of ARIA or of accessible naming.
+  await settleAnimations(page);
   const audit = await new AxeBuilder({ page }).include("form:has(textarea)").analyze();
   expect(
     audit.violations.flatMap((v) =>

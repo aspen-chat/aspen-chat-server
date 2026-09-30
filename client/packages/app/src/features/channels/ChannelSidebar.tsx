@@ -1,4 +1,5 @@
 import { groupChannels, type Category, type Channel, type Community } from "@aspen/protocol";
+import { useGrowthKey, useReorderGlide } from "@/features/layout/motion";
 import { PaneEdge } from "@/features/layout/ResizablePane";
 import {
   BellSlashIcon,
@@ -132,6 +133,8 @@ function CategorySection({
   const sync = useSync();
   const { channelId: current } = useParams({ strict: false });
   const collapsed = useCollapsed(category.id);
+  // Unfolded since it was first drawn: the channels it reveals drop into place.
+  const unfolded = useGrowthKey(collapsed ? 0 : 1) > 0;
   const shown = useShownWhenCollapsed(collapsed ? channels.map((c) => c.id) : []);
   const visible = collapsed
     ? channels.filter((c) => c.id === current || shown.has(c.id))
@@ -167,6 +170,7 @@ function CategorySection({
         channels={visible}
         allIds={channels.map((c) => c.id)}
         collapsed={collapsed}
+        unfolded={unfolded}
       />
     </section>
   );
@@ -224,6 +228,7 @@ function ChannelGroup({
   channels,
   allIds,
   collapsed = false,
+  unfolded = false,
 }: {
   communityId: string;
   label: string;
@@ -235,6 +240,8 @@ function ChannelGroup({
   allIds?: readonly string[];
   /** Whether the group is a folded category. */
   collapsed?: boolean;
+  /** Whether it is a category unfolded since it was drawn, whose channels drop into place. */
+  unfolded?: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -284,13 +291,16 @@ function ChannelGroup({
       />
     ),
   });
+  const list = useRef<HTMLDivElement>(null);
+  useReorderGlide(list, channels.map((c) => c.id).join(" "));
   return (
     <GridList
+      ref={list}
       aria-label={label}
       items={channels}
       // Each row's rendering is cached by its channel; the highlight on the current channel
       // comes from the route, so the route is declared as a dependency.
-      dependencies={[current]}
+      dependencies={[current, unfolded]}
       selectionMode="none"
       renderEmptyState={() =>
         collapsed ? null : (
@@ -321,6 +331,8 @@ function ChannelGroup({
           className={
             "group flex flex-wrap items-center gap-1.5 rounded-md px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-accent/50 dragging:opacity-50 " +
             "cursor-pointer text-ink-muted hover:bg-surface-hover hover:text-ink " +
+            // The current channel stays in view while folded; it has nowhere to drop from.
+            (unfolded && channel.id !== current ? "motion-drop " : "") +
             (channel.id === current ? "bg-surface-hover font-medium text-ink" : "")
           }
         >

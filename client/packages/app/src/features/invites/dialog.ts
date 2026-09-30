@@ -1,6 +1,6 @@
 /** Tailwind class strings shared by the modal dialogs. */
 export const overlayClass =
-  "overlay-inset fixed inset-0 z-10 flex items-center justify-center bg-black/40 entering:animate-in exiting:animate-out";
+  "overlay-inset fixed inset-0 z-10 flex items-center justify-center bg-black/40 motion-backdrop";
 /**
  * The frame every modal is drawn in. It is never taller than the overlay leaves room for, and
  * scrolls within itself when its content is taller than that, as a long form is on a phone;
@@ -8,7 +8,7 @@ export const overlayClass =
  */
 const modalFrameClass =
   "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line " +
-  "p-4 shadow-xl outline-none sm:p-5";
+  "p-4 shadow-xl outline-none sm:p-5 motion-dialog";
 export const modalClass = modalFrameClass + " bg-surface-raised max-w-md";
 /** A modal with room for a list of results beside its controls, such as message search. */
 export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";

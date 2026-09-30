@@ -49,6 +49,9 @@ const actionClass =
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
   "pointer-coarse:p-3";
 
+/** How soon after a message arrives that it is drawn arriving. */
+const ARRIVING_MS = 1000;
+
 /**
  * One message. `parentId` is the parent channel when `channelId` is a thread: its messages
  * link to the thread and cannot start threads of their own. Elsewhere a message offers to
@@ -87,6 +90,11 @@ export function MessageItem({
   const me = useMe();
   const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
+  // A message that came while the reader was here rises into place; history arrives still.
+  const [arriving] = useState(() => {
+    const at = sync.store.arrivedAt(id);
+    return at !== undefined && Date.now() - at < ARRIVING_MS ? "motion-rise " : "";
+  });
   if (message === undefined) {
     return null;
   }
@@ -127,7 +135,9 @@ export function MessageItem({
         data-message-id={id}
         className={
           "flex gap-3 rounded-md px-2 py-1.5 " +
-          (highlighted ? "bg-accent-soft" : "hover:bg-surface-hover/60")
+          arriving +
+          (highlighted ? "motion-flash " : "") +
+          "hover:bg-surface-hover/60"
         }
       >
         <div className="w-10 shrink-0" aria-hidden="true" />
@@ -147,7 +157,9 @@ export function MessageItem({
         data-message-id={id}
         className={
           "flex gap-3 rounded-md px-2 py-1.5 " +
-          (highlighted ? "bg-accent-soft" : "hover:bg-surface-hover/60")
+          arriving +
+          (highlighted ? "motion-flash " : "") +
+          "hover:bg-surface-hover/60"
         }
       >
         <div className="w-10 shrink-0" aria-hidden="true" />
@@ -166,12 +178,12 @@ export function MessageItem({
       tabIndex={-1}
       className={
         "group relative flex gap-3 rounded-md py-1.5 outline-none " +
+        arriving +
+        (highlighted ? "motion-flash " : "") +
         (tagsMe ? "border-s-2 border-accent pe-2 ps-1.5 " : "px-2 ") +
-        (highlighted
-          ? "bg-accent-soft"
-          : tagsMe
-            ? "bg-accent-soft/50"
-            : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
+        (tagsMe
+          ? "bg-accent-soft/50"
+          : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
       }
     >
       {author === undefined ? (

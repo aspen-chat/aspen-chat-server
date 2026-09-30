@@ -144,6 +144,12 @@ export const en = {
   },
   changeCommunityIcon: "Change community icon",
   settings: {
+    motionSpeed: "Animation speed",
+    motionOff: "Off",
+    motionNormal: "Normal",
+    motionTimes: "{speed}×",
+    motionHint:
+      "All your devices share this. At the far left, nothing animates. Where a device is set to reduce motion, things fade in place rather than move.",
     title: "Settings",
     account: "Account",
     audio: "Audio and video",
@@ -863,7 +869,7 @@ export const en = {
   attachFile: "Attach a file",
   attachmentsLabel: "Attachments",
   pendingAttachmentsLabel: "Files to send",
-  uploading: "Uploading…",
+  uploadingFile: "Uploading {name}",
   uploadFailed: "Upload failed",
   removeAttachment: "Remove {name}",
   imageAlt: "Image: {name}",

@@ -81,7 +81,7 @@ function ParticipantRow({
   const avatar = (
     <span
       className={
-        "rounded-full " +
+        "rounded-full transition-shadow " +
         (speaking ? "ring-2 ring-online ring-offset-1 ring-offset-surface-raised" : "")
       }
       aria-label={speaking ? format(m.voice.speaking, { name }) : undefined}

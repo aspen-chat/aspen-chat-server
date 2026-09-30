@@ -1,7 +1,7 @@
 import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { Button, TextArea, TextField } from "react-aria-components";
+import { Button, ProgressBar, TextArea, TextField } from "react-aria-components";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
 import {
@@ -30,7 +30,8 @@ interface Pending {
   /** An object URL for the file's own bytes when it is an image, shown as a thumbnail. */
   thumbnail: string | null;
   state:
-    | { kind: "uploading" }
+    /** `sent` is how much of the file has reached storage, 0 to 1. */
+    | { kind: "uploading"; sent: number }
     | { kind: "ready"; attachment: Attachment }
     | { kind: "failed"; reason: string };
 }
@@ -173,10 +174,20 @@ export function Composer({
       };
       setPending((list) => [
         ...list,
-        { key, name: file.name, thumbnail, state: { kind: "uploading" } },
+        { key, name: file.name, thumbnail, state: { kind: "uploading", sent: 0 } },
       ]);
       measurePicture(file)
-        .then((size) => sync.uploadAttachment(file, size))
+        .then((size) =>
+          sync.uploadAttachment(file, size, (sent, total) => {
+            setPending((list) =>
+              list.map((p) =>
+                p.key === key && p.state.kind === "uploading"
+                  ? { ...p, state: { kind: "uploading", sent: total > 0 ? sent / total : 0 } }
+                  : p,
+              ),
+            );
+          }),
+        )
         .then(
           (attachment) => {
             update({ kind: "ready", attachment });
@@ -271,7 +282,7 @@ export function Composer({
             <li
               key={p.key}
               className={
-                "relative flex items-center gap-2 rounded-md border p-1.5 pe-8 text-sm " +
+                "motion-grow relative flex items-center gap-2 rounded-md border p-1.5 pe-8 text-sm " +
                 (p.state.kind === "failed" ? "border-danger text-danger" : "border-line")
               }
             >
@@ -287,7 +298,20 @@ export function Composer({
               <span className="flex min-w-0 flex-col">
                 <span className="max-w-40 truncate">{p.name}</span>
                 {p.state.kind === "uploading" && (
-                  <span className="text-xs text-ink-faint">{m.uploading}</span>
+                  <ProgressBar
+                    aria-label={format(m.uploadingFile, { name: p.name })}
+                    value={p.state.sent * 100}
+                    className="mt-1 w-full"
+                  >
+                    {({ percentage }) => (
+                      <span className="block h-1 w-full overflow-hidden rounded-full bg-line">
+                        <span
+                          className="block h-full rounded-full bg-accent transition-[width]"
+                          style={{ width: `${String(percentage ?? 0)}%` }}
+                        />
+                      </span>
+                    )}
+                  </ProgressBar>
                 )}
                 {p.state.kind === "failed" && (
                   <span className="text-xs" title={p.state.reason}>

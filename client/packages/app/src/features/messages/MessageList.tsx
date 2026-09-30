@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -23,6 +24,7 @@ import { windowParts } from "@/features/messages/blocked";
 import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
+import { useDeparting, type Departing } from "@/features/messages/departing";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
@@ -63,6 +65,8 @@ const USER_SCROLL_MS = 500;
 const LOAD_MORE_PX = 800;
 /** How long after its last scroll event, with no finger down, the list counts as at rest. */
 const SETTLE_MS = 150;
+/** The ids of a list with no window yet, one array so its identity holds. */
+const NO_IDS: readonly string[] = [];
 const SCROLL_KEYS: ReadonlySet<string> = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -167,6 +171,8 @@ export function MessageList({
       return author !== undefined && blocked.has(author);
     });
   }, [window, blockedUsers, store]);
+
+  const { departing, measure } = useDeparting(scroller, window?.ids ?? NO_IDS, store);
 
   const loaded = window !== undefined;
   const ids = window?.ids;
@@ -318,6 +324,7 @@ export function MessageList({
       return;
     }
     const observer = new ResizeObserver(() => {
+      measure();
       if (stickToBottom.current && atLatest) {
         scrollSelf(element, () => {
           element.scrollTop = element.scrollHeight;
@@ -546,6 +553,12 @@ export function MessageList({
   }
 
   const lineIndex = lineAt(window, lineAfter);
+  const leavingAfter = new Map<string | null, Departing[]>();
+  for (const gone of departing) {
+    leavingAfter.set(gone.after, [...(leavingAfter.get(gone.after) ?? []), gone]);
+  }
+  const leaving = (after: string | null) =>
+    (leavingAfter.get(after) ?? []).map((gone) => <DepartingSpace key={gone.id} gone={gone} />);
 
   return (
     <div
@@ -582,6 +595,7 @@ export function MessageList({
           <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
         )}
         {lineIndex === -1 && <NewMessagesLine />}
+        {leaving(null)}
         {parts.map((part) => {
           const item = (id: string) => (
             <MessageItem
@@ -596,6 +610,7 @@ export function MessageList({
             return (
               <Fragment key={part.id}>
                 {item(part.id)}
+                {leaving(part.id)}
                 {part.index === lineIndex && <NewMessagesLine />}
               </Fragment>
             );
@@ -607,13 +622,15 @@ export function MessageList({
               ? lineIndex - part.index
               : null;
           return (
-            <BlockedRun
-              key={part.ids[0]}
-              ids={part.ids}
-              lineOffset={lineOffset}
-              highlightId={highlightId}
-              item={item}
-            />
+            <Fragment key={part.ids[0]}>
+              <BlockedRun
+                ids={part.ids}
+                lineOffset={lineOffset}
+                highlightId={highlightId}
+                item={item}
+              />
+              {part.ids.flatMap((id) => leaving(id))}
+            </Fragment>
           );
         })}
         {!window.atLatest && (
@@ -630,12 +647,28 @@ export function MessageList({
       {!window.atLatest && (
         <Button
           onPress={jumpToLatest}
-          className="sticky bottom-3 left-1/2 block w-fit -translate-x-1/2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="motion-rise sticky bottom-3 left-1/2 block w-fit -translate-x-1/2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           {m.jumpToLatest}
         </Button>
       )}
     </div>
+  );
+}
+
+/**
+ * The space a deleted message leaves, closing over a moment; the list's `gap-1` between messages
+ * closes with it.
+ */
+function DepartingSpace({ gone }: { gone: Departing }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="motion-collapse"
+      style={
+        { "--from-h": `${String(gone.height)}px`, "--collapse-gap": "-0.25rem" } as CSSProperties
+      }
+    />
   );
 }
 

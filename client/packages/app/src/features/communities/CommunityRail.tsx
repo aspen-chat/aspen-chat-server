@@ -1,4 +1,5 @@
 import { Link, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { useReorderGlide } from "@/features/layout/motion";
 import {
   RAIL_FOLDERS,
   RAIL_ORDER,
@@ -81,7 +82,11 @@ type RailRow =
       readonly kind: "community";
       readonly key: string;
       readonly entry: RailEntry;
-      readonly band: { readonly color: FolderColor; readonly last: boolean } | null;
+      readonly band: {
+        readonly folder: string;
+        readonly color: FolderColor;
+        readonly last: boolean;
+      } | null;
     }
   | {
       readonly kind: "folder";
@@ -106,7 +111,7 @@ function railRows(units: readonly RailUnit<RailEntry>[]): RailRow[] {
         kind: "community",
         key: entry.key,
         entry,
-        band: { color: folder.color, last: index === entries.length - 1 },
+        band: { folder: folder.id, color: folder.color, last: index === entries.length - 1 },
       })),
     ];
   });
@@ -182,6 +187,10 @@ export function CommunityRail() {
   const dragging = useRef<string | null>(null);
   const menuAnchor = useRef<HTMLElement | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useReorderGlide(list, rows.map((row) => row.key).join(" "));
+  /** The folders opened here since the rail was drawn, whose communities drop into place. */
+  const [openedHere, setOpenedHere] = useState<ReadonlySet<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
 
   function save(layout: RailLayout, reordered: boolean) {
@@ -296,17 +305,27 @@ export function CommunityRail() {
         </div>
       )}
       <GridList
+        ref={list}
         aria-label={m.communitiesLabel}
         items={rows}
         // The list caches each item's rendering by its data; the ring around the current
         // community comes from the route, so the route is declared as a dependency.
-        dependencies={[currentKey]}
+        dependencies={[currentKey, openedHere]}
         selectionMode="none"
         onAction={(key) => {
           const id = folderIdOf(String(key));
           if (id !== null) {
             const folder = folders.find((f) => f.id === id);
             if (folder !== undefined) {
+              setOpenedHere((opened) => {
+                const next = new Set(opened);
+                if (folder.open) {
+                  next.delete(id);
+                } else {
+                  next.add(id);
+                }
+                return next;
+              });
               save(updateFolder(units, id, { open: !folder.open }), false);
             }
             return;
@@ -330,7 +349,11 @@ export function CommunityRail() {
               }}
             />
           ) : (
-            <CommunityRow row={row} current={row.key === currentKey} />
+            <CommunityRow
+              row={row}
+              current={row.key === currentKey}
+              arriving={row.band !== null && openedHere.has(row.band.folder)}
+            />
           )
         }
       </GridList>
@@ -407,9 +430,12 @@ export function CommunityRail() {
 function CommunityRow({
   row,
   current,
+  arriving,
 }: {
   row: Extract<RailRow, { kind: "community" }>;
   current: boolean;
+  /** Whether it is in a folder the reader just opened, and drops into place. */
+  arriving: boolean;
 }) {
   const m = useMessages();
   const { entry, band } = row;
@@ -425,6 +451,7 @@ function CommunityRow({
       aria-label={placeLabel(m, entry.unread ? format(m.unreadLabel, { name }) : name, entry.tags)}
       className={
         "group flex w-14 cursor-pointer justify-center py-1 outline-none dragging:opacity-50 " +
+        (arriving ? "motion-drop " : "") +
         (band === null ? "" : FOLDER_TINT[band.color] + (band.last ? " rounded-b-2xl pb-2" : ""))
       }
     >
@@ -566,7 +593,7 @@ function UnreadDot() {
   return (
     <span
       aria-hidden="true"
-      className="absolute top-1/2 -start-1 -z-10 h-2 w-2 -translate-y-1/2 rounded-full bg-ink"
+      className="motion-grow absolute top-1/2 -start-1 -z-10 h-2 w-2 -translate-y-1/2 rounded-full bg-ink"
     />
   );
 }
