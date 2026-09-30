@@ -207,6 +207,49 @@ test.describe("on a phone", () => {
     expect(Math.abs((await offsetOf(reading.id)) - reading.offset)).toBeLessThanOrEqual(1);
   });
 
+  test("content growing above what is being read does not move it", async ({ page }) => {
+    // As a picture does when it loads above the reader: the list holds the message being
+    // read where it was, itself, since iOS Safari has no scroll anchoring to do it.
+    await openChannel(page, "general");
+    const scroller = page.locator("div.overflow-y-auto").filter({ has: page.locator("article") });
+    await expect(scroller.locator("article").first()).toBeVisible();
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight - element.clientHeight - 300;
+    });
+    // At rest before anything loads; the list leaves a moving view to the reader.
+    await page.waitForTimeout(400);
+    const reading = await scroller.evaluate((element) => {
+      const origin = element.getBoundingClientRect().top;
+      for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
+        const box = article.getBoundingClientRect();
+        if (box.bottom > origin) {
+          return { id: article.dataset.messageId ?? "", offset: box.top - origin };
+        }
+      }
+      return { id: "", offset: 0 };
+    });
+    await scroller.evaluate((element, id) => {
+      const articles = Array.from(element.querySelectorAll<HTMLElement>("[data-message-id]"));
+      const above = articles[articles.findIndex((a) => a.dataset.messageId === id) - 1];
+      const picture = document.createElement("div");
+      picture.style.height = "400px";
+      above?.append(picture);
+    }, reading.id);
+    // Within a pixel: WebKit scrolls in whole pixels.
+    await expect
+      .poll(async () =>
+        Math.abs(
+          (await scroller.evaluate((element, id) => {
+            const article = element.querySelector(`[data-message-id="${id}"]`);
+            return article === null
+              ? Infinity
+              : article.getBoundingClientRect().top - element.getBoundingClientRect().top;
+          }, reading.id)) - reading.offset,
+        ),
+      )
+      .toBeLessThanOrEqual(1);
+  });
+
   test("tapping a message's picture shows who wrote it", async ({ page }) => {
     await openChannel(page, "general");
     const own = messageWith(page, ownText);

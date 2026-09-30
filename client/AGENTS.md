@@ -774,6 +774,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records; the viewport is
   re-anchored on the topmost visible message after every change, measured when the change is
   shown rather than when its page was asked for, since the reader keeps scrolling meanwhile.
+  Content that changes size without the window changing (pictures and link cards loading,
+  reactions) moves nothing either: the list holds the linked message while it is shown, or
+  else the topmost message in view, and puts it back wherever a `ResizeObserver` sees the
+  content change, with the browser's own scroll anchoring off (`overflow-anchor: none`); it
+  lets the reader move the list undisturbed while they are dragging or it coasts, and holds
+  wherever they leave it. The list's own scrolls never re-record what it holds, nor pin or unpin
+  it from the bottom; every other scroll does, the reader's and find-in-page's alike.
   `MessageList` shows a change only once the list is at rest (no finger on it, and no scroll event
   for `SETTLE_MS`): iOS Safari has no scroll anchoring of its own and loses or fights a scroll
   correction made while the list is dragged or coasting. Nothing above the view may change height

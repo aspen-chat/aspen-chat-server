@@ -27,7 +27,10 @@ import { useMessages } from "@/i18n/context";
 
 /**
  * The loaded window of a channel, oldest at the top. Stays pinned to the bottom while the user
- * is there and keeps the message under the viewport still when the window changes around it.
+ * is there and keeps the message under the viewport still when the window changes around it,
+ * and when content changes size under it, as pictures and link cards load: the list holds its
+ * view itself (`hold`), since Safari has no scroll anchoring and other browsers' is unreliable
+ * across a jump, and turns the browser's off so the two never fight.
  * Keeping it still takes a scroll correction, which is made against where the view is when the
  * change is shown, and only while the list is at rest: iOS Safari has no scroll anchoring of its
  * own, and a correction made while a finger drags the list or it coasts afterwards is lost or
@@ -108,6 +111,19 @@ export function MessageList({
   /** Scroll events before this time were caused by this component, not the user. */
   const programmaticUntil = useRef(0);
   /**
+   * Where the list last scrolled itself to. The scroll event that lands there is its own, and
+   * any other is someone else's: the reader's, find-in-page's, a screen reader's. It is told by
+   * where the view lands rather than by when, because the list scrolls itself again and again
+   * while content loads, and a reader's scroll in the midst of that is still theirs.
+   */
+  const ownScrollTop = useRef<number | null>(null);
+  function scrollSelf(element: HTMLDivElement, move: () => void) {
+    programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
+    const before = element.scrollTop;
+    move();
+    ownScrollTop.current = element.scrollTop === before ? null : element.scrollTop;
+  }
+  /**
    * When the reader last acted on the list: a wheel or touch move, a press on its scrollbar, or a
    * navigation key. A scroll event is theirs only if it follows one of these closely; the browser
    * also fires scroll events when a modal opening changes the layout, when an image loads, or
@@ -173,6 +189,29 @@ export function MessageList({
     return null;
   }
 
+  /**
+   * Where the view is, held still whenever content changes size under it: the linked message
+   * while it is being shown, or else the topmost message in view, at its offset from the top.
+   * Nothing is held while the list is pinned to the bottom, which the bottom holds instead.
+   */
+  const hold = useRef<Anchor | null>(null);
+  function captureHold() {
+    const element = scroller.current;
+    if (element === null || (stickToBottom.current && atLatest)) {
+      hold.current = null;
+      return;
+    }
+    if (highlightId !== undefined && highlightShown.current === highlightId) {
+      const target = element.querySelector(`[data-message-id="${highlightId}"]`);
+      if (target !== null) {
+        const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
+        hold.current = { id: highlightId, top };
+        return;
+      }
+    }
+    hold.current = captureAnchor();
+  }
+
   // Shows the store's window once the list is at rest, noting where the view was so the layout
   // effect below can keep it there.
   useEffect(() => {
@@ -207,6 +246,15 @@ export function MessageList({
     if (element === null) {
       return;
     }
+    position(element);
+    captureHold();
+    // Positioned when the window's edges, the link, or being at the latest change; what it
+    // reads besides is current in the refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstId, lastId, highlightId, atLatest]);
+
+  /** Places the view after the window or the link changed: see the effect above. */
+  function position(element: HTMLDivElement) {
     if (highlightId === undefined) {
       highlightShown.current = null;
     } else if (highlightShown.current !== highlightId) {
@@ -218,8 +266,9 @@ export function MessageList({
         highlightShown.current = highlightId;
         anchor.current = null;
         stickToBottom.current = false;
-        programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-        target.scrollIntoView({ block: "center" });
+        scrollSelf(element, () => {
+          target.scrollIntoView({ block: "center" });
+        });
         return;
       }
     }
@@ -229,8 +278,9 @@ export function MessageList({
       const target = element.querySelector(`[data-message-id="${restore.id}"]`);
       if (target !== null) {
         const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
-        programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-        element.scrollTop += top - restore.top;
+        scrollSelf(element, () => {
+          element.scrollTop += top - restore.top;
+        });
       }
       return;
     }
@@ -238,18 +288,24 @@ export function MessageList({
       return;
     }
     if (stickToBottom.current && atLatest) {
-      programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-      element.scrollTop = element.scrollHeight;
+      scrollSelf(element, () => {
+        element.scrollTop = element.scrollHeight;
+      });
     }
-  }, [firstId, lastId, highlightId, atLatest]);
+  }
 
   // A different channel starts pinned to the bottom; a linked message's own scroll unpins it.
   useEffect(() => {
     stickToBottom.current = true;
   }, [channelId]);
 
-  // Content can grow without the window changing, for example when a link preview card arrives
-  // for the newest message. Stay pinned through that too.
+  // Content changes size without the window changing: pictures and link cards load, reactions
+  // come and go. The view stays where it is through it: pinned to the bottom there, and
+  // otherwise with the held message (see `hold`) where it was, so a picture loading above what
+  // is being read never pushes it away. Browsers' own scroll anchoring would do some of this,
+  // but not in Safari, and not always; the list does it itself, with the browser's turned off.
+  // While the reader is moving the list, it is theirs to move: a correction then would fight a
+  // finger or cut a fling short, and their next scroll holds wherever they leave it.
   useEffect(() => {
     const element = scroller.current;
     if (element === null || typeof ResizeObserver === "undefined") {
@@ -261,15 +317,37 @@ export function MessageList({
     }
     const observer = new ResizeObserver(() => {
       if (stickToBottom.current && atLatest) {
-        programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-        element.scrollTop = element.scrollHeight;
+        scrollSelf(element, () => {
+          element.scrollTop = element.scrollHeight;
+        });
+        return;
+      }
+      const held = hold.current;
+      const moving = touching.current || Date.now() - scrolledAt.current < SETTLE_MS;
+      if (held === null || moving) {
+        return;
+      }
+      const target = element.querySelector(`[data-message-id="${held.id}"]`);
+      if (target === null) {
+        captureHold();
+        return;
+      }
+      const drift =
+        target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.top;
+      if (Math.abs(drift) >= 1) {
+        scrollSelf(element, () => {
+          element.scrollTop += drift;
+        });
       }
     });
     observer.observe(content);
     return () => {
       observer.disconnect();
     };
-  }, [loaded, atLatest]);
+    // The observer reads the held position and the rest through refs; it is made again when
+    // being at the latest, or the link, changes what it holds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, atLatest, highlightId]);
 
   // A page already read but not yet shown is waiting for the list to settle; reading the next
   // one before it shows would only pile changes up.
@@ -324,18 +402,35 @@ export function MessageList({
   }, [loaded, firstId, lastId]);
 
   function onScroll() {
-    scrolledAt.current = Date.now();
-    noteSeenSoon();
+    // The list's own scrolls are not movement, and do not move what it holds: one that
+    // corrects for a picture loading may be read only after the next picture has grown, and
+    // holding the view where it then is would keep that picture's push.
     const element = scroller.current;
     if (element === null) {
       return;
     }
+    const own = ownScrollTop.current;
+    const ours = own !== null && Math.abs(element.scrollTop - own) < 1;
+    if (ours) {
+      ownScrollTop.current = null;
+    } else {
+      scrolledAt.current = Date.now();
+    }
+    noteSeenSoon();
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    stickToBottom.current = atLatest && distanceFromBottom < 8;
-    loadNearEnds();
     const byUser = Date.now() - userScrollAt.current < USER_SCROLL_MS;
+    // Whether the list is pinned to the bottom follows every scroll but its own: the reader's,
+    // and those of find-in-page or a screen reader. Content loading moves nothing by itself
+    // with the browser's anchoring off, so it never unpins the list.
+    if (!ours) {
+      stickToBottom.current = atLatest && distanceFromBottom < 8;
+    }
+    loadNearEnds();
     if (highlightId !== undefined && byUser && Date.now() > programmaticUntil.current) {
       void navigate({ ...channelLink(home, channelId), replace: true });
+    }
+    if (!ours) {
+      captureHold();
     }
   }
 
@@ -469,7 +564,7 @@ export function MessageList({
       onTouchMove={noteUserScroll}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      className="relative min-h-0 flex-1 overflow-y-auto"
+      className="relative min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
     >
       <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
         {window.hasOlder ? (
