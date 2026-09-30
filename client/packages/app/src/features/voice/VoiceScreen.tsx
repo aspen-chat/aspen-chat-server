@@ -151,8 +151,9 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
         )}
       </div>
       {/* The call bar lives with the channel list, which a narrow screen does not show
-          beside the call; it shows here instead, so the call can be muted and left. */}
-      {inThisCall && (
+          beside the call; it shows here instead, so joining, a failure to join, and the call
+          itself can be seen, muted, and left. */}
+      {call.status !== "idle" && call.channelId === channel.id && (
         <div className="md:hidden">
           <CallBar />
         </div>
