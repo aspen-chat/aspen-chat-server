@@ -33,6 +33,7 @@ import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
 import {
   dangerButtonClass,
+  dangerPlaneClass,
   dialogClass,
   overlayClass,
   planeClass,
@@ -288,7 +289,7 @@ function Delete({ community }: { community: Community }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <section className="flex flex-col gap-2 rounded-lg border border-danger/40 bg-surface-raised p-1.5 shadow-sm">
+    <section className={dangerPlaneClass}>
       <h3 className="text-sm font-semibold text-danger">{m.communitySettings.deleteHeading}</h3>
       <p className={hintClass}>{m.communitySettings.deleteHint}</p>
       <TextField value={typed} onChange={setTyped} className={fieldClass}>
