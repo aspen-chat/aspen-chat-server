@@ -1,4 +1,5 @@
 import type { FileSink, OfferState, TransferMode } from "@aspen/protocol";
+import { nativeCanChooseDestination, nativeChooseDestination } from "@/api/filesBridge";
 
 /** How long an offer may stand, in seconds, as the offer dialog lists them; the first is the default. */
 export const VALIDITY_CHOICES = ["60", "300", "900", "1800", "3600"] as const;
@@ -93,12 +94,15 @@ interface SavePicker {
 }
 
 /**
- * Whether the browser lets the receiver choose where a file goes before it arrives (the File
- * System Access API: Chromium, and so the desktop app). Elsewhere a file is held until it has
- * all arrived and then saved.
+ * Whether the receiver can choose where a file goes before it arrives: in the Android app,
+ * through the system's picker (`filesBridge`), and in a browser with the File System Access API
+ * (Chromium, and so the desktop app). Elsewhere a file is held until it has all arrived and then
+ * saved.
  */
 export function canChooseDestination(): boolean {
-  return typeof (window as SavePicker).showSaveFilePicker === "function";
+  return (
+    nativeCanChooseDestination() || typeof (window as SavePicker).showSaveFilePicker === "function"
+  );
 }
 
 /**
@@ -106,6 +110,9 @@ export function canChooseDestination(): boolean {
  * picker without choosing. Must be called from a click, which the picker needs.
  */
 export async function chooseDestination(name: string): Promise<FileSink | null> {
+  if (nativeCanChooseDestination()) {
+    return nativeChooseDestination(safeFileName(name));
+  }
   const picker = (window as SavePicker).showSaveFilePicker;
   if (picker === undefined) {
     return null;
