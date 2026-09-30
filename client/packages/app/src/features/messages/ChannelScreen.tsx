@@ -117,7 +117,7 @@ export function ChannelScreen() {
           </p>
         )}
         <MessageList channelId={channelId} highlightId={messageId} home={home} />
-        <ChannelComposer channel={channel} />
+        <ChannelComposer key={channel.id} channel={channel} />
       </main>
       {threadId !== undefined && (
         <ThreadPanel home={home} parentId={channelId} threadId={threadId} />

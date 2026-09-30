@@ -225,6 +225,8 @@ export function useTagging({
     /** What a polite status beside the box says of the suggestions: how many, how to pick. */
     announcement,
     /** The text as it is sent, picked tags and all. */
+    /** The tags picked, which a draft keeps with its text. */
+    picks,
     encode: (text: string) => encodeTags(text, picks),
     /** Forgets the picks, once what they were for is sent. */
     reset: () => {

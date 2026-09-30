@@ -524,6 +524,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   Its DM is read-only: `RecordStore.channelAccess` gives only View channel there, as in a
   blocked DM (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's
   record arrives), and the Composer shows a note in place of the box.
+- Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent
+  (text, picked tags, files already uploaded, and a thread's echo choice) waits in its channel
+  on this device, per account, through going elsewhere, a notification opened, and a reload,
+  and goes once sent. The Composer is keyed by its channel, so each box reads its own; it notes
+  its draft in memory on every change (`noteDraft`), which `readDraft` reads first, and keeps it
+  in `localStorage` after a short pause and at once when it unmounts or the page is hidden.
+  `e2e/drafts.spec.ts` checks the notification path.
 - Bots' commands (`src/features/commands`) are offered in the message box by `useCommandLine`,
   which the Composer runs beside `useTagging` and which turns tagging off while the draft
   begins with `/`. The channel's commands are store state (`RecordStore.commands`, topic

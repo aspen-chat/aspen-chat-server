@@ -119,6 +119,7 @@ export function ThreadPanel({
           </div>
           <MessageList channelId={threadId} home={home} highlightId={undefined} />
           <Composer
+            key={threadId}
             channelId={threadId}
             placeholder={m.threads.placeholder}
             echoTarget={echoTarget}

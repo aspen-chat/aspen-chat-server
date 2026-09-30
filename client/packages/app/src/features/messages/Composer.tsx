@@ -8,6 +8,7 @@ import {
   useBlockedDmPeer,
   useChannel,
   useChannelAccess,
+  useMe,
   useSync,
   useSystemDmPeer,
   useUser,
@@ -20,6 +21,7 @@ import { format } from "@/i18n/messages";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
+import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -34,6 +36,9 @@ interface Pending {
 }
 
 let nextKey = 1;
+
+/** How long typing pauses before the draft is kept. */
+const DRAFT_SAVE_DELAY_MS = 400;
 
 const toolButtonClass =
   "rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -59,9 +64,20 @@ export function Composer({
 }) {
   const m = useMessages();
   const sync = useSync();
-  const [draft, setDraft] = useState("");
-  const [echo, setEcho] = useState(false);
-  const [pending, setPending] = useState<Pending[]>([]);
+  const me = useMe();
+  // What was written here and not sent, kept on this device (`drafts.ts`). The box is made
+  // afresh for each channel, so it reads its own.
+  const [saved] = useState(() => (me === null ? null : readDraft(me.id, channelId)));
+  const [draft, setDraft] = useState(saved?.text ?? "");
+  const [echo, setEcho] = useState(saved?.echo ?? false);
+  const [pending, setPending] = useState<Pending[]>(() =>
+    (saved?.attachments ?? []).map((attachment) => ({
+      key: nextKey++,
+      name: attachment.fileName,
+      thumbnail: isImageType(attachment.mimeType) ? attachment.downloadUrl : null,
+      state: { kind: "ready", attachment },
+    })),
+  );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -71,7 +87,49 @@ export function Composer({
   const blockedPeer = useBlockedDmPeer(channelId);
   const systemPeer = useSystemDmPeer(channelId);
   const commands = useCommandLine({ channelId, draft, setDraft });
-  const tagging = useTagging({ channelId, draft, setDraft, off: commands.active });
+  const tagging = useTagging({
+    channelId,
+    draft,
+    setDraft,
+    off: commands.active,
+    initialPicks: saved?.picks ?? [],
+  });
+
+  // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
+  // (another channel, a notification opened) or the page is hidden or left.
+  const keep = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (me === null) {
+      keep.current = null;
+      return;
+    }
+    const current = {
+      text: draft,
+      picks: tagging.picks,
+      attachments: pending.flatMap((p) => (p.state.kind === "ready" ? [p.state.attachment] : [])),
+      echo,
+    };
+    noteDraft(me.id, channelId, current);
+    keep.current = () => {
+      writeDraft(me.id, channelId, current);
+    };
+  });
+  useEffect(() => {
+    const timer = setTimeout(() => keep.current?.(), DRAFT_SAVE_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [draft, pending, echo, tagging.picks]);
+  useEffect(() => {
+    const flush = () => keep.current?.();
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+      flush();
+    };
+  }, []);
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>
@@ -161,6 +219,9 @@ export function Composer({
       setDraft("");
       tagging.reset();
       commands.reset();
+      if (me !== null) {
+        writeDraft(me.id, channelId, null);
+      }
       setPending([]);
       setEcho(false);
     } catch (e) {
