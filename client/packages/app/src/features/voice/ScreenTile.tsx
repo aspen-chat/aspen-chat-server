@@ -1,12 +1,12 @@
-import { Capacitor } from "@capacitor/core";
 import { CornersInIcon, CornersOutIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef } from "react";
+import { isFullScreenKey, useFullScreen } from "@/features/voice/fullScreen";
 import { useMessages } from "@/i18n/context";
 
 /**
  * One shared screen, playing. The audio that came with it is played by the call itself, so the
  * element is muted and only shows the picture. A local preview is the sender's own track.
- * An `expandable` tile can be made full screen with its button or a double click.
+ * An `expandable` tile can be made full screen with its button, a double click, or the F key.
  */
 export function ScreenTile({
   track,
@@ -23,6 +23,22 @@ export function ScreenTile({
   const figure = useRef<HTMLElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const full = useFullScreen(figure);
+  const { toggle } = full;
+  useEffect(() => {
+    if (!expandable) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isFullScreenKey(event)) {
+        event.preventDefault();
+        toggle();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [expandable, toggle]);
   useEffect(() => {
     const element = video.current;
     if (element === null) {
@@ -61,7 +77,8 @@ export function ScreenTile({
           type="button"
           onClick={full.toggle}
           aria-label={full.state === "off" ? m.voice.fullScreen : m.voice.exitFullScreen}
-          title={full.state === "off" ? m.voice.fullScreen : m.voice.exitFullScreen}
+          aria-keyshortcuts="F"
+          title={full.state === "off" ? m.voice.fullScreenHint : m.voice.exitFullScreenHint}
           className="absolute end-2 top-2 rounded-md bg-black/60 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent [@media(hover:none)]:opacity-100"
         >
           {full.state === "off" ? (
@@ -73,66 +90,4 @@ export function ScreenTile({
       )}
     </figure>
   );
-}
-
-/**
- * Whether an element is full screen: `screen` through the Fullscreen API, which the browser
- * leaves on Escape, or `window`, filling the app's window, left with Escape or the button.
- * The window is the fallback where the API is missing or refuses, and the only way in the
- * mobile apps, whose Capacitor WebView dismisses any element that asks for the screen.
- */
-type FullScreenState = "off" | "screen" | "window";
-
-function useFullScreen(element: RefObject<HTMLElement | null>) {
-  const [state, setState] = useState<FullScreenState>("off");
-
-  useEffect(() => {
-    const changed = () => {
-      setState((current) =>
-        document.fullscreenElement !== null && document.fullscreenElement === element.current
-          ? "screen"
-          : current === "screen"
-            ? "off"
-            : current,
-      );
-    };
-    document.addEventListener("fullscreenchange", changed);
-    return () => {
-      document.removeEventListener("fullscreenchange", changed);
-    };
-  }, [element]);
-
-  useEffect(() => {
-    if (state !== "window") {
-      return;
-    }
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setState("off");
-      }
-    };
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("keydown", escape);
-    };
-  }, [state]);
-
-  const toggle = useCallback(() => {
-    const target = element.current;
-    if (state === "screen") {
-      void document.exitFullscreen();
-    } else if (state === "window") {
-      setState("off");
-    } else if (target !== null) {
-      if (!Capacitor.isNativePlatform() && document.fullscreenEnabled) {
-        target.requestFullscreen().catch(() => {
-          setState("window");
-        });
-      } else {
-        setState("window");
-      }
-    }
-  }, [element, state]);
-
-  return { state, toggle };
 }

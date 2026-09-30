@@ -261,6 +261,8 @@ export const en = {
     usersScreen: "{name}'s screen",
     fullScreen: "Full screen",
     exitFullScreen: "Exit full screen",
+    fullScreenHint: "Full screen (F)",
+    exitFullScreenHint: "Exit full screen (F)",
     nobodyHere: "Nobody is in this call yet.",
     shareMenu: "Share",
     shareYourScreen: "Your screen",
