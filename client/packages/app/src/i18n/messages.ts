@@ -330,6 +330,7 @@ export const en = {
     roles: "Roles",
     noRoles: "No roles here yet.",
     addRole: "Give {name} a role",
+    removeRole: "Take {role} from {name}",
     show: "Show profile of {name}",
     message: "Message",
   },

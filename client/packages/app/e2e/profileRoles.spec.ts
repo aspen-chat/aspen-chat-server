@@ -3,7 +3,7 @@ import { community, helper, signInToWorld } from "./world";
 
 /**
  * Roles on a user card, against the stubbed world in `world.ts`, where the caller organises the
- * Family community with the Organiser role, and may assign roles below it.
+ * Family community with the Organiser role, and may give and take roles below it.
  */
 
 const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
@@ -27,24 +27,28 @@ async function openCard(page: Page, name: string) {
   return page.getByRole("dialog", { name: `Profile of ${name}` });
 }
 
-test("a card opened in a community lists the member's roles and gives one to those who may", async ({
+test("a card opened in a community lists the member's roles, and gives and takes them for those who may", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name.startsWith("phone"), "a phone shows no member list");
   const given: string[] = [];
-  const publish = await signInToWorld(page, (p) =>
-    p.route(new RegExp(`/communities/${community}/members/${helper}/roles/[^/]+$`), (route) => {
-      given.push(route.request().url().split("/").pop() ?? "");
-      publish({
-        serverEvent: "userCommunity",
-        type: "update",
-        community,
-        user: helper,
-        roles: [greeter],
-      });
-      return route.fulfill({ status: 204 });
-    }),
-  );
+  const publish = await signInToWorld(page, async (p) => {
+    await p.route(
+      new RegExp(`/communities/${community}/members/${helper}/roles/[^/]+$`),
+      (route) => {
+        const method = route.request().method();
+        given.push(`${method} ${route.request().url().split("/").pop() ?? ""}`);
+        publish({
+          serverEvent: "userCommunity",
+          type: "update",
+          community,
+          user: helper,
+          roles: method === "PUT" ? [greeter] : [],
+        });
+        return route.fulfill({ status: 204 });
+      },
+    );
+  });
   await expect(page.getByText("general", { exact: true })).toBeVisible();
 
   // With no role below the caller's own, there is nothing to give.
@@ -73,7 +77,12 @@ test("a card opened in a community lists the member's roles and gives one to tho
   await expect(menu.getByRole("menuitem")).toHaveText(["Greeter"]);
   await menu.getByRole("menuitem", { name: "Greeter" }).click();
   await expect(roles.getByRole("listitem").filter({ hasText: "Greeter" })).toBeVisible();
-  expect(given).toEqual([greeter]);
+  expect(given).toEqual([`PUT ${greeter}`]);
+
+  // The same card takes it away again.
+  await roles.getByRole("button", { name: "Take Greeter from Helper" }).click();
+  await expect(roles.getByRole("listitem").filter({ hasText: "Greeter" })).toHaveCount(0);
+  expect(given).toEqual([`PUT ${greeter}`, `DELETE ${greeter}`]);
 });
 
 test("a card opened outside a community shows no roles", async ({ page }) => {

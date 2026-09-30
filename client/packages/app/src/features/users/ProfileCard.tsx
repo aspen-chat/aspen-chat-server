@@ -1,5 +1,5 @@
 import type { User } from "@aspen/protocol";
-import { ChatCircleIcon, PlusIcon, ProhibitIcon } from "@phosphor-icons/react";
+import { ChatCircleIcon, PlusIcon, ProhibitIcon, XIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import {
@@ -168,9 +168,9 @@ function BlockControl({
 
 /**
  * The roles a member holds in the community the card was opened in, highest first, read from
- * the server when they are not among the members already known. Those who may give them a role
- * get a button listing the ones they could give. A card of someone who is not a member shows
- * nothing here.
+ * the server when they are not among the members already known. Those who may change their
+ * roles get a button listing the ones they could give, and an × on each they could take away.
+ * A card of someone who is not a member shows nothing here.
  */
 function CommunityRoles({
   communityId,
@@ -217,9 +217,10 @@ function CommunityRoles({
   // Roles are kept lowest first; a card lists the highest first.
   const shown = [...roles].reverse().filter((role) => !role.everyone && holding.has(role.id));
   const addable = [...assignable].reverse().filter((role) => !holding.has(role.id));
-  const give = (roleId: string) => {
+  const removable = new Set(assignable.map((role) => role.id));
+  const change = (roleId: string, held: boolean) => {
     setError(null);
-    sync.setMemberRole(communityId, userId, roleId, true).catch((failure: unknown) => {
+    sync.setMemberRole(communityId, userId, roleId, held).catch((failure: unknown) => {
       setError(failure instanceof Error ? failure.message : String(failure));
     });
   };
@@ -233,8 +234,25 @@ function CommunityRoles({
       </h3>
       <ul className="flex flex-wrap items-center gap-1">
         {shown.map((role) => (
-          <li key={role.id} className="rounded-full border border-line px-2 py-0.5 text-xs">
+          <li
+            key={role.id}
+            className={
+              "flex items-center gap-0.5 rounded-full border border-line py-0.5 text-xs " +
+              (removable.has(role.id) ? "ps-2 pe-0.5" : "px-2")
+            }
+          >
             {role.name}
+            {removable.has(role.id) && (
+              <Button
+                aria-label={format(m.profile.removeRole, { role: role.name, name })}
+                onPress={() => {
+                  change(role.id, false);
+                }}
+                className="flex h-4 w-4 items-center justify-center rounded-full text-ink-muted outline-none hover:bg-surface-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                <XIcon size={10} weight="bold" aria-hidden="true" />
+              </Button>
+            )}
           </li>
         ))}
         {shown.length === 0 && addable.length === 0 && (
@@ -253,7 +271,7 @@ function CommunityRoles({
                 <Menu
                   aria-label={format(m.profile.addRole, { name })}
                   onAction={(key) => {
-                    give(String(key));
+                    change(String(key), true);
                   }}
                   className="max-h-64 overflow-y-auto outline-none"
                 >

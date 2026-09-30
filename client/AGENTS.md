@@ -223,8 +223,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   any user control opens, and `EditProfileDialog.tsx` the signed-in user's editor. Opened within
   a community (a `communityId` in the route) the card lists the roles the user holds there,
   read with `AspenSync.loadMember` when they are outside the member sample, and offers those
-  who may give them a role the ones they could give (`useAssignableRoles`, which the members
-  panel's role picker shares).
+  who may change them the ones they could give and an × on each they could take away
+  (`useAssignableRoles`, which the members panel's role picker shares).
 - Voice lives in `packages/protocol/src/voice.ts`. `AspenSync.voice` is a `VoiceCall`: `join(channelId)`
   asks the API server for a join offer (`POST /channels/{channel}/voice/join`), opens the
   microphone (a refusal fails the join with `errorKind: "microphone"` before any server is
