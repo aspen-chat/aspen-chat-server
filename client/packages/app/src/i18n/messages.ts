@@ -225,6 +225,8 @@ export const en = {
     dismiss: "Dismiss",
     connecting: "Connecting…",
     completed: "Done",
+    saved: "Saved",
+    chooseWhere: "You'll choose where to save it before it starts.",
     cancelledBySelf: "You cancelled it.",
     cancelledByPeer: "{handle} cancelled it.",
     failed: "It stopped before finishing.",

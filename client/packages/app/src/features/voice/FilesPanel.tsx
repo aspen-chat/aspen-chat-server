@@ -7,7 +7,7 @@ import { outlineButtonClass } from "@/features/auth/styles";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { handleOf } from "@/features/users/profile";
 import { OfferFileDialog, ReceiveFileDialog } from "@/features/voice/FileDialogs";
-import { formatSize, formatTimeLeft } from "@/features/voice/files";
+import { formatSize, formatTimeLeft, safeFileName } from "@/features/voice/files";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -33,20 +33,11 @@ function useNow(ticking: boolean, changed: unknown): number {
   return now;
 }
 
-/** A name safe to save a received file under: no directories, and no control characters. */
-function saveName(name: string): string {
-  const cleaned = name
-    .replace(/[/\\]/g, "_")
-    .replace(/\p{Cc}/gu, "")
-    .trim();
-  return cleaned.length > 0 ? cleaned : "file";
-}
-
 function save(file: Blob, name: string): void {
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
-  link.download = saveName(name);
+  link.download = safeFileName(name);
   link.click();
   setTimeout(() => {
     URL.revokeObjectURL(url);
@@ -246,7 +237,7 @@ function Transfer({ transfer }: { transfer: TransferState }) {
           total: formatSize(transfer.size, locale),
         });
       case "completed":
-        return m.files.completed;
+        return transfer.toDisk ? m.files.saved : m.files.completed;
       case "cancelled":
         return transfer.endedBy === "self"
           ? m.files.cancelledBySelf

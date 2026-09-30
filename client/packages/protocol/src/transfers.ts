@@ -85,8 +85,20 @@ export interface TransferState {
   readonly route: TransferRoute | null;
   /** Who ended it, once it has ended: this device, or the other side. */
   readonly endedBy: "self" | "peer" | null;
-  /** The file, on the receiving side, once every byte has arrived. */
+  /** The file, on the receiving side, once every byte has arrived, unless it went to a `FileSink`. */
   readonly file: Blob | null;
+  /** Whether it is being written, or was written, straight to a file the receiver chose. */
+  readonly toDisk: boolean;
+}
+
+/**
+ * Where a receiver writes a file as it arrives, chosen before the transfer began: a browser's
+ * `FileSystemWritableFileStream` fits. `close` keeps what was written; `abort` discards it.
+ */
+export interface FileSink {
+  write(chunk: ArrayBuffer): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
 }
 
 export interface FilesState {
@@ -129,6 +141,9 @@ interface Live {
   received: ArrayBuffer[];
   lastReport: number;
   routeTimer: ReturnType<typeof setInterval> | null;
+  /** Where the receiver writes, and the writes still under way, in order. */
+  sink: FileSink | null;
+  writing: Promise<void>;
 }
 
 /**
@@ -187,6 +202,8 @@ export class FileTransfers {
   readonly #live = new Map<string, Live>();
   /** Finished transfers, kept for the UI until dismissed. */
   readonly #finished = new Map<string, TransferState>();
+  /** Sinks for offers this device accepted, until their transfers start. */
+  readonly #sinks = new Map<string, FileSink>();
   /** The files this device offered, kept while the offer stands or a transfer of it goes on. */
   readonly #files = new Map<string, Blob>();
   #links: TransferLink[] = [];
@@ -223,6 +240,10 @@ export class FileTransfers {
   closeAll(): void {
     for (const live of this.#live.values()) {
       live.pc.close();
+      void live.sink?.abort().catch(() => undefined);
+    }
+    for (const offer of [...this.#sinks.keys()]) {
+      this.#dropSink(offer);
     }
     this.#live.clear();
     this.#finished.clear();
@@ -254,9 +275,25 @@ export class FileTransfers {
     this.#send({ type: "withdrawFile", offer });
   }
 
-  /** Accepts an offer, in the mode the user acknowledged. */
-  accept(offer: string, mode: TransferMode): void {
+  /**
+   * Accepts an offer, in the mode the user acknowledged, writing what arrives to `sink` when
+   * the user chose where to save it, and holding it for `file` otherwise.
+   */
+  accept(offer: string, mode: TransferMode, sink?: FileSink): void {
+    if (sink !== undefined) {
+      this.#dropSink(offer);
+      this.#sinks.set(offer, sink);
+    }
     this.#send({ type: "acceptFile", offer, mode });
+  }
+
+  /** Discards the file a sink was opened for, when its transfer will not start. */
+  #dropSink(offer: string): void {
+    const sink = this.#sinks.get(offer);
+    if (sink !== undefined) {
+      this.#sinks.delete(offer);
+      void sink.abort().catch(() => undefined);
+    }
   }
 
   /** Cancels one transfer at once. */
@@ -285,6 +322,7 @@ export class FileTransfers {
         return true;
       case "fileWithdrawn":
         this.#offers.delete(frame.offer);
+        this.#dropSink(frame.offer);
         this.#releaseFile(frame.offer);
         this.#changed();
         return true;
@@ -368,6 +406,7 @@ export class FileTransfers {
         route: null,
         endedBy: null,
         file: null,
+        toDisk: false,
       },
       pc,
       channel: null,
@@ -375,7 +414,14 @@ export class FileTransfers {
       received: [],
       lastReport: 0,
       routeTimer: null,
+      sink: null,
+      writing: Promise.resolve(),
     };
+    if (!sending) {
+      live.sink = this.#sinks.get(frame.offer) ?? null;
+      this.#sinks.delete(frame.offer);
+      live.state = { ...live.state, toDisk: live.sink !== null };
+    }
     this.#live.set(key(frame.offer, frame.peer), live);
     pc.onicecandidate = (event) => {
       if (event.candidate !== null) {
@@ -509,13 +555,30 @@ export class FileTransfers {
     };
   }
 
-  /** Gathers what arrives until every byte of the offered size is here. */
+  /**
+   * Takes what arrives until every byte of the offered size is here: into the chosen file as it
+   * comes, or held for `file`. It is done only once the file is closed on disk.
+   */
   #receiveOver(live: Live, channel: RTCDataChannel): void {
     live.channel = channel;
     channel.binaryType = "arraybuffer";
-    const complete = (): void => {
-      const file = new Blob(live.received);
-      live.received = [];
+    const complete = async (): Promise<void> => {
+      let file: Blob | null = null;
+      try {
+        if (live.sink === null) {
+          file = new Blob(live.received);
+          live.received = [];
+        } else {
+          await live.writing;
+          await live.sink.close();
+        }
+      } catch {
+        this.#fail(live);
+        return;
+      }
+      if (!this.#isLive(live)) {
+        return;
+      }
       // Closing a channel sends what it holds first, so this reaches the sender before the close.
       if (channel.readyState === "open") {
         channel.send(DONE);
@@ -531,22 +594,31 @@ export class FileTransfers {
     channel.onopen = () => {
       this.#update(live, { status: "moving" }, true);
       if (live.state.size === 0) {
-        complete();
+        void complete();
       }
     };
     channel.onmessage = (event: MessageEvent) => {
       if (!(event.data instanceof ArrayBuffer)) {
         return;
       }
-      live.received.push(event.data);
-      const bytes = live.state.bytes + event.data.byteLength;
+      const chunk = event.data;
+      const bytes = live.state.bytes + chunk.byteLength;
       if (bytes > live.state.size) {
         this.#fail(live);
         return;
       }
+      const sink = live.sink;
+      if (sink === null) {
+        live.received.push(chunk);
+      } else {
+        live.writing = live.writing.then(() => sink.write(chunk));
+        live.writing.catch(() => {
+          this.#fail(live);
+        });
+      }
       this.#update(live, { bytes });
       if (bytes === live.state.size) {
-        complete();
+        void complete();
       }
     };
     channel.onclose = () => {
@@ -597,6 +669,10 @@ export class FileTransfers {
     live.channel?.close();
     live.pc.close();
     live.received = [];
+    if (status !== "completed") {
+      // What was written of a file that did not finish is discarded.
+      void live.sink?.abort().catch(() => undefined);
+    }
     this.#finished.set(k, { ...live.state, status, endedBy, file });
     this.#releaseFile(live.state.offer);
     this.#changed();

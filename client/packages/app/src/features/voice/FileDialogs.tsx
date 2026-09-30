@@ -37,7 +37,14 @@ import {
 import { choiceClass, RadioMark } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { handleOf } from "@/features/users/profile";
-import { formatSize, receiveModes, VALIDITY_CHOICES, type Validity } from "@/features/voice/files";
+import {
+  canChooseDestination,
+  chooseDestination,
+  formatSize,
+  receiveModes,
+  VALIDITY_CHOICES,
+  type Validity,
+} from "@/features/voice/files";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -278,6 +285,9 @@ export function ReceiveFileDialog({
             )}
           </RadioGroup>
           {modes.length === 1 && <p className="text-xs text-ink-muted">{m.files.onlyOption}</p>}
+          {canChooseDestination() && (
+            <p className="text-xs text-ink-muted">{m.files.chooseWhere}</p>
+          )}
           <p className="text-xs text-ink-muted">{m.files.noResume}</p>
           <div className="flex justify-end gap-2">
             <Button onPress={onClose} className={secondaryButtonClass}>
@@ -289,8 +299,25 @@ export function ReceiveFileDialog({
                 if (mode === null) {
                   return;
                 }
-                sync.voice.acceptOffer(offer.id, mode);
-                onClose();
+                if (!canChooseDestination()) {
+                  sync.voice.acceptOffer(offer.id, mode);
+                  onClose();
+                  return;
+                }
+                void chooseDestination(offer.name).then(
+                  (sink) => {
+                    // Closing the picker without choosing leaves the offer to accept later.
+                    if (sink !== null) {
+                      sync.voice.acceptOffer(offer.id, mode, sink);
+                      onClose();
+                    }
+                  },
+                  () => {
+                    // Where the file cannot be opened, it is held and saved at the end instead.
+                    sync.voice.acceptOffer(offer.id, mode);
+                    onClose();
+                  },
+                );
               }}
               className={primaryButtonClass}
             >

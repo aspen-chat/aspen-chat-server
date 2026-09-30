@@ -204,6 +204,7 @@ export {
   MIN_OFFER_SECONDS,
   NO_FILES,
   FileTransfers,
+  type FileSink,
   routeOf,
   type FilesState,
   type OfferState,

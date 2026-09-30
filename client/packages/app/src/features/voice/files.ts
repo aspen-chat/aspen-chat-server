@@ -1,4 +1,4 @@
-import type { OfferState, TransferMode } from "@aspen/protocol";
+import type { FileSink, OfferState, TransferMode } from "@aspen/protocol";
 
 /** How long an offer may stand, in seconds, as the offer dialog lists them; the first is the default. */
 export const VALIDITY_CHOICES = ["60", "300", "900", "1800", "3600"] as const;
@@ -77,4 +77,46 @@ export function linkPath(from: Box, to: Box, gap: number, lane = 0): string {
   }
   const between = (from.top + toBottom) / 2 + shift / 3;
   return `M${at(fromX)},${at(from.top)} V${at(between)} H${at(toX)} V${at(toBottom)}`;
+}
+
+/** A name safe to save a received file under: no directories, and no control characters. */
+export function safeFileName(name: string): string {
+  const cleaned = name
+    .replace(/[/\\]/g, "_")
+    .replace(/\p{Cc}/gu, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned : "file";
+}
+
+interface SavePicker {
+  showSaveFilePicker?: (options: { suggestedName: string }) => Promise<FileSystemFileHandle>;
+}
+
+/**
+ * Whether the browser lets the receiver choose where a file goes before it arrives (the File
+ * System Access API: Chromium, and so the desktop app). Elsewhere a file is held until it has
+ * all arrived and then saved.
+ */
+export function canChooseDestination(): boolean {
+  return typeof (window as SavePicker).showSaveFilePicker === "function";
+}
+
+/**
+ * Asks where to save `name` and opens the file for writing; `null` when the receiver closed the
+ * picker without choosing. Must be called from a click, which the picker needs.
+ */
+export async function chooseDestination(name: string): Promise<FileSink | null> {
+  const picker = (window as SavePicker).showSaveFilePicker;
+  if (picker === undefined) {
+    return null;
+  }
+  try {
+    const handle = await picker({ suggestedName: safeFileName(name) });
+    return await handle.createWritable();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return null;
+    }
+    throw error;
+  }
 }

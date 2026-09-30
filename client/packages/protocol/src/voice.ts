@@ -20,7 +20,13 @@ import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError } from "./problem";
-import { FileTransfers, type FilesState, NO_FILES, type TransferMode } from "./transfers";
+import {
+  type FileSink,
+  FileTransfers,
+  type FilesState,
+  NO_FILES,
+  type TransferMode,
+} from "./transfers";
 
 type VoiceJoinOffer = components["schemas"]["VoiceJoinOffer"];
 type VoiceServerCandidate = components["schemas"]["VoiceServerCandidate"];
@@ -488,9 +494,12 @@ export class VoiceCall {
     this.#files.withdraw(offer);
   }
 
-  /** Accepts an offer in the transfer mode the user acknowledged. */
-  acceptOffer(offer: string, mode: TransferMode): void {
-    this.#files.accept(offer, mode);
+  /**
+   * Accepts an offer in the transfer mode the user acknowledged, writing it to `sink` as it
+   * arrives when the user chose where to save it first.
+   */
+  acceptOffer(offer: string, mode: TransferMode, sink?: FileSink): void {
+    this.#files.accept(offer, mode, sink);
   }
 
   /** Cancels one transfer, which ends at once on both sides. */

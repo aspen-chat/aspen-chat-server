@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OfferState } from "@aspen/protocol";
-import { formatSize, formatTimeLeft, linkPath, receiveModes } from "./files";
+import { formatSize, formatTimeLeft, linkPath, receiveModes, safeFileName } from "./files";
 
 const offer = (allowDirect: boolean): OfferState => ({
   id: "o",
@@ -43,5 +43,11 @@ describe("files", () => {
     for (const path of [linkPath(tile(0, 0), tile(200, 92), 12, 2)]) {
       expect(path).toMatch(/^M[\d.]+,[\d.]+ V[\d.]+ H[\d.]+ V[\d.]+$/);
     }
+  });
+
+  it("saves under a name with no directories or control characters", () => {
+    expect(safeFileName("../../etc/passwd")).toBe(".._.._etc_passwd");
+    expect(safeFileName("a\\b\u0007.txt")).toBe("a_b.txt");
+    expect(safeFileName("  \u0000 ")).toBe("file");
   });
 });

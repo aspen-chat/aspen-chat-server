@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
-import { FileTransfers, routeOf, type TransferState } from "./transfers";
+import { type FileSink, FileTransfers, routeOf, type TransferState } from "./transfers";
 
 /** A data channel whose other end is another fake's, delivering in order on the next tick. */
 class FakeChannel {
@@ -413,5 +413,71 @@ describe("FileTransfers", () => {
       ),
     ).toBe("direct");
     expect(await routeOf(pc([]))).toBeNull();
+  });
+
+  it("writes to the file the receiver chose as it arrives, and keeps nothing in memory", async () => {
+    const { sender, receiver } = call();
+    const written: Uint8Array[] = [];
+    const sink = { closed: false, aborted: false } as {
+      closed: boolean;
+      aborted: boolean;
+    } & FileSink;
+    sink.write = (chunk) => {
+      written.push(new Uint8Array(chunk));
+      return Promise.resolve();
+    };
+    sink.close = () => {
+      sink.closed = true;
+      return Promise.resolve();
+    };
+    sink.abort = () => {
+      sink.aborted = true;
+      return Promise.resolve();
+    };
+    const bytes = new Uint8Array(150_000).map((_, i) => i % 13);
+    sender.offer(new Blob([bytes]), "to-disk.bin", true, 60);
+    await settle();
+    receiver.accept(OFFER, "directPreferred", sink);
+    await settle();
+    expect(transferOf(receiver.state)).toMatchObject({
+      status: "completed",
+      toDisk: true,
+      file: null,
+    });
+    expect(sink.closed).toBe(true);
+    expect(sink.aborted).toBe(false);
+    const joined = new Uint8Array(written.reduce((n, c) => n + c.length, 0));
+    let at = 0;
+    for (const chunk of written) {
+      joined.set(chunk, at);
+      at += chunk.length;
+    }
+    expect(joined).toEqual(bytes);
+  });
+
+  it("discards what was written of a file whose transfer is cancelled", async () => {
+    const { sender, receiver } = call();
+    const sink = {
+      closed: false,
+      aborted: false,
+      write: () => Promise.resolve(),
+      close() {
+        this.closed = true;
+        return Promise.resolve();
+      },
+      abort() {
+        this.aborted = true;
+        return Promise.resolve();
+      },
+    };
+    sender.offer(new Blob([new Uint8Array(50_000_000)]), "big.bin", true, 60);
+    await settle();
+    FakeChannel.stalled = true;
+    receiver.accept(OFFER, "directPreferred", sink);
+    await settle();
+    receiver.cancel(OFFER, SENDER);
+    await settle();
+    expect(sink.aborted).toBe(true);
+    expect(sink.closed).toBe(false);
   });
 });
