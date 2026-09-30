@@ -4,8 +4,10 @@
 The mark is drawn once, here, in two levels of detail: `full` (bark marks on the trunk, fine gaps
 between the leaves) for anything drawn 64 pixels or larger, and `small` (no bark marks, a thicker
 trunk, wider gaps) for the sizes where fine detail turns to mud. The gaps are cut out of the
-leaves beneath rather than painted, so the mark sits on any background. Everything else is laid
-out from those two: the brand art in `client/brand/`, the web client's favicons, the desktop
+leaves beneath rather than painted, so the mark sits on any background. Wherever an icon may be
+transparent it is the bare mark; where the platform needs a solid icon (an iPhone's home screen,
+Android's adaptive icon and splash, macOS's Dock) the mark sits on a charcoal tile, since a pale
+tile swallows the pale trunk. Everything else is laid out from those two: the brand art in `client/brand/`, the web client's favicons, the desktop
 app's icons for each platform, the Android launcher, notification, and splash images, and the
 favicon inlined in the server's passkey page.
 
@@ -34,10 +36,14 @@ EMERALD = "#047857"
 MINT = "#34d399"
 GOLD = "#F2B43A"
 BARK = "#E7E1D3"
+"""The trunk on a dark ground."""
+HAZEL = "#C7BCA5"
+"""The trunk wherever the ground is unknown: a shade darker, so it still shows on a light panel
+or tab bar, and still reads on a dark one."""
 INK = "#23262B"
+"""The bark's marks, the wordmark's letters on a light ground, and the tile behind the mark
+wherever an icon needs a background of its own."""
 PAPER = "#F5F3EE"
-CREAM = "#FBF8F1"
-"""The tile behind the mark wherever an icon needs a background of its own."""
 
 
 @dataclass(frozen=True)
@@ -49,7 +55,6 @@ class Detail:
     trunk: tuple[float, float, float, float, float]  # x, y, width, height, corner radius
     gap: float
     bark_marks: tuple[float, ...]  # heights of the dark "eyes" on the trunk
-    bark: str
 
     @property
     def top_edge(self) -> float:
@@ -60,14 +65,21 @@ class Detail:
         return self.trunk[1] + self.trunk[3]
 
 
-FULL = Detail((90, 112, 44), (166, 112, 44), (128, 76, 48), (116, 120, 24, 106, 8), 3.5, (168, 204), BARK)
-# A pale trunk a few pixels wide vanishes on a light tab bar, so the small mark's bark is a shade
-# darker, which still reads on a dark one.
-SMALL = Detail((88, 118, 48), (168, 118, 48), (128, 76, 52), (110, 130, 36, 96, 10), 12, (), "#C7BCA5")
+FULL = Detail((90, 112, 44), (166, 112, 44), (128, 76, 48), (116, 120, 24, 106, 8), 3.5, (168, 204))
+SMALL = Detail((88, 118, 48), (168, 118, 48), (128, 76, 52), (110, 130, 36, 96, 10), 12, ())
 
 
-def mark(detail: Detail, cx: float, cy: float, height: float, key: str, mono: str | None = None) -> str:
-    """The mark `height` tall, centred on (cx, cy); `mono` draws it in that one colour."""
+def mark(
+    detail: Detail,
+    cx: float,
+    cy: float,
+    height: float,
+    key: str,
+    mono: str | None = None,
+    bark: str = HAZEL,
+) -> str:
+    """The mark `height` tall, centred on (cx, cy), its trunk `bark` (`BARK` on a dark ground);
+    `mono` draws it all in that one colour."""
     scale = height / (detail.bottom_edge - detail.top_edge)
     top = cy - height / 2
     transform = f"translate({cx - 128 * scale:.3f} {top - detail.top_edge * scale:.3f}) scale({scale:.5f})"
@@ -96,7 +108,7 @@ def mark(detail: Detail, cx: float, cy: float, height: float, key: str, mono: st
         f'<defs>{mask("trunk", detail.left, detail.right, detail.top)}'
         f'{mask("left", detail.right, detail.top)}{mask("right", detail.top)}</defs>'
         f'<g transform="{transform}">'
-        f'<g mask="url(#{key}-trunk)"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{colour(detail.bark)}"/>{eyes}</g>'
+        f'<g mask="url(#{key}-trunk)"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{colour(bark)}"/>{eyes}</g>'
         f'<circle cx="{lx}" cy="{ly}" r="{lr}" fill="{colour(MINT)}" mask="url(#{key}-left)"/>'
         f'<circle cx="{rx_}" cy="{ry}" r="{rr}" fill="{colour(GOLD)}" mask="url(#{key}-right)"/>'
         f'<circle cx="{tx}" cy="{ty}" r="{tr}" fill="{colour(EMERALD)}"/>'
@@ -116,19 +128,16 @@ def detail_for(pixels: int) -> Detail:
     return FULL if pixels >= 64 else SMALL
 
 
-def tile(size: int, shape: str = "rounded") -> str:
-    """The mark on the cream tile: `rounded` (a rounded square), `circle`, or `square` (full bleed)."""
-    if shape == "circle":
-        ground = f'<circle cx="{size / 2}" cy="{size / 2}" r="{size / 2}" fill="{CREAM}"/>'
-        height = size * 0.6
-    elif shape == "square":
-        ground = f'<rect width="{size}" height="{size}" fill="{CREAM}"/>'
-        height = size * 0.66
-    else:
-        ground = f'<rect width="{size}" height="{size}" rx="{size * 0.22}" fill="{CREAM}"/>'
-        # A small icon spends little on its tile: the mark is what has to be recognised.
-        height = size * (0.66 if size >= 64 else 0.84)
-    return svg(size, size, ground + mark(detail_for(size), size / 2, size / 2, height, "m"))
+def bare(size: int) -> str:
+    """The mark alone on a transparent square, nearly filling it: small icons fill it to the edge."""
+    height = size * (0.92 if size >= 64 else 0.97)
+    return svg(size, size, mark(detail_for(size), size / 2, size / 2, height, "m"))
+
+
+def tile(size: int, rounded: bool = True) -> str:
+    """The mark on the charcoal tile, a rounded square or, where the platform rounds it, square."""
+    ground = f'<rect width="{size}" height="{size}" rx="{size * 0.22 if rounded else 0}" fill="{INK}"/>'
+    return svg(size, size, ground + mark(detail_for(size), size / 2, size / 2, size * 0.66, "m", bark=BARK))
 
 
 def mac_icon() -> str:
@@ -140,8 +149,8 @@ def mac_icon() -> str:
         '<feGaussianBlur in="SourceAlpha" stdDeviation="14"/><feOffset dy="12"/>'
         '<feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>'
         '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'
-        f'<rect x="100" y="100" width="824" height="824" rx="185" fill="{CREAM}" filter="url(#shadow)"/>'
-        + mark(FULL, 512, 512, 824 * 0.64, "m"),
+        f'<rect x="100" y="100" width="824" height="824" rx="185" fill="{INK}" filter="url(#shadow)"/>'
+        + mark(FULL, 512, 512, 824 * 0.64, "m", bark=BARK),
     )
 
 
@@ -164,15 +173,15 @@ def letters(x: float, y: float, ink: str) -> str:
     )
 
 
-def wordmark(ink: str) -> str:
+def wordmark(ink: str, bark: str) -> str:
     height = 119
-    body = mark(FULL, 20 + height * 164 / 198 / 2, 157 - height / 2, height, "m") + letters(150, 0, ink)
+    body = mark(FULL, 20 + height * 164 / 198 / 2, 157 - height / 2, height, "m", bark=bark) + letters(150, 0, ink)
     return svg(150 + LETTERS_WIDTH + 20, 200, body)
 
 
-def stacked(ink: str) -> str:
+def stacked(ink: str, bark: str) -> str:
     width, height = LETTERS_WIDTH + 40, 158
-    body = mark(FULL, width / 2, 20 + height / 2, height, "m") + letters(20, 112, ink)
+    body = mark(FULL, width / 2, 20 + height / 2, height, "m", bark=bark) + letters(20, 112, ink)
     return svg(width, 324, body)
 
 
@@ -211,12 +220,18 @@ def android() -> None:
     for name, scale in densities.items():
         launcher, layer, status = round(48 * scale), round(108 * scale), round(24 * scale)
         mipmap = ANDROID_RES / f"mipmap-{name}"
-        render(tile(launcher), mipmap / "ic_launcher.png", launcher)
-        render(tile(launcher, "circle"), mipmap / "ic_launcher_round.png", launcher)
+        # Launchers before adaptive icons draw these as they are, so the bare mark serves both.
+        render(bare(launcher), mipmap / "ic_launcher.png", launcher)
+        render(bare(launcher), mipmap / "ic_launcher_round.png", launcher)
         # An adaptive icon's layers are 108dp, of which a mask shows the middle 72dp and only a
-        # 66dp circle is sure to survive every launcher's shape; the mark stays inside it.
+        # 66dp circle is sure to survive every launcher's shape; the mark stays inside it, over
+        # the charcoal `ic_launcher_background`.
         mark_height = layer * 56 / 108
-        render(svg(layer, layer, mark(FULL, layer / 2, layer / 2, mark_height, "a")), mipmap / "ic_launcher_foreground.png", layer)
+        render(
+            svg(layer, layer, mark(FULL, layer / 2, layer / 2, mark_height, "a", bark=BARK)),
+            mipmap / "ic_launcher_foreground.png",
+            layer,
+        )
         render(
             svg(layer, layer, mark(FULL, layer / 2, layer / 2, mark_height, "a", mono="#FFFFFF")),
             mipmap / "ic_launcher_monochrome.png",
@@ -230,8 +245,8 @@ def android() -> None:
         )
     for splash in sorted(ANDROID_RES.glob("drawable*/splash.png")):
         width, height = (int(v) for v in subprocess.check_output(["magick", "identify", "-format", "%w %h", str(splash)]).split())
-        body = f'<rect width="{width}" height="{height}" fill="{CREAM}"/>' + mark(
-            FULL, width / 2, height / 2, min(width, height) * 0.3, "p"
+        body = f'<rect width="{width}" height="{height}" fill="{INK}"/>' + mark(
+            FULL, width / 2, height / 2, min(width, height) * 0.3, "p", bark=BARK
         )
         render(svg(width, height, body), splash, (width, height))
 
@@ -240,15 +255,16 @@ def desktop() -> None:
     # electron-builder makes each platform's format from these: Linux takes the sized PNGs as
     # they are, Windows the .ico, and macOS an .icns built from icon-mac.png.
     for size in (16, 24, 32, 48, 64, 128, 256, 512, 1024):
-        render(tile(size), DESKTOP_BUILD / f"icons/{size}x{size}.png", size)
-    ico(DESKTOP_BUILD / "icon.ico", [16, 24, 32, 48, 64, 128, 256], tile)
+        render(bare(size), DESKTOP_BUILD / f"icons/{size}x{size}.png", size)
+    ico(DESKTOP_BUILD / "icon.ico", [16, 24, 32, 48, 64, 128, 256], bare)
     render(mac_icon(), DESKTOP_BUILD / "icon-mac.png", 1024)
 
 
 def web() -> None:
     write(APP_PUBLIC / "favicon.svg", favicon())
-    ico(APP_PUBLIC / "favicon.ico", [16, 32, 48], lambda size: svg(size, size, mark(SMALL, size / 2, size / 2, size * 0.97, "f")))
-    render(tile(180, "square"), APP_PUBLIC / "apple-touch-icon.png", 180)
+    ico(APP_PUBLIC / "favicon.ico", [16, 32, 48], bare)
+    # iOS rounds the corners itself and turns transparency black, so this one is a full square.
+    render(tile(180, rounded=False), APP_PUBLIC / "apple-touch-icon.png", 180)
 
 
 def passkey_page() -> None:
@@ -266,10 +282,10 @@ def brand() -> None:
     write(BRAND / "aspen-mark.svg", svg(164, 198, mark(FULL, 82, 99, 198, "m")))
     write(BRAND / "aspen-mark-small.svg", svg(176, 202, mark(SMALL, 88, 101, 202, "m")))
     write(BRAND / "aspen-icon.svg", tile(1024))
-    write(BRAND / "aspen-wordmark.svg", wordmark(INK))
-    write(BRAND / "aspen-wordmark-dark.svg", wordmark(PAPER))
-    write(BRAND / "aspen-stacked.svg", stacked(INK))
-    write(BRAND / "aspen-stacked-dark.svg", stacked(PAPER))
+    write(BRAND / "aspen-wordmark.svg", wordmark(INK, HAZEL))
+    write(BRAND / "aspen-wordmark-dark.svg", wordmark(PAPER, BARK))
+    write(BRAND / "aspen-stacked.svg", stacked(INK, HAZEL))
+    write(BRAND / "aspen-stacked-dark.svg", stacked(PAPER, BARK))
 
 
 if __name__ == "__main__":

@@ -25,7 +25,11 @@ Every icon the apps ship is drawn by `scripts/export_icons.py` from one definiti
 mark, in two levels of detail: full (bark marks, fine gaps between the leaves) from 64 pixels up,
 and small (no bark marks, a darker and thicker trunk, wider gaps) below, since fine detail turns
 to mud at favicon sizes. The gaps are cut out rather than painted, so the mark sits on any
-background. It writes the brand art (`brand/`: the mark, the icon tile, and the wordmark side by
+background. Wherever an icon may be transparent (favicons, the desktop icons, Android's legacy
+launcher icons) it is the bare mark, its trunk a shade darker so it shows on a light panel too;
+where the platform needs a solid one (the iPhone's home screen, Android's adaptive icon and
+splash, macOS's Dock) the mark sits on charcoal, since a pale tile swallows the pale trunk. It
+writes the brand art (`brand/`: the mark, the icon tile, and the wordmark side by
 side and stacked, each for light and dark grounds), the web client's `favicon.svg`,
 `favicon.ico`, and `apple-touch-icon.png` (`packages/app/public/`), the desktop app's icons
 (`packages/desktop/build/`: sized PNGs for Linux, which also give the window its icon there, an
