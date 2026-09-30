@@ -158,6 +158,16 @@ export function useUser(id: string | undefined): User | undefined {
   return user;
 }
 
+/**
+ * Whether a person's record is still on its way: asked for and neither arrived nor refused.
+ * What names them shows a skeleton meanwhile, and "unknown" only once the server says so.
+ */
+export function useUserLoading(id: string | undefined): boolean {
+  return useTopic(`user:${id ?? ""}`, (s) =>
+    id === undefined ? false : s.user(id) === undefined && !s.missing("user", id),
+  );
+}
+
 /** An attachment record by id, fetched on demand when the cache lacks it. */
 export function useAttachment(id: string): Attachment | undefined {
   const sync = useSync();
@@ -182,6 +192,13 @@ export function useIcon(id: string | undefined): Icon | undefined {
   return icon;
 }
 
+/** Whether an icon's record is still on its way: asked for and neither arrived nor refused. */
+export function useIconLoading(id: string | undefined): boolean {
+  return useTopic(`icon:${id ?? ""}`, (s) =>
+    id === undefined ? false : s.icon(id) === undefined && !s.missing("icon", id),
+  );
+}
+
 /** A poll by id, fetched on demand with the caller's votes when the cache lacks it. */
 export function usePoll(id: string): Poll | undefined {
   const sync = useSync();
@@ -192,6 +209,11 @@ export function usePoll(id: string): Poll | undefined {
     }
   }, [sync, id, poll]);
   return poll;
+}
+
+/** Whether a poll is still on its way: asked for and neither arrived nor refused. */
+export function usePollLoading(id: string): boolean {
+  return useTopic(`poll:${id}`, (s) => s.poll(id) === undefined && !s.missing("poll", id));
 }
 
 /** The options the caller has voted for on a poll. */

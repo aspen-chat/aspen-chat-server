@@ -7,7 +7,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
-import { useSync, useUser } from "@/api/hooks";
+import { useSync, useUser, useUserLoading } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
@@ -23,6 +23,7 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { formatNodes } from "@/i18n/formatNodes";
 import { format, type Messages } from "@/i18n/messages";
+import { PersonName } from "@/features/users/PersonName";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -100,7 +101,8 @@ export function ModerationLog() {
             { content: m.admin.logWhere },
           ]}
           numeric={[]}
-          dimmed={loading}
+          dimmed={loading && entries.length > 0}
+          skeletonRows={loading && entries.length === 0 ? 5 : 0}
         >
           {entries.map((entry) => (
             <tr key={entry.id}>
@@ -151,7 +153,11 @@ function Actor({ userId }: { userId: string | undefined }) {
  */
 function Person({ id }: { id: string }) {
   const user = useUser(id);
-  return user === undefined ? <BareId id={id} /> : <UserMention id={id} chip />;
+  const loading = useUserLoading(id);
+  if (user !== undefined) {
+    return <UserMention id={id} chip />;
+  }
+  return loading ? <PersonName id={id} /> : <BareId id={id} />;
 }
 
 /** The last resort, an id no name could be found for. */

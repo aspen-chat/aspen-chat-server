@@ -185,7 +185,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   as a link is what gets a preview; change both together.
 - Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (reserve,
   `PUT` the bytes straight to storage with `uploadFetch`, confirm) and are named by id in
-  `sendMessage`. A message event carries only ids, so `useAttachment` fetches records on
+  `sendMessage`. A picture's reservation carries its size, which the composer measures first
+  (`measurePicture`), and its record gives it back as `width` and `height`. A message event carries only ids, so `useAttachment` fetches records on
   demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
   links whose path has an image extension, and links the server found to be images, which
   arrive as previews with a picture and no text. `MessageMedia` there gathers all three into
@@ -645,6 +646,18 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 
 ## UI
 
+- Whatever waits on the network stands in skeleton meanwhile (`Skeleton` and `LoadingLabel`,
+  `src/features/layout/Skeleton.tsx`, and the shaped ones in `ScreenSkeletons.tsx` and
+  `MessageSkeleton.tsx`), sized like what it stands for, or a conservative guess where that
+  cannot be known, so nothing moves when it arrives; it pulses gently, still where the reader
+  asks for less motion, is hidden from assistive technology, and the region says it is busy
+  and names what it waits for. A record fetched on demand is waited on only until the server
+  says it does not exist (`RecordStore.missing`, `markMissing`, on the topic its record would
+  come on; `useUserLoading`, `useIconLoading`, `usePollLoading`), so a skeleton never stands
+  forever and "unknown" or "unavailable" never flashes before the record arrives; people are
+  named through `PersonName` and `PersonAvatar` for that. A picture keeps its room while it
+  loads: an uploader measures it (`measurePicture`) and the attachment records its width and
+  height, and a picture without them keeps a conservative box.
 - Components come from `react-aria-components`. Do not reach for `react-aria` hooks or another
   component library unless React Aria genuinely lacks the primitive; if so, say why in a comment.
 - Every screen and dialog passes axe (`@axe-core/playwright`): `e2e/accessibility.spec.ts`

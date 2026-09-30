@@ -21,6 +21,7 @@ import { BotBadge } from "@/features/users/BotBadge";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /**
  * What a bot's link opens: the bot, the caller's communities they may add bots to, and the
@@ -62,11 +63,23 @@ export function BotAddScreen({
   return (
     <Frame>
       <div className="flex items-center gap-3">
-        <Avatar name={name} iconId={bot?.icon ?? null} size="lg" />
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="truncate text-xl font-semibold">{format(m.bots.addHeading, { name })}</h1>
-          <BotBadge />
-        </div>
+        {bot === undefined ? (
+          <>
+            <LoadingLabel />
+            <Skeleton className="h-12 w-12 shrink-0 rounded-full" />
+            <Skeleton className="h-6 w-48" />
+          </>
+        ) : (
+          <>
+            <Avatar name={name} iconId={bot.icon} size="lg" />
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-xl font-semibold">
+                {format(m.bots.addHeading, { name })}
+              </h1>
+              <BotBadge />
+            </div>
+          </>
+        )}
       </div>
       {bot !== undefined && !mayAdd && <p className="text-sm text-danger">{m.bots.privateBot}</p>}
       {places.length === 0 ? (

@@ -272,17 +272,13 @@ export class AspenSync {
   #lastActivityAt = Number.NEGATIVE_INFINITY;
   #activityReportedAt = Number.NEGATIVE_INFINITY;
   /** Users the server said do not exist; asked once, not again. */
-  readonly #missingUsers = new Set<string>();
   readonly #attachmentLoads = new Map<string, Promise<void>>();
-  readonly #missingAttachments = new Set<string>();
   readonly #pollLoads = new Map<string, Promise<void>>();
   /** Per channel, the furthest message read and not yet reported. */
   readonly #unreported = new Map<string, string>();
   #readTimer: ReturnType<typeof setTimeout> | null = null;
   #muteTimer: ReturnType<typeof setTimeout> | null = null;
-  readonly #missingPolls = new Set<string>();
   readonly #iconLoads = new Map<string, Promise<void>>();
-  readonly #missingIcons = new Set<string>();
   readonly #random: () => number;
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
@@ -549,9 +545,17 @@ export class AspenSync {
    * straight to storage, and confirming, and caches the resulting record. The attachment can
    * then be named in a message.
    */
-  async uploadAttachment(file: File): Promise<Attachment> {
+  async uploadAttachment(
+    file: File,
+    /** A picture's size in pixels, which readers use to make room for it before it loads. */
+    size?: { readonly width: number; readonly height: number },
+  ): Promise<Attachment> {
     const init = await this.#client.api.POST("/api/v1/attachments", {
-      body: { fileName: file.name, mimeType: file.type || "application/octet-stream" },
+      body: {
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        ...(size === undefined ? {} : { width: size.width, height: size.height }),
+      },
     });
     if (init.data === undefined) {
       throw new ApiProblemError(problemOf(init.error, init.response));
@@ -610,7 +614,7 @@ export class AspenSync {
   ensureIcon(iconId: string): void {
     if (
       this.store.icon(iconId) !== undefined ||
-      this.#missingIcons.has(iconId) ||
+      this.store.missing("icon", iconId) ||
       this.#iconLoads.has(iconId)
     ) {
       return;
@@ -621,7 +625,7 @@ export class AspenSync {
         if (data !== undefined) {
           this.store.putIcon(data);
         } else if (response.status === 404) {
-          this.#missingIcons.add(iconId);
+          this.store.markMissing("icon", iconId);
         }
       })
       .catch(() => {
@@ -727,7 +731,7 @@ export class AspenSync {
   ensureAttachment(attachmentId: string): void {
     if (
       this.store.attachment(attachmentId) !== undefined ||
-      this.#missingAttachments.has(attachmentId) ||
+      this.store.missing("attachment", attachmentId) ||
       this.#attachmentLoads.has(attachmentId)
     ) {
       return;
@@ -738,7 +742,7 @@ export class AspenSync {
         if (data !== undefined) {
           this.store.ingest({ attachments: [data] });
         } else if (response.status === 404) {
-          this.#missingAttachments.add(attachmentId);
+          this.store.markMissing("attachment", attachmentId);
         }
       })
       .catch(() => {
@@ -1563,7 +1567,7 @@ export class AspenSync {
   ensurePoll(pollId: string): void {
     if (
       this.store.poll(pollId) !== undefined ||
-      this.#missingPolls.has(pollId) ||
+      this.store.missing("poll", pollId) ||
       this.#pollLoads.has(pollId)
     ) {
       return;
@@ -1576,7 +1580,7 @@ export class AspenSync {
         if (data !== undefined) {
           this.store.ingest({ ...data.included, polls: [data.data] });
         } else if (response.status === 404) {
-          this.#missingPolls.add(pollId);
+          this.store.markMissing("poll", pollId);
         }
       })
       .catch(() => {
@@ -2297,7 +2301,7 @@ export class AspenSync {
   ensureUser(userId: string): void {
     if (
       this.store.user(userId) !== undefined ||
-      this.#missingUsers.has(userId) ||
+      this.store.missing("user", userId) ||
       this.#userLoads.has(userId)
     ) {
       return;
@@ -2308,7 +2312,7 @@ export class AspenSync {
         if (data !== undefined) {
           this.store.ingest({ users: [data] });
         } else if (response.status === 404) {
-          this.#missingUsers.add(userId);
+          this.store.markMissing("user", userId);
         }
       })
       .catch(() => {

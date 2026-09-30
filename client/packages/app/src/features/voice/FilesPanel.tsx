@@ -10,6 +10,8 @@ import { OfferFileDialog, ReceiveFileDialog } from "@/features/voice/FileDialogs
 import { formatSize, formatTimeLeft, safeFileName } from "@/features/voice/files";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { PersonName } from "@/features/users/PersonName";
+import { formatNodes } from "@/i18n/formatNodes";
 
 const smallButtonClass = secondaryButtonClass + " px-2 py-1 text-xs";
 
@@ -171,15 +173,16 @@ function IncomingOffer({
 }) {
   const m = useMessages();
   const { locale } = useLocale();
-  const sender = useUser(offer.from);
-  const handle = sender === undefined ? m.unknownUser : handleOf(sender);
   return (
     <li className={rowClass}>
       <ArrowDownIcon size={16} aria-hidden="true" className="shrink-0 text-ink-muted" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate font-medium">{offer.name}</span>
         <span className="text-xs text-ink-muted">
-          {format(m.files.offeredBy, { size: formatSize(offer.size, locale), handle })}
+          {formatNodes(m.files.offeredBy, {
+            size: formatSize(offer.size, locale),
+            handle: <PersonName id={offer.from} handle />,
+          })}
           {" · "}
           {format(m.files.timeLeft, { time: formatTimeLeft(offer.expiresAt - now) })}
         </span>

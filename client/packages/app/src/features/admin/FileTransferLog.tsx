@@ -1,15 +1,15 @@
 import { ApiProblemError, type FileOfferEntry } from "@aspen/protocol";
 import { useCallback, useEffect, useState } from "react";
 import { Button, useLocale } from "react-aria-components";
-import { useSync, useUser } from "@/api/hooks";
+import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
-import { handleOf } from "@/features/users/profile";
 import { formatSize } from "@/features/voice/files";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
-import { format } from "@/i18n/messages";
+import { PersonName } from "@/features/users/PersonName";
+import { formatNodes } from "@/i18n/formatNodes";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -88,7 +88,8 @@ export function FileTransferLog() {
             { content: m.admin.logReceivers },
           ]}
           numeric={[]}
-          dimmed={loading}
+          dimmed={loading && entries.length > 0}
+          skeletonRows={loading && entries.length === 0 ? 5 : 0}
         >
           {entries.map((entry) => (
             <tr key={entry.id}>
@@ -134,18 +135,15 @@ export function FileTransferLog() {
 }
 
 function Handle({ userId }: { userId: string | undefined }) {
-  const m = useMessages();
-  const user = useUser(userId);
-  return <>{user === undefined ? m.unknownUser : handleOf(user)}</>;
+  return <PersonName id={userId} handle />;
 }
 
 function ReceiverLine({ transfer }: { transfer: FileOfferEntry["transfers"][number] }) {
   const m = useMessages();
-  const user = useUser(transfer.receiver ?? undefined);
   return (
     <>
-      {format(m.admin.receiverLine, {
-        name: user === undefined ? m.unknownUser : handleOf(user),
+      {formatNodes(m.admin.receiverLine, {
+        name: <PersonName id={transfer.receiver ?? undefined} handle />,
         mode: m.admin.transferModes[transfer.mode],
         outcome:
           transfer.outcome == null

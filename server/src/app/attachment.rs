@@ -40,6 +40,37 @@ pub struct Attachment {
     pub timestamp: chrono::DateTime<Utc>,
     pub storage_key: String,
     pub ready_at: Option<chrono::DateTime<Utc>>,
+    /// A picture's size in pixels, as its uploader measured it; both or neither.
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+/// The largest side, in pixels, a picture's stated size may have.
+pub const MAX_PICTURE_SIDE: u32 = 100_000;
+
+/// A picture's size as an uploader states it: both sides or neither, each from one pixel to
+/// `MAX_PICTURE_SIDE`.
+pub fn picture_size(width: Option<u32>, height: Option<u32>) -> app::Result<Option<(i32, i32)>> {
+    let side = |value: u32| {
+        (1..=MAX_PICTURE_SIDE)
+            .contains(&value)
+            .then(|| i32::try_from(value).ok())
+            .flatten()
+    };
+    match (width, height) {
+        (None, None) => Ok(None),
+        (Some(w), Some(h)) => match (side(w), side(h)) {
+            (Some(w), Some(h)) => Ok(Some((w, h))),
+            _ => Err(app::Error::Validation(t!(
+                "attachmentDimensions",
+                max = MAX_PICTURE_SIDE
+            ))),
+        },
+        _ => Err(app::Error::Validation(t!(
+            "attachmentDimensions",
+            max = MAX_PICTURE_SIDE
+        ))),
+    }
 }
 
 impl Loadable for Attachment {
@@ -101,6 +132,7 @@ pub async fn init_upload(
     state: &GlobalServerContext,
     file_name: String,
     mime_type: String,
+    size: Option<(i32, i32)>,
 ) -> app::Result<AttachmentUpload> {
     let id = AttachmentId::new();
     let key = storage_key(id);
@@ -111,6 +143,8 @@ pub async fn init_upload(
         timestamp: Utc::now(),
         storage_key: key.clone(),
         ready_at: None,
+        width: size.map(|(w, _)| w),
+        height: size.map(|(_, h)| h),
     };
     let mut conn = state.connection_pool.get().await?;
     diesel::insert_into(attachment::table)
@@ -227,4 +261,26 @@ pub async fn delete_attachment(state: &GlobalServerContext, id: AttachmentId) ->
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod picture_size_tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_states_both_sides_or_neither() {
+        assert_eq!(picture_size(None, None).unwrap(), None);
+        assert_eq!(
+            picture_size(Some(640), Some(480)).unwrap(),
+            Some((640, 480))
+        );
+        assert_eq!(
+            picture_size(Some(MAX_PICTURE_SIDE), Some(1)).unwrap(),
+            Some((100_000, 1))
+        );
+        assert!(picture_size(Some(640), None).is_err());
+        assert!(picture_size(None, Some(480)).is_err());
+        assert!(picture_size(Some(0), Some(480)).is_err());
+        assert!(picture_size(Some(MAX_PICTURE_SIDE + 1), Some(480)).is_err());
+    }
 }

@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { Button } from "react-aria-components";
-import { useBlockedUsers, useSync, useUser } from "@/api/hooks";
-import { Avatar } from "@/features/communities/Avatar";
+import { useBlockedUsers, useSync } from "@/api/hooks";
 import { planeClass, secondaryButtonClass } from "@/features/invites/dialog";
-import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 
 /** Everyone the user has blocked, each with a way to lift the block. */
 export function BlockedUsersSection() {
@@ -34,15 +33,15 @@ export function BlockedUsersSection() {
 function BlockedRow({ userId }: { userId: string }) {
   const m = useMessages();
   const sync = useSync();
-  const user = useUser(userId);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const name = user === undefined ? m.unknownUser : displayNameOf(user);
   return (
     <li className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
-        <Avatar name={name} iconId={user?.icon ?? null} size="sm" />
-        <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+        <PersonAvatar id={userId} size="sm" />
+        <span className="min-w-0 flex-1 truncate text-sm">
+          <PersonName id={userId} />
+        </span>
         <Button
           isDisabled={pending}
           onPress={() => {

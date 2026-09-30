@@ -34,6 +34,7 @@ import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
@@ -223,8 +224,22 @@ function CommunityRoles({
       current = false;
     };
   }, [sync, communityId, userId, known]);
-  if (!member || (held === undefined && error === null)) {
+  if (!member) {
     return null;
+  }
+  if (held === undefined && error === null) {
+    return (
+      <section aria-busy="true" className={planeSurfaceClass + " flex flex-col gap-1"}>
+        <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
+          {m.profile.roles}
+        </h3>
+        <LoadingLabel />
+        <div className="flex flex-wrap gap-1">
+          <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-5 w-20 rounded-full" />
+        </div>
+      </section>
+    );
   }
   const holding = new Set(held);
   // Roles are kept lowest first; a card lists the highest first.

@@ -23,6 +23,8 @@ import { windowParts } from "@/features/messages/blocked";
 import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
+import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -540,9 +542,7 @@ export function MessageList({
   );
 
   if (window === undefined) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-ink-muted">{m.loading}</div>
-    );
+    return <HistorySkeleton />;
   }
 
   const lineIndex = lineAt(window, lineAfter);
@@ -570,8 +570,13 @@ export function MessageList({
         {window.hasOlder ? (
           // Its height does not change with its text: the text comes and goes above what is being
           // read, and a line appearing there would push the view down.
-          <p aria-live="polite" className="min-h-9 py-2 text-center text-sm text-ink-faint">
-            {loadingOlder ? m.loading : ""}
+          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+            {loadingOlder && (
+              <>
+                <LoadingLabel />
+                <Skeleton className="h-3 w-24" />
+              </>
+            )}
           </p>
         ) : (
           <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
@@ -612,8 +617,13 @@ export function MessageList({
           );
         })}
         {!window.atLatest && (
-          <p aria-live="polite" className="min-h-9 py-2 text-center text-sm text-ink-faint">
-            {loadingNewer ? m.loading : ""}
+          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+            {loadingNewer && (
+              <>
+                <LoadingLabel />
+                <Skeleton className="h-3 w-24" />
+              </>
+            )}
           </p>
         )}
       </div>

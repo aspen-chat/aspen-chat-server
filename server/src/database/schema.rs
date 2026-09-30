@@ -18,6 +18,8 @@ diesel::table! {
         timestamp -> Timestamptz,
         storage_key -> Text,
         ready_at -> Nullable<Timestamptz>,
+        width -> Nullable<Int4>,
+        height -> Nullable<Int4>,
     }
 }
 

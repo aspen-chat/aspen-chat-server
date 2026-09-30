@@ -7,6 +7,7 @@ import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { PersonName } from "@/features/users/PersonName";
 
 const chipClass =
   "rounded bg-accent-soft px-0.5 font-medium text-accent-strong outline-none " +
@@ -42,8 +43,15 @@ export function Mention({ kind, id, text }: { kind: MentionKind; id: string; tex
 export function UserMention({ id, chip }: { id: string; chip: boolean }) {
   const m = useMessages();
   const user = useUser(id);
-  const name = `@${user === undefined ? m.unknownUser : displayNameOf(user)}`;
-  if (!chip || user === undefined) {
+  if (user === undefined) {
+    return (
+      <>
+        @<PersonName id={id} />
+      </>
+    );
+  }
+  const name = `@${displayNameOf(user)}`;
+  if (!chip) {
     return <>{name}</>;
   }
   return (

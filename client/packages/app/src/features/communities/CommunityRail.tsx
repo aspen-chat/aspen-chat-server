@@ -12,7 +12,7 @@ import {
 import { useRef, useState } from "react";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, type Source } from "@/api/everywhere";
-import { useIsAdmin, usePreference, useSync } from "@/api/hooks";
+import { useIsAdmin, usePreference, useSync, useSyncStatus } from "@/api/hooks";
 import { communityLink } from "@/features/messages/links";
 import {
   arrangeRail,
@@ -56,6 +56,7 @@ import { format, type Messages } from "@/i18n/messages";
 import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /** The drag type rail rows carry, so nothing else accepts them and they accept nothing else. */
 const COMMUNITY_DRAG_TYPE = "application/x-aspen-community";
@@ -176,6 +177,7 @@ export function CommunityRail() {
     matchRoute({ to: "/at/$domain/dms", fuzzy: true }) !== false;
   const inAdmin = matchRoute({ to: "/admin", fuzzy: true }) !== false;
   const admin = useIsAdmin();
+  const bootstrapping = useSyncStatus() === "bootstrapping";
   /** The row being dragged, which decides what it may be dropped on. */
   const dragging = useRef<string | null>(null);
   const menuAnchor = useRef<HTMLElement | null>(null);
@@ -285,6 +287,14 @@ export function CommunityRail() {
         </Tooltip>
       </div>
       <div aria-hidden="true" className="h-px w-8 bg-line" />
+      {rows.length === 0 && bootstrapping && (
+        <div aria-busy="true" className="flex flex-col items-center gap-2 py-1">
+          <LoadingLabel />
+          {[0, 1, 2].map((index) => (
+            <Skeleton key={index} className="h-12 w-12 rounded-full" />
+          ))}
+        </div>
+      )}
       <GridList
         aria-label={m.communitiesLabel}
         items={rows}

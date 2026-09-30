@@ -11,6 +11,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
+import { measurePicture } from "@/features/media/measurePicture";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -105,14 +106,19 @@ export function Composer({
         ...list,
         { key, name: file.name, thumbnail, state: { kind: "uploading" } },
       ]);
-      sync.uploadAttachment(file).then(
-        (attachment) => {
-          update({ kind: "ready", attachment });
-        },
-        (e: unknown) => {
-          update({ kind: "failed", reason: e instanceof ApiProblemError ? e.message : String(e) });
-        },
-      );
+      measurePicture(file)
+        .then((size) => sync.uploadAttachment(file, size))
+        .then(
+          (attachment) => {
+            update({ kind: "ready", attachment });
+          },
+          (e: unknown) => {
+            update({
+              kind: "failed",
+              reason: e instanceof ApiProblemError ? e.message : String(e),
+            });
+          },
+        );
     }
   }
 

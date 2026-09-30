@@ -8,6 +8,7 @@ import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /** How often the fleet is read again while the dashboard is visible, as the servers report. */
 const FLEET_REFRESH_MS = 10_000;
@@ -41,6 +42,7 @@ export function FleetHealth() {
             m.admin.database,
           ]}
           numeric={[3, 4, 5, 6]}
+          skeletonRows={data === undefined && error === null ? 2 : 0}
         >
           {(data?.apiServers ?? []).map((server) => (
             <ApiServerRow key={server.instance} server={server} now={now} />
@@ -55,6 +57,7 @@ export function FleetHealth() {
           label={m.admin.voiceServers}
           headings={[m.admin.name, m.admin.status, m.admin.load, m.admin.lastReport]}
           numeric={[2]}
+          skeletonRows={data === undefined && error === null ? 2 : 0}
         >
           {(data?.voiceServers ?? []).map((server) => (
             <VoiceServerRow key={server.id} server={server} now={now} />
@@ -164,6 +167,7 @@ export function Table({
   headings,
   numeric = [],
   dimmed = false,
+  skeletonRows = 0,
   children,
 }: {
   label: string;
@@ -171,6 +175,8 @@ export function Table({
   numeric?: number[];
   /** Shown faded, as while the next page loads. */
   dimmed?: boolean;
+  /** Rows of skeleton after the rest, while the first of them are on their way. */
+  skeletonRows?: number;
   children: ReactNode;
 }) {
   return (
@@ -185,7 +191,11 @@ export function Table({
         (dimmed ? " opacity-50" : "")
       }
     >
-      <table aria-label={label} className="w-full text-start text-sm">
+      <table
+        aria-label={label}
+        aria-busy={skeletonRows > 0 ? true : undefined}
+        className="w-full text-start text-sm"
+      >
         <thead className="border-b border-line text-xs text-ink-muted">
           <tr>
             {headings.map((heading, i) => (
@@ -203,8 +213,29 @@ export function Table({
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-line">{children}</tbody>
+        <tbody className="divide-y divide-line">
+          {children}
+          {Array.from({ length: skeletonRows }, (_, row) => (
+            <tr key={`skeleton-${String(row)}`} aria-hidden="true">
+              {headings.map((_, column) => (
+                <td key={column} className="px-3 py-2.5">
+                  <Skeleton
+                    className={
+                      "h-3.5 " +
+                      (numeric.includes(column)
+                        ? "ms-auto w-10"
+                        : (row + column) % 2 === 0
+                          ? "w-24"
+                          : "w-16")
+                    }
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
       </table>
+      {skeletonRows > 0 && <LoadingLabel />}
     </div>
   );
 }

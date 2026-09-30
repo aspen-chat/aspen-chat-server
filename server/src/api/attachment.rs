@@ -30,6 +30,10 @@ pub struct Attachment {
     pub file_name: String,
     pub mime_type: String,
     pub download_url: String,
+    /// A picture's size in pixels as its uploader measured it, both or neither, so a reader
+    /// can make room for it before it loads.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 pub(crate) fn attachment_to_api(
@@ -42,6 +46,8 @@ pub(crate) fn attachment_to_api(
         file_name: row.file_name,
         mime_type: row.mime_type,
         download_url,
+        width: row.width.and_then(|w| u32::try_from(w).ok()),
+        height: row.height.and_then(|h| u32::try_from(h).ok()),
     }
 }
 
@@ -50,6 +56,13 @@ pub(crate) fn attachment_to_api(
 pub struct AttachmentUploadInitRequest {
     pub file_name: String,
     pub mime_type: String,
+    /// A picture's size in pixels, both or neither, each at most
+    /// `app::attachment::MAX_PICTURE_SIDE`; a client that measures pictures before sending them
+    /// gives it, so readers can make room for the picture before it loads.
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 /// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, then
@@ -79,7 +92,9 @@ pub async fn init_attachment_upload(
     _: SessionUser,
     Json(request): Json<AttachmentUploadInitRequest>,
 ) -> ApiResult<Created<AttachmentUploadHandle>> {
-    let upload = app::attachment::init_upload(&state, request.file_name, request.mime_type).await?;
+    let size = app::attachment::picture_size(request.width, request.height)?;
+    let upload =
+        app::attachment::init_upload(&state, request.file_name, request.mime_type, size).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/attachments/{}", upload.id.0),
         AttachmentUploadHandle {

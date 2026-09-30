@@ -10,6 +10,7 @@ import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
 import { dateFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 const RANGES: readonly GrowthRange[] = [
   "threeMonths",
@@ -104,6 +105,21 @@ export function Growth() {
         </ToggleButton>
       </div>
       {error !== null && <ReadFailed error={error} onRetry={reload} />}
+      {series === undefined && error === null && (
+        <div aria-busy="true" className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <LoadingLabel />
+          {[0, 1].map((index) => (
+            <div
+              key={index}
+              className="flex min-w-0 flex-col gap-2 rounded-lg border border-line bg-surface-raised p-4"
+            >
+              <Skeleton className="h-4 w-24" />
+              {/* The chart's plot and its axis. */}
+              <Skeleton className="h-48 w-full" />
+            </div>
+          ))}
+        </div>
+      )}
       {series !== undefined &&
         (asTable ? (
           <Table

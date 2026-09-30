@@ -15,6 +15,7 @@ import { VoiceScreen } from "@/features/voice/VoiceScreen";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { DmCall } from "@/features/dms/DmCall";
+import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /**
  * A channel's screen, in a community or among the caller's DMs: a text channel's or DM's
@@ -72,13 +73,13 @@ export function ChannelScreen() {
   }, [sync, channelId, messageId, live, readable]);
 
   if (channel === undefined || channelId === undefined) {
+    // Coming rather than missing: the sync is not live yet, or a DM is being read on its own.
+    if (!removed && !missing && (!live || home.community === null)) {
+      return <ChannelSkeleton />;
+    }
     return (
       <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">
-        {home.community === null && !missing && !removed
-          ? m.loading
-          : home.community === null
-            ? m.dms.notFound
-            : m.channelNotFound}
+        {home.community === null ? m.dms.notFound : m.channelNotFound}
       </main>
     );
   }

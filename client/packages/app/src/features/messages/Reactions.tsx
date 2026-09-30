@@ -28,7 +28,6 @@ import {
   useUser,
   useUsers,
 } from "@/api/hooks";
-import { Avatar } from "@/features/communities/Avatar";
 import {
   dialogClass,
   overlayClass,
@@ -41,6 +40,8 @@ import { displayNameOf } from "@/features/users/profile";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { PersonAvatar, PersonName } from "@/features/users/PersonName";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
 const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
@@ -328,7 +329,7 @@ function ReactorList({ messageId, emoji }: { messageId: string; emoji: string })
           />
         ))}
       </ul>
-      {loading && <p className="px-1 text-sm text-ink-muted">{m.loading}</p>}
+      {loading && <RowsSkeleton count={ids.length === 0 ? 5 : 2} />}
       {error !== null && (
         <p role="alert" className="px-1 text-sm text-danger">
           {error}
@@ -368,8 +369,10 @@ function Reactor({
   const label = format(m.removeReactor, { name });
   return (
     <li className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">
-      <Avatar name={name} iconId={user?.icon} size="sm" />
-      <span className="min-w-0 flex-1 truncate">{name}</span>
+      <PersonAvatar id={userId} size="sm" />
+      <span className="min-w-0 flex-1 truncate">
+        <PersonName id={userId} />
+      </span>
       {moderate && (
         <Tooltip text={label}>
           <Button

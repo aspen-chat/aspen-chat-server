@@ -46,6 +46,8 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { PersonName } from "@/features/users/PersonName";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /** Where a search looks: the channel it was opened from, its community, its server, or all. */
 type Scope = "channel" | "community" | "server" | "everywhere";
@@ -314,6 +316,7 @@ function SearchPanel({
           })}
         </p>
       ))}
+      {pending && searched === null && <ResultsSkeleton count={4} />}
       {searched !== null && (
         <section aria-label={m.search.results} className="flex flex-col gap-2">
           {results.length === 0 && failures.length === 0 ? (
@@ -330,6 +333,7 @@ function SearchPanel({
               })}
             </ul>
           )}
+          {pending && <ResultsSkeleton count={2} />}
           {searched.some((s) => !s.exhausted) && (
             <Button
               onPress={() => {
@@ -399,7 +403,7 @@ function SearchResult({
       >
         <span className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-medium">
-            {author === undefined ? m.unknownUser : displayNameOf(author)}
+            <PersonName id={message.author} />
           </span>
           <span className="text-xs text-ink-faint">{time.format(new Date(message.timestamp))}</span>
         </span>
@@ -416,5 +420,24 @@ function SearchResult({
         )}
       </Link>
     </li>
+  );
+}
+
+/** Results on their way, shaped like `SearchResult`: who and when, where, and a line or two. */
+function ResultsSkeleton({ count }: { count: number }) {
+  return (
+    <div aria-busy="true" className="flex flex-col gap-1">
+      <LoadingLabel />
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="flex flex-col gap-1.5 px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            <Skeleton className={"h-3.5 " + (index % 2 === 0 ? "w-24" : "w-16")} />
+            <Skeleton className="h-3 w-14" />
+          </div>
+          <Skeleton className="h-3 w-32" />
+          <Skeleton className={"h-3.5 " + (index % 2 === 0 ? "w-5/6" : "w-2/3")} />
+        </div>
+      ))}
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import { AddCommunityDialog } from "@/features/communities/AddCommunityDialog";
 import { JoinForm } from "@/features/invites/JoinForm";
 import { communityLink, dmsLink, useDomain } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
+import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /** `/`: opens the first community, or explains that there is none to open. */
 export function Home() {
@@ -17,9 +18,7 @@ export function Home() {
     return <Navigate to="/communities/$communityId" params={{ communityId: first.id }} replace />;
   }
   if (status === "bootstrapping") {
-    return (
-      <main className="flex flex-1 items-center justify-center text-ink-muted">{m.loading}</main>
-    );
+    return <ChannelSkeleton />;
   }
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
@@ -42,7 +41,6 @@ export function Home() {
  * none of its communities yet.
  */
 export function ForeignIndex() {
-  const m = useMessages();
   const domain = useDomain();
   const communities = useCommunities();
   const status = useSyncStatus();
@@ -51,9 +49,7 @@ export function ForeignIndex() {
     return <Navigate {...communityLink(domain, first.id)} replace />;
   }
   if (status === "bootstrapping") {
-    return (
-      <main className="flex flex-1 items-center justify-center text-ink-muted">{m.loading}</main>
-    );
+    return <ChannelSkeleton />;
   }
   return <Navigate {...dmsLink(domain)} replace />;
 }

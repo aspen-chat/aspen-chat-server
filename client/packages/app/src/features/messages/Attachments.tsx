@@ -2,15 +2,15 @@ import type { Attachment } from "@aspen/protocol";
 import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "react-aria-components";
-import { useAttachments } from "@/api/hooks";
+import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
 import { isImageType, splitInline, type Picture } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
-const imageClass =
-  "block max-h-80 max-w-full rounded-md border border-line object-contain bg-surface-sunken";
+const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
 /**
  * What a message carries besides its text: uploaded attachments, shown inline when they are
@@ -35,6 +35,7 @@ export function MessageMedia({
 }) {
   const m = useMessages();
   const attachments = useAttachments(attachmentIds);
+  const store = useStore();
   const [gallery, setGallery] = useState<number | null>(null);
   if (attachmentIds.length === 0 && linkedImages.length === 0 && previewImages.length === 0) {
     return null;
@@ -42,14 +43,18 @@ export function MessageMedia({
   const pictures: Picture[] = [];
   const files: Attachment[] = [];
   const unavailable: string[] = [];
+  const coming: string[] = [];
   attachments.forEach((attachment, i) => {
+    const id = attachmentIds[i] ?? "";
     if (attachment === undefined) {
-      unavailable.push(attachmentIds[i] ?? "");
+      (store.missing("attachment", id) ? unavailable : coming).push(id);
     } else if (isImageType(attachment.mimeType)) {
       pictures.push({
         src: attachment.downloadUrl,
         name: attachment.fileName,
         attachmentId: attachment.id,
+        width: attachment.width,
+        height: attachment.height,
       });
     } else {
       files.push(attachment);
@@ -62,6 +67,14 @@ export function MessageMedia({
   const { shown, hidden } = splitInline(pictures);
   return (
     <ul aria-label={m.attachmentsLabel} className="mt-1 flex flex-wrap items-start gap-2">
+      {coming.map((id) => (
+        // Its record says whether it is a picture or a file, and how big; until it comes, a
+        // picture's worth of room is the conservative guess.
+        <li key={id} aria-busy="true" data-attachment-id={id}>
+          <LoadingLabel />
+          <Skeleton className="h-48 w-64 max-w-full" />
+        </li>
+      ))}
       {unavailable.map((id) => (
         <li key={id} className="text-sm text-ink-faint" data-attachment-id={id}>
           {m.attachmentUnavailable}
@@ -131,9 +144,17 @@ export function MessageMedia({
   );
 }
 
-/** A picture in the message; pressing it opens the message's gallery on that picture. */
+/**
+ * A picture in the message; pressing it opens the message's gallery on that picture. A picture
+ * whose size is known keeps exactly its room while it loads; one whose size is not keeps a
+ * conservative guess at it, which the channel's view holds still through when the picture
+ * comes in larger or smaller. Either pulses as a skeleton until it has loaded.
+ */
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const known = picture.width != null && picture.height != null;
+  const waiting = loaded !== picture.src;
   return (
     <Button
       onPress={onOpen}
@@ -145,7 +166,21 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         alt={format(m.imageAlt, { name: picture.name })}
         loading="lazy"
         referrerPolicy="no-referrer"
-        className={imageClass}
+        {...(known ? { width: picture.width ?? 0, height: picture.height ?? 0 } : {})}
+        onLoad={() => {
+          setLoaded(picture.src);
+        }}
+        onError={() => {
+          setLoaded(picture.src);
+        }}
+        className={
+          imageClass +
+          (known ? " h-auto w-auto" : "") +
+          (waiting
+            ? " animate-pulse bg-surface-hover motion-reduce:animate-none" +
+              (known ? "" : " min-h-48 min-w-48")
+            : " bg-surface-sunken")
+        }
       />
     </Button>
   );

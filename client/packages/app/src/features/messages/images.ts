@@ -6,6 +6,9 @@ export interface Picture {
   name: string;
   /** The attachment it is, when it is one rather than a link. */
   attachmentId?: string;
+  /** Its size in pixels, when known before it loads, so its room is kept for it. */
+  width?: number | null | undefined;
+  height?: number | null | undefined;
 }
 
 /** How many of a message's pictures show inline; the rest are behind the gallery button. */

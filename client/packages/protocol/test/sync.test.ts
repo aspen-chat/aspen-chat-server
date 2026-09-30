@@ -646,18 +646,21 @@ describe("AspenSync", () => {
       downloadUrl: "http://files.test/attachments/900",
     };
     const uploads: { url: string; method: string; type: string | null; body: string }[] = [];
+    const reservations: unknown[] = [];
     const { sync } = makeSync(
       {
         ...bootstrapResponses(),
-        "/api/v1/attachments": () =>
-          json(
+        "/api/v1/attachments": async (_url, request) => {
+          reservations.push(await request.json());
+          return json(
             {
               id: record.id,
               uploadUrl: "http://store.test/put/900?sig=1",
               expiresAt: "2026-09-25T13:00:00Z",
             },
             201,
-          ),
+          );
+        },
         [`/api/v1/attachments/${record.id}/confirm`]: () => json(record),
       },
       undefined,
@@ -681,6 +684,15 @@ describe("AspenSync", () => {
       { url: "http://store.test/put/900?sig=1", method: "PUT", type: "text/plain", body: "hello" },
     ]);
     expect(sync.store.attachment(record.id)).toEqual(record);
+    // A picture's size goes with its reservation; a file that is no picture has none.
+    await sync.uploadAttachment(new File(["png"], "pic.png", { type: "image/png" }), {
+      width: 640,
+      height: 480,
+    });
+    expect(reservations).toEqual([
+      { fileName: "note.txt", mimeType: "text/plain" },
+      { fileName: "pic.png", mimeType: "image/png", width: 640, height: 480 },
+    ]);
   });
 
   it("fetches an attachment record a message names but the cache lacks, once", async () => {

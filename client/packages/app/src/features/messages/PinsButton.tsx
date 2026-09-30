@@ -2,15 +2,15 @@ import { PushPinIcon, PushPinSlashIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
-import { useBlocked, useChannelCan, useMessage, usePins, useSync, useUser } from "@/api/hooks";
-import { Avatar } from "@/features/communities/Avatar";
+import { useBlocked, useChannelCan, useMessage, usePins, useSync } from "@/api/hooks";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { messageLink, type ChannelHome } from "@/features/messages/links";
 import { MessageBody } from "@/features/messages/MessageBody";
-import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -69,7 +69,14 @@ function PinList({
   const m = useMessages();
   const pins = usePins(channelId);
   if (pins === undefined) {
-    return <p className="px-1 text-sm text-ink-muted">{m.pins.loading}</p>;
+    return (
+      <div aria-busy="true" className="flex flex-col gap-1">
+        <LoadingLabel text={m.pins.loading} />
+        {[0, 1, 2].map((index) => (
+          <PinSkeleton key={index} index={index} />
+        ))}
+      </div>
+    );
   }
   if (pins.length === 0) {
     return <p className="px-1 text-sm text-ink-muted">{m.pins.none}</p>;
@@ -108,7 +115,6 @@ function PinnedMessage({
   const m = useMessages();
   const sync = useSync();
   const message = useMessage(messageId);
-  const author = useUser(message?.author);
   const blocked = useBlocked(message?.author);
   const mayPin = useChannelCan(channelId, "pinMessages");
   const time = useDateFormat(TIME);
@@ -117,13 +123,14 @@ function PinnedMessage({
       void sync.loadMessage(messageId).catch(() => undefined);
     }
   }, [sync, messageId, message]);
-  const name = author === undefined ? m.unknownUser : displayNameOf(author);
   return (
     <li className="flex gap-2 rounded-md px-2 py-1.5 hover:bg-surface-hover">
-      <Avatar name={name} iconId={author?.icon} size="sm" />
+      <PersonAvatar id={message?.author} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
         <div className="flex items-baseline gap-2">
-          <span className="truncate font-medium">{name}</span>
+          <span className="truncate font-medium">
+            <PersonName id={message?.author} />
+          </span>
           {message !== undefined && (
             <span className="shrink-0 text-xs text-ink-faint">
               {time.format(new Date(message.timestamp))}
@@ -155,7 +162,11 @@ function PinnedMessage({
         {blocked ? (
           <span className="text-ink-faint italic">{m.blocking.oneBlockedMessage}</span>
         ) : message === undefined ? (
-          <span className="text-ink-muted">{m.loading}</span>
+          <>
+            <LoadingLabel />
+            <Skeleton className="h-3.5 w-11/12" />
+            <Skeleton className="h-3.5 w-1/2" />
+          </>
         ) : (
           <div className="flex min-w-0 flex-col gap-1 break-words">
             <MessageBody message={message} home={home} />
@@ -163,5 +174,19 @@ function PinnedMessage({
         )}
       </div>
     </li>
+  );
+}
+
+/** A pin on its way, shaped like `PinnedMessage`: a picture, a name and time, and two lines. */
+function PinSkeleton({ index }: { index: number }) {
+  return (
+    <div className="flex gap-2 px-2 py-1.5">
+      <Skeleton className="h-6 w-6 shrink-0 rounded-full" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <Skeleton className={"h-3.5 " + (index % 2 === 0 ? "w-24" : "w-16")} />
+        <Skeleton className="h-3.5 w-11/12" />
+        <Skeleton className={"h-3.5 " + (index === 1 ? "w-3/4" : "w-1/2")} />
+      </div>
+    </div>
   );
 }

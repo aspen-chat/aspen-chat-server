@@ -11,6 +11,7 @@ import {
   useMe,
   useMentions,
   useMute,
+  useSyncStatus,
   useUnread,
   useUser,
 } from "@/api/hooks";
@@ -33,6 +34,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /**
  * `/dms`: the caller's DMs and group DMs beside the route's content, on their home and every
@@ -76,6 +78,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
     sources.find((s) => s.domain === chosen) ??
     sources.find((s) => s.domain === domain) ??
     sources[0];
+  const bootstrapping = useSyncStatus() === "bootstrapping";
   const dms = useEverywhere(["dms"], (sources) =>
     mergeDms<DmEntry>(
       sources.map((source) => ({
@@ -129,6 +132,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
         aria-label={m.dms.label}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
       >
+        {dms.length === 0 && bootstrapping && <RowsSkeleton count={6} />}
         {dms.map(({ dm, source }) => (
           <SourceScope key={`${source.domain ?? ""}/${dm.id}`} source={source}>
             <DmRow
@@ -312,9 +316,10 @@ const HOME = "";
 export function DmIndex() {
   const m = useMessages();
   const dms = useDms();
+  const bootstrapping = useSyncStatus() === "bootstrapping";
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-1 p-6 text-center text-ink-muted">
-      {dms.length === 0 && <p className="font-medium text-ink">{m.dms.empty}</p>}
+      {dms.length === 0 && !bootstrapping && <p className="font-medium text-ink">{m.dms.empty}</p>}
       <p className="text-sm">{m.dms.emptyHint}</p>
     </main>
   );

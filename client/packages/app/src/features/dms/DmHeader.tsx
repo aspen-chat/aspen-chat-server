@@ -25,6 +25,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useDomain, dmsLink } from "@/features/messages/links";
+import { PersonName } from "@/features/users/PersonName";
 
 /** The most people a group DM holds, the caller included; the server's `MAX_RECIPIENTS`. */
 export const MAX_DM_PEOPLE = 10;
@@ -107,7 +108,7 @@ function PeopleNames({ channel, fallback }: { channel: Channel; fallback: string
         <Fragment key={ids[index]}>
           {index > 0 && ", "}
           {user === undefined ? (
-            m.unknownUser
+            <PersonName id={ids[index]} />
           ) : (
             <ProfilePopover user={user}>
               <Button

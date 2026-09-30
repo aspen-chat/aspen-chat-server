@@ -29,6 +29,7 @@ import { RecoveryCodesDialog } from "./RecoveryCodesDialog";
 import { ReauthProvider } from "./reauth";
 import { useReauth } from "./reauthContext";
 import { useSecuritySettings } from "./useSecuritySettings";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 function errorText(e: unknown): string | null {
   if (e instanceof PasskeyCancelledError) {
@@ -47,7 +48,17 @@ export function SecurityPanel({ transport }: { transport: PasskeyTransport | nul
   const m = useMessages();
   const { settings, failed, reload } = useSecuritySettings();
   if (settings === null) {
-    return <p className={hintClass}>{failed ? m.security.loadFailed : m.security.loading}</p>;
+    if (failed) {
+      return <p className={hintClass}>{m.security.loadFailed}</p>;
+    }
+    return (
+      <div aria-busy="true" className="flex flex-col gap-3">
+        <LoadingLabel text={m.security.loading} />
+        {["h-28", "h-20", "h-24"].map((height) => (
+          <Skeleton key={height} className={height + " w-full rounded-lg"} />
+        ))}
+      </div>
+    );
   }
   return (
     <ReauthProvider settings={settings} transport={transport}>

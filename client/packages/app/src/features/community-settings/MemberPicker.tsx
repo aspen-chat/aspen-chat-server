@@ -15,6 +15,7 @@ import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { optionClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /**
  * Chooses one member of a community by typing their name: the member sample until something is
@@ -67,11 +68,15 @@ export function MemberPicker({
       <Popover className="max-h-72 min-w-(--trigger-width) overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg">
         <ListBox
           className="outline-none"
-          renderEmptyState={() => (
-            <p className="px-2 py-1 text-sm text-ink-muted">
-              {search.error ?? (search.searching ? m.loading : m.members.noneFound)}
-            </p>
-          )}
+          renderEmptyState={() =>
+            search.searching && search.error === null ? (
+              <RowsSkeleton count={3} />
+            ) : (
+              <p className="px-2 py-1 text-sm text-ink-muted">
+                {search.error ?? m.members.noneFound}
+              </p>
+            )
+          }
         >
           {(user: User) => (
             <ListBoxItem id={user.id} textValue={displayNameOf(user)} className={optionClass}>

@@ -16,8 +16,10 @@ import {
   usePins,
   useSync,
   useUser,
+  useUserLoading,
 } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
@@ -77,6 +79,7 @@ export function MessageItem({
   const navigate = useNavigate();
   const message = useMessage(id);
   const author = useUser(message?.author);
+  const authorLoading = useUserLoading(message?.author);
   const me = useMe();
   const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
@@ -168,7 +171,11 @@ export function MessageItem({
       }
     >
       {author === undefined ? (
-        <Avatar name="?" />
+        authorLoading ? (
+          <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+        ) : (
+          <Avatar name="?" />
+        )
       ) : (
         // The picture opens the same card as the name. It stays out of the tab order, where the
         // name already offers the card, so a keyboard does not stop on each message twice.
@@ -185,7 +192,14 @@ export function MessageItem({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           {author === undefined ? (
-            <span className="font-medium">{m.unknownUser}</span>
+            authorLoading ? (
+              <>
+                <LoadingLabel />
+                <Skeleton className="h-3.5 w-24 self-center" />
+              </>
+            ) : (
+              <span className="font-medium">{m.unknownUser}</span>
+            )
           ) : (
             <ProfilePopover user={author}>
               <Button
@@ -318,7 +332,13 @@ function EchoedReply({
   if (reply === undefined) {
     return missing ? (
       <p className="text-sm text-ink-faint italic">{m.threads.replyDeleted}</p>
-    ) : null;
+    ) : (
+      <div aria-busy="true" className="flex flex-col gap-1.5 py-0.5">
+        <LoadingLabel />
+        <Skeleton className="h-3.5 w-3/4" />
+        <Skeleton className="h-3 w-20" />
+      </div>
+    );
   }
   return (
     <div className="flex flex-col gap-1">

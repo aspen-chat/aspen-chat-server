@@ -24,6 +24,7 @@ import { useUniformHeight } from "@/features/layout/useUniformHeight";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 const iconButtonClass =
   "rounded p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -75,6 +76,14 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
       {read.error !== null && <ReadFailed error={read.error} onRetry={read.reload} />}
       <div className="flex flex-col gap-4 md:flex-row">
         <div className="flex flex-col gap-2 md:w-56 md:shrink-0">
+          {data === undefined && read.error === null && (
+            <div aria-busy="true" className="flex flex-col gap-1">
+              <LoadingLabel />
+              {["w-28", "w-20", "w-24"].map((width) => (
+                <Skeleton key={width} className={"my-1.5 h-4 " + width} />
+              ))}
+            </div>
+          )}
           <GridList
             aria-label={m.admin.deploymentRoles}
             items={highestFirst}

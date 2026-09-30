@@ -42,6 +42,7 @@ import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /** The longest note kept on a deployment, as the server's `MAX_NOTE_CHARS`. */
 const MAX_NOTE_CHARS = 200;
@@ -170,7 +171,21 @@ function Identity({ read }: { read: AdminRead<FederationOverview> }) {
   }
   const overview = read.data;
   if (overview === undefined) {
-    return null;
+    return (
+      <div
+        aria-busy="true"
+        className="flex flex-col gap-3 rounded-lg border border-line bg-surface-raised p-4"
+      >
+        <LoadingLabel />
+        {["w-40", "w-56", "w-72"].map((width) => (
+          <div key={width} className="flex items-center gap-4">
+            <Skeleton className="h-3.5 w-20" />
+            <Skeleton className={"h-3.5 " + width} />
+          </div>
+        ))}
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
   }
   if (overview.domain == null) {
     return <p className="text-sm text-ink-muted">{m.federation.notFederating}</p>;

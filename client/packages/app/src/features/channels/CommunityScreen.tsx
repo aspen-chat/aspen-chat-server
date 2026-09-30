@@ -8,6 +8,7 @@ import { MembersPanelContext } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useDomain, channelLink } from "@/features/messages/links";
+import { ChannelListSkeleton, ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /**
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
@@ -37,10 +38,24 @@ export function ChannelSidebarLayout() {
       setMissingId(communityId);
     });
   }, [sync, communityId, live, held, moderator]);
+  // Until the sync is live, or while a moderator's read of it is on its way, the community is
+  // not missing but coming: its screen stands in skeleton.
+  if (community === undefined && (!live || (moderator && missingId !== communityId))) {
+    return (
+      <>
+        <div
+          className={`${channelId !== undefined ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+        >
+          <ChannelListSkeleton />
+        </div>
+        {channelId !== undefined || !onePane ? <ChannelSkeleton /> : null}
+      </>
+    );
+  }
   if (community === undefined) {
     return (
       <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">
-        {moderator && missingId !== communityId ? m.loading : m.communityNotFound}
+        {m.communityNotFound}
       </main>
     );
   }

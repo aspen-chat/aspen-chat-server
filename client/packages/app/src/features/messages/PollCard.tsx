@@ -17,6 +17,7 @@ import {
   useMyVotes,
   useMyWriteIns,
   usePoll,
+  usePollLoading,
   useStore,
   useSync,
   useChannelCan,
@@ -29,6 +30,7 @@ import {
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   MAX_OPTION_CHARS,
@@ -56,6 +58,21 @@ import { useOnePane } from "@/features/layout/useMediaQuery";
 export function PollCard({ pollId }: { pollId: string }) {
   const m = useMessages();
   const poll = usePoll(pollId);
+  const loading = usePollLoading(pollId);
+  if (poll === undefined && loading) {
+    return (
+      <div
+        aria-busy="true"
+        className="mt-1 flex w-full max-w-lg flex-col gap-2 rounded-md border border-line bg-surface-raised p-3"
+      >
+        <LoadingLabel />
+        <Skeleton className="h-4 w-2/3" />
+        {[0, 1, 2].map((index) => (
+          <Skeleton key={index} className="h-9 w-full" />
+        ))}
+      </div>
+    );
+  }
   if (poll === undefined) {
     return <p className="mt-1 text-sm text-ink-faint">{m.poll.unavailable}</p>;
   }

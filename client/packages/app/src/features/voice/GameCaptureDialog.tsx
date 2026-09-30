@@ -42,6 +42,8 @@ import {
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
+import { LoadingLabel } from "@/features/layout/Skeleton";
 
 interface Option {
   readonly id: string;
@@ -202,7 +204,10 @@ export function GameCaptureDialog({
         <Dialog className={dialogClass}>
           <DialogHeading>{m.voice.shareGameHeading}</DialogHeading>
           {catalogue === null && (
-            <p className="text-sm text-ink-muted">{m.voice.shareGameLoading}</p>
+            <div>
+              <LoadingLabel text={m.voice.shareGameLoading} />
+              <RowsSkeleton count={4} />
+            </div>
           )}
           {applicationAudio !== null && applications !== null && (
             <>

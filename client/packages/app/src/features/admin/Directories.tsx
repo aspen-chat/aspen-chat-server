@@ -627,7 +627,13 @@ export function Directory<T extends { id: string }, S extends string>({
       {rows !== null && rows.items.length === 0 && page === 0 ? (
         <p className="text-sm text-ink-muted">{m.admin.noMatches}</p>
       ) : (
-        <Table label={title} headings={headings} numeric={numeric} dimmed={loading}>
+        <Table
+          label={title}
+          headings={headings}
+          numeric={numeric}
+          dimmed={loading && rows !== null}
+          skeletonRows={rows === null && error === null ? 5 : 0}
+        >
           {(rows?.items ?? []).map((item) => (
             <tr key={item.id}>
               {columns.map((column, i) => (

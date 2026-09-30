@@ -9,6 +9,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, communityLink, inviteLink } from "@/features/messages/links";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 type Lookup =
   | { state: "loading" }
@@ -92,7 +93,15 @@ export function InviteScreen() {
   return (
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-lg border border-line bg-surface-raised p-6 text-center">
-        {lookup.state === "loading" && <p className="text-ink-muted">{m.lookingUpInvite}</p>}
+        {lookup.state === "loading" && (
+          <div aria-busy="true" className="flex w-full flex-col items-center gap-4">
+            <LoadingLabel text={m.lookingUpInvite} />
+            <Skeleton className="h-12 w-12 rounded-full" />
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        )}
         {lookup.state === "failed" && (
           <>
             <h1 className="text-xl font-semibold">{m.inviteUnusableHeading}</h1>

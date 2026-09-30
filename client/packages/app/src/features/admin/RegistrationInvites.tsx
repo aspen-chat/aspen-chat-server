@@ -113,6 +113,7 @@ export function RegistrationInvites({
             m.admin.actions,
           ]}
           numeric={[2]}
+          skeletonRows={invites.data === undefined && invites.error === null ? 3 : 0}
         >
           {(invites.data ?? []).map((invite) => (
             <tr key={invite.code}>

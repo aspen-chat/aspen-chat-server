@@ -34,6 +34,7 @@ import { markClass } from "@/features/layout/choices";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 function problemText(e: unknown): string {
   return e instanceof ApiProblemError ? e.message : String(e);
@@ -65,7 +66,7 @@ export function MembersPanel({ communityId }: { communityId: string }) {
           {error}
         </p>
       )}
-      {searching && <p className={hintClass}>{m.loading}</p>}
+      {searching && members.length === 0 && <RowsSkeleton count={4} size="md" />}
       {!searching && members.length === 0 && <p className={hintClass}>{m.members.noneFound}</p>}
       <ul aria-label={m.members.listLabel} className={planeSurfaceClass + " flex flex-col gap-1"}>
         {members.map((member) => (

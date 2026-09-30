@@ -92,6 +92,9 @@ export type Listener = () => void;
  */
 export type Topic = string;
 
+/** The kinds of record fetched on demand whose absence the store remembers. */
+export type MissingKind = "user" | "icon" | "poll" | "attachment";
+
 /**
  * The most messages a channel's window holds. Extending it past this at one end drops
  * messages, and their records, from the other end, so a long scroll through history never
@@ -218,6 +221,8 @@ function created<T extends object>(event: T & { type: "create"; serverEvent: str
 export class RecordStore {
   readonly #now: () => number;
   readonly #users = new Map<string, User>();
+  /** Records the server says do not exist, by kind, so no one waits on them. */
+  readonly #missing = new Set<`${MissingKind}:${string}`>();
   readonly #communities = new Map<string, Community>();
   readonly #channels = new Map<string, Channel>();
   readonly #categories = new Map<string, Category>();
@@ -331,6 +336,23 @@ export class RecordStore {
 
   user(id: string): User | undefined {
     return this.#users.get(id);
+  }
+
+  /**
+   * Whether the server said there is no such record of `kind`; topic `<kind>:<id>`, the one its
+   * record would come on, so whatever waits for it hears the answer either way.
+   */
+  missing(kind: MissingKind, id: string): boolean {
+    return this.#missing.has(`${kind}:${id}`);
+  }
+
+  /** Notes that the server knows no such record, which ends any wait for it. */
+  markMissing(kind: MissingKind, id: string): void {
+    const key = `${kind}:${id}` as const;
+    if (!this.#missing.has(key)) {
+      this.#missing.add(key);
+      this.#touch(key);
+    }
   }
 
   community(id: string): Community | undefined {
