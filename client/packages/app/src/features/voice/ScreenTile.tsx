@@ -4,21 +4,30 @@ import { isFullScreenKey, useFullScreen, useOrientationLock } from "@/features/v
 import { useMessages } from "@/i18n/context";
 
 /**
- * One shared screen, playing. The audio that came with it is played by the call itself, so the
- * element is muted and only shows the picture. A local preview is the sender's own track.
- * An `expandable` tile can be made full screen with its button, a double click, or the F key,
- * which also turns a phone to the picture's orientation.
+ * One shared screen or camera, playing. The audio that came with it is played by the call
+ * itself, so the element is muted and only shows the picture. A local preview is the sender's
+ * own track, which a camera shows `mirrored`, as a mirror would. An `expandable` tile can be
+ * made full screen with its button or a double click, and with the F key where `shortcut` says
+ * it is the one tile on screen the key means; full screen also turns a phone to the picture's
+ * orientation. `caption` names the picture over its corner, which a tile already named beside
+ * it leaves out.
  */
 export function ScreenTile({
   track,
   label,
   className,
   expandable = false,
+  shortcut = expandable,
+  mirrored = false,
+  caption = true,
 }: {
   track: MediaStreamTrack;
   label: string;
   className?: string;
   expandable?: boolean;
+  shortcut?: boolean;
+  mirrored?: boolean;
+  caption?: boolean;
 }) {
   const m = useMessages();
   const figure = useRef<HTMLElement>(null);
@@ -27,7 +36,7 @@ export function ScreenTile({
   const { toggle } = full;
   useOrientationLock(full.state, video);
   useEffect(() => {
-    if (!expandable) {
+    if (!shortcut) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -40,7 +49,7 @@ export function ScreenTile({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [expandable, toggle]);
+  }, [shortcut, toggle]);
   useEffect(() => {
     const element = video.current;
     if (element === null) {
@@ -69,17 +78,19 @@ export function ScreenTile({
         playsInline
         muted
         aria-label={label}
-        className="h-full w-full object-contain"
+        className={"h-full w-full object-contain" + (mirrored ? " -scale-x-100" : "")}
       />
-      <figcaption className="absolute bottom-2 start-2 rounded-md bg-black/60 px-2 py-0.5 text-xs text-white">
-        {label}
-      </figcaption>
+      {caption && (
+        <figcaption className="absolute bottom-2 start-2 rounded-md bg-black/60 px-2 py-0.5 text-xs text-white">
+          {label}
+        </figcaption>
+      )}
       {expandable && (
         <button
           type="button"
           onClick={full.toggle}
           aria-label={full.state === "off" ? m.voice.fullScreen : m.voice.exitFullScreen}
-          aria-keyshortcuts="F"
+          aria-keyshortcuts={shortcut ? "F" : undefined}
           title={full.state === "off" ? m.voice.fullScreenHint : m.voice.exitFullScreenHint}
           className="absolute end-2 top-2 rounded-md bg-black/60 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent [@media(hover:none)]:opacity-100"
         >

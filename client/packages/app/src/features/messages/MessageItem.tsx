@@ -1,4 +1,3 @@
-import type { LinkPreview } from "@aspen/protocol";
 import {
   ArrowBendDownRightIcon,
   ChatsCircleIcon,
@@ -25,12 +24,9 @@ import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
 import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { MessageMedia } from "@/features/messages/Attachments";
-import { imageUrls, isImageUrl, onlyImageLinks } from "@/features/messages/images";
 import { Markdown } from "@/features/messages/Markdown";
-import { VideoCard } from "@/features/messages/VideoCard";
-import { playerSrc } from "@/features/messages/video";
+import { MessageBody } from "@/features/messages/MessageBody";
 import { MessageEditor } from "@/features/messages/MessageEditor";
-import { PollCard } from "@/features/messages/PollCard";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
@@ -118,20 +114,6 @@ export function MessageItem({
   const deletable = own || permissions.has("manageMessages");
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   const editable = own && message.kind === "standard";
-  const linkedImages = imageUrls(message.content);
-  // A link the client already shows as a picture needs no card from the server for the same URL.
-  const previews = message.linkPreviews.filter((p) => !linkedImages.includes(p.url));
-  // Links the server found to be images themselves join the message's pictures; the rest
-  // are cards.
-  const previewImages = previews.flatMap((p) =>
-    isPictureOnly(p) && p.imageUrl != null ? [{ src: p.imageUrl, name: p.url }] : [],
-  );
-  const cards = previews.filter((p) => !isPictureOnly(p));
-  // A message that is nothing but links to pictures shows the pictures alone.
-  const pictureOnly = onlyImageLinks(
-    message.content,
-    (url) => isImageUrl(url) || previews.some((p) => p.url === url && isPictureOnly(p)),
-  );
   if (message.kind === "call" || message.kind === "missedCall") {
     return (
       <article
@@ -287,41 +269,19 @@ export function MessageItem({
           />
         ) : message.kind === "threadEcho" && message.echoOf != null ? (
           <EchoedReply replyId={message.echoOf} home={home} channelId={channelId} />
-        ) : (
-          <div className="flex flex-wrap items-baseline gap-x-1">
-            {!pictureOnly && (
-              <Markdown
-                content={message.content}
-                mentions={message.mentions}
-                communityId={home.community}
-              />
-            )}
-            {message.editedAt != null && (
-              <span
-                className="text-xs text-ink-faint"
-                title={format(m.editedAt, { date: timeFormat.format(new Date(message.editedAt)) })}
-              >
-                {m.edited}
-              </span>
-            )}
-          </div>
-        )}
-        {message.kind === "poll" && message.poll != null && <PollCard pollId={message.poll} />}
-        <MessageMedia
-          attachmentIds={message.attachments}
-          linkedImages={linkedImages}
-          previewImages={previewImages}
+        ) : null}
+        <MessageBody
+          message={message}
+          home={home}
+          hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
           {...(own || permissions.has("manageMessages")
             ? {
-                onRemove: (attachmentId: string) => {
+                onRemoveAttachment: (attachmentId: string) => {
                   void sync.removeAttachment(id, attachmentId).catch(() => undefined);
                 },
               }
             : {})}
         />
-        {cards.map((preview) => (
-          <LinkPreviewCard key={preview.url} preview={preview} />
-        ))}
         <ReactionChips messageId={id} canReact={permissions.has("addReactions")} />
         {canThread && message.thread != null && (
           <ThreadSummary threadId={message.thread} home={home} channelId={channelId} />
@@ -411,42 +371,6 @@ function ThreadSummary({
         </span>
       )}
     </Link>
-  );
-}
-
-/** A preview the server made from a link that is itself an image: a picture, no text. */
-function isPictureOnly(preview: LinkPreview): boolean {
-  return preview.imageUrl != null && preview.title == null && preview.description == null;
-}
-
-function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
-  const player = preview.video == null ? null : playerSrc(preview.video.src);
-  if (preview.video != null && player !== null) {
-    return <VideoCard preview={preview} player={player} />;
-  }
-  const title = preview.title ?? preview.siteName ?? preview.url;
-  return (
-    <a
-      href={preview.url}
-      target="_blank"
-      rel="noreferrer"
-      className="mt-1 flex max-w-lg gap-3 rounded-md border border-line bg-surface-raised p-2 text-sm hover:bg-surface-hover"
-      style={
-        preview.themeColor != null
-          ? { borderLeftColor: preview.themeColor, borderLeftWidth: 3 }
-          : undefined
-      }
-    >
-      {preview.imageUrl != null && (
-        <img src={preview.imageUrl} alt="" className="h-16 w-16 shrink-0 rounded object-cover" />
-      )}
-      <span className="min-w-0">
-        <span className="block truncate font-medium text-accent">{title}</span>
-        {preview.description != null && (
-          <span className="mt-0.5 line-clamp-2 block text-ink-muted">{preview.description}</span>
-        )}
-      </span>
-    </a>
   );
 }
 

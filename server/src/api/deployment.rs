@@ -276,6 +276,23 @@ pub struct ModerationEntry {
     /// What else it was done to: a message, a user, an attachment, a reaction.
     pub subject: Option<String>,
     pub at: DateTime<Utc>,
+    /// What the ids above name, as they stand now.
+    pub details: app::deployment::ModerationDetails,
+}
+
+impl From<app::deployment::ModerationEntry> for ModerationEntry {
+    fn from(e: app::deployment::ModerationEntry) -> Self {
+        Self {
+            id: e.id,
+            actor: e.actor,
+            action: e.action,
+            community: e.community,
+            channel: e.channel,
+            subject: e.subject,
+            at: e.at,
+            details: e.details,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -317,18 +334,7 @@ pub async fn read_moderation_log(
     )
     .await?;
     Ok(Json(
-        entries
-            .into_iter()
-            .map(|e| ModerationEntry {
-                id: e.id,
-                actor: e.actor,
-                action: e.action,
-                community: e.community,
-                channel: e.channel,
-                subject: e.subject,
-                at: e.at,
-            })
-            .collect(),
+        entries.into_iter().map(ModerationEntry::from).collect(),
     ))
 }
 

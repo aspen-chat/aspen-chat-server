@@ -107,6 +107,8 @@ export {
   type DeploymentRole,
   type Growth,
   type ModerationEntry,
+  type LoggedChannel,
+  type LoggedMessage,
   type FileOfferEntry,
   type GrowthRange,
   type MessageHolding,

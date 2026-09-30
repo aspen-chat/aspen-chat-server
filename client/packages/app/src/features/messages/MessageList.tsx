@@ -36,7 +36,9 @@ import { useMessages } from "@/i18n/context";
  * not at the latest reads the next one. The store keeps the window bounded, so a long scroll
  * drops what is far from the viewport, and the jump control returns to the present.
  *
- * A linked message is scrolled into view once. The first scroll the user makes afterwards drops
+ * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
+ * even when a window around it had to be read first; keeping the old view still gives way to it,
+ * and so does staying at the bottom. The first scroll the user makes afterwards drops
  * the message from the URL, so the link is shareable but does not keep pulling the view back.
  *
  * In a channel that keeps a read position (any but a thread), the newest message on screen
@@ -187,8 +189,10 @@ export function MessageList({
         return;
       }
       if (!direct) {
+        // A linked message waiting to be shown decides where the view goes, not what was in it.
+        const linking = highlightId !== undefined && highlightShown.current !== highlightId;
         anchor.current =
-          stickToBottom.current && latest?.atLatest === true ? null : captureAnchor();
+          linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
       }
       setShown({ channelId, window: latest });
     };
@@ -196,12 +200,28 @@ export function MessageList({
     return () => {
       clearTimeout(timer);
     };
-  }, [channelId, latest, shown]);
+  }, [channelId, latest, shown, highlightId]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element === null) {
       return;
+    }
+    if (highlightId === undefined) {
+      highlightShown.current = null;
+    } else if (highlightShown.current !== highlightId) {
+      // A linked message goes to the middle of the view once it is in the window, whatever
+      // view was being kept, and the list lets go of the bottom so that nothing arriving or
+      // growing later pulls the view away from it.
+      const target = element.querySelector(`[data-message-id="${highlightId}"]`);
+      if (target !== null) {
+        highlightShown.current = highlightId;
+        anchor.current = null;
+        stickToBottom.current = false;
+        programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
+        target.scrollIntoView({ block: "center" });
+        return;
+      }
     }
     const restore = anchor.current;
     if (restore !== null) {
@@ -214,17 +234,7 @@ export function MessageList({
       }
       return;
     }
-    if (highlightId === undefined) {
-      highlightShown.current = null;
-    } else {
-      if (highlightShown.current !== highlightId) {
-        const target = element.querySelector(`[data-message-id="${highlightId}"]`);
-        if (target !== null) {
-          highlightShown.current = highlightId;
-          programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-          target.scrollIntoView({ block: "center" });
-        }
-      }
+    if (highlightId !== undefined) {
       return;
     }
     if (stickToBottom.current && atLatest) {

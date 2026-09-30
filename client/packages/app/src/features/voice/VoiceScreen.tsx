@@ -10,7 +10,7 @@ import {
   SpeakerHighIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
@@ -197,7 +197,7 @@ export function CallStage({
             <p className="py-8 text-center text-ink-muted">{m.voice.nobodyHere}</p>
           ) : (
             <div ref={tiles} className="relative">
-              <ul className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
+              <ul className="@container grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-3">
                 {voice.participants.map((participant) => (
                   <ParticipantTile
                     key={participant.user}
@@ -314,11 +314,7 @@ function ParticipantTile({
   const tile = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const avatar =
-    camera === null ? (
-      <TileAvatar speaking={speaking} name={name} iconId={user?.icon} />
-    ) : (
-      <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />
-    );
+    camera === null ? <TileAvatar speaking={speaking} name={name} iconId={user?.icon} /> : null;
   return (
     <li
       ref={tile}
@@ -332,7 +328,8 @@ function ParticipantTile({
       }}
       className={
         "relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 " +
-        (camera === null ? "" : "col-span-2")
+        // Twice an avatar tile's width where four columns fit, the whole row where they do not.
+        (camera === null ? "" : "col-span-full @min-[33rem]:col-span-4")
       }
     >
       {!self && (
@@ -355,6 +352,9 @@ function ParticipantTile({
             onOpenChange={setMenuOpen}
           />
         </>
+      )}
+      {camera !== null && (
+        <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />
       )}
       <Identity
         user={user}
@@ -429,8 +429,9 @@ function TileAvatar({
 }
 
 /**
- * A participant's camera, in their tile. The user's own is mirrored, as a mirror shows them;
- * everyone else sees it as the camera does. Its sound is the microphone's, played by the call.
+ * A participant's camera, in their tile, where it can be made full screen. The user's own is
+ * mirrored, as a mirror shows them; everyone else sees it as the camera does. Its sound is the
+ * microphone's, played by the call. A ring shows while they speak.
  */
 function CameraVideo({
   track,
@@ -444,32 +445,26 @@ function CameraVideo({
   mirrored: boolean;
 }) {
   const m = useMessages();
-  const video = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const element = video.current;
-    if (element === null) {
-      return;
-    }
-    element.srcObject = new MediaStream([track]);
-    return () => {
-      element.srcObject = null;
-    };
-  }, [track]);
   return (
-    <video
-      ref={video}
-      autoPlay
-      playsInline
-      muted
+    <div
       data-camera
-      aria-label={
-        speaking ? format(m.voice.speaking, { name }) : format(m.voice.usersCamera, { name })
-      }
+      data-speaking={speaking ? "true" : undefined}
       className={
-        "aspect-video w-full rounded-md bg-black object-cover " +
-        (mirrored ? "-scale-x-100 " : "") +
+        "w-full rounded-lg " +
         (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
       }
-    />
+    >
+      <ScreenTile
+        track={track}
+        label={
+          speaking ? format(m.voice.speaking, { name }) : format(m.voice.usersCamera, { name })
+        }
+        className="aspect-video w-full"
+        expandable
+        shortcut={false}
+        mirrored={mirrored}
+        caption={false}
+      />
+    </div>
   );
 }
