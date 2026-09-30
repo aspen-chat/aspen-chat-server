@@ -19,17 +19,26 @@ extraResources:
     filter:
       - aspen-obs-capture
       - aspen-obs-capture.exe
+  # The window's icon on Linux, where a window names its own; `build/` holds every platform's
+  # icons, drawn by `client/scripts/export_icons.py`.
+  - from: build/icons/512x512.png
+    to: icon.png
 asar: true
 npmRebuild: false
 linux:
+  # The package's own name, `@aspen/desktop`, is no file name.
+  executableName: aspen
+  icon: build/icons
   target:
     - AppImage
     - deb
   category: Network
 mac:
+  icon: build/icon-mac.png
   target:
     - dmg
   category: public.app-category.social-networking
 win:
+  icon: build/icon.ico
   target:
     - nsis

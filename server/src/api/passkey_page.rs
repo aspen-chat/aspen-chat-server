@@ -15,8 +15,10 @@ use std::borrow::Cow;
 const TEMPLATE: &str = include_str!("passkey_page/page.html");
 const STRINGS_MARKER: &str = "/*STRINGS*/{}";
 
-/// Inline script and style only, talking to this origin only, never framed.
+/// Inline script and style only, images only from inside the page (its favicon), talking to this
+/// origin only, never framed.
 const POLICY: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+     img-src data:; \
      connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 fn strings() -> serde_json::Map<String, serde_json::Value> {

@@ -26,8 +26,23 @@ function isDevelopment(): boolean {
   return !app.isPackaged;
 }
 
+/**
+ * The window's icon on Linux, where each window names its own; Windows and macOS take the
+ * application's.
+ */
+function windowIcon(): string | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  return app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(app.getAppPath(), "build", "icons", "512x512.png");
+}
+
 function createWindow(): void {
+  const icon = windowIcon();
   const window = new BrowserWindow({
+    ...(icon === undefined ? {} : { icon }),
     width: 1280,
     height: 800,
     minWidth: 480,

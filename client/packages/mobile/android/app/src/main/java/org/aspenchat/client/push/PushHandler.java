@@ -143,7 +143,9 @@ public final class PushHandler {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            // The status bar draws a small icon by its alpha alone; the colour tints it where shown.
+            .setSmallIcon(R.drawable.ic_stat_aspen)
+            .setColor(0xFF047857)
             .setContentTitle(where == null ? name : name + " · " + where)
             .setContentText(text)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(text))

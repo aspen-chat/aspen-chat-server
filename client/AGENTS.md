@@ -19,6 +19,22 @@ Electron it runs sandboxed with `contextIsolation`. Anything the page needs from
 through the preload bridge (`window.aspenDesktop`), whose shape is declared in
 `packages/app/src/vite-env.d.ts`.
 
+## Icons
+
+Every icon the apps ship is drawn by `scripts/export_icons.py` from one definition of the canopy
+mark, in two levels of detail: full (bark marks, fine gaps between the leaves) from 64 pixels up,
+and small (no bark marks, a darker and thicker trunk, wider gaps) below, since fine detail turns
+to mud at favicon sizes. The gaps are cut out rather than painted, so the mark sits on any
+background. It writes the brand art (`brand/`: the mark, the icon tile, and the wordmark side by
+side and stacked, each for light and dark grounds), the web client's `favicon.svg`,
+`favicon.ico`, and `apple-touch-icon.png` (`packages/app/public/`), the desktop app's icons
+(`packages/desktop/build/`: sized PNGs for Linux, which also give the window its icon there, an
+`.ico` for Windows, and a 1024 PNG on macOS's icon grid, from which electron-builder makes the
+`.icns`), the Android launcher icons (legacy, round, and adaptive, with a monochrome layer for
+themed icons), the status bar icon `ic_stat_aspen` that push notifications use, the splash
+images, and the favicon inlined in the server's passkey page. Change the mark there and run it
+again; never edit its outputs by hand. It needs `rsvg-convert` and ImageMagick's `magick`.
+
 ## The server contract is generated, never hand-written
 
 `packages/protocol/src/generated/` is produced by `pnpm codegen` from `../openapi.yaml` and
