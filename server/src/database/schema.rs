@@ -46,6 +46,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    bot_command_list (bot) {
+        bot -> Uuid,
+        commands -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     bot_token (bot) {
         bot -> Uuid,
         digest -> Bytea,
@@ -603,6 +611,7 @@ diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
 diesel::joinable!(benchmark_user -> user (user));
+diesel::joinable!(bot_command_list -> user (bot));
 diesel::joinable!(bot_token -> user (bot));
 diesel::joinable!(category -> community (community));
 diesel::joinable!(category_collapse -> category (category));
@@ -683,6 +692,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_community,
     benchmark_run,
     benchmark_user,
+    bot_command_list,
     bot_token,
     category,
     category_collapse,

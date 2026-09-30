@@ -258,6 +258,11 @@ user = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."POST /users/@me/bots"]
 user = { requests = 10, per_seconds = 3600, burst = 3 }
 
+[rate_limits.endpoints."PUT /bots/{bot}/commands"]
+# A bot publishes its list when it starts or changes; each publish is checked whole and
+# announced wherever the bot is.
+user = { requests = 30, per_seconds = 3600, burst = 5 }
+
 [rate_limits.endpoints."POST /bots/{bot}/token"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 

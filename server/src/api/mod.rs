@@ -17,6 +17,7 @@ pub(crate) mod attachment;
 pub(crate) mod auth;
 pub(crate) mod block;
 pub(crate) mod bot;
+pub mod bot_command;
 pub(crate) mod category;
 pub(crate) mod category_collapse;
 pub(crate) mod channel;
@@ -385,6 +386,11 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(bot::rotate_bot_token))
         .routes(routes!(bot::transfer_bot))
         .routes(routes!(bot::update_bot, bot::delete_bot))
+        .routes(routes!(
+            bot_command::publish_bot_commands,
+            bot_command::read_bot_commands
+        ))
+        .routes(routes!(bot_command::channel_commands))
         .routes(routes!(block::block_user, block::unblock_user))
         .routes(routes!(
             category_collapse::collapse_category,

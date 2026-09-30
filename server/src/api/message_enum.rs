@@ -84,6 +84,10 @@ enum MessageEnumSource {
         category: CategoryId,
         collapsed: bool,
     },
+    // A bot published a new list of the commands it answers; clients that complete commands
+    // read it again. See `app::bot_command`.
+    #[message_gen(custom_event)]
+    BotCommandsChanged { bot: UserId },
     // The user blocked or unblocked someone, on one of their devices; the others follow. The
     // blocked user is never told. See `app::block`.
     #[message_gen(custom_event)]

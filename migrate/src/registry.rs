@@ -67,4 +67,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260930_044153_use_camera_permission::M,
     &migrations::m20260930_075132_attachment_dimensions::M,
     &migrations::m20260930_081607_link_preview_image_size::M,
+    &migrations::m20260930_083535_bot_commands::M,
 ];

@@ -16,6 +16,7 @@ pub mod attachment;
 pub mod benchmark;
 pub mod block;
 pub mod bot;
+pub mod bot_command;
 pub mod category;
 pub mod category_collapse;
 pub mod channel;
