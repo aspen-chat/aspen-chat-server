@@ -67,3 +67,21 @@ export async function removePasskey(client: AspenClient, passkey: string): Promi
 export async function regenerateRecoveryCodes(client: AspenClient): Promise<string[]> {
   return unwrap(await client.api.POST(`${API_PREFIX}/users/{user}/recovery-codes`, me)).codes;
 }
+
+/**
+ * Replaces the password. The server signs out every other session of the account and keeps
+ * this one; an account with two-factor sign-in also needs a recent verification.
+ */
+export async function changePassword(
+  client: AspenClient,
+  oldPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const result = await client.api.PUT(`${API_PREFIX}/users/{user}/password`, {
+    ...me,
+    body: { oldPassword, newPassword },
+  });
+  if (result.error !== undefined) {
+    throw new ApiProblemError(problemOf(result.error, result.response));
+  }
+}
