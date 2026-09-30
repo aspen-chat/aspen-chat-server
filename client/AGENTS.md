@@ -499,7 +499,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 - Bots are users with `bot` set, marked by `BotBadge` wherever they are named (messages, the
   member list, their card, which also says who made them, the admin users directory). Nothing
   in the app signs in as a bot; bots use the API with their tokens. Developer mode is the
-  account preference `DEVELOPER_MODE`, turned on in Settings, which then offers `BotsDialog`
+  account preference `DEVELOPER_MODE`, turned on in Settings. With it comes the ID wizard
+  (`ID_WIZARD`, on unless turned off; `useIdWizard`): everything with an id offers to copy it
+  through `CopyIdButton`, or `CopyIdMenuItem` in a menu (`src/features/layout/CopyId.tsx`),
+  always last in whatever shows it, so the everyday controls keep their places whether it is
+  on or off, and each dashboard table gains a last ID column (`Directory`'s `idThing`). A new
+  place that shows something with an id gives it one. Developer mode also offers `BotsDialog`
   (`src/features/bots`): the caller's bots (`RecordStore.ownedBots`, topic `bots`, derived from
   the cached users whose `botOwner` is the caller and filled by `AspenSync.loadBots`), making
   one, whose token is shown once as it arrives, public or private, the link that adds it with
