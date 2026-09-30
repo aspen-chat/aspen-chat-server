@@ -21,8 +21,10 @@ import {
   dangerButtonClass,
   dialogClass,
   overlayClass,
+  planeClass,
+  planeSurfaceClass,
   secondaryButtonClass,
-  wideModalClass,
+  widePlanesModalClass,
 } from "@/features/invites/dialog";
 import { copyText } from "@/features/layout/clipboard";
 import { ChoiceCheckbox } from "@/features/layout/choices";
@@ -51,7 +53,7 @@ export function BotsDialog() {
         {m.bots.manage}
       </Button>
       <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={wideModalClass}>
+        <Modal className={widePlanesModalClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.bots.heading}</DialogHeading>
             <BotsBody />
@@ -77,11 +79,11 @@ function BotsBody() {
   const current = bots.find((bot) => bot.id === selected) ?? bots[0];
   return (
     <div className="flex flex-col gap-4 md:flex-row">
-      <div className="flex flex-col gap-3 md:w-60 md:shrink-0">
+      <div className="flex flex-col gap-4 md:w-60 md:shrink-0">
         {bots.length === 0 ? (
-          <p className="text-sm text-ink-muted">{m.bots.none}</p>
+          <p className={planeClass + " text-sm text-ink-muted"}>{m.bots.none}</p>
         ) : (
-          <ul aria-label={m.bots.heading} className="flex flex-col gap-0.5">
+          <ul aria-label={m.bots.heading} className={planeSurfaceClass + " flex flex-col gap-0.5"}>
             {bots.map((bot) => (
               <li key={bot.id}>
                 <Button
@@ -154,7 +156,7 @@ function CreateBot({ onCreated }: { onCreated: (bot: User, token: string) => voi
           },
         );
       }}
-      className="flex flex-col gap-2 border-t border-line pt-3"
+      className={planeClass}
     >
       <h3 className="text-sm font-semibold text-ink-muted">{m.bots.create}</h3>
       <TextField value={name} onChange={setName} isRequired maxLength={32} className={fieldClass}>
@@ -222,7 +224,7 @@ function BotEditor({
     );
   };
   return (
-    <section aria-label={name} className="flex min-w-0 flex-1 flex-col gap-4">
+    <section aria-label={name} className={planeClass + " min-w-0 flex-1 self-start"}>
       <div className="flex items-center gap-3">
         <Avatar name={name} iconId={bot.icon} size="lg" />
         <div className="min-w-0">

@@ -87,7 +87,10 @@ test("a card opened in a community lists the member's roles, and gives and takes
 
 test("a card opened outside a community shows no roles", async ({ page }) => {
   await signInToWorld(page);
-  await page.goto(`/dms`);
+  await page
+    .getByRole("navigation", { name: "Communities" })
+    .getByRole("link", { name: /^Direct messages/ })
+    .click();
   await page.getByRole("link", { name: /Bob/ }).first().click();
   await page
     .getByRole("button", { name: /^Show profile of Bob/ })

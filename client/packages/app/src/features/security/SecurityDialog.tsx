@@ -3,8 +3,8 @@ import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-c
 import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
 import {
   dialogClass,
-  modalClass,
   overlayClass,
+  planesModalClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -22,7 +22,7 @@ export function SecurityDialog() {
         {m.security.open}
       </Button>
       <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={modalClass}>
+        <Modal className={planesModalClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.security.title}</DialogHeading>
             <SecurityPanel transport={transport} />

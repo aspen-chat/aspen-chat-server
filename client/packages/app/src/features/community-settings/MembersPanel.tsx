@@ -25,7 +25,11 @@ import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/fea
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
-import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import {
+  dangerButtonClass,
+  planeSurfaceClass,
+  secondaryButtonClass,
+} from "@/features/invites/dialog";
 import { markClass } from "@/features/layout/choices";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -63,7 +67,7 @@ export function MembersPanel({ communityId }: { communityId: string }) {
       )}
       {searching && <p className={hintClass}>{m.loading}</p>}
       {!searching && members.length === 0 && <p className={hintClass}>{m.members.noneFound}</p>}
-      <ul aria-label={m.members.listLabel} className="flex flex-col gap-1">
+      <ul aria-label={m.members.listLabel} className={planeSurfaceClass + " flex flex-col gap-1"}>
         {members.map((member) => (
           <MemberRow key={member.id} communityId={communityId} member={member} />
         ))}

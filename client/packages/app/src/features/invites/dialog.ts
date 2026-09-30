@@ -15,14 +15,18 @@ export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";
 /** A modal with room for a grid of choices, such as the screen share picker. */
 export const wideModalClass = modalFrameClass + " bg-surface-raised max-w-3xl";
 /**
- * A modal of many sections, such as Settings, each drawn as a plane (`planeClass`) raised off
- * the modal's plainer ground, so the eye finds where one ends and the next begins. It is wide
- * enough for the planes to stand in two columns (`PlaneColumns`).
+ * A modal of several sections, such as Sign-in and security, each drawn as a plane
+ * (`planeClass`) raised off the modal's plainer ground, so the eye finds where one ends and the
+ * next begins.
  */
-export const planesModalClass = modalFrameClass + " bg-surface max-w-3xl";
-/** A section drawn raised off its ground; it never splits across columns. */
-export const planeClass =
-  "flex flex-col gap-3 break-inside-avoid rounded-lg border border-line bg-surface-raised p-1.5 shadow-sm";
+export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
+/** The same, wide enough for the planes to stand in two columns (`PlaneColumns`), as Settings. */
+export const widePlanesModalClass = modalFrameClass + " bg-surface max-w-3xl";
+/** A plane's look alone, for an element that lays out its own contents, such as a list. */
+export const planeSurfaceClass =
+  "break-inside-avoid rounded-lg border border-line bg-surface-raised p-1.5 shadow-sm";
+/** A section drawn raised off its ground, its contents in a column; it never splits across columns. */
+export const planeClass = "flex flex-col gap-3 " + planeSurfaceClass;
 export const dialogClass = "flex flex-col gap-4 outline-none";
 export const headingClass = "text-lg font-semibold";
 export const dangerButtonClass =

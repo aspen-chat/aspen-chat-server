@@ -32,7 +32,7 @@ import {
   optionClass,
   overlayClass,
   planeClass,
-  planesModalClass,
+  widePlanesModalClass,
   secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
@@ -68,7 +68,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
         </Button>
       </Tooltip>
       <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
+        <Modal className={widePlanesModalClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>

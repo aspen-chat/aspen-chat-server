@@ -22,7 +22,12 @@ import {
 } from "@/api/hooks";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
-import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import {
+  dangerButtonClass,
+  planeClass,
+  planeSurfaceClass,
+  secondaryButtonClass,
+} from "@/features/invites/dialog";
 import { BotBadge } from "@/features/users/BotBadge";
 import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -30,7 +35,7 @@ import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 
 /**
- * A user's profile as a card: who they are, their pronouns, what they are up to, and their
+ * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
  * bio, with ways to message and to block them when they are someone else. Opens from any
  * control that names the user, such as a message author or a member row. Opened within a
  * community it shows the roles they hold there, with a way to give them another for those who
@@ -46,34 +51,36 @@ export function ProfileCard({ user }: { user: User }) {
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
   const name = displayNameOf(user);
   return (
-    <div className="flex w-72 flex-col gap-3 p-4">
-      <div className="flex items-center gap-3">
-        <Avatar name={name} iconId={user.icon} size="lg" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-base font-semibold">{name}</span>
-            {user.bot && <BotBadge />}
-          </div>
-          <div className="truncate text-sm text-ink-muted">
-            {handleOf(user)}
-            {user.pronouns != null && <span> · {user.pronouns}</span>}
-          </div>
-          {blocked && (
-            <div className="mt-0.5 flex items-center gap-1 text-xs font-medium text-ink-faint">
-              <ProhibitIcon size={12} aria-hidden="true" />
-              {m.blocking.blocked}
+    <div className="flex w-72 flex-col gap-2 p-2">
+      <div className={planeClass}>
+        <div className="flex items-center gap-3">
+          <Avatar name={name} iconId={user.icon} size="lg" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-base font-semibold">{name}</span>
+              {user.bot && <BotBadge />}
             </div>
-          )}
+            <div className="truncate text-sm text-ink-muted">
+              {handleOf(user)}
+              {user.pronouns != null && <span> · {user.pronouns}</span>}
+            </div>
+            {blocked && (
+              <div className="mt-0.5 flex items-center gap-1 text-xs font-medium text-ink-faint">
+                <ProhibitIcon size={12} aria-hidden="true" />
+                {m.blocking.blocked}
+              </div>
+            )}
+          </div>
         </div>
+        {user.bot && <BotMaker ownerId={user.botOwner ?? null} />}
+        {user.status != null && (
+          <p className="text-sm break-words" aria-label={m.profile.statusLabel}>
+            {statusLine(user.status)}
+          </p>
+        )}
       </div>
-      {user.bot && <BotMaker ownerId={user.botOwner ?? null} />}
-      {user.status != null && (
-        <p className="text-sm break-words" aria-label={m.profile.statusLabel}>
-          {statusLine(user.status)}
-        </p>
-      )}
       {user.bio != null && (
-        <section>
+        <section className={planeSurfaceClass}>
           <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
             {m.profile.bio}
           </h3>
@@ -225,7 +232,10 @@ function CommunityRoles({
     });
   };
   return (
-    <section aria-labelledby={`roles-${userId}`} className="flex flex-col gap-1">
+    <section
+      aria-labelledby={`roles-${userId}`}
+      className={planeSurfaceClass + " flex flex-col gap-1"}
+    >
       <h3
         id={`roles-${userId}`}
         className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
@@ -374,7 +384,7 @@ export function ProfilePopover({
       <Popover
         placement={placement}
         {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
-        className="rounded-lg border border-line bg-surface-raised shadow-lg entering:animate-in exiting:animate-out"
+        className="rounded-lg border border-line bg-surface shadow-lg entering:animate-in exiting:animate-out"
       >
         <Dialog
           aria-label={format(m.profile.cardLabel, { name: displayNameOf(user) })}

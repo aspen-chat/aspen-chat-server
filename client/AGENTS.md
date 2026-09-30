@@ -625,6 +625,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `src/features/invites/dialog.ts`, which never grows taller than the screen and scrolls within
   itself, so a long form on a phone reaches its buttons. Build new modals on those rather than
   on a class string of their own.
+  A modal or card of several sections draws each as a plane raised off a plainer ground:
+  `planesModalClass` or `widePlanesModalClass` for the modal, `planeClass` for a section
+  (`planeSurfaceClass` for one that lays out its own contents, such as a list), and
+  `PlaneColumns` to let planes stand in two columns where the modal is wide enough. Settings,
+  Sign-in and security, community settings, the bots dialog, the user card, and the
+  Administration Dashboard's sections are drawn this way.
   Every modal is titled with `DialogHeading` (`src/features/layout/DialogHeading.tsx`), which
   puts a Phosphor X in its top right that closes it through the `Dialog`'s `close` slot, and
   has no other button that only closes it (no Cancel, Close, Done, or OK); whatever closing

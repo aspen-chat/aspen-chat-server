@@ -18,7 +18,7 @@ import {
   labelClass,
   primaryButtonClass,
 } from "@/features/auth/styles";
-import { secondaryButtonClass } from "@/features/invites/dialog";
+import { planeClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
@@ -87,7 +87,7 @@ function Sections({
     [reload],
   );
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <p className="text-sm">
         {settings.twoFactorEnabled ? m.security.twoFactorOn : m.security.twoFactorOff}
         {settings.twoFactorRequired && ` ${m.security.twoFactorRequired}`}
@@ -192,7 +192,7 @@ function PasswordSection() {
   }
 
   return (
-    <section aria-labelledby="security-password" className="flex flex-col gap-2">
+    <section aria-labelledby="security-password" className={planeClass}>
       <SectionHeading id="security-password">{m.security.passwordHeading}</SectionHeading>
       {!open ? (
         <div className="flex items-center justify-between gap-2">
@@ -343,7 +343,7 @@ function AuthenticatorSection({
   }
 
   return (
-    <section aria-labelledby="security-authenticator" className="flex flex-col gap-2">
+    <section aria-labelledby="security-authenticator" className={planeClass}>
       <SectionHeading id="security-authenticator">{m.security.authenticatorHeading}</SectionHeading>
       {enrollment === null ? (
         <div className="flex items-center justify-between gap-2">
@@ -441,7 +441,7 @@ function PasskeySection({
   const withReauth = useReauth();
   const [pending, setPending] = useState(false);
   return (
-    <section aria-labelledby="security-passkeys" className="flex flex-col gap-2">
+    <section aria-labelledby="security-passkeys" className={planeClass}>
       <SectionHeading id="security-passkeys">{m.security.passkeysHeading}</SectionHeading>
       <p className={hintClass}>{m.security.passkeysHint}</p>
       {settings.passkeys.length === 0 ? (
@@ -597,7 +597,7 @@ function RecoverySection({ settings, change }: { settings: api.SecuritySettings;
   const client = useAspenClient();
   const withReauth = useReauth();
   return (
-    <section aria-labelledby="security-recovery" className="flex flex-col gap-2">
+    <section aria-labelledby="security-recovery" className={planeClass}>
       <SectionHeading id="security-recovery">{m.security.recoveryHeading}</SectionHeading>
       {settings.twoFactorEnabled ? (
         <div className="flex items-center justify-between gap-2">

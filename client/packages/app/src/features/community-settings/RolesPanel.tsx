@@ -18,7 +18,12 @@ import {
   primaryButtonClass,
 } from "@/features/auth/styles";
 import { PermissionChecklist } from "@/features/community-settings/PermissionChecklist";
-import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import {
+  dangerButtonClass,
+  planeClass,
+  planeSurfaceClass,
+  secondaryButtonClass,
+} from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -91,7 +96,7 @@ export function RolesPanel({ communityId }: { communityId: string }) {
               setSelected(key === undefined ? null : String(key));
             }
           }}
-          className="flex flex-col gap-0.5 outline-none"
+          className={planeSurfaceClass + " flex flex-col gap-0.5 outline-none"}
         >
           {(role) => {
             const index = movable.findIndex((r) => r.id === role.id);
@@ -250,7 +255,7 @@ function RoleEditor({
         event.preventDefault();
         void save();
       }}
-      className="flex min-w-0 flex-1 flex-col gap-4"
+      className={planeClass + " min-w-0 flex-1"}
     >
       {role.bot != null && <BotRoleNote botId={role.bot} />}
       {role.everyone ? (

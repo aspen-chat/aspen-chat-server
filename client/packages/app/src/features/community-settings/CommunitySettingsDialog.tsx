@@ -35,8 +35,9 @@ import {
   dangerButtonClass,
   dialogClass,
   overlayClass,
+  planeClass,
   secondaryButtonClass,
-  wideModalClass,
+  widePlanesModalClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CommunityNotifications } from "@/features/notifications/CommunityNotifications";
@@ -77,7 +78,7 @@ export function CommunitySettingsDialog({
         </Button>
       </Tooltip>
       <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={wideModalClass}>
+        <Modal className={widePlanesModalClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>
               {format(m.communitySettings.heading, { community: community.name })}
@@ -125,11 +126,15 @@ function Overview({ community }: { community: Community }) {
   // A moderator of the server may rename and delete any community, and nothing else here.
   const moderator = access?.moderator === true;
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {moderator && !member && <p className={hintClass}>{m.communitySettings.moderatorNote}</p>}
       {(manage || moderator) && <Rename community={community} icon={manage} />}
-      {member && <CommunityNotifications communityId={community.id} />}
-      <section className="flex flex-col gap-2">
+      {member && (
+        <div className={planeClass}>
+          <CommunityNotifications communityId={community.id} />
+        </div>
+      )}
+      <section className={planeClass}>
         <h3 className="text-sm font-semibold text-ink-muted">{m.communitySettings.ownerHeading}</h3>
         <p className={hintClass}>
           {owner === undefined
@@ -167,7 +172,7 @@ function Rename({ community, icon }: { community: Community; icon: boolean }) {
             setSaving(false);
           });
       }}
-      className="flex flex-col gap-2"
+      className={planeClass}
     >
       {icon && (
         <div className="flex items-center gap-3">
@@ -283,7 +288,7 @@ function Delete({ community }: { community: Community }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <section className="flex flex-col gap-2 rounded-md border border-danger/40 p-3">
+    <section className="flex flex-col gap-2 rounded-lg border border-danger/40 bg-surface-raised p-1.5 shadow-sm">
       <h3 className="text-sm font-semibold text-danger">{m.communitySettings.deleteHeading}</h3>
       <p className={hintClass}>{m.communitySettings.deleteHint}</p>
       <TextField value={typed} onChange={setTyped} className={fieldClass}>
@@ -326,7 +331,7 @@ function Leave({ community }: { community: Community }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <section className="flex flex-col gap-2">
+    <section className={planeClass}>
       {confirming && (
         <p className="text-sm">
           {format(m.communitySettings.leaveConfirm, { community: community.name })}
