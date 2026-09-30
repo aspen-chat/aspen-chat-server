@@ -7,6 +7,9 @@ export const choiceClass =
   "hover:bg-surface-hover selected:border-accent disabled:opacity-60 disabled:hover:bg-transparent " +
   "focus-visible:ring-2 focus-visible:ring-accent/50";
 
+/** A choice as tall as the tallest of its fellows, which `useUniformHeight` measures. */
+export const UNIFORM_CHOICE_CLASS = "min-h-(--choice-height)";
+
 /** The square a checkbox's tick, or a radio button's dot, sits in. */
 export const markClass =
   "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-line bg-surface " +
@@ -19,16 +22,21 @@ export function ChoiceCheckbox({
   label,
   hint,
   isDisabled = false,
+  className,
 }: {
   isSelected: boolean;
   onChange: (selected: boolean) => void;
   label: string;
   hint: string;
   isDisabled?: boolean;
+  /** Added to the choice's own, to size it among others. */
+  className?: string;
 }) {
   return (
     <CheckboxField isSelected={isSelected} onChange={onChange} isDisabled={isDisabled}>
-      <CheckboxButton className={choiceClass}>
+      <CheckboxButton
+        className={className === undefined ? choiceClass : choiceClass + " " + className}
+      >
         <span className={markClass}>
           <CheckIcon
             size={12}

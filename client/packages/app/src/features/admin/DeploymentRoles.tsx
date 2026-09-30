@@ -19,7 +19,8 @@ import {
   primaryButtonClass,
 } from "@/features/auth/styles";
 import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
-import { ChoiceCheckbox } from "@/features/layout/choices";
+import { ChoiceCheckbox, UNIFORM_CHOICE_CLASS } from "@/features/layout/choices";
+import { useUniformHeight } from "@/features/layout/useUniformHeight";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -192,6 +193,7 @@ function DeploymentRoleEditor({
   const [permissions, setPermissions] = useState<ReadonlySet<DeploymentPermission>>(
     () => new Set(role.permissions),
   );
+  const permissionList = useUniformHeight();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -235,7 +237,7 @@ function DeploymentRoleEditor({
         <Input className={inputClass} />
       </TextField>
       {!editable && <p className={hintClass}>{m.roles.aboveYou}</p>}
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div ref={permissionList} className="grid gap-2 sm:grid-cols-2">
         {DEPLOYMENT_PERMISSIONS.map((permission) => (
           <ChoiceCheckbox
             key={permission}
@@ -252,6 +254,7 @@ function DeploymentRoleEditor({
             }}
             label={m.deploymentPermissionNames[permission].name}
             hint={m.deploymentPermissionNames[permission].hint}
+            className={UNIFORM_CHOICE_CLASS}
           />
         ))}
       </div>

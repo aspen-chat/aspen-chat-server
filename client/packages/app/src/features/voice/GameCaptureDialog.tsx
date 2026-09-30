@@ -86,8 +86,7 @@ export function GameCaptureDialog({
     const apply = (loaded: CaptureCatalogue) => {
       const targets = loaded.applicationAudio?.targets ?? null;
       setCatalogue((current) =>
-        current !== null &&
-        sameAudioTargets(current.applicationAudio?.targets ?? null, targets)
+        current !== null && sameAudioTargets(current.applicationAudio?.targets ?? null, targets)
           ? current
           : loaded,
       );
