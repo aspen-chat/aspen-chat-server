@@ -255,7 +255,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   voice channel row joins it (a call the user is already in, or joining, is left alone) and
   opens `VoiceScreen`, the channel's screen in place of a
   history: the shared screens (one large, the others as thumbnails to pick), everyone in the
-  call as tiles, and a Join button when the user is not in it. `ChannelHeader` is the bar both
+  call as tiles, and a Join button when the user is not in it. The large screen goes full
+  screen with its corner button or a double click (`ScreenTile`), through the Fullscreen API
+  where it works and otherwise by filling the app's window, left with Escape or the button; the
+  mobile apps always fill the window, since Capacitor's WebView dismisses any element that
+  asks for the whole screen. `ChannelHeader` is the bar both
   channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
   (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's
   own events. A `participantState` frame about the user themself overwrites `muted` and

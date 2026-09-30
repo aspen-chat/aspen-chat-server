@@ -179,6 +179,7 @@ function FocusedScreen({ screen }: { screen: { user: string | null; track: Media
       track={screen.track}
       label={screenLabel(m, screen.user, user === undefined ? undefined : displayNameOf(user))}
       className="aspect-video max-h-[60vh] w-full"
+      expandable
     />
   );
 }
