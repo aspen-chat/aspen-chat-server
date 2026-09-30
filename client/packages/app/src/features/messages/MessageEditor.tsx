@@ -81,6 +81,9 @@ export function MessageEditor({
         autoFocus
         className="relative"
       >
+        <p role="status" className="sr-only">
+          {tagging.announcement}
+        </p>
         {tagging.list}
         <TextArea
           {...tagging.boxProps}

@@ -487,7 +487,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   its permission in the channel (people from the member sample and, for those the server lets
   search a large community, `useMemberSearch`), from the keyboard (arrows, Enter or Tab, Escape) with
   `aria-activedescendant` and a polite status, since React Aria's ComboBox cannot complete at a
-  `TextArea`'s caret. A pick shows as `@username` or `@Role` and is sent as its tag
+  `TextArea`'s caret. Completions share `SuggestionList`, and the box renders one status saying
+  what the active completion's `announcement` says. A pick shows as `@username` or `@Role` and is sent as its tag
   (`encodeTags`); editing reads tags back (`decodeTags`). Each read state's `mentions` is the
   unread tags of the reader: the store adds a live message that tags them, clears it when they
   post or read to the newest, and `AspenSync` reads the state again when only the server can
@@ -517,6 +518,26 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   give (Manage roles and Assign roles, and each permission held), and calls `AspenSync.addBot`.
   A role made for a bot says whose it is in the role editor and is offered for neither
   deletion nor assigning. With `manageBots`, the admin users directory deletes ownerless bots.
+- Bots' commands (`src/features/commands`) are offered in the message box by `useCommandLine`,
+  which the Composer runs beside `useTagging` and which turns tagging off while the draft
+  begins with `/`. The channel's commands are store state (`RecordStore.commands`, topic
+  `commands:<channelId>`, read by `AspenSync.loadCommands` through `useCommands`), dropped
+  whenever something may change which bots see the channel or what they answer
+  (`botCommandsChanged`, roles, overrides, a bot's membership, a DM's recipients), and read
+  again where shown. Typing the name offers every bot's commands with the bot's picture and
+  name and the command's description in the reader's language (`describe`); picking one that
+  another bot answers too writes its bot's tag after the name (`/kick @modbot `), which is how
+  a line says which it means. While an argument is typed, the command's form shows above the
+  box with the parameter at the caret marked, what it takes, and a warning when a `regex`
+  value does not match; people, roles, channels, communities, and deployments are suggested by
+  name, and a pick is remembered so that sending turns its text into the id. `commandLine.ts`
+  holds the reading, the server's quoting included (`tokenize`, `quoteArgument`), the last
+  `any` parameter taking the rest of the line, files filling `attachmentId` parameters in
+  order. Sending a line that names a command here invokes it (`AspenSync.invokeCommand`), one
+  two bots answer untagged is refused in the box naming both, and any other line beginning
+  with `/` goes as a message. A command's message says who it was sent to beside its author
+  (`sentTo`), and its text names people and roles by the tags that tag no one, so they read by
+  name.
 - Blocks are store state (`RecordStore.blocked`, topic `block:<userId>`, and `blockedUsers`,
   topic `blocks`; `useBlocked`, `useBlockedUsers`), read at bootstrap from `GET
 /users/@me/blocks` with the blocked users sideloaded and kept by `userBlockChanged` events.

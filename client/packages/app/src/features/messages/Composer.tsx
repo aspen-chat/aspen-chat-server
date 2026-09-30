@@ -3,6 +3,7 @@ import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useTagging } from "@/features/mentions/useTagging";
+import { useCommandLine } from "@/features/commands/useCommandLine";
 import { useBlockedDmPeer, useChannel, useChannelAccess, useSync, useUser } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
@@ -60,7 +61,8 @@ export function Composer({
   const permissions = useChannelAccess(channelId);
   const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
   const blockedPeer = useBlockedDmPeer(channelId);
-  const tagging = useTagging({ channelId, draft, setDraft });
+  const commands = useCommandLine({ channelId, draft, setDraft });
+  const tagging = useTagging({ channelId, draft, setDraft, off: commands.active });
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>
@@ -129,11 +131,27 @@ export function Composer({
     setSending(true);
     setError(null);
     try {
-      await sync.sendMessage(channelId, tagging.encode(draft.trim()), readyIds, {
-        echoToParent: echoTarget !== undefined && echo,
-      });
+      const text = draft.trim();
+      // A line beginning with `/` is read against the commands here, which it may be sent
+      // before they have been read.
+      if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
+        await sync.loadCommands(channelId).catch(() => undefined);
+      }
+      const prepared = commands.prepare(text, readyIds);
+      if (prepared.kind === "refused") {
+        setError(prepared.reason);
+        return;
+      }
+      if (prepared.kind === "command") {
+        await sync.invokeCommand(channelId, prepared.invocation);
+      } else {
+        await sync.sendMessage(channelId, tagging.encode(text), readyIds, {
+          echoToParent: echoTarget !== undefined && echo,
+        });
+      }
       setDraft("");
       tagging.reset();
+      commands.reset();
       setPending([]);
       setEcho(false);
     } catch (e) {
@@ -144,7 +162,7 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (tagging.onKeyDown(event)) {
+    if (commands.onKeyDown(event) || tagging.onKeyDown(event)) {
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -247,9 +265,26 @@ export function Composer({
           onChange={setDraft}
           className="relative flex-1"
         >
+          <p role="status" className="sr-only">
+            {commands.active ? commands.announcement : tagging.announcement}
+          </p>
           {tagging.list}
+          {commands.list}
           <TextArea
             {...tagging.boxProps}
+            {...(commands.active ? commands.aria : {})}
+            onSelect={(event) => {
+              tagging.boxProps.onSelect(event);
+              commands.follow(event);
+            }}
+            onKeyUp={(event) => {
+              tagging.boxProps.onKeyUp(event);
+              commands.follow(event);
+            }}
+            onClick={(event) => {
+              tagging.boxProps.onClick(event);
+              commands.follow(event);
+            }}
             placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}

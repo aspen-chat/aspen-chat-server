@@ -14,6 +14,7 @@ import type {
   Permission,
   PermissionSet,
   Pin,
+  BotCommands,
   Role,
   ChannelMute,
   NotificationLevel,
@@ -507,4 +508,20 @@ export function usePins(channelId: string): readonly Pin[] | undefined {
     }
   }, [sync, channelId, pins]);
   return pins;
+}
+
+/**
+ * The commands of the bots that can see a channel, read when first asked for and again
+ * whenever the store drops them; `undefined` while they are read, or for no channel.
+ */
+export function useCommands(channelId: string | null): readonly BotCommands[] | undefined {
+  const sync = useSync();
+  const topic = channelId === null ? "commands:" : `commands:${channelId}`;
+  const commands = useTopic(topic, (s) => (channelId === null ? undefined : s.commands(channelId)));
+  useEffect(() => {
+    if (channelId !== null && commands === undefined) {
+      void sync.loadCommands(channelId).catch(() => undefined);
+    }
+  }, [sync, channelId, commands]);
+  return commands;
 }

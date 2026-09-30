@@ -7,12 +7,12 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactNode,
   type SyntheticEvent,
 } from "react";
 import { useChannel, useChannelAccess, useMe, useMembers, useRoles, useUsers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
+import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
 import { encodeTags, tagQueryAt, type PickedTag } from "@/features/mentions/tags";
 import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -21,15 +21,11 @@ import { format } from "@/i18n/messages";
 /** The most suggestions shown at once. */
 const MAX_SUGGESTIONS = 8;
 
-interface Suggestion {
-  readonly key: string;
+interface Tag extends Suggestion {
   /** What the message box shows once picked. */
   readonly text: string;
   /** What it is sent as. */
   readonly token: string;
-  readonly label: string;
-  readonly detail: string | null;
-  readonly icon: ReactNode;
 }
 
 /**
@@ -45,20 +41,24 @@ interface Suggestion {
  * cannot offer completions at the caret of a multi-line `TextArea`; this follows its pattern
  * instead, with what a text box may carry: `aria-autocomplete`, the list named by
  * `aria-controls`, and the chosen option by `aria-activedescendant`, focus staying in the box.
- * A polite status says when suggestions appear and how to pick one, since a text box has no
- * `aria-expanded` to announce it.
+ * `announcement` is what a polite status beside the box says when suggestions appear and how
+ * to pick one, since a text box has no `aria-expanded` to announce it; the box renders the one
+ * status, which other completions (`useCommandLine`) share.
  */
 export function useTagging({
   channelId,
   draft,
   setDraft,
   initialPicks = [],
+  off = false,
 }: {
   channelId: string;
   draft: string;
   setDraft: (next: string) => void;
   /** The tags a message being edited already holds (`decodeTags`). */
   initialPicks?: readonly PickedTag[];
+  /** Offers nothing, while something else completes what is typed (a command's arguments). */
+  off?: boolean;
 }) {
   const m = useMessages();
   const listId = useId();
@@ -84,8 +84,8 @@ export function useTagging({
     home?.community == null
       ? recipients.filter((u): u is User => u !== undefined)
       : [...search.members, ...sample.filter((u) => !search.members.some((f) => f.id === u.id))];
-  const suggestions: Suggestion[] = [];
-  if (typing !== null && typing.start !== dismissedAt) {
+  const suggestions: Tag[] = [];
+  if (!off && typing !== null && typing.start !== dismissedAt) {
     if (access.has("mentionMembers")) {
       for (const user of people) {
         if (
@@ -134,7 +134,7 @@ export function useTagging({
   const current = Math.min(active, shown.length - 1);
 
   const pick = useCallback(
-    (suggestion: Suggestion, box: HTMLTextAreaElement | null) => {
+    (suggestion: Tag, box: HTMLTextAreaElement | null) => {
       if (typing === null) {
         return;
       }
@@ -202,79 +202,28 @@ export function useTagging({
     "aria-activedescendant": open ? `${listId}-${String(current)}` : undefined,
   };
 
-  const status = (
-    <p role="status" className="sr-only">
-      {open
-        ? format(shown.length === 1 ? m.tagging.oneSuggestion : m.tagging.someSuggestions, {
-            count: String(shown.length),
-          })
-        : ""}
-    </p>
-  );
+  const announcement = open
+    ? format(shown.length === 1 ? m.tagging.oneSuggestion : m.tagging.someSuggestions, {
+        count: String(shown.length),
+      })
+    : "";
 
   const suggestionList = open ? (
-    <ul
+    <SuggestionList
       id={listId}
-      role="listbox"
-      aria-label={m.tagging.suggestions}
-      className="absolute bottom-full start-0 z-20 mb-1 flex max-h-72 w-72 max-w-full flex-col overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-lg"
-    >
-      {shown.map((suggestion, index) => (
-        <li
-          key={suggestion.key}
-          id={`${listId}-${String(index)}`}
-          role="option"
-          aria-selected={index === current}
-          // Read as a name and what it is, without the picture's initials between them.
-          aria-label={
-            suggestion.detail === null
-              ? suggestion.label
-              : `${suggestion.label}, ${suggestion.detail}`
-          }
-          // Picking keeps focus in the message box.
-          onMouseDown={(event) => {
-            event.preventDefault();
-          }}
-          onClick={() => {
-            pick(
-              suggestion,
-              document.querySelector<HTMLTextAreaElement>(`[aria-controls="${listId}"]`),
-            );
-          }}
-          className={
-            "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm " +
-            (index === current ? "bg-accent-soft text-accent-strong" : "hover:bg-surface-hover")
-          }
-        >
-          <span aria-hidden="true" className="flex shrink-0">
-            {suggestion.icon}
-          </span>
-          <span className="min-w-0 flex-1 truncate">{suggestion.label}</span>
-          {suggestion.detail !== null && (
-            <span
-              className={
-                "truncate text-xs " + (index === current ? "text-accent-strong" : "text-ink-muted")
-              }
-            >
-              {suggestion.detail}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
+      label={m.tagging.suggestions}
+      suggestions={shown}
+      current={current}
+      onPick={pick}
+    />
   ) : null;
-
-  const list = (
-    <>
-      {status}
-      {suggestionList}
-    </>
-  );
 
   return {
     boxProps,
     onKeyDown,
-    list,
+    list: suggestionList,
+    /** What a polite status beside the box says of the suggestions: how many, how to pick. */
+    announcement,
     /** The text as it is sent, picked tags and all. */
     encode: (text: string) => encodeTags(text, picks),
     /** Forgets the picks, once what they were for is sent. */

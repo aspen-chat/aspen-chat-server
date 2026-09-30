@@ -62,6 +62,13 @@ export type Mentions = components["schemas"]["Mentions"];
 export type UserBlock = components["schemas"]["UserBlock"];
 /** A pinned message: which, when it was pinned, and its place among the channel's pins. */
 export type Pin = components["schemas"]["Pin"];
+/** A bot and the commands it answers, as a channel offers them. */
+export type BotCommands = components["schemas"]["BotCommands"];
+export type Command = components["schemas"]["Command"];
+export type CommandParameter = components["schemas"]["Parameter"];
+export type ParameterType = components["schemas"]["ParameterType"];
+/** A command as sent: which bot's, its name, and its arguments as the server reads them. */
+export type Invocation = components["schemas"]["Invocation"];
 
 export type Listener = () => void;
 
@@ -89,6 +96,7 @@ export type Listener = () => void;
  * - `access:<communityId>`: what the caller may do across a community
  * - `channelAccess:<channelId>`: what the caller may do in one channel
  * - `pins:<channelId>`: a channel's pinned messages, once loaded
+ * - `commands:<channelId>`: the commands of the bots that can see a channel, once loaded
  */
 export type Topic = string;
 
@@ -264,6 +272,7 @@ export class RecordStore {
   readonly #categoryOverrides = new Map<string, CategoryOverride>();
   /** `channel -> message -> pin`, for the channels whose pins have been loaded. */
   readonly #pins = new Map<string, Map<string, Pin>>();
+  readonly #commands = new Map<string, readonly BotCommands[]>();
   /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
   readonly #memberRoles = new Map<string, readonly string[]>();
   /** What the caller may do across the deployment. */
@@ -336,6 +345,20 @@ export class RecordStore {
 
   user(id: string): User | undefined {
     return this.#users.get(id);
+  }
+
+  /**
+   * A cached user of this deployment by username, ignoring case, as a person types one; those
+   * of other deployments share names with it, so they are left out.
+   */
+  userNamed(name: string): User | undefined {
+    const wanted = name.toLowerCase();
+    for (const user of this.#users.values()) {
+      if (user.homeDomain == null && user.name.toLowerCase() === wanted) {
+        return user;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -544,6 +567,34 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Topic `commands:<channelId>`: each bot that can see the channel and has commands, with
+   * them, or `undefined` until loaded or once something that may change them has happened.
+   */
+  commands(channelId: string): readonly BotCommands[] | undefined {
+    return this.#commands.get(channelId);
+  }
+
+  /** Installs a channel's commands as read. */
+  setCommands(channelId: string, commands: readonly BotCommands[]): void {
+    this.#batch(() => {
+      this.#commands.set(channelId, commands);
+      this.#touch(`commands:${channelId}`);
+    });
+  }
+
+  /**
+   * Drops every channel's commands, to be read again where they are shown. Which bots can see
+   * a channel follows memberships, roles, and overrides, which the server resolves; a change
+   * to any of them is rare enough that asking again beats resolving it here.
+   */
+  #forgetCommands(): void {
+    for (const channelId of this.#commands.keys()) {
+      this.#touch(`commands:${channelId}`);
+    }
+    this.#commands.clear();
+  }
+
   /** Topic `icon:<id>`. */
   icon(id: string): Icon | undefined {
     return this.#icons.get(id);
@@ -644,13 +695,14 @@ export class RecordStore {
     if (message.author === this.#myUserId || this.silenced(message.author)) {
       return false;
     }
-    // An echo and a poll's result say nothing of their own, and a call's record follows the
-    // ring that already told of the call.
+    // An echo and a poll's result say nothing of their own, a call's record follows the ring
+    // that already told of the call, and a command is for its bot, whose answer is what tells.
     if (
       message.kind === "threadEcho" ||
       message.kind === "pollClosed" ||
       message.kind === "call" ||
-      message.kind === "missedCall"
+      message.kind === "missedCall" ||
+      message.kind === "command"
     ) {
       return false;
     }
@@ -1612,6 +1664,7 @@ export class RecordStore {
       this.#blocked.clear();
       this.#roles.clear();
       this.#pins.clear();
+      this.#forgetCommands();
       this.#channelOverrides.clear();
       this.#categoryOverrides.clear();
       this.#memberRoles.clear();
@@ -1908,8 +1961,35 @@ export class RecordStore {
             }
           }
           break;
+        case "botCommandsChanged":
+        case "botCommandInvoked":
+          // A bot's own stream hears of invocations; its commands follow below.
+          break;
+      }
+      if (this.#commands.size > 0 && this.#changesCommands(event)) {
+        this.#forgetCommands();
       }
     });
+  }
+
+  /** Whether `event` may change which commands a channel offers. */
+  #changesCommands(event: ServerEvent): boolean {
+    switch (event.serverEvent) {
+      case "botCommandsChanged":
+      case "role":
+      case "channelOverride":
+      case "categoryOverride":
+        return true;
+      case "userCommunity":
+        return (
+          (event.type !== "update" || event.roles != null) &&
+          this.#users.get(event.user)?.bot === true
+        );
+      case "channel":
+        return event.type === "update" && event.recipients != null;
+      default:
+        return false;
+    }
   }
 
   // ---------------------------------------------------------------------------------------

@@ -31,7 +31,12 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
-import { REACTION_SUMMARY_USERS, RecordStore, type NotificationLevel } from "./store";
+import {
+  REACTION_SUMMARY_USERS,
+  RecordStore,
+  type Invocation,
+  type NotificationLevel,
+} from "./store";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
 
@@ -283,6 +288,7 @@ export class AspenSync {
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
+  readonly #commandLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
   readonly #notifyListeners = new Set<(message: Message) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
@@ -2122,6 +2128,44 @@ export class AspenSync {
     });
     this.#pinLoads.set(channelId, load);
     return load;
+  }
+
+  /**
+   * Reads the commands of the bots that can see a channel into the store, once however many
+   * ask at the same time; the store drops them when something that may change them happens.
+   */
+  loadCommands(channelId: string): Promise<void> {
+    const pending = this.#commandLoads.get(channelId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const load = (async () => {
+      const result = await this.#client.api.GET("/api/v1/channels/{channel}/commands", {
+        params: { path: { channel: channelId } },
+      });
+      if (result.data === undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.setCommands(channelId, result.data);
+    })().finally(() => {
+      this.#commandLoads.delete(channelId);
+    });
+    this.#commandLoads.set(channelId, load);
+    return load;
+  }
+
+  /**
+   * Sends a bot a command in a channel. The server checks its arguments and posts it there as
+   * a message of kind `command`, which arrives like any other.
+   */
+  async invokeCommand(channelId: string, invocation: Invocation): Promise<void> {
+    const result = await this.#client.api.POST("/api/v1/channels/{channel}/commands", {
+      params: { path: { channel: channelId } },
+      body: invocation,
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /**

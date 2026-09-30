@@ -652,12 +652,24 @@ pub(crate) async fn check(
     Ok((command, arguments))
 }
 
-/// The command as the channel shows it: `/name` and its arguments, each quoted where it holds
-/// whitespace or a quote, or is empty.
+/// The command as the channel shows it: `/name` and its arguments, people and roles as the
+/// tags a message names them by (which tag no one, the message's mentions being empty), and
+/// anything else quoted where it holds whitespace or a quote, or is empty.
 pub fn invocation_text(command: &Command, arguments: &[Argument]) -> String {
     let mut text = format!("/{}", command.name);
     for argument in arguments {
         text.push(' ');
+        match argument.ty {
+            ParameterType::UserId => {
+                text.push_str(&format!("<@{}>", argument.value));
+                continue;
+            }
+            ParameterType::RoleId => {
+                text.push_str(&format!("<@&{}>", argument.value));
+                continue;
+            }
+            _ => {}
+        }
         let plain = !argument.value.is_empty()
             && !argument
                 .value
@@ -775,6 +787,21 @@ mod tests {
                 ]
             ),
             "/say 2d6 \"for luck\" \"a \\\"quote\\\"\""
+        );
+        let tagged = |ty, value: &str| Argument {
+            name: "x".into(),
+            ty,
+            value: value.into(),
+        };
+        assert_eq!(
+            invocation_text(
+                &c,
+                &[
+                    tagged(ParameterType::UserId, "u"),
+                    tagged(ParameterType::RoleId, "r")
+                ]
+            ),
+            "/say <@u> <@&r>"
         );
     }
 

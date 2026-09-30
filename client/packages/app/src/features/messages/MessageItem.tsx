@@ -4,6 +4,7 @@ import {
   PencilSimpleIcon,
   PushPinIcon,
   PushPinSlashIcon,
+  RobotIcon,
 } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -37,6 +38,8 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { UserMention } from "@/features/messages/Mention";
+import { formatNodes } from "@/i18n/formatNodes";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -212,6 +215,14 @@ export function MessageItem({
             </ProfilePopover>
           )}
           {author?.bot === true && <BotBadge />}
+          {message.kind === "command" && message.commandBot != null && (
+            <span className="flex items-center gap-1 text-xs text-ink-muted">
+              <RobotIcon size={12} aria-hidden="true" />
+              {formatNodes(m.commands.sentTo, {
+                bot: <UserMention id={message.commandBot} chip />,
+              })}
+            </span>
+          )}
           {message.kind === "threadEcho" && (
             <span className="flex items-center gap-1 text-xs whitespace-nowrap text-ink-muted">
               <ArrowBendDownRightIcon size={12} aria-hidden="true" className="rtl:-scale-x-100" />
