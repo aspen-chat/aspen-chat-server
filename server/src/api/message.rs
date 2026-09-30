@@ -371,6 +371,7 @@ pub async fn create_message(
         request.content,
         request.attachments.clone(),
         request.echo_to_parent.unwrap_or(false),
+        None,
     )
     .await?;
     let location = format!("{API_PREFIX}/messages/{}", msg.id.0);

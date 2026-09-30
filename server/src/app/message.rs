@@ -3,6 +3,7 @@ use crate::api::message_enum::request::MessageUpdateRequest;
 use crate::api::message_enum::server_event::{MessageEvent, PinEvent, ServerEvent};
 use crate::api::{ChannelType, GlobalServerContext, MessageKind, message_enum};
 use crate::app;
+use crate::app::bot_command::{self, Invocation};
 use crate::app::channel::Channel;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
@@ -45,6 +46,8 @@ pub struct Message {
     pub mentions: Mentions,
     /// For a `Call`, how long the call lasted, in seconds.
     pub call_seconds: Option<i32>,
+    /// For a `Command`, the bot it was sent to.
+    pub command_bot: Option<UserId>,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -68,6 +71,7 @@ pub fn record(
         echo_of: row.echo_of,
         mentions: row.mentions.clone(),
         call_seconds: row.call_seconds,
+        command_bot: row.command_bot,
     }
 }
 
@@ -124,6 +128,7 @@ pub async fn create_message(
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
+    command: Option<Invocation>,
 ) -> Result<Message, app::Error> {
     let mut conn = state.connection_pool.get().await?;
     let message = conn
@@ -153,14 +158,38 @@ pub async fn create_message(
                         .require(Permissions::SEND_MESSAGES)?;
                 }
                 ensure_attachments_ready(conn.as_mut(), &attachments).await?;
-                let mentions = mention::resolve(
-                    state,
-                    conn.as_mut(),
-                    channel_id,
-                    &access,
-                    mention::parse(&content),
-                )
-                .await?;
+                // A command's text is the command as sent, checked here, and it tags no one.
+                let invoked = match &command {
+                    Some(invocation) => Some(
+                        bot_command::check(
+                            state,
+                            conn.as_mut(),
+                            author,
+                            &access,
+                            channel_id,
+                            invocation,
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                };
+                let (content, mentions) = match &invoked {
+                    Some((command, arguments)) => (
+                        bot_command::invocation_text(command, arguments),
+                        mention::Mentions::default(),
+                    ),
+                    None => {
+                        let mentions = mention::resolve(
+                            state,
+                            conn.as_mut(),
+                            channel_id,
+                            &access,
+                            mention::parse(&content),
+                        )
+                        .await?;
+                        (content, mentions)
+                    }
+                };
                 let message = Message {
                     id: MessageId::new(),
                     channel: MaybeLoaded::from_id(channel_id),
@@ -169,12 +198,17 @@ pub async fn create_message(
                     timestamp: Utc::now(),
                     deleted_at: None,
                     edited_at: None,
-                    kind: MessageKind::Standard,
+                    kind: if invoked.is_some() {
+                        MessageKind::Command
+                    } else {
+                        MessageKind::Standard
+                    },
                     poll: None,
                     thread: None,
                     echo_of: None,
                     mentions,
                     call_seconds: None,
+                    command_bot: command.as_ref().map(|invocation| invocation.bot),
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -203,6 +237,24 @@ pub async fn create_message(
                     ))),
                 )
                 .await?;
+                // The bot alone hears of the command, with its arguments checked and typed.
+                if let (Some((command, arguments)), Some(invocation)) = (&invoked, &command) {
+                    publish_event(
+                        state,
+                        conn.as_mut(),
+                        EventScope::User(invocation.bot),
+                        &ServerEvent::BotCommandInvoked {
+                            invocation: message.id,
+                            channel: channel_id,
+                            community: access.community.as_ref().map(|c| c.community),
+                            invoker: author,
+                            bot: invocation.bot,
+                            command: command.name.clone(),
+                            arguments: arguments.clone(),
+                        },
+                    )
+                    .await?;
+                }
                 if target.ty == ChannelType::Thread {
                     thread::record_reply(state, conn.as_mut(), channel_id, message.timestamp)
                         .await?;
@@ -218,7 +270,9 @@ pub async fn create_message(
             .scope_boxed()
         })
         .await?;
-    spawn_preview_fetch(state.clone(), message.id, message.content.clone());
+    if message.kind == MessageKind::Standard {
+        spawn_preview_fetch(state.clone(), message.id, message.content.clone());
+    }
     Ok(message)
 }
 
@@ -363,6 +417,10 @@ pub async fn update_message(
     // An echo shows its reply's content; there is nothing of its own to edit.
     if kind == MessageKind::ThreadEcho {
         return Err(app::Error::Validation(t!("echoNotEditable")));
+    }
+    // A command was sent as it stands, and its bot has already answered it.
+    if kind == MessageKind::Command {
+        return Err(app::Error::Validation(t!("commandNotEditable")));
     }
     let content_changed = command.content.is_some();
     let new_content_for_refetch = command.content.clone();

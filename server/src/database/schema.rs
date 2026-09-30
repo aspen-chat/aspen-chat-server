@@ -296,6 +296,7 @@ diesel::table! {
         echo_of -> Nullable<Uuid>,
         mentions -> Jsonb,
         call_seconds -> Nullable<Int4>,
+        command_bot -> Nullable<Uuid>,
     }
 }
 
@@ -645,7 +646,6 @@ diesel::joinable!(mention -> community_role (target_role));
 diesel::joinable!(mention -> message (message));
 diesel::joinable!(mention -> user (target_user));
 diesel::joinable!(message -> poll (poll));
-diesel::joinable!(message -> user (author));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
 diesel::joinable!(message_link_preview -> message (message_id));

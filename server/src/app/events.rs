@@ -147,6 +147,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::NotificationSettingChanged { .. }
         | ServerEvent::ForeignDmJoined { .. }
         | ServerEvent::UserBlockChanged { .. }
+        | ServerEvent::BotCommandInvoked { .. }
         | ServerEvent::CategoryCollapseChanged { .. }
         | ServerEvent::DeploymentAccessChanged { .. } => ScopeKind::User,
         ServerEvent::User(_) | ServerEvent::BotCommandsChanged { .. } => ScopeKind::UserEverywhere,

@@ -1300,6 +1300,7 @@ async fn record_call(
         echo_of: None,
         mentions: app::mention::Mentions::default(),
         call_seconds: had_company.then(|| i32::try_from(seconds).unwrap_or(i32::MAX)),
+        command_bot: None,
     };
     diesel::insert_into(message::table)
         .values(&row)

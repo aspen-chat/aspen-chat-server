@@ -11,13 +11,13 @@
 
 use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::permissions::{Permissions, channel_access};
-use crate::app::{self, ChannelId, EventScope, UserId, publish_event};
+use crate::app::permissions::{ChannelAccess, Permissions, channel_access, require_member};
+use crate::app::{self, AttachmentId, ChannelId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::bot_command_list;
 use crate::t;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -380,6 +380,300 @@ pub async fn for_channel(
         .collect())
 }
 
+/// The longest a text argument may be, in characters.
+pub const MAX_ARGUMENT_CHARS: usize = 2000;
+
+/// A command someone invokes: which bot, which of its commands, what they gave it, in order,
+/// and the files its `attachmentId` arguments name.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Invocation {
+    pub bot: UserId,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentId>,
+}
+
+/// One argument as the bot receives it: named, typed, and checked against its type, an emoji
+/// in its fully qualified form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Argument {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: ParameterType,
+    pub value: String,
+}
+
+/// Why an invocation was refused, for the person who typed it.
+fn refused(key: &'static str, command: &str, parameter: &str) -> app::Error {
+    app::Error::Validation(t!(key, command = command, parameter = parameter))
+}
+
+/// Whether `bot` can see `channel`, which the caller's `access` is to: a member of its
+/// community who may view it, or one of the DM's people, a thread counting as its parent.
+async fn bot_present(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    access: &ChannelAccess,
+    channel: ChannelId,
+    bot: UserId,
+) -> app::Result<bool> {
+    use crate::database::schema::{channel as channel_table, dm_recipient, user};
+    let is_bot: Option<bool> = user::table
+        .select(user::bot)
+        .filter(user::id.eq(bot).and(user::deleted_at.is_null()))
+        .first(conn)
+        .await
+        .optional()?;
+    if is_bot != Some(true) {
+        return Ok(false);
+    }
+    if access.community.is_some() {
+        return match channel_access(state, conn, bot, channel).await {
+            Ok(bot_access) => Ok(bot_access.has(Permissions::VIEW_CHANNEL)),
+            Err(app::Error::Diesel(diesel::result::Error::NotFound)) => Ok(false),
+            Err(e) => Err(e),
+        };
+    }
+    let parent: Option<ChannelId> = channel_table::table
+        .select(channel_table::parent_channel)
+        .filter(channel_table::id.eq(channel))
+        .first(conn)
+        .await?;
+    let found: i64 = dm_recipient::table
+        .filter(
+            dm_recipient::channel
+                .eq(parent.unwrap_or(channel))
+                .and(dm_recipient::user.eq(bot)),
+        )
+        .count()
+        .get_result(conn)
+        .await?;
+    Ok(found > 0)
+}
+
+/// Checks an invocation by `caller` in `channel`: that the bot can see the channel and
+/// answers the command, that the arguments are as many as it takes, and that each is what its
+/// parameter says, as the caller may reach it. Returns the command and the arguments as the
+/// bot will receive them.
+pub(crate) async fn check(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    access: &ChannelAccess,
+    channel: ChannelId,
+    invocation: &Invocation,
+) -> app::Result<(Command, Vec<Argument>)> {
+    use crate::database::schema::{attachment, community_role, message, user};
+    let name = invocation.name.as_str();
+    if !bot_present(state, conn, access, channel, invocation.bot).await? {
+        return Err(refused("botCommandBotAbsent", name, ""));
+    }
+    let stored: Option<serde_json::Value> = bot_command_list::table
+        .select(bot_command_list::commands)
+        .filter(bot_command_list::bot.eq(invocation.bot))
+        .first(conn)
+        .await
+        .optional()?;
+    let list: CommandList = stored
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    let wanted = name.to_lowercase();
+    let Some(command) = list
+        .commands
+        .into_iter()
+        .find(|c| c.name.to_lowercase() == wanted)
+    else {
+        return Err(refused("botCommandUnknown", name, ""));
+    };
+    let required = command.parameters.iter().filter(|p| !p.optional).count();
+    if !(required..=command.parameters.len()).contains(&invocation.arguments.len()) {
+        return Err(app::Error::Validation(t!(
+            "botCommandArity",
+            command = command.name.as_str(),
+            least = required,
+            most = command.parameters.len(),
+            given = invocation.arguments.len()
+        )));
+    }
+    let community = access.community.as_ref().map(|c| c.community);
+    let mut arguments = Vec::with_capacity(invocation.arguments.len());
+    for (parameter, value) in command.parameters.iter().zip(&invocation.arguments) {
+        let reason = match parameter.ty {
+            ParameterType::UserId => t!("botArgumentUser"),
+            ParameterType::ChannelId => t!("botArgumentChannel"),
+            ParameterType::MessageId => t!("botArgumentMessage"),
+            ParameterType::CommunityId => t!("botArgumentCommunity"),
+            ParameterType::RoleId => t!("botArgumentRole"),
+            ParameterType::AttachmentId => t!("botArgumentAttachment"),
+            ParameterType::DeploymentHost => t!("botArgumentHost"),
+            ParameterType::React => t!("botArgumentReact"),
+            ParameterType::Any => t!("botArgumentAny", max = MAX_ARGUMENT_CHARS),
+            ParameterType::Regex => t!("botArgumentRegex"),
+        };
+        let bad = || {
+            app::Error::Validation(t!(
+                "botCommandArgument",
+                command = command.name.as_str(),
+                parameter = parameter.name.as_str(),
+                reason = reason.as_ref()
+            ))
+        };
+        let id = || uuid::Uuid::parse_str(value.trim()).map_err(|_| bad());
+        let value = match parameter.ty {
+            ParameterType::UserId => {
+                let id = id()?;
+                let exists: i64 = user::table
+                    .filter(user::id.eq(id).and(user::deleted_at.is_null()))
+                    .count()
+                    .get_result(conn)
+                    .await?;
+                if exists == 0 {
+                    return Err(bad());
+                }
+                id.to_string()
+            }
+            ParameterType::ChannelId => {
+                let id = id()?;
+                if channel_access(state, conn, caller, ChannelId(id))
+                    .await
+                    .is_err()
+                {
+                    return Err(bad());
+                }
+                id.to_string()
+            }
+            ParameterType::MessageId => {
+                let id = id()?;
+                let home: Option<ChannelId> = message::table
+                    .select(message::channel)
+                    .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+                    .first(conn)
+                    .await
+                    .optional()?;
+                let Some(home) = home else {
+                    return Err(bad());
+                };
+                if channel_access(state, conn, caller, home).await.is_err() {
+                    return Err(bad());
+                }
+                id.to_string()
+            }
+            ParameterType::CommunityId => {
+                let id = id()?;
+                if require_member(conn, caller, CommunityId(id)).await.is_err() {
+                    return Err(bad());
+                }
+                id.to_string()
+            }
+            ParameterType::RoleId => {
+                let id = id()?;
+                let Some(community) = community else {
+                    return Err(bad());
+                };
+                let found: i64 = community_role::table
+                    .filter(
+                        community_role::id
+                            .eq(id)
+                            .and(community_role::community.eq(community)),
+                    )
+                    .count()
+                    .get_result(conn)
+                    .await?;
+                if found == 0 {
+                    return Err(bad());
+                }
+                id.to_string()
+            }
+            ParameterType::AttachmentId => {
+                let id = AttachmentId(id()?);
+                // A file the command takes goes with it, shown in the channel as the
+                // invocation's own.
+                if !invocation.attachments.contains(&id) {
+                    return Err(bad());
+                }
+                let ready: i64 = attachment::table
+                    .filter(
+                        attachment::id
+                            .eq(id)
+                            .and(attachment::ready_at.is_not_null()),
+                    )
+                    .count()
+                    .get_result(conn)
+                    .await?;
+                if ready == 0 {
+                    return Err(bad());
+                }
+                id.0.to_string()
+            }
+            ParameterType::DeploymentHost => {
+                let domain = app::federation::Domain::parse(value.trim()).map_err(|_| bad())?;
+                String::from(domain)
+            }
+            ParameterType::React => app::react::canonical_emoji(value.trim())
+                .ok_or_else(bad)?
+                .to_string(),
+            ParameterType::Any => {
+                if value.is_empty() || value.chars().count() > MAX_ARGUMENT_CHARS {
+                    return Err(bad());
+                }
+                value.clone()
+            }
+            ParameterType::Regex => {
+                let matches = parameter
+                    .pattern
+                    .as_deref()
+                    .and_then(compile_pattern)
+                    .is_some_and(|pattern| pattern.is_match(value));
+                if !matches || value.chars().count() > MAX_ARGUMENT_CHARS {
+                    return Err(bad());
+                }
+                value.clone()
+            }
+        };
+        arguments.push(Argument {
+            name: parameter.name.clone(),
+            ty: parameter.ty,
+            value,
+        });
+    }
+    // Every file sent with the command is one of its arguments.
+    for attached in &invocation.attachments {
+        let named = arguments
+            .iter()
+            .any(|a| a.ty == ParameterType::AttachmentId && a.value == attached.0.to_string());
+        if !named {
+            return Err(refused("botCommandStrayAttachment", &command.name, ""));
+        }
+    }
+    Ok((command, arguments))
+}
+
+/// The command as the channel shows it: `/name` and its arguments, each quoted where it holds
+/// whitespace or a quote, or is empty.
+pub fn invocation_text(command: &Command, arguments: &[Argument]) -> String {
+    let mut text = format!("/{}", command.name);
+    for argument in arguments {
+        text.push(' ');
+        let plain = !argument.value.is_empty()
+            && !argument
+                .value
+                .chars()
+                .any(|c| c.is_whitespace() || c == '"');
+        if plain {
+            text.push_str(&argument.value);
+        } else {
+            text.push('"');
+            text.push_str(&argument.value.replace('\\', "\\\\").replace('"', "\\\""));
+            text.push('"');
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +754,28 @@ mod tests {
         plain.pattern = Some("x".into());
         c.parameters = vec![plain];
         assert!(validate(&list(vec![c])).is_err());
+    }
+
+    #[test]
+    fn a_command_shows_as_sent_quoting_what_would_split() {
+        let c = command("say");
+        let argument = |value: &str| Argument {
+            name: "x".into(),
+            ty: ParameterType::Any,
+            value: value.into(),
+        };
+        assert_eq!(invocation_text(&c, &[]), "/say");
+        assert_eq!(
+            invocation_text(
+                &c,
+                &[
+                    argument("2d6"),
+                    argument("for luck"),
+                    argument("a \"quote\"")
+                ]
+            ),
+            "/say 2d6 \"for luck\" \"a \\\"quote\\\"\""
+        );
     }
 
     #[test]

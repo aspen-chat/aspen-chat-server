@@ -266,6 +266,7 @@ pub async fn echo(
         // An echo shows its reply, whose tags count in the thread.
         mentions: crate::app::mention::Mentions::default(),
         call_seconds: None,
+        command_bot: None,
     };
     diesel::insert_into(message::table)
         .values(&echo)

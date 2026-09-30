@@ -3,9 +3,10 @@
 
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
-use crate::api::extract::{Json, Path};
-use crate::api::{GlobalServerContext, TAG_USERS};
-use crate::app::bot_command::{BotCommands, CommandList};
+use crate::api::extract::{Created, Json, Path};
+use crate::api::message_enum::Message;
+use crate::api::{API_PREFIX, GlobalServerContext, TAG_USERS};
+use crate::app::bot_command::{BotCommands, CommandList, Invocation};
 use crate::app::{self, ChannelId, UserId};
 use axum::extract::State;
 
@@ -82,5 +83,49 @@ pub async fn channel_commands(
 ) -> ApiResult<Json<Vec<BotCommands>>> {
     Ok(Json(
         app::bot_command::for_channel(&state, user.id, channel).await?,
+    ))
+}
+
+/// Invokes a bot's command in a channel, as its person sends a message there. The server
+/// checks that the bot can see the channel and answers the command, and each argument against
+/// its parameter's type, then shows the command in the channel as the caller's message of kind
+/// `command` and tells the bot alone (`botCommandInvoked`). Files an `attachmentId` argument
+/// names are uploaded first and listed in `attachments`.
+#[utoipa::path(
+    post,
+    path = "/channels/{channel}/commands",
+    tag = TAG_USERS,
+    params(("channel" = ChannelId, Path)),
+    request_body = Invocation,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = Message, headers(("Location" = String, description = "The message showing the command"))),
+        (status = BAD_REQUEST, description = "`badRequest`: no such command, the wrong number of arguments, or one that is not what its parameter takes, which the detail names", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden` without Send messages (or Send in threads), or `blocked`", body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or one the caller may not view", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn invoke_command(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+    Json(invocation): Json<Invocation>,
+) -> ApiResult<Created<Message>> {
+    let attachments = invocation.attachments.clone();
+    let message = app::message::create_message(
+        &state,
+        user.id,
+        channel,
+        String::new(),
+        attachments.clone(),
+        false,
+        Some(invocation),
+    )
+    .await?;
+    Ok(Created::new(
+        format!("{API_PREFIX}/messages/{}", message.id.0),
+        app::message::record(&message, attachments, Vec::new()),
     ))
 }

@@ -507,14 +507,16 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> app::Res
     let Some(found) = found else {
         return Ok(());
     };
-    // An echo and a poll's result say nothing of their own, and a call's record follows the
-    // ring that already told everyone of the call.
+    // An echo and a poll's result say nothing of their own, a call's record follows the ring
+    // that already told everyone of the call, and a command is for its bot, whose answer is
+    // what tells.
     if matches!(
         found.kind,
         MessageKind::ThreadEcho
             | MessageKind::PollClosed
             | MessageKind::Call
             | MessageKind::MissedCall
+            | MessageKind::Command
     ) {
         return Ok(());
     }

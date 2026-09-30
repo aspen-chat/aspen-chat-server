@@ -88,6 +88,19 @@ enum MessageEnumSource {
     // read it again. See `app::bot_command`.
     #[message_gen(custom_event)]
     BotCommandsChanged { bot: UserId },
+    // Someone invoked one of the bot's commands, which is published to the bot alone. The
+    // arguments are checked against their parameters' types; `invocation` is the message
+    // that shows the command in `channel`. See `app::bot_command`.
+    #[message_gen(custom_event)]
+    BotCommandInvoked {
+        invocation: MessageId,
+        channel: ChannelId,
+        community: Option<CommunityId>,
+        invoker: UserId,
+        bot: UserId,
+        command: String,
+        arguments: Vec<crate::app::bot_command::Argument>,
+    },
     // The user blocked or unblocked someone, on one of their devices; the others follow. The
     // blocked user is never told. See `app::block`.
     #[message_gen(custom_event)]
@@ -159,6 +172,10 @@ enum MessageEnumSource {
         // a `MissedCall` included.
         #[message_gen(server_authoritative)]
         call_seconds: Option<i32>,
+        // For a `Command`, the bot it was sent to; `None` for every other kind, and once the
+        // bot is gone.
+        #[message_gen(server_authoritative)]
+        command_bot: Option<UserId>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]

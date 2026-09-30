@@ -201,6 +201,13 @@ user = { requests = 60, per_seconds = 60, burst = 20 }
 # A whole channel's flood, however many accounts take part.
 per_channel = { requests = 50, per_seconds = 10, burst = 50 }
 
+[rate_limits.endpoints."POST /channels/{channel}/commands"]
+# A command is a message in the channel and an event for its bot, and checking it can read
+# several records.
+user_per_channel = { requests = 5, per_seconds = 5, burst = 10 }
+user = { requests = 60, per_seconds = 60, burst = 20 }
+per_channel = { requests = 50, per_seconds = 10, burst = 50 }
+
 [rate_limits.endpoints."POST /channels/{channel}/polls"]
 user_per_channel = { requests = 3, per_seconds = 60, burst = 3 }
 

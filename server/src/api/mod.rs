@@ -390,7 +390,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             bot_command::publish_bot_commands,
             bot_command::read_bot_commands
         ))
-        .routes(routes!(bot_command::channel_commands))
+        .routes(routes!(
+            bot_command::channel_commands,
+            bot_command::invoke_command
+        ))
         .routes(routes!(block::block_user, block::unblock_user))
         .routes(routes!(
             category_collapse::collapse_category,
@@ -629,6 +632,9 @@ pub enum MessageKind {
     /// The system message recording that a DM's call ended without anyone joining whoever
     /// started it, its `author`. It has no content of its own.
     MissedCall,
+    /// A bot command its `author` invoked, as it was sent (`/name` and its arguments), to the
+    /// bot `commandBot` names (see `app::bot_command`).
+    Command,
 }
 
 impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -640,6 +646,7 @@ impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind 
             MessageKind::ThreadEcho => b"thread_echo",
             MessageKind::Call => b"call",
             MessageKind::MissedCall => b"missed_call",
+            MessageKind::Command => b"command",
         })?;
         Ok(IsNull::No)
     }
@@ -655,6 +662,7 @@ impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKin
             b"poll_closed" => Ok(MessageKind::PollClosed),
             b"thread_echo" => Ok(MessageKind::ThreadEcho),
             b"call" => Ok(MessageKind::Call),
+            b"command" => Ok(MessageKind::Command),
             b"missed_call" => Ok(MessageKind::MissedCall),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
