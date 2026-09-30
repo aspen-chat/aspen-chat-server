@@ -1,4 +1,6 @@
 import { ApiProblemError, isDm } from "@aspen/protocol";
+import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
+import { THREAD_PANEL } from "@/features/layout/paneSizes";
 import { ChatsCircleIcon, XIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -79,54 +81,62 @@ export function ThreadPanel({
   const starter = thread?.starterMessage;
   return (
     // Beside its channel it is complementary; alone on a phone it is the page's main content.
-    <section
-      role={onePane ? "main" : "complementary"}
-      aria-label={m.threads.heading}
-      className="flex min-h-0 w-full flex-col border-s border-line bg-surface md:w-96"
+    <ResizablePane
+      sizing={THREAD_PANEL}
+      edge="start"
+      label={m.layout.threadPanel}
+      className="flex min-h-0 w-full"
     >
-      <header className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <ChatsCircleIcon size={18} aria-hidden="true" className="text-ink-faint" />
-        {onePane ? (
-          <h1 className="flex-1 font-semibold">{m.threads.heading}</h1>
+      <section
+        role={onePane ? "main" : "complementary"}
+        aria-label={m.threads.heading}
+        className="relative flex min-h-0 w-full flex-col border-s border-line bg-surface"
+      >
+        <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+          <ChatsCircleIcon size={18} aria-hidden="true" className="text-ink-faint" />
+          {onePane ? (
+            <h1 className="flex-1 font-semibold">{m.threads.heading}</h1>
+          ) : (
+            <h2 className="flex-1 font-semibold">{m.threads.heading}</h2>
+          )}
+          <Tooltip text={m.threads.close}>
+            <Button
+              aria-label={m.threads.close}
+              onPress={() => {
+                void navigate(channelLink(home, parentId));
+              }}
+              className="tap-target rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <XIcon size={18} aria-hidden="true" />
+            </Button>
+          </Tooltip>
+          <CopyIdButton id={threadId} thing="thread" />
+        </header>
+        {error !== null ? (
+          <p role="alert" className="p-4 text-sm text-danger">
+            {error}
+          </p>
         ) : (
-          <h2 className="flex-1 font-semibold">{m.threads.heading}</h2>
+          <>
+            <div className="border-b border-line px-2 py-2">
+              {starterGone ? (
+                <p className="px-2 text-sm text-ink-faint italic">{m.threads.starterDeleted}</p>
+              ) : (
+                starter != null && <Starter id={starter} home={home} channelId={parentId} />
+              )}
+            </div>
+            <MessageList channelId={threadId} home={home} highlightId={undefined} />
+            <Composer
+              key={threadId}
+              channelId={threadId}
+              placeholder={m.threads.placeholder}
+              echoTarget={echoTarget}
+            />
+          </>
         )}
-        <Tooltip text={m.threads.close}>
-          <Button
-            aria-label={m.threads.close}
-            onPress={() => {
-              void navigate(channelLink(home, parentId));
-            }}
-            className="tap-target rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
-          >
-            <XIcon size={18} aria-hidden="true" />
-          </Button>
-        </Tooltip>
-        <CopyIdButton id={threadId} thing="thread" />
-      </header>
-      {error !== null ? (
-        <p role="alert" className="p-4 text-sm text-danger">
-          {error}
-        </p>
-      ) : (
-        <>
-          <div className="border-b border-line px-2 py-2">
-            {starterGone ? (
-              <p className="px-2 text-sm text-ink-faint italic">{m.threads.starterDeleted}</p>
-            ) : (
-              starter != null && <Starter id={starter} home={home} channelId={parentId} />
-            )}
-          </div>
-          <MessageList channelId={threadId} home={home} highlightId={undefined} />
-          <Composer
-            key={threadId}
-            channelId={threadId}
-            placeholder={m.threads.placeholder}
-            echoTarget={echoTarget}
-          />
-        </>
-      )}
-    </section>
+        <PaneEdge />
+      </section>
+    </ResizablePane>
   );
 }
 

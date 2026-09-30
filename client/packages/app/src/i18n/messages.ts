@@ -372,6 +372,12 @@ export const en = {
     role: "Role",
     everyone: "Everyone here",
   },
+  layout: {
+    resizePane: "Resize the {pane}",
+    channelList: "channel list",
+    memberList: "member list",
+    threadPanel: "thread",
+  },
   system: {
     badge: "System",
     readOnly: "These are notices from {name}, and can't be answered here.",

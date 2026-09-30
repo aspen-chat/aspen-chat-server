@@ -1,4 +1,5 @@
 import type { User, UserOnlineStatus } from "@aspen/protocol";
+import { PaneEdge } from "@/features/layout/ResizablePane";
 import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
 import { useBlocked, useMembers } from "@/api/hooks";
@@ -20,18 +21,22 @@ export function MemberList({ communityId }: { communityId: string }) {
   const online = members.filter((u) => u.onlineStatus !== "offline").sort(byName);
   const offline = members.filter((u) => u.onlineStatus === "offline").sort(byName);
   return (
+    // The list scrolls within the landmark, so the pane's edge stays along its whole side.
     <aside
       aria-label={m.membersLabel}
-      className="flex w-56 shrink-0 flex-col overflow-y-auto border-s border-line bg-surface-raised px-2 py-3"
+      className="relative flex w-full shrink-0 flex-col border-s border-line bg-surface-raised"
     >
-      <MemberGroup
-        heading={format(m.onlineGroup, { count: String(online.length) })}
-        users={online}
-      />
-      <MemberGroup
-        heading={format(m.offlineGroup, { count: String(offline.length) })}
-        users={offline}
-      />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3">
+        <MemberGroup
+          heading={format(m.onlineGroup, { count: String(online.length) })}
+          users={online}
+        />
+        <MemberGroup
+          heading={format(m.offlineGroup, { count: String(offline.length) })}
+          users={offline}
+        />
+      </div>
+      <PaneEdge />
     </aside>
   );
 }

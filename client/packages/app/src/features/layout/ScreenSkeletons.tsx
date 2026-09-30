@@ -1,4 +1,5 @@
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { PaneEdge } from "@/features/layout/ResizablePane";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 
 /** Channel names' widths in a skeleton list, so its rows read as names rather than bars. */
@@ -12,7 +13,7 @@ export function ChannelListSkeleton() {
   return (
     <section
       aria-busy="true"
-      className="flex h-full flex-col border-e border-line bg-surface-raised"
+      className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <LoadingLabel />
       <div className="flex h-11 items-center border-b border-line px-4 py-2">
@@ -32,6 +33,7 @@ export function ChannelListSkeleton() {
           </div>
         ))}
       </div>
+      <PaneEdge />
     </section>
   );
 }

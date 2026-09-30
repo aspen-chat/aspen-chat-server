@@ -1,4 +1,5 @@
 import { groupChannels, type Category, type Channel, type Community } from "@aspen/protocol";
+import { PaneEdge } from "@/features/layout/ResizablePane";
 import {
   BellSlashIcon,
   CaretDownIcon,
@@ -76,7 +77,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
     // A landmark named by its heading, holding the channels and the user's own controls.
     <section
       aria-labelledby={headingId}
-      className="flex h-full flex-col border-e border-line bg-surface-raised"
+      className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
@@ -110,6 +111,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
         </div>
       </nav>
       <SidebarFooter />
+      <PaneEdge />
     </section>
   );
 }

@@ -1,4 +1,6 @@
 import type { Channel } from "@aspen/protocol";
+import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
+import { CHANNEL_LIST } from "@/features/layout/paneSizes";
 import { BellSlashIcon, NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
@@ -42,17 +44,21 @@ import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
  * one of the two is shown, as in a community.
  */
 export function DmLayout() {
+  const m = useMessages();
   const onePane = useOnePane();
   const { channelId } = useParams({ strict: false });
   const showing = channelId !== undefined;
   return (
     <>
-      <div
+      <ResizablePane
+        sizing={CHANNEL_LIST}
+        edge="end"
+        label={m.layout.channelList}
         role={onePane && !showing ? "main" : undefined}
-        className={`${showing ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+        className={`${showing ? "hidden md:flex" : "flex"} w-full flex-col`}
       >
         <DmSidebar current={channelId} />
-      </div>
+      </ResizablePane>
       <div className={`${showing ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
         <Outlet />
       </div>
@@ -91,7 +97,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
     // A landmark named by its heading, holding the DMs and the user's own controls.
     <section
       aria-labelledby={headingId}
-      className="flex h-full flex-col border-e border-line bg-surface-raised"
+      className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
@@ -144,6 +150,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
         ))}
       </nav>
       <SidebarFooter />
+      <PaneEdge />
     </section>
   );
 }

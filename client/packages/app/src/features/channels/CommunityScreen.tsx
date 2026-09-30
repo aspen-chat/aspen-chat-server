@@ -1,4 +1,6 @@
 import { Navigate, Outlet, useParams } from "@tanstack/react-router";
+import { ResizablePane } from "@/features/layout/ResizablePane";
+import { CHANNEL_LIST, MEMBER_LIST } from "@/features/layout/paneSizes";
 import { useEffect, useState } from "react";
 import { useChannels, useCommunity, useDeploymentCan, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelSidebar } from "@/features/channels/ChannelSidebar";
@@ -43,11 +45,14 @@ export function ChannelSidebarLayout() {
   if (community === undefined && (!live || (moderator && missingId !== communityId))) {
     return (
       <>
-        <div
-          className={`${channelId !== undefined ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+        <ResizablePane
+          sizing={CHANNEL_LIST}
+          edge="end"
+          label={m.layout.channelList}
+          className={`${channelId !== undefined ? "hidden md:flex" : "flex"} w-full flex-col`}
         >
           <ChannelListSkeleton />
-        </div>
+        </ResizablePane>
         {channelId !== undefined || !onePane ? <ChannelSkeleton /> : null}
       </>
     );
@@ -69,19 +74,27 @@ export function ChannelSidebarLayout() {
         },
       }}
     >
-      <div
+      <ResizablePane
+        sizing={CHANNEL_LIST}
+        edge="end"
+        label={m.layout.channelList}
         role={onePane && !showingChannel ? "main" : undefined}
-        className={`${showingChannel ? "hidden md:flex" : "flex"} w-full flex-col md:w-64`}
+        className={`${showingChannel ? "hidden md:flex" : "flex"} w-full flex-col`}
       >
         <ChannelSidebar community={community} />
-      </div>
+      </ResizablePane>
       <div className={`${showingChannel ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
         <Outlet />
       </div>
       {membersOpen && (
-        <div className="hidden lg:flex">
+        <ResizablePane
+          sizing={MEMBER_LIST}
+          edge="start"
+          label={m.layout.memberList}
+          className="hidden lg:flex"
+        >
           <MemberList communityId={communityId} />
-        </div>
+        </ResizablePane>
       )}
     </MembersPanelContext.Provider>
   );

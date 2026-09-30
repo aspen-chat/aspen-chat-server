@@ -524,6 +524,15 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   Its DM is read-only: `RecordStore.channelAccess` gives only View channel there, as in a
   blocked DM (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's
   record arrives), and the Composer shows a note in place of the box.
+- The channel list (and the DM list in its place), the member list, and the thread panel are
+  `ResizablePane`s (`src/features/layout`): each has an edge, a `separator`, that the reader
+  drags, moves with the arrow keys (Shift for bigger steps, Home and End for the bounds), or
+  double-clicks (or presses Enter on) to reset. The width is a device preference per pane
+  (`paneSizes.ts`: `layout.<pane>.width`), kept when a drag ends and read within the pane's
+  bounds. Each is kept with its pane's layout version, and a width kept under another version
+  is ignored, so an update that changes a pane enough to need it raises that pane's version and
+  resets it alone; otherwise widths are left as the reader made them. On one-pane screens a
+  pane fills the screen and has no edge.
 - Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent
   (text, picked tags, files already uploaded, and a thread's echo choice) waits in its channel
   on this device, per account, through going elsewhere, a notification opened, and a reload,
