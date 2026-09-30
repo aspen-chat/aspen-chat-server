@@ -7,6 +7,9 @@
 //!   on its event stream while its user interacts with it, and each sets the key to expire after
 //!   `[presence] away_after_seconds`.
 //!
+//! A bot's `active` key is set with its `online` key and lives as long, so a connected bot is
+//! online and never away: it uses Aspen through the API, not as a person does.
+//!
 //! A user is online while both exist, away while only the first does, and offline otherwise.
 //! Because both keys are the user's, not a connection's, any active device keeps them online and
 //! any connected one keeps them from going offline, whichever API server each device talks to.

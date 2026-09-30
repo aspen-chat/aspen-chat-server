@@ -262,7 +262,7 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
         log_send_error(&e);
         return;
     }
-    pump_events(socket, subscription, &state, session.user.id).await;
+    pump_events(socket, subscription, &state, session.user.id, session.user.bot).await;
 }
 
 struct Identified {
@@ -348,6 +348,7 @@ async fn pump_events(
     mut subscription: Subscription,
     state: &GlobalServerContext,
     user: UserId,
+    bot: bool,
 ) {
     let mut ping_interval =
         tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
@@ -394,7 +395,7 @@ async fn pump_events(
                 }
                 unanswered_pings += 1;
                 // The connection is the user's presence: the key is refreshed as long as it is up.
-                app::user::mark_user_online_id(state, user);
+                app::user::mark_user_online_id(state, user, bot);
                 if let Err(e) = socket.send(Message::Ping(Bytes::new())).await {
                     log_send_error(&e);
                     return;

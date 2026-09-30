@@ -533,25 +533,33 @@ pub async fn users_online_status(
 /// when they connect and while they stay, and so does every authenticated request. Fire and
 /// forget: presence is best effort.
 pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
-    mark_user_online_id(state, user.id);
+    mark_user_online_id(state, user.id, user.bot);
 }
 
-pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId) {
+/// As `mark_user_online`, for a user known by id. A bot is never away: it uses Aspen through
+/// the API rather than as a person does, so being connected is being active, and both of its
+/// keys are set together.
+pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool) {
     use fred::interfaces::KeysInterface;
     let valkey = state.valkey.clone();
-    let key = app::user_status::online_key(user);
+    let mut keys = vec![app::user_status::online_key(user)];
+    if bot {
+        keys.push(app::user_status::active_key(user));
+    }
     tokio::spawn(async move {
-        if let Err(e) = valkey
-            .set::<(), _, i64>(
-                key,
-                1,
-                Some(fred::types::Expiration::EX(ONLINE_TTL_SECONDS)),
-                None,
-                false,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "failed to record the user as online");
+        for key in keys {
+            if let Err(e) = valkey
+                .set::<(), _, i64>(
+                    key,
+                    1,
+                    Some(fred::types::Expiration::EX(ONLINE_TTL_SECONDS)),
+                    None,
+                    false,
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "failed to record the user as online");
+            }
         }
     });
 }
