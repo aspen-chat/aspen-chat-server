@@ -3,6 +3,7 @@ import { usePreference, useSync } from "@/api/hooks";
 import { BotsDialog } from "@/features/bots/BotsDialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
+import { planeClass } from "@/features/invites/dialog";
 
 /** The opt-in to developer mode, and, once in it, the user's bots. */
 export function DeveloperSection() {
@@ -10,7 +11,7 @@ export function DeveloperSection() {
   const sync = useSync();
   const on = usePreference(DEVELOPER_MODE);
   return (
-    <section aria-labelledby="settings-developer" className="flex flex-col gap-3">
+    <section aria-labelledby="settings-developer" className={planeClass}>
       <h3 id="settings-developer" className="text-sm font-semibold text-ink-muted">
         {m.bots.developerMode}
       </h3>

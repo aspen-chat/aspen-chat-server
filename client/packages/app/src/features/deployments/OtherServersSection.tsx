@@ -2,7 +2,7 @@ import { ApiProblemError } from "@aspen/protocol";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useDeploymentsHub, useForeignDeployments } from "@/api/deploymentsContext";
-import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import { dangerButtonClass, planeClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -17,7 +17,7 @@ export function OtherServersSection() {
     return null;
   }
   return (
-    <section aria-labelledby="settings-servers" className="flex flex-col gap-2">
+    <section aria-labelledby="settings-servers" className={planeClass}>
       <h3 id="settings-servers" className="text-sm font-semibold text-ink-muted">
         {m.deployments.otherServers}
       </h3>

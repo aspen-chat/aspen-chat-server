@@ -11,7 +11,12 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
-import { optionClass, selectButtonClass, selectPopoverClass } from "@/features/invites/dialog";
+import {
+  optionClass,
+  planeClass,
+  selectButtonClass,
+  selectPopoverClass,
+} from "@/features/invites/dialog";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { AUTOMATIC, LANGUAGES, type Language } from "@/i18n/locales";
 import { format, type Messages } from "@/i18n/messages";
@@ -43,7 +48,7 @@ export function LanguageSection() {
     ...LANGUAGES.map((language) => ({ id: language, label: nativeName(language, m) })),
   ];
   return (
-    <section aria-labelledby="settings-language" className="flex flex-col gap-3">
+    <section aria-labelledby="settings-language" className={planeClass}>
       <h3 id="settings-language" className="text-sm font-semibold text-ink-muted">
         {m.settings.language}
       </h3>

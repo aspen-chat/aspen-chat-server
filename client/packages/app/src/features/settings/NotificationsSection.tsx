@@ -4,6 +4,7 @@ import { usePreference, useSync } from "@/api/hooks";
 import { detectShell } from "@/config";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
+import { planeClass } from "@/features/invites/dialog";
 
 /**
  * How this install tells the user of messages their notification settings ask for: the system's
@@ -19,7 +20,7 @@ export function NotificationsSection() {
   const [denied, setDenied] = useState(supported && Notification.permission === "denied");
   const mobile = detectShell() === "mobile";
   return (
-    <section aria-labelledby="settings-notifications" className="flex flex-col gap-3">
+    <section aria-labelledby="settings-notifications" className={planeClass}>
       <h3 id="settings-notifications" className="text-sm font-semibold text-ink-muted">
         {m.notifications.settings}
       </h3>

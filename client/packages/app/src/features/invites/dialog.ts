@@ -7,13 +7,20 @@ export const overlayClass =
  * the scroll stays in the dialog rather than passing to the page behind it.
  */
 const modalFrameClass =
-  "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line bg-surface-raised " +
+  "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line " +
   "p-4 shadow-xl outline-none sm:p-5";
-export const modalClass = modalFrameClass + " max-w-md";
+export const modalClass = modalFrameClass + " bg-surface-raised max-w-md";
 /** A modal with room for a list of results beside its controls, such as message search. */
-export const listModalClass = modalFrameClass + " max-w-xl";
+export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";
 /** A modal with room for a grid of choices, such as the screen share picker. */
-export const wideModalClass = modalFrameClass + " max-w-3xl";
+export const wideModalClass = modalFrameClass + " bg-surface-raised max-w-3xl";
+/**
+ * A modal of many sections, such as Settings, each drawn as a plane (`planeClass`) raised off
+ * the modal's plainer ground, so the eye finds where one ends and the next begins.
+ */
+export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
+export const planeClass =
+  "flex flex-col gap-3 rounded-lg border border-line bg-surface-raised p-4 shadow-sm";
 export const dialogClass = "flex flex-col gap-4 outline-none";
 export const headingClass = "text-lg font-semibold";
 export const dangerButtonClass =

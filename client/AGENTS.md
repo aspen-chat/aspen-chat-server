@@ -57,9 +57,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   confirm it's them and tries once more, and resolves to `undefined` when they decline, so an
   action that has no result of its own returns one to tell success apart. Sign-in and security
   (`SecurityPanel`) changes the password too (`PUT /users/@me/password`, which signs out every
-  other session), for users of this deployment only. A form marks a field invalid by clearing
-  its error as soon as it is edited: an invalid React Aria field blocks the form's next
-  submission.
+  other session), for users of this deployment only. A form that marks a field invalid clears
+  that error as soon as the field is edited, since an invalid React Aria field blocks the
+  form's next submission.
 - The user's home is the server they chose and signed in to; the other deployments they use
   are signed in to from there (`Deployments`, `packages/protocol/src/deployments.ts`). The home
   lists them (`GET /users/@me/foreign-deployments`), so every device signs in to the same ones,

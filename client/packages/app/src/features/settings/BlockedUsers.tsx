@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useBlockedUsers, useSync, useUser } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
-import { secondaryButtonClass } from "@/features/invites/dialog";
+import { planeClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 
@@ -11,7 +11,7 @@ export function BlockedUsersSection() {
   const m = useMessages();
   const blocked = useBlockedUsers();
   return (
-    <section aria-labelledby="settings-blocked" className="flex flex-col gap-3">
+    <section aria-labelledby="settings-blocked" className={planeClass}>
       <div>
         <h3 id="settings-blocked" className="text-sm font-semibold text-ink-muted">
           {m.blocking.blockedUsers}

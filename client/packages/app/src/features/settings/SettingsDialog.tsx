@@ -29,9 +29,10 @@ import { OtherServersSection } from "@/features/deployments/OtherServersSection"
 import { usePreference, useSync } from "@/api/hooks";
 import {
   dialogClass,
-  modalClass,
   optionClass,
   overlayClass,
+  planeClass,
+  planesModalClass,
   secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
@@ -66,13 +67,13 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
         </Button>
       </Tooltip>
       <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={modalClass}>
+        <Modal className={planesModalClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>
                 <DialogHeading>{m.settings.title}</DialogHeading>
                 <AudioSection />
-                <section aria-labelledby="settings-appearance" className="flex flex-col gap-3">
+                <section aria-labelledby="settings-appearance" className={planeClass}>
                   <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
                     {m.settings.appearance}
                   </h3>
@@ -83,7 +84,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                 <BlockedUsersSection />
                 <OtherServersSection />
                 <DeveloperSection />
-                <section aria-labelledby="settings-account" className="flex flex-col gap-3">
+                <section aria-labelledby="settings-account" className={planeClass}>
                   <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
                     {m.settings.account}
                   </h3>
@@ -115,7 +116,7 @@ function AudioSection() {
   const { devices, permission } = useAudioDevices();
   const outputs = canChooseOutput();
   return (
-    <section aria-labelledby="settings-audio" className="flex flex-col gap-3">
+    <section aria-labelledby="settings-audio" className={planeClass}>
       <h3 id="settings-audio" className="text-sm font-semibold text-ink-muted">
         {m.settings.audio}
       </h3>
