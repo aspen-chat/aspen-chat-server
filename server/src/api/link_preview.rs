@@ -47,6 +47,10 @@ pub struct LinkPreview {
     pub description: Option<String>,
     pub site_name: Option<String>,
     pub image_url: Option<String>,
+    /// The picture's size in pixels, both or neither, so readers can make room for it before
+    /// it loads.
+    pub image_width: Option<u32>,
+    pub image_height: Option<u32>,
     pub theme_color: Option<String>,
     /// Present when the link is a video on a provider the server embeds players from.
     pub video: Option<VideoEmbed>,

@@ -126,6 +126,8 @@ pub struct LinkPreviewRow {
     pub video_src: Option<String>,
     pub video_width: Option<i32>,
     pub video_height: Option<i32>,
+    pub image_width: Option<i32>,
+    pub image_height: Option<i32>,
 }
 
 impl LinkPreviewRow {
@@ -147,6 +149,8 @@ impl LinkPreviewRow {
             description: self.description,
             site_name: self.site_name,
             image_url,
+            image_width: self.image_width.map(i32::unsigned_abs),
+            image_height: self.image_height.map(i32::unsigned_abs),
             theme_color: self.theme_color,
             video,
         }
@@ -159,7 +163,14 @@ impl LinkPreviewRow {
 struct Materialised {
     url: String,
     metadata: ParsedMetadata,
-    image: Option<(LinkPreviewImageId, String)>,
+    image: Option<PreviewImage>,
+}
+
+/// A preview picture as stored: its id, its type, and its size in pixels when its header says.
+struct PreviewImage {
+    id: LinkPreviewImageId,
+    mime_type: String,
+    size: Option<(i32, i32)>,
 }
 
 #[derive(Debug, Insertable)]
@@ -177,6 +188,8 @@ struct NewLinkPreviewRow<'a> {
     video_src: Option<&'a str>,
     video_width: Option<i32>,
     video_height: Option<i32>,
+    image_width: Option<i32>,
+    image_height: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1326,7 +1339,7 @@ fn player_src_from_html(
 async fn fetch_and_store_image(
     state: &GlobalServerContext,
     image_url: &str,
-) -> Option<(LinkPreviewImageId, String)> {
+) -> Option<PreviewImage> {
     let response = match http_client().get(image_url).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -1372,6 +1385,13 @@ async fn fetch_and_store_image(
     if bytes.is_empty() {
         return None;
     }
+    // Its size, read from its header, lets readers make room for it before it loads; a
+    // picture whose header says nothing sensible simply has none.
+    let size = imagesize::blob_size(&bytes).ok().and_then(|size| {
+        let width = i32::try_from(size.width).ok().filter(|w| *w > 0)?;
+        let height = i32::try_from(size.height).ok().filter(|h| *h > 0)?;
+        Some((width, height))
+    });
     let id = LinkPreviewImageId::new();
     let key = image_storage_key(id);
     if let Err(e) = state.media_store.put_bytes(&key, bytes, &mime_type).await {
@@ -1382,7 +1402,11 @@ async fn fetch_and_store_image(
         );
         return None;
     }
-    Some((id, mime_type))
+    Some(PreviewImage {
+        id,
+        mime_type,
+        size,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1474,7 @@ async fn run_preview_fetch(
     let materialised: Vec<Materialised> = with_images.into_iter().flatten().collect();
     let new_image_ids: Vec<LinkPreviewImageId> = materialised
         .iter()
-        .filter_map(|m| m.image.as_ref().map(|(id, _)| *id))
+        .filter_map(|m| m.image.as_ref().map(|image| image.id))
         .collect();
 
     let media_store = state.media_store.as_ref();
@@ -1464,7 +1488,17 @@ async fn run_preview_fetch(
             image_url: m
                 .image
                 .as_ref()
-                .map(|(id, _)| media_store.public_url(&image_storage_key(*id))),
+                .map(|image| media_store.public_url(&image_storage_key(image.id))),
+            image_width: m
+                .image
+                .as_ref()
+                .and_then(|image| image.size)
+                .map(|(w, _)| w.unsigned_abs()),
+            image_height: m
+                .image
+                .as_ref()
+                .and_then(|image| image.size)
+                .map(|(_, h)| h.unsigned_abs()),
             theme_color: m.metadata.theme_color.clone(),
             video: m.metadata.video.clone(),
         })
@@ -1488,10 +1522,9 @@ async fn run_preview_fetch(
                     .execute(conn.as_mut())
                     .await?;
                 for (i, m) in materialised_ref.iter().enumerate() {
-                    let (image_id, image_mime_type) = match &m.image {
-                        Some((id, mime)) => (Some(*id), Some(mime.as_str())),
-                        None => (None, None),
-                    };
+                    let image_id = m.image.as_ref().map(|image| image.id);
+                    let image_mime_type = m.image.as_ref().map(|image| image.mime_type.as_str());
+                    let image_size = m.image.as_ref().and_then(|image| image.size);
                     let row = NewLinkPreviewRow {
                         message_id,
                         position: i as i32,
@@ -1513,6 +1546,8 @@ async fn run_preview_fetch(
                             .video
                             .as_ref()
                             .and_then(|v| i32::try_from(v.height).ok()),
+                        image_width: image_size.map(|(w, _)| w),
+                        image_height: image_size.map(|(_, h)| h),
                     };
                     diesel::insert_into(message_link_preview::table)
                         .values(&row)

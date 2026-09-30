@@ -312,6 +312,8 @@ diesel::table! {
         video_src -> Nullable<Text>,
         video_width -> Nullable<Int4>,
         video_height -> Nullable<Int4>,
+        image_width -> Nullable<Int4>,
+        image_height -> Nullable<Int4>,
     }
 }
 

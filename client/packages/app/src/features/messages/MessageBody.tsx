@@ -38,7 +38,9 @@ export function MessageBody({
   // Links the server found to be images themselves join the message's pictures; the rest
   // are cards.
   const previewImages = previews.flatMap((p) =>
-    isPictureOnly(p) && p.imageUrl != null ? [{ src: p.imageUrl, name: p.url }] : [],
+    isPictureOnly(p) && p.imageUrl != null
+      ? [{ src: p.imageUrl, name: p.url, width: p.imageWidth, height: p.imageHeight }]
+      : [],
   );
   const cards = previews.filter((p) => !isPictureOnly(p));
   const pictureOnly = onlyImageLinks(
