@@ -51,7 +51,7 @@ pollWriteInsFull: "This poll has taken all %{max} written-in answers it can."
 problemPollClosed: "The poll has closed."
 
 # Voice
-voiceChannelOnly: "Only voice channels have calls."
+voiceChannelOnly: "Calls happen only in voice channels, DMs, and group DMs."
 voiceNoServers: "No voice server can take a call right now. Try again in a minute; if it keeps happening, tell this server's administrators."
 
 # React

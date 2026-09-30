@@ -293,7 +293,9 @@ pub async fn join_offer(
         )
         .first(conn.as_mut())
         .await?;
-    if !matches!(ty, ChannelType::Voice) {
+    // A DM's or group DM's call is its recipients', and, since no one holds a community
+    // permission there, no one moderates it.
+    if !matches!(ty, ChannelType::Voice | ChannelType::Dm | ChannelType::GroupDm) {
         return Err(app::Error::Validation(t!("voiceChannelOnly")));
     }
     let access = channel_access(state, conn.as_mut(), user, channel_id).await?;
@@ -520,12 +522,43 @@ pub async fn read_communities_voice(
         .filter(channel::community.eq_any(communities.iter().map(|c| Some(*c))))
         .load(conn.as_mut())
         .await?;
+    records_of_sessions(conn.as_mut(), sessions).await
+}
+
+/// The calls under way in each of `channels` (DMs, say), with who is in each.
+pub async fn read_channels_voice(
+    state: &GlobalServerContext,
+    channels: &[ChannelId],
+) -> app::Result<(
+    Vec<message_enum::VoiceSession>,
+    Vec<message_enum::VoiceParticipant>,
+)> {
+    if channels.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let sessions: Vec<VoiceSession> = voice_session::table
+        .select(VoiceSession::as_select())
+        .filter(voice_session::channel.eq_any(channels))
+        .load(conn.as_mut())
+        .await?;
+    records_of_sessions(conn.as_mut(), sessions).await
+}
+
+/// Sessions as records, with their participants in the order they joined, read in one query.
+async fn records_of_sessions(
+    conn: &mut AsyncPgConnection,
+    sessions: Vec<VoiceSession>,
+) -> app::Result<(
+    Vec<message_enum::VoiceSession>,
+    Vec<message_enum::VoiceParticipant>,
+)> {
     let ids: Vec<VoiceSessionId> = sessions.iter().map(|s| s.id).collect();
     let participants: Vec<VoiceParticipant> = voice_participant::table
         .select(VoiceParticipant::as_select())
         .filter(voice_participant::session.eq_any(&ids))
         .order(voice_participant::joined_at)
-        .load(conn.as_mut())
+        .load(conn)
         .await?;
     let channel_of =
         |session: VoiceSessionId| sessions.iter().find(|s| s.id == session).map(|s| s.channel);
