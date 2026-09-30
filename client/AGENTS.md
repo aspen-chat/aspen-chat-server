@@ -508,7 +508,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   place that shows something with an id gives it one. Developer mode also offers `BotsDialog`
   (`src/features/bots`): the caller's bots (`RecordStore.ownedBots`, topic `bots`, derived from
   the cached users whose `botOwner` is the caller and filled by `AspenSync.loadBots`), making
-  one, whose token is shown once as it arrives, public or private, the link that adds it with
+  one, whose token is shown once as it arrives, its picture (`IconPicker`, written with
+  `AspenSync.updateBotProfile`), public or private, the link that adds it with
   the permissions it suggests (`botAddLink`: the page's address on the web, the path in the
   shells), a new token, handing it to someone (`PeoplePicker`), and deleting it. The writes are
   `AspenSync.createBot`, `rotateBotToken`, `setBotPublic`, `transferBot`, and `deleteBot`,

@@ -15,6 +15,7 @@ import { useMe, useOwnedBots, useSync } from "@/api/hooks";
 import { fieldClass, inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { botAddLink } from "@/features/bots/botLink";
 import { Avatar } from "@/features/communities/Avatar";
+import { IconPicker } from "@/features/media/IconPicker";
 import { PermissionChecklist } from "@/features/community-settings/PermissionChecklist";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import {
@@ -42,7 +43,7 @@ function problemText(e: unknown): string {
 
 /**
  * The bots the user owns, opened from developer mode in Settings: making one, and for each,
- * whether it is public, the link that adds it with the permissions it suggests, a new token,
+ * its picture, whether it is public, the link that adds it with the permissions it suggests, a new token,
  * handing it to someone, and deleting it. A token is shown once, when it is issued.
  */
 export function BotsDialog() {
@@ -232,6 +233,25 @@ function BotEditor({
           <div className="truncate text-base font-semibold">{name}</div>
           <div className="truncate text-sm text-ink-muted">@{bot.name}</div>
         </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <IconPicker onIcon={(iconId) => sync.updateBotProfile(bot.id, { icon: iconId })}>
+          {(open, uploading) => (
+            <Button onPress={open} isDisabled={uploading} className={secondaryButtonClass}>
+              {m.profile.changeAvatar}
+            </Button>
+          )}
+        </IconPicker>
+        {bot.icon != null && (
+          <Button
+            onPress={() => {
+              run(sync.updateBotProfile(bot.id, { icon: null }));
+            }}
+            className={secondaryButtonClass}
+          >
+            {m.profile.removeAvatar}
+          </Button>
+        )}
       </div>
       {token !== null && <TokenReveal name={name} token={token} />}
       <ChoiceCheckbox

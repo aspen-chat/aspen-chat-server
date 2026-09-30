@@ -1735,6 +1735,19 @@ export class AspenSync {
     this.store.ingest({ users: [result.data] });
   }
 
+  /** Changes the profile of a bot the caller owns, as `updateProfile` changes their own. */
+  async updateBotProfile(botId: string, patch: UserUpdateRequest): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
+      params: { path: { user: botId } },
+      body: patch,
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    // The bot's own update event reaches only those who share a community with it.
+    this.store.ingest({ users: [result.data] });
+  }
+
   /** Hands a bot the caller owns to someone else; it leaves the caller's list. */
   async transferBot(botId: string, ownerId: string): Promise<void> {
     const result = await this.#client.api.PUT("/api/v1/bots/{bot}/owner", {
