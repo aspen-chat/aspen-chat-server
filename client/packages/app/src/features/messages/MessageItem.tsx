@@ -31,7 +31,7 @@ import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { PollCard } from "@/features/messages/PollCard";
-import { CallNotice } from "@/features/messages/CallNotice";
+import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
@@ -95,6 +95,7 @@ export function MessageItem({
     message.kind !== "threadEcho" &&
     message.kind !== "pollClosed" &&
     message.kind !== "call" &&
+    message.kind !== "missedCall" &&
     (message.thread != null || permissions.has("startThreads"));
   const permalink = inThread
     ? threadLink(home, parentId, channelId)
@@ -131,7 +132,7 @@ export function MessageItem({
     message.content,
     (url) => isImageUrl(url) || previews.some((p) => p.url === url && isPictureOnly(p)),
   );
-  if (message.kind === "call") {
+  if (message.kind === "call" || message.kind === "missedCall") {
     return (
       <article
         data-message-id={id}
@@ -142,7 +143,11 @@ export function MessageItem({
       >
         <div className="w-10 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <CallNotice starter={message.author} seconds={message.callSeconds ?? 0} />
+          {message.kind === "call" ? (
+            <CallNotice starter={message.author} seconds={message.callSeconds ?? 0} />
+          ) : (
+            <MissedCallNotice caller={message.author} />
+          )}
         </div>
       </article>
     );

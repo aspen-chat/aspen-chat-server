@@ -624,7 +624,12 @@ export class RecordStore {
     }
     // An echo and a poll's result say nothing of their own, and a call's record follows the
     // ring that already told of the call.
-    if (message.kind === "threadEcho" || message.kind === "pollClosed" || message.kind === "call") {
+    if (
+      message.kind === "threadEcho" ||
+      message.kind === "pollClosed" ||
+      message.kind === "call" ||
+      message.kind === "missedCall"
+    ) {
       return false;
     }
     const channel = this.#channels.get(message.channelId);

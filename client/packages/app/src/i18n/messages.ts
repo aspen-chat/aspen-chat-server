@@ -277,6 +277,7 @@ export const en = {
     decline: "Decline",
     ringing: "Ringing",
     callRecord: "{name} started a call that lasted {length}.",
+    missedCall: "Missed call from {name}",
     joinCall: "Join the call",
     dmCallLabel: "Call",
     callUnderWay: "Call under way",

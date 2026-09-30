@@ -35,7 +35,11 @@ export function Mention({ kind, id, text }: { kind: MentionKind; id: string; tex
   return counts ? <span className={chipClass}>{text}</span> : <>{text}</>;
 }
 
-function UserMention({ id, chip }: { id: string; chip: boolean }) {
+/**
+ * A person named in text: "@" and their name, as a chip that opens their card where `chip`
+ * says they count, and plain text otherwise.
+ */
+export function UserMention({ id, chip }: { id: string; chip: boolean }) {
   const m = useMessages();
   const user = useUser(id);
   const name = `@${user === undefined ? m.unknownUser : displayNameOf(user)}`;

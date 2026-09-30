@@ -273,7 +273,7 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   moderation there, since the resolver gives no one Manage calls in a DM. A call that rings
   the user (`RecordStore.myRings`, on any deployment they use) shows `IncomingCall`, a modal
   over the whole app naming who is calling and from where, with Accept (open the DM and join)
-  and Decline (`AspenSync.declineCall`, as the modal's X and Escape do too); while it shows,
+  and Decline (`AspenSync.declineCall`, as Escape does too; it has no X); while it shows,
   `startRingtone` (`src/features/notifications/ringtone.ts`, made like the chime by
   `tone.ts`) plays through the notification sound's speaker and, when the app is not focused
   and the user turned system notifications on, the system notifies. A muted DM rings silently.
@@ -282,7 +282,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   every 4) through the voice chat's speaker. In the call, those being rung show as
   tiles darkened by `brightness-75`, at full opacity, with no visible label (a screen reader
   hears "Ringing"). A message of kind `call` renders as `CallNotice`, its length in words by
-  `callLength`. The large screen goes full
+  `callLength`, and one of kind `missedCall` (a DM call no one else joined) as
+  `MissedCallNotice`, "Missed call from" the caller's chip beside a red X. The large screen goes full
   screen with its corner button, a double click, or F (`ScreenTile`, `fullScreen.ts`), through
   the Fullscreen API where it works and otherwise by filling the app's window, left the same
   ways or with Escape; the mobile apps always fill the window, since Capacitor's WebView
@@ -656,8 +657,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   puts a Phosphor X in its top right that closes it through the `Dialog`'s `close` slot, and
   has no other button that only closes it (no Cancel, Close, Done, or OK); whatever closing
   must do (answering the screen picker, abandoning a crop) goes in the overlay's
-  `onOpenChange`, which the X, Escape, and a click outside all reach. The one exception is a
-  modal that must not be left before the reader acts, such as the recovery codes.
+  `onOpenChange`, which the X, Escape, and a click outside all reach. The exceptions are a
+  modal that must not be left before the reader acts, such as the recovery codes, and an
+  incoming call (`DialogHeading closeButton={false}`), whose Accept and Decline are the ways
+  out; a click beside it does nothing, and Escape declines.
 - User-facing strings live in `packages/app/src/i18n/messages.ts` with camelCase keys, matching
   the server's locale files. Server Problem text is already localized and is shown as-is.
   The language shown (`src/i18n/locales.ts`, `I18nProvider`) is the account preference

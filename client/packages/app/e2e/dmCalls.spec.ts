@@ -132,6 +132,10 @@ test("a call ringing the user asks them to accept or decline, and declining tell
   const modal = page.getByRole("alertdialog", { name: `${bobName} is calling` });
   await expect(modal).toBeVisible();
   await expect(modal.getByText("Direct message")).toBeVisible();
+  // Answering is the only way out: no close button, and a click beside it does nothing.
+  await expect(modal.getByRole("button", { name: "Close" })).toHaveCount(0);
+  await page.mouse.click(5, 5);
+  await expect(modal).toBeVisible();
   await modal.getByRole("button", { name: "Decline" }).click();
   await expect(modal).toHaveCount(0);
   expect(declined).toEqual(["DELETE"]);
@@ -193,4 +197,36 @@ test("someone being rung shows darkened in the call, and a call that ended says 
   await expect(
     page.getByText(`${bobName} started a call that lasted 2 minutes and 5 seconds.`),
   ).toBeVisible();
+});
+
+test("a DM call no one else joined is recorded as missed", async ({ page }) => {
+  const publish = await signInToWorld(page);
+  await openDms(page);
+  await page
+    .getByRole("navigation", { name: "Direct messages" })
+    .getByRole("link", { name: new RegExp(bobName) })
+    .click();
+  publish({
+    serverEvent: "message",
+    type: "create",
+    id: "0190f0a0-0000-7000-8000-0000000000f2",
+    channelId: dm,
+    author: bob,
+    content: "",
+    timestamp: new Date().toISOString(),
+    editedAt: null,
+    attachments: [],
+    linkPreviews: [],
+    kind: "missedCall",
+    poll: null,
+    thread: null,
+    echoOf: null,
+    mentions: { users: [], roles: [], everyone: false },
+    callSeconds: null,
+  });
+  const record = page.locator("article").filter({ hasText: "Missed call from" });
+  await expect(record).toHaveText(`Missed call from @${bobName}`);
+  // The caller is a chip that opens their card.
+  await record.getByRole("button", { name: `Show profile of ${bobName}` }).click();
+  await expect(page.getByRole("dialog", { name: `Profile of ${bobName}` })).toBeVisible();
 });

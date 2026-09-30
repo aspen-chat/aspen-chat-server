@@ -58,7 +58,8 @@ export function IncomingCalls() {
 
 /**
  * A call ringing the user: who is calling and from where, with Accept, which opens the DM and
- * joins its call, and Decline, which the modal's close button and Escape do too. While it
+ * joins its call, and Decline, which Escape does too. It has no close button: answering is the
+ * way out. While it
  * shows, the ringtone plays and, if the app is not focused, the system notifies, unless the
  * user muted the DM, which rings silently.
  */
@@ -119,9 +120,9 @@ function IncomingCall({ ring, source }: { ring: VoiceRing; source: Source }) {
     void source.sync.voice.join(ring.channel).catch(() => undefined);
   };
   return (
+    // A click beside it must not decline a call; Escape still does.
     <ModalOverlay
       isOpen
-      isDismissable
       onOpenChange={(open) => {
         if (!open) {
           decline();
@@ -131,7 +132,7 @@ function IncomingCall({ ring, source }: { ring: VoiceRing; source: Source }) {
     >
       <Modal className={modalClass + " max-w-xs"}>
         <Dialog role="alertdialog" className={dialogClass + " items-center text-center"}>
-          <DialogHeading>{heading}</DialogHeading>
+          <DialogHeading closeButton={false}>{heading}</DialogHeading>
           <span className="rounded-full motion-safe:animate-pulse">
             <Avatar name={callerName} iconId={caller?.icon} size="lg" />
           </span>
