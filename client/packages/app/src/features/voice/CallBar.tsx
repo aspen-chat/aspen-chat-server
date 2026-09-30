@@ -5,10 +5,13 @@ import {
   PhoneDisconnectIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
+import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { isDm, type Channel } from "@aspen/protocol";
 import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { useDmTitle } from "@/features/dms/useDmTitle";
+import { channelLink, useDomain } from "@/features/messages/links";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
@@ -19,7 +22,7 @@ const buttonClass =
 
 /**
  * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
- * people), and mute, deafen, leave.
+ * people), which opens that room, and mute, deafen, leave.
  */
 export function CallBar() {
   const m = useMessages();
@@ -45,7 +48,7 @@ export function CallBar() {
       aria-label={m.voice.callBarLabel}
       className="flex items-center gap-1 border-t border-line px-3 py-2"
     >
-      <span className="flex min-w-0 flex-1 flex-col">
+      <CallPlaceLink channel={channel}>
         <span
           className={
             "truncate text-sm font-medium " + (call.status === "connected" ? "text-online" : "")
@@ -60,7 +63,7 @@ export function CallBar() {
             <CallPlace channel={channel} />
           )}
         </span>
-      </span>
+      </CallPlaceLink>
       {/* Someone who may not speak here listens only, and has no microphone to mute. */}
       {call.canSpeak || call.status !== "connected" ? (
         <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
@@ -125,4 +128,33 @@ function CallPlace({ channel }: { channel: Channel }) {
 
 function DmTitle({ channel }: { channel: Channel }) {
   return useDmTitle(channel);
+}
+
+/**
+ * The call bar's status and place, as a link to the call's room (the voice channel's screen,
+ * or the DM), once the channel is known.
+ */
+function CallPlaceLink({
+  channel,
+  children,
+}: {
+  channel: Channel | undefined;
+  children: ReactNode;
+}) {
+  const domain = useDomain();
+  const className = "flex min-w-0 flex-1 flex-col";
+  if (channel === undefined) {
+    return <span className={className}>{children}</span>;
+  }
+  return (
+    <Link
+      {...channelLink({ domain, community: channel.community ?? null }, channel.id)}
+      className={
+        className +
+        " rounded-md outline-none hover:[&>span:last-child]:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+      }
+    >
+      {children}
+    </Link>
+  );
 }
