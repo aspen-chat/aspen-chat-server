@@ -657,6 +657,39 @@ pub(crate) async fn read_community_sample(
     read_community_members(state, caller, &[community]).await
 }
 
+/// One member of `community`, with their roles, for a member of it (or a deployment moderator):
+/// who reads someone's messages there may see what roles they hold, whether or not they are in
+/// the member sample. Someone who is not a member is not found.
+pub(crate) async fn read_community_member(
+    state: &GlobalServerContext,
+    caller: UserId,
+    community: CommunityId,
+    member: UserId,
+) -> app::Result<Membership> {
+    use diesel::sql_types::Uuid;
+    let mut conn = state.connection_pool.get().await?;
+    require_member(conn.as_mut(), caller, community).await?;
+    let rows: Vec<CommunityMember> = diesel::sql_query(
+        r#"
+        SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
+               u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
+               u.status_emoji, u.bot, u.bot_owner, u.bot_public, u.home_domain, u.home_id,
+               u.home_icon
+        FROM community_user cu
+        JOIN "user" u ON u.id = cu."user"
+        WHERE cu.community = $1 AND cu."user" = $2 AND u.deleted_at IS NULL
+        "#,
+    )
+    .bind::<Uuid, _>(community.0)
+    .bind::<Uuid, _>(member.0)
+    .load(conn.as_mut())
+    .await?;
+    memberships_of(state, conn.as_mut(), caller, rows)
+        .await?
+        .pop()
+        .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))
+}
+
 /// Every live channel of each of `communities`, including those filed under a category, ordered
 /// by community and then sort index. This is the batch a client needs to render the channel
 /// tree of every community it belongs to in one request.

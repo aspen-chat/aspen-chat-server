@@ -247,7 +247,11 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(role::update_role, role::delete_role))
         .routes(routes!(role::reorder_roles))
         .routes(routes!(role::add_member_role, role::remove_member_role))
-        .routes(routes!(role::remove_member, bot::add_bot))
+        .routes(routes!(
+            community::get_community_member,
+            role::remove_member,
+            bot::add_bot
+        ))
         .routes(routes!(role::transfer_ownership))
         .routes(routes!(
             role::set_channel_override,

@@ -6,6 +6,7 @@ use crate::api::message_enum::request::{
     CommunityCreateRequest, CommunityUpdateRequest, UserCommunityCreateRequest,
 };
 use crate::api::message_enum::{Channel, User, UserCommunity};
+use crate::api::user::UserRef;
 use crate::api::{API_PREFIX, GlobalServerContext, TAG_COMMUNITIES, message_enum};
 use crate::app::{CommunityId, UserId};
 use crate::{api, app};
@@ -463,6 +464,39 @@ pub async fn list_community_members(
             ..Included::default()
         },
     )))
+}
+
+/// One member's membership of the community: the roles they hold there besides everyone's,
+/// whether or not they are in the member sample. Any member may read it, as a deployment
+/// moderator may; `sortIndex` is given only for the caller's own.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/members/{user}",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path), ("user" = inline(UserRef), Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = UserCommunity),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, the caller is not a member, or the user is not", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_community_member(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path((community, user)): Path<(CommunityId, UserRef)>,
+) -> ApiResult<Json<UserCommunity>> {
+    let member = user.resolve(&session);
+    let membership =
+        app::community::read_community_member(&state, session.user.id, community, member).await?;
+    Ok(Json(UserCommunity {
+        community: membership.community,
+        user: membership.user.user_pg.id,
+        sort_index: membership.sort_index,
+        roles: membership.roles,
+    }))
 }
 
 /// Top-level channels of the community (those not filed under a category), in sort order.
