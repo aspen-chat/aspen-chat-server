@@ -72,6 +72,9 @@ test("a card opened in a community lists the member's roles, and gives and takes
   });
   card = await openCard(page, "Helper");
   roles = card.getByRole("region", { name: "Roles" });
+  // Each control says what it does on hover.
+  await roles.getByRole("button", { name: "Give Helper a role" }).hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Give Helper a role");
   await roles.getByRole("button", { name: "Give Helper a role" }).click();
   const menu = page.getByRole("menu", { name: "Give Helper a role" });
   await expect(menu.getByRole("menuitem")).toHaveText(["Greeter"]);
@@ -80,6 +83,8 @@ test("a card opened in a community lists the member's roles, and gives and takes
   expect(given).toEqual([`PUT ${greeter}`]);
 
   // The same card takes it away again.
+  await roles.getByRole("button", { name: "Take Greeter from Helper" }).hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Take Greeter from Helper");
   await roles.getByRole("button", { name: "Take Greeter from Helper" }).click();
   await expect(roles.getByRole("listitem").filter({ hasText: "Greeter" })).toHaveCount(0);
   expect(given).toEqual([`PUT ${greeter}`, `DELETE ${greeter}`]);

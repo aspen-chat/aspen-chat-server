@@ -21,6 +21,7 @@ import {
   useUser,
 } from "@/api/hooks";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
+import { Tooltip } from "@/features/layout/Tooltip";
 import { Avatar } from "@/features/communities/Avatar";
 import {
   dangerButtonClass,
@@ -253,15 +254,17 @@ function CommunityRoles({
           >
             {role.name}
             {removable.has(role.id) && (
-              <Button
-                aria-label={format(m.profile.removeRole, { role: role.name, name })}
-                onPress={() => {
-                  change(role.id, false);
-                }}
-                className="flex h-4 w-4 items-center justify-center rounded-full text-ink-muted outline-none hover:bg-surface-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                <XIcon size={10} weight="bold" aria-hidden="true" />
-              </Button>
+              <Tooltip text={format(m.profile.removeRole, { role: role.name, name })}>
+                <Button
+                  aria-label={format(m.profile.removeRole, { role: role.name, name })}
+                  onPress={() => {
+                    change(role.id, false);
+                  }}
+                  className="flex h-4 w-4 items-center justify-center rounded-full text-ink-muted outline-none hover:bg-surface-hover hover:text-danger focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <XIcon size={10} weight="bold" aria-hidden="true" />
+                </Button>
+              </Tooltip>
             )}
           </li>
         ))}
@@ -271,12 +274,14 @@ function CommunityRoles({
         {addable.length > 0 && (
           <li>
             <MenuTrigger>
-              <Button
-                aria-label={format(m.profile.addRole, { name })}
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-line text-ink-muted outline-none hover:border-accent hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                <PlusIcon size={12} aria-hidden="true" />
-              </Button>
+              <Tooltip text={format(m.profile.addRole, { name })}>
+                <Button
+                  aria-label={format(m.profile.addRole, { name })}
+                  className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-line text-ink-muted outline-none hover:border-accent hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <PlusIcon size={12} aria-hidden="true" />
+                </Button>
+              </Tooltip>
               <Popover className="w-48 rounded-md border border-line bg-surface-raised p-1 shadow-lg">
                 <Menu
                   aria-label={format(m.profile.addRole, { name })}
