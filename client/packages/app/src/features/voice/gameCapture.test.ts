@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   applicationAudioShare,
+  audioTargetKey,
   captureChoice,
   gameCaptureShare,
+  NO_AUDIO,
+  refreshAudioChoice,
   testPattern,
   type GameCaptureBridge,
 } from "./gameCapture";
@@ -158,5 +161,39 @@ describe("applicationAudioShare", () => {
     const audio = applicationAudioShare(bridge, kind, doom, () => undefined);
     await expect(audio.start(target)).rejects.toThrow("PipeWire did not answer");
     expect(ended.listener).toBeNull();
+  });
+});
+
+describe("refreshAudioChoice", () => {
+  const game = { name: "Doom", pid: 42, settings: { pid: 42 } };
+  const music = { name: "Music", pid: 7, settings: { pid: 7 } };
+  const nameless = { name: "Radio", pid: null, settings: { name: "Radio" } };
+
+  it("names an application by its process, or by name without one", () => {
+    expect(audioTargetKey(game)).toBe("pid:42");
+    expect(audioTargetKey(nameless)).toBe("name:Radio");
+  });
+
+  it("preselects the only application playing until the sharer picks", () => {
+    const none = { key: NO_AUDIO, chosen: false };
+    const one = refreshAudioChoice(none, [game]);
+    expect(one).toEqual({ key: "pid:42", chosen: false });
+    expect(refreshAudioChoice(one, [game, music])).toEqual(none);
+    expect(refreshAudioChoice(one, [])).toEqual(none);
+  });
+
+  it("keeps a pick while its application plays, wherever it moves in the list", () => {
+    const picked = { key: "pid:42", chosen: true };
+    expect(refreshAudioChoice(picked, [music, game])).toBe(picked);
+    expect(refreshAudioChoice(picked, [game])).toBe(picked);
+  });
+
+  it("falls to no audio when the picked application goes, and never picks another", () => {
+    expect(refreshAudioChoice({ key: "pid:42", chosen: true }, [music])).toEqual({
+      key: NO_AUDIO,
+      chosen: true,
+    });
+    const silent = { key: NO_AUDIO, chosen: true };
+    expect(refreshAudioChoice(silent, [game])).toBe(silent);
   });
 });

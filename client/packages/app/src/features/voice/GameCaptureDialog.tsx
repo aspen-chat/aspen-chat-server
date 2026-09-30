@@ -24,9 +24,15 @@ import {
 } from "@/features/invites/dialog";
 import {
   applicationAudioShare,
+  AUDIO_REFRESH_MS,
+  audioTargetKey,
   captureChoice,
   gameCaptureShare,
+  NO_AUDIO,
+  refreshAudioChoice,
+  sameAudioTargets,
   testPattern,
+  type AudioChoice,
   type AudioKind,
   type AudioTarget,
   type CaptureCatalogue,
@@ -44,7 +50,6 @@ interface Option {
 }
 
 /** No application's sound chosen. */
-const NO_AUDIO = "none";
 
 /**
  * What the desktop shell can share as a game. Where libobs captures games (Windows and macOS)
@@ -54,7 +59,9 @@ const NO_AUDIO = "none";
  * application's sound: the dialog lists the applications playing sound, and its button opens
  * the system picker for the picture. Choosing sound and picture separately is a limitation of
  * the Linux desktop portal, which only the app owning a window can raise and which reports
- * nothing about the application behind the window chosen. A development shell started with
+ * nothing about the application behind the window chosen. The list of applications is read
+ * again every `AUDIO_REFRESH_MS` while the dialog is open, so one that starts or stops playing
+ * meanwhile appears or goes. A development shell started with
  * `ASPEN_TEST_MEDIA` also offers that clip as a test pattern, for the drives that test capture
  * without a game.
  */
@@ -71,19 +78,50 @@ export function GameCaptureDialog({
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [withAudio, setWithAudio] = useState(true);
-  const [audioChoice, setAudioChoice] = useState<string>(NO_AUDIO);
+  const [audioChoice, setAudioChoice] = useState<AudioChoice>({ key: NO_AUDIO, chosen: false });
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const apply = (loaded: CaptureCatalogue) => {
+      const targets = loaded.applicationAudio?.targets ?? null;
+      setCatalogue((current) =>
+        current !== null &&
+        sameAudioTargets(current.applicationAudio?.targets ?? null, targets)
+          ? current
+          : loaded,
+      );
+      if (targets !== null) {
+        setAudioChoice((choice) => refreshAudioChoice(choice, targets));
+      }
+    };
+    // Only application audio (Linux) is listed again: the window lists elsewhere come from
+    // probing libobs sources, which is too heavy to repeat twice a second.
+    const refresh = () => {
+      timer = setTimeout(() => {
+        bridge.kinds().then(
+          (loaded) => {
+            if (!cancelled) {
+              apply(loaded);
+              refresh();
+            }
+          },
+          () => {
+            if (!cancelled) {
+              refresh();
+            }
+          },
+        );
+      }, AUDIO_REFRESH_MS);
+    };
     bridge.kinds().then(
       (loaded) => {
         if (cancelled) {
           return;
         }
-        setCatalogue(loaded);
-        // The one application playing is the likely game; more than one needs a choice.
-        if (loaded.applicationAudio?.targets?.length === 1) {
-          setAudioChoice("0");
+        apply(loaded);
+        if (loaded.applicationAudio !== null) {
+          refresh();
         }
       },
       (failure: unknown) => {
@@ -95,6 +133,7 @@ export function GameCaptureDialog({
     );
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [bridge]);
 
@@ -133,7 +172,7 @@ export function GameCaptureDialog({
     );
 
   const shareWithApplicationAudio = (kind: AudioKind, targets: readonly AudioTarget[]) => {
-    const application = audioChoice === NO_AUDIO ? undefined : targets[Number(audioChoice)];
+    const application = targets.find((target) => audioTargetKey(target) === audioChoice.key);
     // A game moves: its picture should keep its frame rate when bandwidth runs short.
     return run(() =>
       sync.voice.startScreenShare(
@@ -171,8 +210,10 @@ export function GameCaptureDialog({
               <p className="text-sm text-ink-muted">{m.voice.shareGameTwoSteps}</p>
               <AudioSelect
                 applications={applications}
-                value={audioChoice}
-                onChange={setAudioChoice}
+                value={audioChoice.key}
+                onChange={(key) => {
+                  setAudioChoice({ key, chosen: true });
+                }}
               />
               <Button
                 isDisabled={starting}
@@ -250,8 +291,8 @@ function AudioSelect({
   const m = useMessages();
   const items = [
     { id: NO_AUDIO, label: m.voice.shareGameAudioNone },
-    ...applications.map((application, index) => ({
-      id: String(index),
+    ...applications.map((application) => ({
+      id: audioTargetKey(application),
       label: applicationLabel(application, m),
     })),
   ];

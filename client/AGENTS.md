@@ -303,7 +303,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   voice channel header both use) follows the platform. On Windows and macOS it lists the
   windows the capture source can be pointed at, with a checkbox for their sound. On Linux it
   lists the applications playing sound as a "Game audio" picker (preselecting the only one when
-  just one plays), and its button opens the system's picker for the picture. Choosing the sound
+  just one plays, until the user picks), listing them again twice a second while it is open so
+  an application that starts or stops playing appears or goes (a pick stands while its
+  application is listed and falls to no audio when it goes), and its button opens the system's picker for the picture. Choosing the sound
   and the picture separately is a known weakness, not a design goal: one choice of "this game"
   is the better experience, and it is out of reach only because the portal tells the app
   nothing about the application behind the window the user picked. Look for ways to close

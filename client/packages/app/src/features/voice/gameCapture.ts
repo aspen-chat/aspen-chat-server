@@ -119,6 +119,53 @@ export function captureChoice(kind: CaptureKind, target: CaptureTarget): Capture
   return { kind: kind.kind, settings, audio };
 }
 
+/** How often the dialog lists the applications playing sound again while it is open. */
+export const AUDIO_REFRESH_MS = 500;
+
+/** The audio choice that sends no application's sound. */
+export const NO_AUDIO = "none";
+
+/**
+ * A key naming one application across refreshes of the list: its process, or its name when it
+ * gave no process id, as the helper groups them.
+ */
+export function audioTargetKey(target: AudioTarget): string {
+  return target.pid === null ? `name:${target.name}` : `pid:${String(target.pid)}`;
+}
+
+/** Which application's sound is selected, and whether the sharer picked it themself. */
+export interface AudioChoice {
+  readonly key: string;
+  readonly chosen: boolean;
+}
+
+/**
+ * The selection once the applications playing sound are listed again. Until the sharer picks,
+ * the only application playing is preselected, being the likely game, and none when several
+ * or none play. A pick stands while its application is listed and falls to no audio when it
+ * goes, rather than moving to some other application's sound.
+ */
+export function refreshAudioChoice(
+  choice: AudioChoice,
+  targets: readonly AudioTarget[],
+): AudioChoice {
+  if (!choice.chosen) {
+    const only = targets.length === 1 ? targets[0] : undefined;
+    return { key: only === undefined ? NO_AUDIO : audioTargetKey(only), chosen: false };
+  }
+  const listed =
+    choice.key === NO_AUDIO || targets.some((target) => audioTargetKey(target) === choice.key);
+  return listed ? choice : { key: NO_AUDIO, chosen: true };
+}
+
+/** Whether two listings name the same applications with the same settings, in the same order. */
+export function sameAudioTargets(
+  a: readonly AudioTarget[] | null,
+  b: readonly AudioTarget[] | null,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * A test pattern for trying the pipeline without a game: the media file the shell names,
  * looping through libobs's media source, picture and sound both.
