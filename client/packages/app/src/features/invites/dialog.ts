@@ -16,11 +16,13 @@ export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";
 export const wideModalClass = modalFrameClass + " bg-surface-raised max-w-3xl";
 /**
  * A modal of many sections, such as Settings, each drawn as a plane (`planeClass`) raised off
- * the modal's plainer ground, so the eye finds where one ends and the next begins.
+ * the modal's plainer ground, so the eye finds where one ends and the next begins. It is wide
+ * enough for the planes to stand in two columns (`PlaneColumns`).
  */
-export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
+export const planesModalClass = modalFrameClass + " bg-surface max-w-3xl";
+/** A section drawn raised off its ground; it never splits across columns. */
 export const planeClass =
-  "flex flex-col gap-3 rounded-lg border border-line bg-surface-raised p-4 shadow-sm";
+  "flex flex-col gap-3 break-inside-avoid rounded-lg border border-line bg-surface-raised p-1.5 shadow-sm";
 export const dialogClass = "flex flex-col gap-4 outline-none";
 export const headingClass = "text-lg font-semibold";
 export const dangerButtonClass =

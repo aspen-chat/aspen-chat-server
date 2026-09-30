@@ -46,6 +46,7 @@ import { NotificationsSection } from "@/features/settings/NotificationsSection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { PlaneColumns } from "@/features/layout/PlaneColumns";
 import { useMessages } from "@/i18n/context";
 import { ThemePicker } from "@/theme/ThemePicker";
 
@@ -72,24 +73,26 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
             {({ close }) => (
               <>
                 <DialogHeading>{m.settings.title}</DialogHeading>
-                <AudioSection />
-                <section aria-labelledby="settings-appearance" className={planeClass}>
-                  <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
-                    {m.settings.appearance}
-                  </h3>
-                  <ThemePicker />
-                </section>
-                <NotificationsSection />
-                <LanguageSection />
-                <BlockedUsersSection />
-                <OtherServersSection />
-                <DeveloperSection />
-                <section aria-labelledby="settings-account" className={planeClass}>
-                  <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
-                    {m.settings.account}
-                  </h3>
-                  <SecurityDialog />
-                </section>
+                <PlaneColumns>
+                  <AudioSection />
+                  <section aria-labelledby="settings-appearance" className={planeClass}>
+                    <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
+                      {m.settings.appearance}
+                    </h3>
+                    <ThemePicker />
+                  </section>
+                  <NotificationsSection />
+                  <LanguageSection />
+                  <BlockedUsersSection />
+                  <OtherServersSection />
+                  <DeveloperSection />
+                  <section aria-labelledby="settings-account" className={planeClass}>
+                    <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
+                      {m.settings.account}
+                    </h3>
+                    <SecurityDialog />
+                  </section>
+                </PlaneColumns>
                 <div className="flex items-center justify-between gap-2">
                   <Button
                     onPress={() => {
