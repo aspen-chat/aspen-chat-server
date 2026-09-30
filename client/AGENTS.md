@@ -264,8 +264,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   voice channel row joins it (a call the user is already in, or joining, is left alone) and
   opens `VoiceScreen`, the channel's screen in place of a
   history: the shared screens (one large, the others as thumbnails to pick), everyone in the
-  call as tiles, and a Join button when the user is not in it (`CallStage`, which a DM's call
-  shares). A DM or group DM holds a call too: its header's phone button starts or joins it,
+  call as tiles, a Join button when the user is not in it, and a red Leave Call button at the
+  top left while they are in it or joining (`CallStage`, which a DM's call shares; nobody can
+  end a call for everyone, so it only leaves). A DM or group DM holds a call too: its header's phone button starts or joins it,
   `DmCall` shows it between the header and the messages while one is under way or the user is
   in it, the DM's row carries a phone meanwhile, `CallBar` names the DM's people, and a user
   card's Call button opens the DM with that person and joins its call. No one is offered
@@ -276,7 +277,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `startRingtone` (`src/features/notifications/ringtone.ts`, made like the chime by
   `tone.ts`) plays through the notification sound's speaker and, when the app is not focused
   and the user turned system notifications on, the system notifies. A muted DM rings silently.
-  A ring ends at its `until` by the clock (`useNow`). In the call, those being rung show as
+  A ring ends at its `until` by the clock (`useNow`). While the user is in a DM's call that
+  still rings someone, `startDialTone` plays a quiet ringback (440 and 480 Hz, 1.2 seconds in
+  every 4) through the voice chat's speaker. In the call, those being rung show as
   tiles darkened by `brightness-75`, at full opacity, with no visible label (a screen reader
   hears "Ringing"). A message of kind `call` renders as `CallNotice`, its length in words by
   `callLength`. The large screen goes full

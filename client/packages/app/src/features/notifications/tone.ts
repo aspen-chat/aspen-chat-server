@@ -12,8 +12,9 @@ export interface Note {
 
 /**
  * Notes as 16-bit mono WAV, `seconds` long (or as long as the notes need): each a sine,
- * with `overtone` of its octave above for warmth, rising in `attack` seconds and fading away.
- * The app's sounds are made this way rather than shipped as recordings.
+ * with `overtone` of its octave above for warmth, rising in `attack` seconds and then fading
+ * away, or, with `sustain`, holding until it falls away in its last `attack` seconds, as a
+ * telephone's tones do. The app's sounds are made this way rather than shipped as recordings.
  */
 export function wavOf(
   notes: readonly Note[],
@@ -22,7 +23,8 @@ export function wavOf(
     attack,
     overtone = 0,
     seconds,
-  }: { peak: number; attack: number; overtone?: number; seconds?: number },
+    sustain = false,
+  }: { peak: number; attack: number; overtone?: number; seconds?: number; sustain?: boolean },
 ): Blob {
   const total = seconds ?? Math.max(...notes.map((n) => n.start + n.length));
   const samples = Math.ceil(total * RATE);
@@ -32,7 +34,9 @@ export function wavOf(
     const count = Math.floor(length * RATE);
     for (let i = 0; i < count && first + i < samples; i++) {
       const t = i / RATE;
-      const envelope = Math.min(1, t / attack) * Math.exp(-t / (length / 4));
+      const envelope =
+        Math.min(1, t / attack) *
+        (sustain ? Math.min(1, (length - t) / attack) : Math.exp(-t / (length / 4)));
       const wave =
         Math.sin(2 * Math.PI * frequency * t) +
         overtone * Math.sin(2 * Math.PI * frequency * 2 * t);

@@ -261,6 +261,7 @@ export const en = {
     deafen: "Deafen",
     undeafen: "Undeafen",
     leave: "Leave call",
+    leaveCallButton: "Leave Call",
     shareScreen: "Share screen",
     stopSharing: "Stop sharing",
     sharingMark: "Sharing a screen",

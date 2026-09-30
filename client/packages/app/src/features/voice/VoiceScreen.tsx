@@ -4,12 +4,13 @@ import {
   HeadphonesIcon,
   MicrophoneSlashIcon,
   MonitorIcon,
+  PhoneDisconnectIcon,
   PhoneIcon,
   ProhibitIcon,
   SpeakerHighIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
@@ -36,6 +37,7 @@ import { TransferLinks } from "@/features/voice/TransferLinks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useNow } from "@/features/layout/useNow";
+import { dangerButtonClass } from "@/features/invites/dialog";
 
 /**
  * A voice channel's screen: its header, with the share control while the user is in its call,
@@ -78,17 +80,21 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
  * A channel's call, in a voice channel or a DM: the shared screens, one of them large and the
  * rest as thumbnails to pick from, then everyone in the call as tiles, with the transfers under
  * way between them drawn over the tiles, those a DM's call is ringing as darkened tiles, the
- * call's files, and the way in, labelled `joinLabel`. The screens and file offers of people the user blocked, here or on another
+ * call's files, and the way in, labelled `joinLabel`. While the user is in the call, or joining
+ * it, Leave Call at the top left leaves it, across from `toolbarEnd`. The screens and file offers of people the user blocked, here or on another
  * deployment, are not shown. `className` lays out the scrolling area that holds it all.
  */
 export function CallStage({
   channel,
   joinLabel,
   className,
+  toolbarEnd,
 }: {
   channel: Channel;
   joinLabel: string;
   className: string;
+  /** Controls for the toolbar's other end, across from Leave Call. */
+  toolbarEnd?: ReactNode;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -123,9 +129,29 @@ export function CallStage({
     : [];
   const focused = screens.find((screen) => screen.id === focusedId) ?? screens[0];
 
+  // Joining counts: Leave Call also calls off a join under way.
+  const here = call.status !== "idle" && call.channelId === channel.id;
   return (
     <>
       <div className={className}>
+        {(here || toolbarEnd !== undefined) && (
+          <div className="flex items-center justify-between gap-2">
+            {here ? (
+              <Button
+                onPress={() => {
+                  sync.voice.leave();
+                }}
+                className={dangerButtonClass + " flex items-center gap-1.5"}
+              >
+                <PhoneDisconnectIcon size={18} aria-hidden="true" />
+                {m.voice.leaveCallButton}
+              </Button>
+            ) : (
+              <span />
+            )}
+            {toolbarEnd}
+          </div>
+        )}
         {focused !== undefined && (
           <section aria-label={m.voice.screensLabel} className="flex min-h-0 flex-col gap-2">
             <FocusedScreen screen={focused} />

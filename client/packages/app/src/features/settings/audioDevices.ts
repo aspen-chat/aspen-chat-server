@@ -61,3 +61,9 @@ export function notificationOutputDevice(preferences: PreferenceStore): DeviceCh
   const resolved = chosen === SAME_AS_VOICE ? preferences.get(AUDIO_OUTPUT) : chosen;
   return resolved === DEFAULT_DEVICE ? null : resolved;
 }
+
+/** The speaker voice chat plays through, or `null` for the system default. */
+export function voiceOutputDevice(preferences: PreferenceStore): DeviceChoice | null {
+  const chosen = preferences.get(AUDIO_OUTPUT);
+  return chosen === DEFAULT_DEVICE ? null : chosen;
+}
