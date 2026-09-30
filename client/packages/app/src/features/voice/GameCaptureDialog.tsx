@@ -54,8 +54,9 @@ const NO_AUDIO = "none";
  * application's sound: the dialog lists the applications playing sound, and its button opens
  * the system picker for the picture. Choosing sound and picture separately is a limitation of
  * the Linux desktop portal, which only the app owning a window can raise and which reports
- * nothing about the application behind the window chosen. In development a test pattern is
- * offered too.
+ * nothing about the application behind the window chosen. A development shell started with
+ * `ASPEN_TEST_MEDIA` also offers that clip as a test pattern, for the drives that test capture
+ * without a game.
  */
 export function GameCaptureDialog({
   bridge,
@@ -305,7 +306,7 @@ function optionsFor(catalogue: CaptureCatalogue, m: ReturnType<typeof useMessage
       });
     }
   }
-  if (import.meta.env.DEV) {
+  if (catalogue.testMedia !== null) {
     options.push({
       id: "test-pattern",
       label: m.voice.shareGameTestPattern,

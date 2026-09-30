@@ -79,8 +79,7 @@ describe("captureChoice", () => {
     expect(captureChoice(silent, { name: "Doom", value: "w" }).audio).toBeNull();
   });
 
-  it("offers a silent colour source without a clip, and the clip with its sound with one", () => {
-    expect(testPattern(null).audio).toBeNull();
+  it("plays the shell's clip with its sound", () => {
     expect(testPattern("/tmp/clip.mp4")).toEqual({
       kind: "ffmpeg_source",
       settings: {

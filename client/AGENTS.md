@@ -308,9 +308,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   is the better experience, and it is out of reach only because the portal tells the app
   nothing about the application behind the window the user picked. Look for ways to close
   that gap: a video track's label names the window on X11, which could identify its
-  application, and a future portal may report the window's application. In development the
-  dialog also offers a test pattern: the clip `ASPEN_TEST_MEDIA` names, looped through
-  libobs's media source with its sound, or a colour source without one. A shell without the
+  application, and a future portal may report the window's application. A development shell
+  started with `ASPEN_TEST_MEDIA` naming a clip also offers it as a test pattern, looped
+  through libobs's media source with its sound; without it no test pattern is offered. A shell without the
   helper on disk shows no game option. The drives run the shell headlessly with
   `ASPEN_DESKTOP_HIDDEN=1`, `ASPEN_DESKTOP_FAKE_MEDIA=1` (with which Chromium answers
   `getDisplayMedia` itself with a synthetic screen, so no picker is shown), and

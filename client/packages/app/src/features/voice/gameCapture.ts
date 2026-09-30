@@ -120,18 +120,10 @@ export function captureChoice(kind: CaptureKind, target: CaptureTarget): Capture
 }
 
 /**
- * A test pattern for trying the pipeline without a game: a media file looping through
- * libobs's media source, picture and sound both, when the shell names one; otherwise its
- * colour source, orange (its colours are ABGR), silent.
+ * A test pattern for trying the pipeline without a game: the media file the shell names,
+ * looping through libobs's media source, picture and sound both.
  */
-export function testPattern(testMedia: string | null): CaptureChoice {
-  if (testMedia === null) {
-    return {
-      kind: "color_source",
-      settings: { color: 0xff_20_80_ff, width: 1280, height: 720 },
-      audio: null,
-    };
-  }
+export function testPattern(testMedia: string): CaptureChoice {
   return {
     kind: "ffmpeg_source",
     settings: { is_local_file: true, local_file: testMedia, looping: true, hw_decode: false },
