@@ -22,7 +22,10 @@ import {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
   PreferenceStore,
+  effectiveStreamVolume,
   effectiveUserVolume,
+  streamMuted,
+  streamVolume,
   userMuted,
   userVolume,
   type PreferenceStorage,
@@ -306,7 +309,8 @@ export class AspenSync {
     if (options.random !== undefined) {
       voiceOptions.random = options.random;
     }
-    voiceOptions.userVolume = (userId) => this.#userGain(userId);
+    voiceOptions.userVolume = (userId, source) =>
+      source === "screenAudio" ? this.#streamGain(userId) : this.#userGain(userId);
     this.voice = new VoiceCall(voiceOptions);
     // A block made or lifted, here or on another deployment, changes who is heard at once.
     this.store.subscribe("silenced", () => {
@@ -1609,6 +1613,26 @@ export class AspenSync {
   /** How loud `userId` plays here: silent while muted for this user, or blocked on any deployment. */
   #userGain(userId: string): number {
     return this.store.silenced(userId) ? 0 : effectiveUserVolume(this.preferences, userId);
+  }
+
+  /**
+   * How loud the sound of what `userId` shares is to this user on this install, set apart from
+   * their voice: a gain, 1 as sent.
+   */
+  async setStreamVolume(userId: string, gain: number): Promise<void> {
+    await this.preferences.set(streamVolume(userId), gain);
+    this.voice.setUserVolume(userId, this.#streamGain(userId), "screenAudio");
+  }
+
+  /** Silences the sound of what `userId` shares for this user alone, their voice apart. */
+  async setStreamMuted(userId: string, muted: boolean): Promise<void> {
+    await this.preferences.set(streamMuted(userId), muted);
+    this.voice.setUserVolume(userId, this.#streamGain(userId), "screenAudio");
+  }
+
+  /** How loud `userId`'s stream plays here: silent while muted for this user, or blocked. */
+  #streamGain(userId: string): number {
+    return this.store.silenced(userId) ? 0 : effectiveStreamVolume(this.preferences, userId);
   }
 
   /**

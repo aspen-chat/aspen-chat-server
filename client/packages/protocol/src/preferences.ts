@@ -342,3 +342,34 @@ export class PreferenceStore {
     }
   }
 }
+
+/**
+ * How loud one other person's shared stream (the sound of a screen or game they share) is heard
+ * on this install, set apart from their voice: a gain, 1 as sent, up to double.
+ */
+export function streamVolume(userId: string): PreferenceDefinition<number> {
+  return {
+    key: `voice.streamVolume.${userId}`,
+    scope: "device",
+    fallback: 1,
+    parse: (raw) =>
+      typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_USER_VOLUME
+        ? raw
+        : undefined,
+  };
+}
+
+/** Whether this user has silenced one other person's stream for themself, voice apart. */
+export function streamMuted(userId: string): PreferenceDefinition<boolean> {
+  return {
+    key: `voice.streamMuted.${userId}`,
+    scope: "device",
+    fallback: false,
+    parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+  };
+}
+
+/** How loud one other person's stream is heard: its volume, or silence while muted for this user. */
+export function effectiveStreamVolume(store: PreferenceStore, userId: string): number {
+  return store.get(streamMuted(userId)) ? 0 : store.get(streamVolume(userId));
+}

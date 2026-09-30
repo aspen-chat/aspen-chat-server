@@ -319,6 +319,7 @@ function ParticipantTile({
             userId={userId}
             name={name}
             muted={muted}
+            sharing={sharingScreen}
             anchorRef={tile}
             isOpen={menuOpen}
             onOpenChange={setMenuOpen}

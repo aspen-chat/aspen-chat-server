@@ -284,7 +284,7 @@ function makeCall(options: {
   existing?: boolean;
   unreachableSendTransports?: number;
   microphone?: "ok" | "denied";
-  userVolume?: (userId: string) => number;
+  userVolume?: (userId: string, source: "microphone" | "screenAudio") => number;
   /** What the join offer grants; both by default. */
   speak?: boolean;
   shareScreen?: boolean;
@@ -828,6 +828,38 @@ describe("VoiceCall", () => {
     expect(volumes).toEqual(["a1=1.5", "a2=0.25"]);
     call.setUserVolume("nobody", 2);
     expect(volumes).toHaveLength(2);
+  });
+
+  it("sets a person's stream apart from their voice", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, volumes } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      userVolume: (_user, source) => (source === "screenAudio" ? 0.5 : 1.5),
+    });
+    await call.join(channel);
+    const socket = FakeSocket.instances[0];
+    for (const [consumerId, source] of [
+      ["voice", "microphone"],
+      ["stream", "screenAudio"],
+    ] as const) {
+      socket?.frame({
+        type: "newConsumer",
+        consumerId,
+        producerId: `p-${consumerId}`,
+        user: "sharer",
+        kind: "audio",
+        source,
+        rtpParameters: {},
+        producerPaused: false,
+      });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+    expect(volumes).toEqual(["voice=1.5", "stream=0.5"]);
+    // Their stream's volume leaves their voice alone, and theirs leaves the stream alone.
+    call.setUserVolume("sharer", 0, "screenAudio");
+    call.setUserVolume("sharer", 1.25);
+    expect(volumes).toEqual(["voice=1.5", "stream=0.5", "stream=0", "voice=1.25"]);
   });
 
   it("sets every consumer's gain again when who is silenced changes", async () => {

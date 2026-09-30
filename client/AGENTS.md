@@ -257,9 +257,12 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   the dots beside them, opens `ParticipantMenu`: how loud they are to this user alone (a gain
   from 0 to `MAX_USER_VOLUME`, the `userVolume(userId)` device preference), "mute for me"
   (the `userMuted(userId)` device preference, which silences them for this user while keeping
-  their volume, nothing the server or they can see), and the moderation actions. Both go
-  through `AspenSync.setUserVolume` and `setUserMuted`, which apply `effectiveUserVolume` to
-  whatever of theirs is playing; playback runs through a Web Audio gain node because an
+  their volume, nothing the server or they can see), and, while they share a screen, the same
+  two for its sound apart from their voice (`streamVolume`, `streamMuted`, through
+  `setStreamVolume` and `setStreamMuted`), and the moderation actions. Voice and stream go
+  through `AspenSync.setUserVolume` and `setUserMuted` and their stream counterparts, which
+  apply `effectiveUserVolume` or `effectiveStreamVolume` to that person's `microphone` or
+  `screenAudio` consumers alone (`VoiceCall` asks `userVolume(user, source)`); playback runs through a Web Audio gain node because an
   element's own volume stops at 1. Chromium, and so the desktop app, feeds a remote WebRTC
   track into Web Audio only while the track also plays through a media element, so each
   participant's raw stream also plays through a muted element (`browserMedia.ts`); without

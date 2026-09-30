@@ -43,7 +43,14 @@ export const READY_TIMEOUT_MS = 6_000;
  * producer says otherwise), without discontinuous transmission, which cuts quiet passages of
  * music, and at 128 kbps, where cymbals and other dense sound stay clean.
  */
-export /**
+export /** The two sounds a participant sends, whose volumes are set apart: their voice, and their stream's. */
+type AudioSource = "microphone" | "screenAudio";
+
+function isAudioSource(source: string): source is AudioSource {
+  return source === "microphone" || source === "screenAudio";
+}
+
+/**
  * A shared screen is sent at the best quality the network carries: one layer allowed up to
  * 25 Mbps at 60 frames a second, the ceiling rather than a target, since the encoder spends only
  * what the picture needs and the connection's bandwidth estimate brings it down.
@@ -238,8 +245,11 @@ export interface VoiceCallOptions {
   now?: () => number;
   /** Uniform in [0, 1); seeds the rejoin delay. */
   random?: () => number;
-  /** How loud each other user should be to this one; consulted as their audio arrives. */
-  userVolume?: (userId: string) => number;
+  /**
+   * How loud each other user should be to this one, their voice (`microphone`) and the sound of
+   * what they share (`screenAudio`) apart; consulted as their audio arrives.
+   */
+  userVolume?: (userId: string, source: AudioSource) => number;
   /** Makes file transfers' peer connections; the browser's own by default. */
   createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection;
 }
@@ -399,8 +409,8 @@ export class VoiceCall {
   #external: { producerIds: string[]; share: ExternalShare } | null = null;
   /** The consumer carrying the call's own preview of an external share. */
   #previewConsumerId: string | null = null;
-  readonly #consumers = new Map<string, { close(): void; user: string }>();
-  readonly #userVolume: (userId: string) => number;
+  readonly #consumers = new Map<string, { close(): void; user: string; source: string }>();
+  readonly #userVolume: (userId: string, source: AudioSource) => number;
   /** Increments on every join and leave so a stale async step can notice and bail. */
   #generation = 0;
   readonly #files: FileTransfers;
@@ -755,14 +765,19 @@ export class VoiceCall {
   /** Sets every consumer's gain again from `userVolume`, after what it answers has changed. */
   refreshVolumes(): void {
     for (const [consumerId, consumer] of this.#consumers) {
-      this.#media.setVolume(consumerId, this.#userVolume(consumer.user));
+      if (isAudioSource(consumer.source)) {
+        this.#media.setVolume(consumerId, this.#userVolume(consumer.user, consumer.source));
+      }
     }
   }
 
-  /** Sets how loud `userId` is heard right now; the preference behind it is the caller's to keep. */
-  setUserVolume(userId: string, gain: number): void {
+  /**
+   * Sets how loud `userId`'s voice, or with `source` `screenAudio` the sound of what they share,
+   * is heard right now; the preference behind it is the caller's to keep.
+   */
+  setUserVolume(userId: string, gain: number, source: AudioSource = "microphone"): void {
     for (const [consumerId, consumer] of this.#consumers) {
-      if (consumer.user === userId) {
+      if (consumer.user === userId && consumer.source === source) {
         this.#media.setVolume(consumerId, gain);
       }
     }
@@ -1200,6 +1215,7 @@ export class VoiceCall {
           consumer.close();
         },
         user: frame.user,
+        source: frame.source,
       });
       if (frame.kind === "video" && frame.user === this.#lastReady?.user) {
         // The call's own external share, back from the server as its preview.
@@ -1214,7 +1230,10 @@ export class VoiceCall {
         });
       } else {
         this.#media.play(frame.consumerId, consumer.track);
-        const gain = this.#userVolume(frame.user);
+        const gain = this.#userVolume(
+          frame.user,
+          frame.source === "screenAudio" ? "screenAudio" : "microphone",
+        );
         if (gain !== 1) {
           this.#media.setVolume(frame.consumerId, gain);
         }

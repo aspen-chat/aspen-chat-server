@@ -151,6 +151,7 @@ function ParticipantRow({
             userId={userId}
             name={name}
             muted={muted}
+            sharing={sharingScreen}
             anchorRef={row}
             isOpen={menuOpen}
             onOpenChange={setMenuOpen}

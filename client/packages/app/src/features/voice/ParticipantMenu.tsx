@@ -1,4 +1,4 @@
-import { MAX_USER_VOLUME, userMuted, userVolume } from "@aspen/protocol";
+import { MAX_USER_VOLUME, streamMuted, streamVolume, userMuted, userVolume } from "@aspen/protocol";
 import { DotsThreeVerticalIcon } from "@phosphor-icons/react";
 import type { RefObject } from "react";
 import {
@@ -24,14 +24,16 @@ const itemClass =
 /**
  * Everything one can do to another person in a call, opened by right-clicking them or by the
  * dots button beside them: how loud they are to this user alone, silencing them for this user
- * alone (their volume is kept for when they are unmuted), and moderation (server mute or
- * unmute, removal), offered only with Manage calls.
+ * alone (their volume is kept for when they are unmuted), the same for the sound of a screen
+ * they share, set apart from their voice, and moderation (server mute or unmute, removal),
+ * offered only with Manage calls.
  */
 export function ParticipantMenu({
   channelId,
   userId,
   name,
   muted,
+  sharing = false,
   anchorRef,
   isOpen,
   onOpenChange,
@@ -41,6 +43,8 @@ export function ParticipantMenu({
   name: string;
   /** Server-muted, as the participant record says. */
   muted: boolean;
+  /** Sharing a screen, whose sound then has a volume of its own. */
+  sharing?: boolean;
   anchorRef: RefObject<HTMLElement | null>;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
@@ -49,6 +53,8 @@ export function ParticipantMenu({
   const sync = useSync();
   const gain = usePreference(userVolume(userId));
   const mutedForMe = usePreference(userMuted(userId));
+  const streamGain = usePreference(streamVolume(userId));
+  const streamMutedForMe = usePreference(streamMuted(userId));
   const blocked = useBlocked(userId);
   const moderate = useChannelCan(channelId, "manageCalls");
   const label = format(m.voice.participantActions, { name });
@@ -61,30 +67,24 @@ export function ParticipantMenu({
       className="w-64 rounded-md border border-line bg-surface-raised p-2 shadow-lg"
     >
       <Dialog aria-label={label} className="flex flex-col gap-2 outline-none">
-        <Slider
-          value={Math.round(gain * 100)}
-          minValue={0}
-          maxValue={MAX_USER_VOLUME * 100}
-          step={STEP}
+        <VolumeSlider
+          label={sharing ? m.voice.voiceVolume : m.voice.volume}
+          gain={gain}
           isDisabled={mutedForMe || blocked}
           onChange={(value) => {
-            if (typeof value === "number") {
-              void sync.setUserVolume(userId, value / 100).catch(() => undefined);
-            }
+            void sync.setUserVolume(userId, value).catch(() => undefined);
           }}
-          className="flex w-full flex-col gap-1 px-1 disabled:opacity-60"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <Label className="truncate text-sm font-medium">{m.voice.volume}</Label>
-            <SliderOutput className="text-sm tabular-nums text-ink-muted">
-              {({ state }) => `${String(state.getThumbValue(0))}%`}
-            </SliderOutput>
-          </div>
-          <SliderTrack className="relative h-6 w-full">
-            <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-line" />
-            <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
-          </SliderTrack>
-        </Slider>
+        />
+        {sharing && !blocked && (
+          <VolumeSlider
+            label={m.voice.streamVolume}
+            gain={streamGain}
+            isDisabled={streamMutedForMe}
+            onChange={(value) => {
+              void sync.setStreamVolume(userId, value).catch(() => undefined);
+            }}
+          />
+        )}
         {blocked && <p className="px-1 text-xs text-ink-muted">{m.blocking.blockedInCall}</p>}
         {(!blocked || moderate) && (
           <Menu
@@ -93,6 +93,8 @@ export function ParticipantMenu({
             onAction={(key) => {
               if (key === "muteForMe") {
                 void sync.setUserMuted(userId, !mutedForMe).catch(() => undefined);
+              } else if (key === "muteStreamForMe") {
+                void sync.setStreamMuted(userId, !streamMutedForMe).catch(() => undefined);
               } else if (key === "serverMute") {
                 onOpenChange(false);
                 void sync.muteVoiceParticipant(channelId, userId, !muted).catch(() => undefined);
@@ -105,6 +107,11 @@ export function ParticipantMenu({
             {!blocked && (
               <MenuItem id="muteForMe" className={itemClass}>
                 {mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
+              </MenuItem>
+            )}
+            {!blocked && sharing && (
+              <MenuItem id="muteStreamForMe" className={itemClass}>
+                {streamMutedForMe ? m.voice.unmuteStreamForMe : m.voice.muteStreamForMe}
               </MenuItem>
             )}
             {moderate && (
@@ -121,6 +128,46 @@ export function ParticipantMenu({
         )}
       </Dialog>
     </Popover>
+  );
+}
+
+/** A volume, 0 to `MAX_USER_VOLUME` as a percentage, in steps of `STEP`. */
+function VolumeSlider({
+  label,
+  gain,
+  isDisabled,
+  onChange,
+}: {
+  label: string;
+  gain: number;
+  isDisabled: boolean;
+  onChange: (gain: number) => void;
+}) {
+  return (
+    <Slider
+      value={Math.round(gain * 100)}
+      minValue={0}
+      maxValue={MAX_USER_VOLUME * 100}
+      step={STEP}
+      isDisabled={isDisabled}
+      onChange={(value) => {
+        if (typeof value === "number") {
+          onChange(value / 100);
+        }
+      }}
+      className="flex w-full flex-col gap-1 px-1 disabled:opacity-60"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <Label className="truncate text-sm font-medium">{label}</Label>
+        <SliderOutput className="text-sm tabular-nums text-ink-muted">
+          {({ state }) => `${String(state.getThumbValue(0))}%`}
+        </SliderOutput>
+      </div>
+      <SliderTrack className="relative h-6 w-full">
+        <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-line" />
+        <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
+      </SliderTrack>
+    </Slider>
   );
 }
 
