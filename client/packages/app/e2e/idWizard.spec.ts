@@ -21,6 +21,7 @@ async function withDeveloperMode(page: Page) {
 test("with developer mode on, IDs are offered for copying, last in each place", async ({
   page,
   isMobile,
+  browserName,
 }) => {
   test.skip(isMobile, "the same components serve phones; this checks what they hold");
   await signInToWorld(page, withDeveloperMode);
@@ -35,11 +36,16 @@ test("with developer mode on, IDs are offered for copying, last in each place", 
   await own.hover();
   const actions = own.getByRole("group", { name: "Message actions" }).getByRole("button");
   await expect(actions.last()).toHaveAccessibleName("Copy message ID");
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  // Reading the clipboard back takes a permission only Chromium's driver grants.
+  if (browserName === "chromium") {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  }
   await actions.last().click();
   await expect(actions.last()).toHaveAccessibleName("Copied message ID");
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toBe(await own.getAttribute("data-message-id"));
+  if (browserName === "chromium") {
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toBe(await own.getAttribute("data-message-id"));
+  }
 
   // So does a channel's menu.
   await page.getByRole("button", { name: "Options for general" }).first().click();
