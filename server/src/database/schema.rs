@@ -591,6 +591,7 @@ diesel::table! {
         created_at -> Timestamptz,
         alone_since -> Nullable<Timestamptz>,
         started_by -> Nullable<Uuid>,
+        had_company -> Bool,
     }
 }
 

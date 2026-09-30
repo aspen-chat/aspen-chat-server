@@ -7,6 +7,7 @@
 //! one server while anyone is in the call; it is created by the first report of a participant
 //! and ends when the last one leaves, so the channel can land anywhere the next time.
 
+use crate::api::MessageKind;
 use crate::api::message_enum;
 use crate::api::message_enum::server_event::{
     MessageEvent, ServerEvent, VoiceParticipantEvent, VoiceRingEvent, VoiceSessionEvent,
@@ -18,7 +19,6 @@ use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::{
     ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId, publish_event,
 };
-use crate::api::MessageKind;
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::{
     channel, dm_recipient, message, voice_participant, voice_ring, voice_server,
@@ -80,6 +80,8 @@ struct VoiceSession {
     alone_since: Option<DateTime<Utc>>,
     /// Who started the call: its first participant, `None` until they are in it.
     started_by: Option<UserId>,
+    /// Whether the call has ever held two people at once.
+    had_company: bool,
 }
 
 /// How long a DM's call rings the people it rings, unless they join or decline sooner.
@@ -325,7 +327,10 @@ pub async fn join_offer(
         .await?;
     // A DM's or group DM's call is its recipients', and, since no one holds a community
     // permission there, no one moderates it.
-    if !matches!(ty, ChannelType::Voice | ChannelType::Dm | ChannelType::GroupDm) {
+    if !matches!(
+        ty,
+        ChannelType::Voice | ChannelType::Dm | ChannelType::GroupDm
+    ) {
         return Err(app::Error::Validation(t!("voiceChannelOnly")));
     }
     let access = channel_access(state, conn.as_mut(), user, channel_id).await?;
@@ -739,6 +744,7 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                         created_at: now,
                         alone_since: Some(now),
                         started_by: None,
+                        had_company: false,
                     };
                     // A voice server reports a session only once it holds the room, and it
                     // holds the room because a client with a valid join token arrived, so the
@@ -755,6 +761,7 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                         // start and its starter, and rings no one again.
                         row.created_at = stale.created_at;
                         row.started_by = stale.started_by;
+                        row.had_company = stale.had_company;
                         end_session(
                             state,
                             conn.as_mut(),
@@ -1056,6 +1063,13 @@ async fn note_company(conn: &mut AsyncPgConnection, session: &VoiceSession) -> a
         .filter(voice_session::id.eq(session.id))
         .first(conn)
         .await?;
+    if count >= 2 && !session.had_company {
+        diesel::update(voice_session::table)
+            .filter(voice_session::id.eq(session.id))
+            .set(voice_session::had_company.eq(true))
+            .execute(conn)
+            .await?;
+    }
     let next = alone_after(count, current, Utc::now());
     if next != current {
         diesel::update(voice_session::table)
@@ -1237,9 +1251,10 @@ pub async fn read_channels_rings(
         .collect())
 }
 
-/// Records that a DM's call ended, as a message of kind `Call` saying how long it lasted, in
-/// the name of whoever started it. A call in a voice channel, or one no one was ever in, leaves
-/// nothing.
+/// Records that a DM's call ended, in the name of whoever started it: as a message of kind
+/// `Call` saying how long it lasted, or, if no one else ever joined, of kind `MissedCall`. A
+/// call in a voice channel, or one no one was ever in, leaves nothing. The session is read
+/// afresh, since whether it had company is decided as people join.
 async fn record_call(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -1248,6 +1263,11 @@ async fn record_call(
     let Some(starter) = session.started_by else {
         return Ok(());
     };
+    let had_company: bool = voice_session::table
+        .select(voice_session::had_company)
+        .filter(voice_session::id.eq(session.id))
+        .first(conn)
+        .await?;
     let ty: ChannelType = channel::table
         .select(channel::ty)
         .filter(channel::id.eq(session.channel))
@@ -1266,12 +1286,16 @@ async fn record_call(
         timestamp: now,
         deleted_at: None,
         edited_at: None,
-        kind: MessageKind::Call,
+        kind: if had_company {
+            MessageKind::Call
+        } else {
+            MessageKind::MissedCall
+        },
         poll: None,
         thread: None,
         echo_of: None,
         mentions: app::mention::Mentions::default(),
-        call_seconds: Some(i32::try_from(seconds).unwrap_or(i32::MAX)),
+        call_seconds: had_company.then(|| i32::try_from(seconds).unwrap_or(i32::MAX)),
     };
     diesel::insert_into(message::table)
         .values(&row)

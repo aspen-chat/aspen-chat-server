@@ -620,6 +620,9 @@ pub enum MessageKind {
     /// The system message recording that a DM's call ended; `callSeconds` says how long it
     /// lasted and its `author` is who started it. It has no content of its own.
     Call,
+    /// The system message recording that a DM's call ended without anyone joining whoever
+    /// started it, its `author`. It has no content of its own.
+    MissedCall,
 }
 
 impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -630,6 +633,7 @@ impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind 
             MessageKind::PollClosed => b"poll_closed",
             MessageKind::ThreadEcho => b"thread_echo",
             MessageKind::Call => b"call",
+            MessageKind::MissedCall => b"missed_call",
         })?;
         Ok(IsNull::No)
     }
@@ -645,6 +649,7 @@ impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKin
             b"poll_closed" => Ok(MessageKind::PollClosed),
             b"thread_echo" => Ok(MessageKind::ThreadEcho),
             b"call" => Ok(MessageKind::Call),
+            b"missed_call" => Ok(MessageKind::MissedCall),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())

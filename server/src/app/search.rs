@@ -113,6 +113,7 @@ pub async fn search_messages(
             MessageKind::ThreadEcho,
             MessageKind::PollClosed,
             MessageKind::Call,
+            MessageKind::MissedCall,
         ]))
         .filter(not(exists(
             user_block::table.filter(

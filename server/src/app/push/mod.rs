@@ -511,7 +511,10 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> app::Res
     // ring that already told everyone of the call.
     if matches!(
         found.kind,
-        MessageKind::ThreadEcho | MessageKind::PollClosed | MessageKind::Call
+        MessageKind::ThreadEcho
+            | MessageKind::PollClosed
+            | MessageKind::Call
+            | MessageKind::MissedCall
     ) {
         return Ok(());
     }

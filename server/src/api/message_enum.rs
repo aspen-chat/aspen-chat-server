@@ -151,7 +151,8 @@ enum MessageEnumSource {
         // changes the text tags afresh, announced by an `Update` event carrying the new set.
         #[message_gen(server_authoritative = "mutable")]
         mentions: crate::app::mention::Mentions,
-        // For a `Call`, how long the DM's call lasted, in seconds; `None` for every other kind.
+        // For a `Call`, how long the DM's call lasted, in seconds; `None` for every other kind,
+        // a `MissedCall` included.
         #[message_gen(server_authoritative)]
         call_seconds: Option<i32>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
