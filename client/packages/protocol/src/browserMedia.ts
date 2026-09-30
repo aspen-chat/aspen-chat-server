@@ -32,6 +32,13 @@ export function canChooseOutput(): boolean {
  * the best the screen gives, which the encoder and each viewer's bandwidth then carry as far
  * as they can.
  */
+/** A camera is opened at up to 1080p and 30 frames a second, the most most cameras give. */
+const CAMERA_QUALITY: MediaTrackConstraints = {
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
+  frameRate: { ideal: 30 },
+};
+
 const SCREEN_QUALITY: MediaTrackConstraints = {
   width: { max: 3840 },
   height: { max: 2160 },
@@ -110,6 +117,33 @@ export function browserVoiceMedia(): VoiceMedia {
     async setOutput(choice: DeviceChoice): Promise<void> {
       output = choice;
       await Promise.all(Array.from(players.values(), (player) => route(player.audio)));
+    },
+    async getCamera(choice: DeviceChoice): Promise<MediaStreamTrack> {
+      const deviceId = await deviceIdFor(choice, "videoinput");
+      const open = (constraints: MediaTrackConstraints) =>
+        navigator.mediaDevices.getUserMedia({ audio: false, video: constraints });
+      let stream: MediaStream;
+      try {
+        stream = await open(
+          deviceId === null ? CAMERA_QUALITY : { ...CAMERA_QUALITY, deviceId: { exact: deviceId } },
+        );
+      } catch (error) {
+        // A remembered camera that is unplugged is no reason to refuse the camera.
+        if (
+          deviceId !== null &&
+          error instanceof DOMException &&
+          error.name === "OverconstrainedError"
+        ) {
+          stream = await open(CAMERA_QUALITY);
+        } else {
+          throw error;
+        }
+      }
+      const [track] = stream.getVideoTracks();
+      if (track === undefined) {
+        throw new Error("no camera");
+      }
+      return track;
     },
     async getScreen(): Promise<ScreenCapture> {
       // Audio is asked for so a shared tab or window can bring its sound; browsers that

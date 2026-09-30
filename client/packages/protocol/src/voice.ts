@@ -43,8 +43,28 @@ export const READY_TIMEOUT_MS = 6_000;
  * producer says otherwise), without discontinuous transmission, which cuts quiet passages of
  * music, and at 128 kbps, where cymbals and other dense sound stay clean.
  */
-export /** The two sounds a participant sends, whose volumes are set apart: their voice, and their stream's. */
-type AudioSource = "microphone" | "screenAudio";
+export /** The camera this client sends: its track, and the producer once the voice server has it. */
+interface CameraSend {
+  track: MediaStreamTrack;
+  producer: {
+    id: string;
+    close(): void;
+    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
+  } | null;
+}
+
+/**
+ * A camera is sent as one layer allowed up to 4 Mbps at 30 frames a second, which a 1080p camera
+ * fills well. The encoder starts at 10 Mbps (in kbps here), as a share does, so nothing of ours
+ * holds it back; the browser still sizes the picture to its bandwidth estimate, which climbs over
+ * the first seconds of a camera, and gives up resolution rather than frames where bandwidth runs
+ * short, which suits a face.
+ */
+const CAMERA_ENCODING = { maxBitrate: 4_000_000, maxFramerate: 30 };
+const CAMERA_VIDEO_CODEC = { videoGoogleStartBitrate: 10_000 };
+
+/** The two sounds a participant sends, whose volumes are set apart: their voice, and their stream's. */
+export type AudioSource = "microphone" | "screenAudio";
 
 function isAudioSource(source: string): source is AudioSource {
   return source === "microphone" || source === "screenAudio";
@@ -85,6 +105,8 @@ export interface VoiceCallState {
    */
   readonly canSpeak: boolean;
   readonly canShare: boolean;
+  /** Whether the channel lets the user turn on a camera (Use camera). */
+  readonly canCamera: boolean;
   /** Whether the channel lets the user offer files to the call (Transfer files). */
   readonly canTransfer: boolean;
   /** Files offered in the call, this user's transfers, and everyone's transfers under way. */
@@ -95,6 +117,10 @@ export interface VoiceCallState {
   localScreen: MediaStreamTrack | null;
   /** The screens other participants are sharing, in the order they arrived. */
   screens: readonly RemoteScreen[];
+  /** This client's camera while it is on, for its own tile; `null` when off. */
+  localCamera: MediaStreamTrack | null;
+  /** The cameras other participants have on, in the order they arrived. */
+  cameras: readonly RemoteScreen[];
   /**
    * What failed when `status` is `failed`: the microphone (permission refused, no device, or an
    * insecure page origin, which browsers refuse media on), or every voice server.
@@ -110,7 +136,7 @@ export interface VoiceCallState {
 }
 
 /** A transport as mediasoup-client models it, narrowed to what the call needs. */
-/** A screen another participant is sharing, as a playable video track. */
+/** A screen another participant is sharing, or their camera, as a playable video track. */
 export interface RemoteScreen {
   readonly user: string;
   readonly consumerId: string;
@@ -225,6 +251,8 @@ export interface VoiceMedia {
   createDevice(): Promise<VoiceDevice>;
   /** Opens the microphone the choice names, or the system's default. */
   getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack>;
+  /** Opens a camera, the chosen one when it is present. */
+  getCamera(choice: DeviceChoice): Promise<MediaStreamTrack>;
   /** Routes everything played to the speaker the choice names, or the system's default. */
   setOutput(choice: DeviceChoice): Promise<void>;
   /** Asks the user for a screen, window, or tab to share; rejects when they decline. */
@@ -283,11 +311,14 @@ const IDLE: VoiceCallState = {
   deafened: false,
   canSpeak: false,
   canShare: false,
+  canCamera: false,
   canTransfer: false,
   files: NO_FILES,
   sharingScreen: false,
   localScreen: null,
   screens: [],
+  localCamera: null,
+  cameras: [],
   errorKind: null,
   error: null,
   endedReason: null,
@@ -402,10 +433,12 @@ export class VoiceCall {
   #microphoneProducer: {
     replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
   } | null = null;
-  #devices: { input: DeviceChoice; output: DeviceChoice } = {
+  #devices: { input: DeviceChoice; output: DeviceChoice; camera: DeviceChoice } = {
     input: DEFAULT_DEVICE,
     output: DEFAULT_DEVICE,
+    camera: DEFAULT_DEVICE,
   };
+  #camera: CameraSend | null = null;
   #external: { producerIds: string[]; share: ExternalShare } | null = null;
   /** The consumer carrying the call's own preview of an external share. */
   #previewConsumerId: string | null = null;
@@ -737,13 +770,103 @@ export class VoiceCall {
   }
 
   /**
+   * Turns the camera on: opens the chosen camera and produces it as `camera`, at up to 1080p and
+   * 30 frames a second (`CAMERA_QUALITY`, `CAMERA_ENCODING`). Ends on its own if the camera goes
+   * away. Nothing happens outside a call, in one that does not allow it, or while it is on.
+   */
+  async startCamera(): Promise<void> {
+    const transport = this.#sendTransport;
+    if (
+      this.#state.status !== "connected" ||
+      !this.#state.canCamera ||
+      transport === null ||
+      this.#camera !== null
+    ) {
+      return;
+    }
+    const track = await this.#media.getCamera(this.#devices.camera);
+    // Opening the camera took time; the call may have moved on, or it was turned on meanwhile.
+    if (this.#sendTransport !== transport || this.#cameraOn()) {
+      track.stop();
+      return;
+    }
+    const camera: CameraSend = { track, producer: null };
+    this.#camera = camera;
+    this.#set({ localCamera: track });
+    track.addEventListener("ended", () => {
+      if (this.#camera === camera) {
+        this.stopCamera();
+      }
+    });
+    try {
+      camera.producer = await transport.produce({
+        track,
+        appData: { source: "camera" },
+        encodings: [CAMERA_ENCODING],
+        codecOptions: CAMERA_VIDEO_CODEC,
+      });
+      if (this.#camera !== camera) {
+        camera.producer.close();
+        this.#signal?.send({ type: "closeProducer", producerId: camera.producer.id });
+      }
+    } catch (error) {
+      this.stopCamera();
+      throw error;
+    }
+  }
+
+  /** Whether the camera is on, read afresh where an `await` may have changed it. */
+  #cameraOn(): boolean {
+    return this.#camera !== null;
+  }
+
+  /** Turns the camera off, if it is on. */
+  stopCamera(): void {
+    const camera = this.#camera;
+    if (camera === null) {
+      return;
+    }
+    this.#camera = null;
+    if (camera.producer !== null) {
+      camera.producer.close();
+      this.#signal?.send({ type: "closeProducer", producerId: camera.producer.id });
+    }
+    camera.track.stop();
+    this.#set({ localCamera: null });
+  }
+
+  /** Moves a camera that is on to the camera now chosen. */
+  async #swapCamera(): Promise<void> {
+    const camera = this.#camera;
+    if (camera?.producer == null) {
+      return;
+    }
+    const track = await this.#media.getCamera(this.#devices.camera);
+    if (this.#camera !== camera) {
+      track.stop();
+      return;
+    }
+    await camera.producer.replaceTrack({ track });
+    camera.track.stop();
+    camera.track = track;
+    this.#set({ localCamera: track });
+  }
+
+  /**
    * The devices voice chat uses, from the user's preferences. Takes effect at once, in a call
    * or not: the microphone producer swaps to the new input and playback moves to the new
    * output.
    */
-  async setAudioDevices(devices: { input: DeviceChoice; output: DeviceChoice }): Promise<void> {
+  async setAudioDevices(devices: {
+    input: DeviceChoice;
+    output: DeviceChoice;
+    camera?: DeviceChoice;
+  }): Promise<void> {
     const previous = this.#devices;
-    this.#devices = devices;
+    this.#devices = { ...devices, camera: devices.camera ?? previous.camera };
+    if (!sameChoice(this.#devices.camera, previous.camera)) {
+      await this.#swapCamera();
+    }
     if (!sameChoice(devices.output, previous.output)) {
       await this.#media.setOutput(devices.output);
     }
@@ -842,8 +965,9 @@ export class VoiceCall {
   #teardown(): void {
     this.#files.closeAll();
     this.stopScreenShare();
-    if (this.#state.screens.length > 0) {
-      this.#set({ screens: [] });
+    this.stopCamera();
+    if (this.#state.screens.length > 0 || this.#state.cameras.length > 0) {
+      this.#set({ screens: [], cameras: [] });
     }
     for (const consumer of this.#consumers.values()) {
       consumer.close();
@@ -874,6 +998,7 @@ export class VoiceCall {
     this.#set({
       canSpeak: offer.speak,
       canShare: offer.shareScreen,
+      canCamera: offer.useCamera,
       canTransfer: offer.transferFiles,
     });
     // The microphone comes first: without it there is nothing to send, and its failure is
@@ -1117,7 +1242,9 @@ export class VoiceCall {
     });
     transport.on("produce", ({ kind, rtpParameters, appData }, callback, errback) => {
       const source =
-        appData.source === "screen" || appData.source === "screenAudio"
+        appData.source === "screen" ||
+        appData.source === "screenAudio" ||
+        appData.source === "camera"
           ? appData.source
           : "microphone";
       signal
@@ -1157,6 +1284,11 @@ export class VoiceCall {
         if (this.#state.screens.some((screen) => screen.consumerId === frame.consumerId)) {
           this.#set({
             screens: this.#state.screens.filter((screen) => screen.consumerId !== frame.consumerId),
+          });
+        }
+        if (this.#state.cameras.some((camera) => camera.consumerId === frame.consumerId)) {
+          this.#set({
+            cameras: this.#state.cameras.filter((camera) => camera.consumerId !== frame.consumerId),
           });
         }
         if (this.#previewConsumerId === frame.consumerId) {
@@ -1217,7 +1349,14 @@ export class VoiceCall {
         user: frame.user,
         source: frame.source,
       });
-      if (frame.kind === "video" && frame.user === this.#lastReady?.user) {
+      if (frame.kind === "video" && frame.source === "camera") {
+        this.#set({
+          cameras: [
+            ...this.#state.cameras,
+            { user: frame.user, consumerId: frame.consumerId, track: consumer.track },
+          ],
+        });
+      } else if (frame.kind === "video" && frame.user === this.#lastReady?.user) {
         // The call's own external share, back from the server as its preview.
         this.#previewConsumerId = frame.consumerId;
         this.#set({ localScreen: consumer.track });

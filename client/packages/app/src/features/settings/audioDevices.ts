@@ -16,10 +16,11 @@ export interface AudioDevice {
 export interface AudioDevices {
   readonly inputs: readonly AudioDevice[];
   readonly outputs: readonly AudioDevice[];
+  readonly cameras: readonly AudioDevice[];
 }
 
 /**
- * Sorts the browser's device list into microphones and speakers. The browser's own `default`
+ * Sorts the browser's device list into microphones, speakers, and cameras. The browser's own `default`
  * entries are dropped, since the app offers the system default itself, and the id
  * `communications` (Windows' second default) with them. A device without a label, which is
  * what a browser gives before permission is granted, is named by its position.
@@ -30,6 +31,7 @@ export function sortDevices(
 ): AudioDevices {
   const inputs: AudioDevice[] = [];
   const outputs: AudioDevice[] = [];
+  const cameras: AudioDevice[] = [];
   for (const device of devices) {
     if (
       device.deviceId === "" ||
@@ -39,16 +41,13 @@ export function sortDevices(
       continue;
     }
     const list =
-      device.kind === "audioinput" ? inputs : device.kind === "audiooutput" ? outputs : null;
-    if (list === null) {
-      continue;
-    }
+      device.kind === "audioinput" ? inputs : device.kind === "audiooutput" ? outputs : cameras;
     list.push({
       id: device.deviceId,
       label: device.label === "" ? unnamed(list.length + 1) : device.label,
     });
   }
-  return { inputs, outputs };
+  return { inputs, outputs, cameras };
 }
 
 /**

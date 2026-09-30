@@ -10,7 +10,7 @@ import {
   SpeakerHighIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
@@ -111,7 +111,25 @@ export function CallStage({
       Date.parse(ring.until) > now &&
       !voice.participants.some((participant) => participant.user === ring.user),
   );
-  const silenced = useSilenced(call.status === "connected" ? call.screens.map((s) => s.user) : []);
+  const silenced = useSilenced(
+    call.status === "connected"
+      ? [...call.screens.map((s) => s.user), ...call.cameras.map((c) => c.user)]
+      : [],
+  );
+  const me = useMe()?.id;
+  /** The camera each participant shows, their own being the local track. */
+  const cameraOf = (userId: string): MediaStreamTrack | null => {
+    if (!inThisCall) {
+      return null;
+    }
+    if (userId === me) {
+      return call.localCamera;
+    }
+    if (silenced.has(userId)) {
+      return null;
+    }
+    return call.cameras.find((camera) => camera.user === userId)?.track ?? null;
+  };
 
   const screens: { id: string; user: string | null; track: MediaStreamTrack }[] = inThisCall
     ? [
@@ -189,6 +207,7 @@ export function CallStage({
                     muted={participant.muted}
                     deafened={participant.deafened}
                     sharingScreen={participant.sharingScreen}
+                    camera={cameraOf(participant.user)}
                   />
                 ))}
                 {ringing.map((ring) => (
@@ -275,6 +294,7 @@ function ParticipantTile({
   muted,
   deafened,
   sharingScreen,
+  camera,
 }: {
   channelId: string;
   userId: string;
@@ -282,6 +302,8 @@ function ParticipantTile({
   muted: boolean;
   deafened: boolean;
   sharingScreen: boolean;
+  /** Their camera, which takes the avatar's place and widens the tile to the picture's shape. */
+  camera: MediaStreamTrack | null;
 }) {
   const m = useMessages();
   const user = useUser(userId);
@@ -291,7 +313,12 @@ function ParticipantTile({
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
   const tile = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const avatar = <TileAvatar speaking={speaking} name={name} iconId={user?.icon} />;
+  const avatar =
+    camera === null ? (
+      <TileAvatar speaking={speaking} name={name} iconId={user?.icon} />
+    ) : (
+      <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />
+    );
   return (
     <li
       ref={tile}
@@ -303,7 +330,10 @@ function ParticipantTile({
           setMenuOpen(true);
         }
       }}
-      className="relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3"
+      className={
+        "relative flex flex-col items-center gap-2 rounded-lg bg-surface-raised p-3 " +
+        (camera === null ? "" : "col-span-2")
+      }
     >
       {!self && (
         <>
@@ -326,7 +356,13 @@ function ParticipantTile({
           />
         </>
       )}
-      <Identity user={user} name={name} avatar={avatar} className="flex-col" anchorRef={tile} />
+      <Identity
+        user={user}
+        name={name}
+        avatar={avatar}
+        className={"flex-col" + (camera === null ? "" : " w-full")}
+        anchorRef={tile}
+      />
       <span className="flex gap-1 text-ink-faint">
         {muted && <MicrophoneSlashIcon size={14} aria-label={m.voice.mutedMark} />}
         {deafened && <HeadphonesIcon size={14} aria-label={m.voice.deafenedMark} />}
@@ -389,5 +425,51 @@ function TileAvatar({
     >
       <Avatar name={name} iconId={iconId} size="lg" />
     </span>
+  );
+}
+
+/**
+ * A participant's camera, in their tile. The user's own is mirrored, as a mirror shows them;
+ * everyone else sees it as the camera does. Its sound is the microphone's, played by the call.
+ */
+function CameraVideo({
+  track,
+  speaking,
+  name,
+  mirrored,
+}: {
+  track: MediaStreamTrack;
+  speaking: boolean;
+  name: string;
+  mirrored: boolean;
+}) {
+  const m = useMessages();
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    if (element === null) {
+      return;
+    }
+    element.srcObject = new MediaStream([track]);
+    return () => {
+      element.srcObject = null;
+    };
+  }, [track]);
+  return (
+    <video
+      ref={video}
+      autoPlay
+      playsInline
+      muted
+      data-camera
+      aria-label={
+        speaking ? format(m.voice.speaking, { name }) : format(m.voice.usersCamera, { name })
+      }
+      className={
+        "aspect-video w-full rounded-md bg-black object-cover " +
+        (mirrored ? "-scale-x-100 " : "") +
+        (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
+      }
+    />
   );
 }

@@ -4,6 +4,7 @@ import {
   DEFAULT_DEVICE,
   NOTIFICATION_OUTPUT,
   SAME_AS_VOICE,
+  VIDEO_INPUT,
   canChooseOutput,
   resolveDevice,
   type DeviceChoice,
@@ -149,6 +150,12 @@ function AudioSection() {
           { id: DEFAULT_DEVICE, label: m.settings.systemDefault },
         ]}
         disabled={!outputs}
+      />
+      <DeviceSelect
+        label={m.settings.camera}
+        definition={VIDEO_INPUT}
+        devices={devices.cameras}
+        defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
       />
     </section>
   );

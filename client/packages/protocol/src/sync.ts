@@ -21,6 +21,7 @@ import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
+  VIDEO_INPUT,
   PreferenceStore,
   effectiveStreamVolume,
   effectiveUserVolume,
@@ -339,6 +340,7 @@ export class AspenSync {
         .setAudioDevices({
           input: this.preferences.get(AUDIO_INPUT),
           output: this.preferences.get(AUDIO_OUTPUT),
+          camera: this.preferences.get(VIDEO_INPUT),
         })
         .catch(() => undefined);
     };
@@ -2788,6 +2790,7 @@ function lazyBrowserMedia(): VoiceMedia {
   return {
     createDevice: async () => (await media()).createDevice(),
     getMicrophone: async (choice) => (await media()).getMicrophone(choice),
+    getCamera: async (choice) => (await media()).getCamera(choice),
     setOutput: async (choice) => (await media()).setOutput(choice),
     getScreen: async () => (await media()).getScreen(),
     setVolume: (consumerId, gain) => {

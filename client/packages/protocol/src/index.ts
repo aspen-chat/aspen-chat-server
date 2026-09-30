@@ -220,6 +220,7 @@ export { browserVoiceMedia, canChooseOutput } from "./browserMedia";
 export {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
+  VIDEO_INPUT,
   DEFAULT_DEVICE,
   NOTIFICATION_OUTPUT,
   DESKTOP_NOTIFICATIONS,

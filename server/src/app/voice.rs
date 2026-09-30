@@ -285,6 +285,7 @@ pub struct JoinOffer {
     pub speak: bool,
     pub share_screen: bool,
     pub transfer_files: bool,
+    pub camera: bool,
 }
 
 /// Whether a server is offered to a joiner: enabled, with room, and heard from within the
@@ -384,10 +385,11 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
-    let (speak, share_screen, transfer_files) = (
+    let (speak, share_screen, transfer_files, camera) = (
         access.has(Permissions::SPEAK),
         access.has(Permissions::SHARE_SCREEN),
         voice.file_transfers && access.has(Permissions::TRANSFER_FILES),
+        access.has(Permissions::USE_CAMERA),
     );
     let claims = JoinClaims {
         user: user.0,
@@ -398,6 +400,7 @@ pub async fn join_offer(
         speak,
         share_screen,
         transfer_files,
+        camera,
     };
     Ok(JoinOffer {
         session,
@@ -407,6 +410,7 @@ pub async fn join_offer(
         speak,
         share_screen,
         transfer_files,
+        camera,
     })
 }
 

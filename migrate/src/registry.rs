@@ -64,4 +64,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260929_233735_file_transfer_log::M,
     &migrations::m20260930_024332_dm_call_rings::M,
     &migrations::m20260930_031756_missed_calls::M,
+    &migrations::m20260930_044153_use_camera_permission::M,
 ];

@@ -48,6 +48,7 @@ export const CHANNEL_PERMISSIONS: readonly Permission[] = [
   "mentionRoles",
   "mentionEveryone",
   "transferFiles",
+  "useCamera",
 ];
 
 export const ALL_PERMISSIONS: readonly Permission[] = [

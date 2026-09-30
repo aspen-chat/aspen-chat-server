@@ -136,6 +136,8 @@ pub struct VoiceJoinOffer {
     /// Whether they may offer files to the others in the call (Transfer files), which the voice
     /// server also enforces.
     pub transfer_files: bool,
+    /// Whether they may turn on a camera (Use camera), which the voice server also enforces.
+    pub use_camera: bool,
 }
 
 /// The call on a channel, if any, and who is in it.
@@ -198,6 +200,7 @@ pub async fn join_voice(
         speak: offer.speak,
         share_screen: offer.share_screen,
         transfer_files: offer.transfer_files,
+        use_camera: offer.camera,
     }))
 }
 

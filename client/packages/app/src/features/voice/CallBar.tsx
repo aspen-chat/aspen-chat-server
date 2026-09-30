@@ -4,6 +4,8 @@ import {
   MicrophoneSlashIcon,
   PhoneDisconnectIcon,
   SpeakerSlashIcon,
+  VideoCameraIcon,
+  VideoCameraSlashIcon,
 } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
@@ -22,7 +24,7 @@ const buttonClass =
 
 /**
  * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
- * people), which opens that room, and mute, deafen, leave.
+ * people), which opens that room, and mute, deafen, camera, share, leave.
  */
 export function CallBar() {
   const m = useMessages();
@@ -105,6 +107,7 @@ export function CallBar() {
           )}
         </Button>
       </Tooltip>
+      {call.status === "connected" && call.canCamera && <CameraToggle />}
       {call.status === "connected" && <ShareControl variant="bar" />}
       <Tooltip text={m.voice.leave}>
         <Button
@@ -156,5 +159,36 @@ function CallPlaceLink({
     >
       {children}
     </Link>
+  );
+}
+
+/** Turns the camera on and off. A camera that cannot be opened says why beside the call bar. */
+function CameraToggle() {
+  const m = useMessages();
+  const sync = useSync();
+  const call = useVoiceCall();
+  const on = call.localCamera !== null;
+  const label = on ? m.voice.cameraOff : m.voice.cameraOn;
+  return (
+    <Tooltip text={label}>
+      <Button
+        aria-label={label}
+        aria-pressed={on}
+        onPress={() => {
+          if (on) {
+            sync.voice.stopCamera();
+          } else {
+            void sync.voice.startCamera().catch(() => undefined);
+          }
+        }}
+        className={buttonClass + (on ? " text-accent" : "")}
+      >
+        {on ? (
+          <VideoCameraIcon size={18} aria-hidden="true" />
+        ) : (
+          <VideoCameraSlashIcon size={18} aria-hidden="true" />
+        )}
+      </Button>
+    </Tooltip>
   );
 }

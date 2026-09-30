@@ -231,6 +231,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const microphones: (string | null)[] = [];
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
+  const cameras: (string | null)[] = [];
   let sendTransports = 0;
   const played: string[] = [];
   const device: VoiceDevice = {
@@ -256,6 +257,10 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
         ? Promise.resolve(new FakeTrack("audio") as unknown as MediaStreamTrack)
         : Promise.reject(new Error("Permission denied"));
     },
+    getCamera: (choice) => {
+      cameras.push(choice === "default" ? null : choice.id);
+      return Promise.resolve(new FakeTrack("video") as unknown as MediaStreamTrack);
+    },
     setOutput: (choice) => {
       outputs.push(choice === "default" ? null : choice.id);
       return Promise.resolve();
@@ -275,7 +280,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     },
     stop: () => undefined,
   };
-  return { media, transports, played, screens, microphones, outputs, volumes };
+  return { media, transports, played, screens, microphones, outputs, volumes, cameras };
 }
 
 function makeCall(options: {
@@ -288,6 +293,7 @@ function makeCall(options: {
   /** What the join offer grants; both by default. */
   speak?: boolean;
   shareScreen?: boolean;
+  useCamera?: boolean;
 }) {
   FakeSocket.instances = [];
   const calls: string[] = [];
@@ -315,6 +321,8 @@ function makeCall(options: {
           expiresAt: "2030-01-01T00:00:00Z",
           speak: options.speak ?? true,
           shareScreen: options.shareScreen ?? true,
+          transferFiles: false,
+          useCamera: options.useCamera ?? true,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -338,7 +346,7 @@ function makeCall(options: {
   const store = new MemorySessionStore();
   store.save(liveSession());
   const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
-  const { media, transports, played, screens, microphones, outputs, volumes } = fakeMedia(
+  const { media, transports, played, screens, microphones, outputs, volumes, cameras } = fakeMedia(
     options.unreachableSendTransports ?? 0,
     options.microphone ?? "ok",
   );
@@ -354,7 +362,18 @@ function makeCall(options: {
     random: () => 0.5,
     ...(options.userVolume === undefined ? {} : { userVolume: options.userVolume }),
   });
-  return { call, calls, transports, played, screens, microphones, outputs, volumes, timers };
+  return {
+    call,
+    calls,
+    transports,
+    played,
+    screens,
+    microphones,
+    outputs,
+    volumes,
+    cameras,
+    timers,
+  };
 }
 
 describe("VoiceCall", () => {
@@ -531,6 +550,58 @@ describe("VoiceCall", () => {
     call.acknowledgeEnd();
     expect(call.state.endedReason).toBeNull();
     expect(REJOIN_DELAY_MAX_MS).toBe(1000);
+  });
+
+  it("sends the camera when turned on, shows others' cameras apart from screens, and stops", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports, cameras } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    const socket = FakeSocket.instances[0];
+    expect(call.state.canCamera).toBe(true);
+    await call.startCamera();
+    expect(cameras).toEqual([null]);
+    expect(call.state.localCamera).not.toBeNull();
+    expect(
+      socket?.sent.filter((f) => f.type === "produce").map((f) => `${f.kind}:${f.source}`),
+    ).toEqual(["audio:microphone", "video:camera"]);
+    expect(transports[0]?.codecOptions).toEqual([
+      { source: "camera", videoGoogleStartBitrate: 10_000 },
+    ]);
+    // A second start while it is on opens nothing.
+    await call.startCamera();
+    expect(cameras).toHaveLength(1);
+    // Another participant's camera is theirs to show, and never a shared screen.
+    socket?.frame({
+      type: "newConsumer",
+      consumerId: "c1",
+      producerId: "p-c1",
+      user: "u2",
+      kind: "video",
+      source: "camera",
+      rtpParameters: {},
+      producerPaused: false,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(call.state.cameras.map((c) => [c.user, c.consumerId])).toEqual([["u2", "c1"]]);
+    expect(call.state.screens).toEqual([]);
+    socket?.frame({ type: "consumerClosed", consumerId: "c1" });
+    expect(call.state.cameras).toEqual([]);
+    call.stopCamera();
+    expect(call.state.localCamera).toBeNull();
+    expect(transports[0]?.closedProducers).toContain("p-camera");
+  });
+
+  it("offers no camera where the channel does not allow one", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, cameras } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      useCamera: false,
+    });
+    await call.join(channel);
+    expect(call.state.canCamera).toBe(false);
+    await call.startCamera();
+    expect(cameras).toEqual([]);
   });
 
   it("shares a screen with its sound, shows others' screens, and stops when the capture ends", async () => {

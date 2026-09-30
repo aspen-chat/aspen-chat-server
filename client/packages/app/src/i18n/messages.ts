@@ -146,7 +146,7 @@ export const en = {
   settings: {
     title: "Settings",
     account: "Account",
-    audio: "Audio",
+    audio: "Audio and video",
     appearance: "Appearance",
     language: "Language",
     languageLabel: "Show Aspen in",
@@ -163,6 +163,8 @@ export const en = {
     missingDevice: "Remembered device (not connected)",
     unnamedMicrophone: "Microphone {index}",
     unnamedSpeaker: "Speaker {index}",
+    unnamedCamera: "Camera {index}",
+    camera: "Camera",
     microphoneDenied:
       "Microphone access was refused, so devices cannot be named. Allow it in the browser to choose one.",
     outputUnsupported: "This browser cannot choose a speaker; the system default is used.",
@@ -262,6 +264,9 @@ export const en = {
     undeafen: "Undeafen",
     leave: "Leave call",
     leaveCallButton: "Leave Call",
+    cameraOn: "Turn on camera",
+    cameraOff: "Turn off camera",
+    usersCamera: "{name}'s camera",
     voiceVolume: "Voice volume",
     streamVolume: "Stream volume",
     muteStreamForMe: "Mute stream for me",
@@ -1143,6 +1148,7 @@ export const en = {
       name: "Transfer files",
       hint: "Offer files to the others in a call, sent straight from device to device.",
     },
+    useCamera: { name: "Use camera", hint: "Turn on a camera in calls." },
     mentionMembers: {
       name: "Mention members",
       hint: "Tag people in messages, which they're told of.",

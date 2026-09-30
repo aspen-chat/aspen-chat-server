@@ -44,6 +44,8 @@ pub enum MediaSource {
     Screen,
     /// The audio that goes with a shared screen or game.
     ScreenAudio,
+    /// The participant's camera, as video.
+    Camera,
 }
 
 /// The kind of media, as WebRTC names it.

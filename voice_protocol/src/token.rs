@@ -33,6 +33,10 @@ pub struct JoinClaims {
     /// permission when the token was issued. A token without it grants nothing.
     #[serde(default)]
     pub transfer_files: bool,
+    /// Whether they may send a camera, the channel's Use camera permission when the token was
+    /// issued. A token without it grants nothing.
+    #[serde(default)]
+    pub camera: bool,
 }
 
 impl JoinClaims {
@@ -42,6 +46,7 @@ impl JoinClaims {
         match source {
             MediaSource::Microphone => self.speak,
             MediaSource::Screen | MediaSource::ScreenAudio => self.share_screen,
+            MediaSource::Camera => self.camera,
         }
     }
 }
@@ -116,6 +121,7 @@ mod tests {
             speak: true,
             share_screen: false,
             transfer_files: false,
+            camera: false,
         }
     }
 

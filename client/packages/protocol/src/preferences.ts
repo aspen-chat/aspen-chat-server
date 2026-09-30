@@ -83,6 +83,14 @@ export const AUDIO_INPUT: PreferenceDefinition<DeviceChoice> = {
   parse: parseDevice,
 };
 
+/** The camera calls send, when the user turns it on. */
+export const VIDEO_INPUT: PreferenceDefinition<DeviceChoice> = {
+  key: "video.input",
+  scope: "device",
+  fallback: DEFAULT_DEVICE,
+  parse: parseDevice,
+};
+
 /** The speaker voice chat plays through. */
 export const AUDIO_OUTPUT: PreferenceDefinition<DeviceChoice> = {
   key: "audio.output",

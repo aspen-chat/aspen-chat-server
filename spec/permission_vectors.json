@@ -354,7 +354,8 @@
                 "mentionMembers",
                 "mentionRoles",
                 "mentionEveryone",
-                "transferFiles"
+                "transferFiles",
+                "useCamera"
             ],
             "channel": [
                 "manageCommunity",
@@ -382,7 +383,8 @@
                 "mentionMembers",
                 "mentionRoles",
                 "mentionEveryone",
-                "transferFiles"
+                "transferFiles",
+                "useCamera"
             ],
             "rank": 2147483647,
             "moderator": false
