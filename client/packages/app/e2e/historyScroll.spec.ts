@@ -292,8 +292,11 @@ for (const { name, anchoring, ios } of SCROLLERS) {
         await page.waitForTimeout(400);
         const rested = await sample(page);
         if (resting !== null && rested !== null) {
-          const drift = moves(resting.tops, rested.tops).filter((d) => Math.abs(d) > 1);
-          if (drift.length > 0) {
+          const both = moves(resting.tops, rested.tops);
+          const drift = both.filter((d) => Math.abs(d) > 1);
+          if (both.length === 0) {
+            strays.push(`resting before step ${String(step)}: nothing in view stayed in view`);
+          } else if (drift.length > 0) {
             strays.push(`resting before step ${String(step)}: moved ${drift.join(", ")}px`);
           }
         }
@@ -310,6 +313,10 @@ for (const { name, anchoring, ios } of SCROLLERS) {
       await frames(page);
       const now = await sample(page);
       if (last !== null && now !== null) {
+        // A view that jumped clean away leaves nothing in both samples to measure by.
+        if (moves(last.tops, now.tops).length === 0) {
+          strays.push(`step ${String(step)}: nothing in view before was in view after`);
+        }
         const wrong = moves(last.tops, now.tops).filter((d) => Math.abs(d - STEP_PX) > 1);
         if (wrong.length > 0) {
           const was = last;
