@@ -66,3 +66,30 @@ test("the message's own actions open the list of reactions", async ({ page, isMo
   await message(page).getByRole("button", { name: "View reactions" }).click();
   await expect(page.getByRole("dialog", { name: "Reactions" })).toBeVisible();
 });
+
+test("a right click on a chip shows who reacted with it", async ({ page, isMobile }) => {
+  test.skip(isMobile, "a phone presses long instead");
+  await chips(page).getByRole("button", { name: "React with 🎉" }).click({ button: "right" });
+  const dialog = page.getByRole("dialog", { name: "Reactions" });
+  await expect(dialog.getByRole("tab", { selected: true })).toHaveAccessibleName("🎉, 6");
+});
+
+test("a long press on a chip shows who reacted, and leaves the reaction be", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "a long press is a touch screen's");
+  let reacted = false;
+  page.on("request", (request) => {
+    if (request.url().includes("/reactions/") && request.method() !== "GET") {
+      reacted = true;
+    }
+  });
+  const chip = chips(page).getByRole("button", { name: "Remove your 👍" });
+  await chip.dispatchEvent("pointerdown", { pointerType: "touch", isPrimary: true });
+  await page.waitForTimeout(700);
+  await chip.dispatchEvent("pointerup", { pointerType: "touch", isPrimary: true });
+  const dialog = page.getByRole("dialog", { name: "Reactions" });
+  await expect(dialog.getByRole("tab", { selected: true })).toHaveAccessibleName("👍, 7");
+  expect(reacted).toBe(false);
+});

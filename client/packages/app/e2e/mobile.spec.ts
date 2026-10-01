@@ -416,6 +416,22 @@ test.describe("on a phone", () => {
     await expect(page.getByRole("menuitem")).toHaveText(["Attach a file", "Create a new poll"]);
   });
 
+  test("Enter writes a new line, and only the button sends", async ({ page }) => {
+    await openChannel(page, "general");
+    const box = page.getByRole("textbox", { name: "Message" });
+    let posted = false;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().includes("/messages")) {
+        posted = true;
+      }
+    });
+    await box.fill("first line");
+    await box.press("Enter");
+    await box.pressSequentially("second");
+    await expect(box).toHaveValue("first line\nsecond");
+    expect(posted).toBe(false);
+  });
+
   test("a placeholder too long for the box is cut short, never making it taller", async ({
     page,
   }) => {
@@ -430,10 +446,11 @@ test.describe("on a phone", () => {
       })
       .toBe(0);
     // The placeholder is drawn just after the box, on one line, ending in an ellipsis.
-    const cut = await page
-      .locator("textarea + span")
-      .evaluate((span) => span.scrollWidth > span.clientWidth);
-    expect(cut).toBe(true);
+    await expect
+      .poll(() =>
+        page.locator("textarea + span").evaluate((span) => span.scrollWidth > span.clientWidth),
+      )
+      .toBe(true);
   });
 
   test("the view keeps its bottom when the keyboard takes the screen's space", async ({ page }) => {

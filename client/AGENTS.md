@@ -556,7 +556,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   is ignored, so an update that changes a pane enough to need it raises that pane's version and
   resets it alone; otherwise widths are left as the reader made them. On one-pane screens a
   pane fills the screen and has no edge.
-- The message box (`Composer`) sits level with its buttons, all 42px tall. On a narrow screen
+- Every list sidebar, the channel list's and the DM list's, is drawn by the same two pieces:
+  `SidebarHeader` (its title and plain icon buttons, `headerIconButtonClass`, spaced so their
+  touch areas never overlap) and `SidebarFooter` (the call bar and the user bar).
+- The message box (`Composer`) sits level with its buttons, all 42px tall; Send is an icon
+  (paper plane), so the box keeps the room. Enter sends on a computer; on a touch-only device
+  (`TOUCH_ONLY`), whose keyboard has no Shift+Enter, Enter writes a new line there and in a
+  message being edited, and the button sends. On a narrow screen
   its other controls share one + button whose menu offers attaching a file and making a poll
   (`CreatePollModal`, which the wide screen's own poll button opens too). Its placeholder is
   drawn by the box itself on one line, cut short with an ellipsis, since the textarea's own
@@ -564,8 +570,8 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it was (pinned to the
   newest message, or moved down by what it lost), so what is being answered stays in view; the
   web app asks for this with `interactive-widget=resizes-content` in its viewport. "Jump to
-  latest" answers at once (the list goes to the end of what it holds, the pill says the newest
-  are on their way), and `AspenSync.loadLatest` follows any page already being read rather than
+  latest" answers at once: the pill keeps its own state, so a press repaints it alone, saying
+  the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
 - Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent
   (text, picked tags, files already uploaded, and a thread's echo choice) waits in its channel
@@ -629,8 +635,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   reads the message's summary again. `ReactionChips` (`src/features/messages/Reactions.tsx`)
   shows the most popular first (ties in the order first used), at most twenty, then a `+N` chip
   and an add chip that opens the picker at once; each chip's tooltip names the first four and
-  counts the rest. `ReactionsDialog`, opened from the `+N` chip or the message's "View
-  reactions" action, lists every emoji and, for the chosen one, everyone who reacted, a page at
+  counts the rest; emoji are drawn half again as large as the count, and the reader's own
+  reaction is marked by a darker outline in the chips' neutral colours. `ReactionsDialog`,
+  opened from the `+N` chip, the message's "View reactions" action, or a right click or long
+  press on a chip (opening on that chip's emoji; the long press toggles nothing), lists every emoji and, for the chosen one, everyone who reacted, a page at
   a time (`AspenSync.loadReactors`).
 - The Administration Dashboard is `/admin/{tab}` (`src/features/admin`; `/admin` opens the first
   tab the caller may), a rail of tabs beside the one open, set across the top on a one-pane

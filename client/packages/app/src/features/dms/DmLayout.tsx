@@ -1,4 +1,6 @@
 import type { Channel } from "@aspen/protocol";
+import { SidebarHeader } from "@/features/layout/SidebarHeader";
+import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
 import { CHANNEL_LIST } from "@/features/layout/paneSizes";
 import { BellSlashIcon, NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
@@ -99,17 +101,11 @@ function DmSidebar({ current }: { current: string | undefined }) {
       aria-labelledby={headingId}
       className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2">
-        <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
-          {m.dms.label}
-        </h1>
+      <SidebarHeader headingId={headingId} title={m.dms.label}>
         <PeoplePicker
           trigger={
             <Tooltip text={m.dms.newMessage}>
-              <Button
-                aria-label={m.dms.newMessage}
-                className="tap-target rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
+              <Button aria-label={m.dms.newMessage} className={headerIconButtonClass}>
                 <NotePencilIcon size={18} aria-hidden="true" />
               </Button>
             </Tooltip>
@@ -133,7 +129,7 @@ function DmSidebar({ current }: { current: string | undefined }) {
             void navigate(channelLink({ domain: host.domain, community: null }, dm.id));
           }}
         />
-      </div>
+      </SidebarHeader>
       <nav
         aria-label={m.dms.label}
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"

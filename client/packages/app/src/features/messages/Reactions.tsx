@@ -6,7 +6,7 @@ import {
 } from "@aspen/protocol";
 import { useGrowthKey } from "@/features/layout/motion";
 import { SmileyIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Dialog,
@@ -52,6 +52,9 @@ const chipClass =
   "pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50";
 const plainChipClass = chipClass + " border-line bg-surface-raised hover:bg-surface-hover";
 
+/** How long a touch on a reaction chip is held before it shows who reacted. */
+const LONG_PRESS_MS = 500;
+
 /** How many emoji show as chips under a message; the rest are counted in a "+N" chip. */
 const VISIBLE_REACTIONS = 20;
 
@@ -83,6 +86,8 @@ export function ReactionChips({
   const m = useMessages();
   const reactions = useReactions(messageId);
   const [listOpen, setListOpen] = useState(false);
+  /** The emoji whose people the list opens on, from a long press or right click on its chip. */
+  const [listEmoji, setListEmoji] = useState<string | null>(null);
   // The emoji the message had when drawn; one added while it is on screen pops in.
   const [first] = useState(() => new Set(reactions.keys()));
   if (reactions.size === 0) {
@@ -101,6 +106,10 @@ export function ReactionChips({
             reactions={r}
             canReact={canReact}
             fresh={!first.has(emoji)}
+            onShowWho={() => {
+              setListEmoji(emoji);
+              setListOpen(true);
+            }}
           />
         </li>
       ))}
@@ -110,6 +119,7 @@ export function ReactionChips({
             <Button
               aria-label={format(m.moreReactions, { count: String(hidden) })}
               onPress={() => {
+                setListEmoji(null);
                 setListOpen(true);
               }}
               className={plainChipClass + " tabular-nums"}
@@ -117,7 +127,6 @@ export function ReactionChips({
               +{hidden}
             </Button>
           </Tooltip>
-          <ReactionsDialog messageId={messageId} isOpen={listOpen} onOpenChange={setListOpen} />
         </li>
       )}
       {canReact && (
@@ -128,6 +137,12 @@ export function ReactionChips({
           />
         </li>
       )}
+      <ReactionsDialog
+        messageId={messageId}
+        isOpen={listOpen}
+        onOpenChange={setListOpen}
+        {...(listEmoji === null ? {} : { initialEmoji: listEmoji })}
+      />
     </ul>
   );
 }
@@ -135,7 +150,8 @@ export function ReactionChips({
 /**
  * One emoji's chip. Its tooltip names the first `REACTION_SUMMARY_USERS` to react with it and
  * counts the rest. A chip `fresh` on a message already shown pops in, and its count pops each
- * time it grows.
+ * time it grows. A right click, or a long press on a touch screen, shows everyone who reacted
+ * with it (`onShowWho`) instead of adding or taking the reader's own.
  */
 function ReactionChip({
   messageId,
@@ -143,13 +159,21 @@ function ReactionChip({
   reactions,
   canReact,
   fresh,
+  onShowWho,
 }: {
   messageId: string;
   emoji: string;
   reactions: EmojiReactions;
   canReact: boolean;
   fresh: boolean;
+  onShowWho: () => void;
 }) {
+  const pressing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Whether the press now ending was a long one, which showed who reacted and toggles nothing. */
+  const pressedLong = useRef(false);
+  const endPress = () => {
+    clearTimeout(pressing.current);
+  };
   const grown = useGrowthKey(reactions.count);
   const m = useMessages();
   const sync = useSync();
@@ -161,34 +185,58 @@ function ReactionChip({
       ? format(m.reactedByMore, { names: names.join(", "), count: String(more), emoji })
       : format(m.reactedBy, { names: names.join(", "), emoji });
   return (
-    <Tooltip text={who}>
-      <ToggleButton
-        isSelected={reactions.me}
-        isDisabled={!reactions.me && !canReact}
-        aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji })}
-        onChange={(selected) => {
-          void (
-            selected ? sync.addReaction(messageId, emoji) : sync.removeReaction(messageId, emoji)
-          ).catch(() => undefined);
-        }}
-        className={
-          (fresh ? "motion-pop " : "") +
-          // The reader's own reaction is marked by a darker outline alone, in the chips' neutral
-          // colours, so a message's reactions never outshine the message.
-          (reactions.me
-            ? chipClass + " border-ink-faint bg-surface-raised hover:bg-surface-hover"
-            : plainChipClass)
+    <span
+      className="block select-none [-webkit-touch-callout:none]"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onShowWho();
+      }}
+      onPointerDownCapture={(event) => {
+        pressedLong.current = false;
+        if (event.pointerType !== "mouse") {
+          pressing.current = setTimeout(() => {
+            pressedLong.current = true;
+            onShowWho();
+          }, LONG_PRESS_MS);
         }
-      >
-        <span className="text-[1.5em] leading-none">{emoji}</span>
-        <span
-          key={grown}
-          className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}
+      }}
+      onPointerUpCapture={endPress}
+      onPointerCancelCapture={endPress}
+      onPointerLeave={endPress}
+    >
+      <Tooltip text={who}>
+        <ToggleButton
+          isSelected={reactions.me}
+          isDisabled={!reactions.me && !canReact}
+          aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji })}
+          onChange={(selected) => {
+            if (pressedLong.current) {
+              pressedLong.current = false;
+              return;
+            }
+            void (
+              selected ? sync.addReaction(messageId, emoji) : sync.removeReaction(messageId, emoji)
+            ).catch(() => undefined);
+          }}
+          className={
+            (fresh ? "motion-pop " : "") +
+            // The reader's own reaction is marked by a darker outline alone, in the chips' neutral
+            // colours, so a message's reactions never outshine the message.
+            (reactions.me
+              ? chipClass + " border-ink-faint bg-surface-raised hover:bg-surface-hover"
+              : plainChipClass)
+          }
         >
-          {reactions.count}
-        </span>
-      </ToggleButton>
-    </Tooltip>
+          <span className="text-[1.5em] leading-none">{emoji}</span>
+          <span
+            key={grown}
+            className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}
+          >
+            {reactions.count}
+          </span>
+        </ToggleButton>
+      </Tooltip>
+    </span>
   );
 }
 
@@ -233,10 +281,13 @@ function ReactionsDialog({
   messageId,
   isOpen,
   onOpenChange,
+  initialEmoji,
 }: {
   messageId: string;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The emoji whose people it opens on; the most popular without one. */
+  initialEmoji?: string;
 }) {
   const m = useMessages();
   const reactions = useReactions(messageId);
@@ -256,6 +307,7 @@ function ReactionsDialog({
             <p className="text-sm text-ink-muted">{m.noReactions}</p>
           ) : (
             <Tabs
+              {...(initialEmoji === undefined ? {} : { defaultSelectedKey: initialEmoji })}
               orientation={wide ? "vertical" : "horizontal"}
               className="flex min-h-0 flex-col gap-3 md:flex-row"
             >

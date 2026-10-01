@@ -1,5 +1,12 @@
 import { ApiProblemError, type Attachment } from "@aspen/protocol";
-import { ChartBarIcon, FileIcon, PaperclipIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ChartBarIcon,
+  FileIcon,
+  PaperclipIcon,
+  PaperPlaneRightIcon,
+  PlusIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import {
   Button,
@@ -24,7 +31,7 @@ import {
 } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
-import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
+import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -78,6 +85,7 @@ export function Composer({
   echoTarget?: string;
 }) {
   const m = useMessages();
+  const touchOnly = useMediaQuery(TOUCH_ONLY);
   const sync = useSync();
   const me = useMe();
   // What was written here and not sent, kept on this device (`drafts.ts`). The box is made
@@ -262,7 +270,7 @@ export function Composer({
     if (commands.onKeyDown(event) || tagging.onKeyDown(event)) {
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !touchOnly) {
       event.preventDefault();
       void send();
     }
@@ -453,13 +461,16 @@ export function Composer({
             </span>
           )}
         </TextField>
-        <Button
-          type="submit"
-          isDisabled={!canSend}
-          className="rounded-md border border-transparent bg-accent px-4 py-2 font-medium text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
-        >
-          {m.send}
-        </Button>
+        <Tooltip text={m.send}>
+          <Button
+            type="submit"
+            aria-label={m.send}
+            isDisabled={!canSend}
+            className="rounded-md border border-transparent bg-accent p-2.5 text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <PaperPlaneRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
+          </Button>
+        </Tooltip>
       </div>
       {echoTarget !== undefined && permissions.has("sendMessages") && (
         <label className="mt-2 flex w-fit items-center gap-2 text-sm text-ink-muted">

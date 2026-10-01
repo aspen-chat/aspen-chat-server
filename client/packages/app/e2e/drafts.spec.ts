@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { bob, me, roadmap, signInToWorld } from "./world";
+import { bob, me, roadmap, signInToWorld, submit } from "./world";
 
 /**
  * Drafts, against the stubbed world: what is written in a message box and not sent waits in its
@@ -132,7 +132,7 @@ test("sending a message clears its draft", async ({ page }) => {
   await signInToWorld(page);
   await openChannel(page, "general");
   await box(page).fill("on its way");
-  await box(page).press("Enter");
+  await submit(page);
   await expect(box(page)).toHaveValue("");
   await openChannel(page, "roadmap");
   await openChannel(page, "general");

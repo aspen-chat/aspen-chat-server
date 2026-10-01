@@ -7,6 +7,12 @@ import { useCallback, useSyncExternalStore } from "react";
 export const MEDIUM_SCREEN = "(min-width: 48rem)";
 
 /**
+ * A device typed on with an on-screen keyboard: touch alone, nothing to hover with. Its
+ * keyboard has no Shift+Enter for a new line, so Enter writes one there and does not send.
+ */
+export const TOUCH_ONLY = "(hover: none) and (pointer: coarse)";
+
+/**
  * Whether the app shows one pane at a time: a list, or a conversation, never both. Then the
  * pane shown is the page's main content, and a conversation's title is its first heading.
  */

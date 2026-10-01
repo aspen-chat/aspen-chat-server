@@ -111,7 +111,8 @@ export function MessageList({
   const scroller = useRef<HTMLDivElement>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
-  const [jumping, setJumping] = useState(false);
+  /** Whether the newest page is being read for "Jump to latest". */
+  const jumping = useRef(false);
   /** Where the viewport was before a page was read, restored once the window has changed. */
   const anchor = useRef<Anchor | null>(null);
   const stickToBottom = useRef(true);
@@ -439,7 +440,7 @@ export function MessageList({
     if (element.scrollTop < LOAD_MORE_PX) {
       loadOlder();
     }
-    if (distanceFromBottom < LOAD_MORE_PX) {
+    if (distanceFromBottom < LOAD_MORE_PX && !jumping.current) {
       loadNewer();
     }
   }
@@ -507,27 +508,27 @@ export function MessageList({
   }
 
   /** Back to the present: the newest page replaces the window and the view pins to the bottom. */
-  function jumpToLatest() {
+  function jumpToLatest(): Promise<void> {
     stickToBottom.current = true;
     anchor.current = null;
-    // The press is answered at once: the list goes to the end of what it holds, and the pill
-    // says the newest are on their way, until they come.
+    jumping.current = true;
+    // The list goes to the end of what it holds while the newest are on their way; the next
+    // page after it is not read, since the newest replace the window.
     const element = scroller.current;
     if (element !== null) {
       scrollSelf(element, () => {
         element.scrollTop = element.scrollHeight;
       });
     }
-    setJumping(true);
-    void sync
-      .loadLatest(channelId)
-      .catch(() => undefined)
-      .finally(() => {
-        setJumping(false);
-      });
     if (highlightId !== undefined) {
       void navigate({ ...channelLink(home, channelId), replace: true });
     }
+    return sync
+      .loadLatest(channelId)
+      .catch(() => undefined)
+      .finally(() => {
+        jumping.current = false;
+      });
   }
 
   /**
@@ -709,22 +710,42 @@ export function MessageList({
           </p>
         )}
       </div>
-      {!window.atLatest && (
-        <Button
-          onPress={jumpToLatest}
-          isPending={jumping}
-          className="motion-rise sticky bottom-3 left-1/2 flex w-fit -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
-        >
-          {jumping && (
-            <span
-              aria-hidden="true"
-              className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent-contrast/40 border-t-accent-contrast"
-            />
-          )}
-          {jumping ? m.jumpingToLatest : m.jumpToLatest}
-        </Button>
-      )}
+      {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
     </div>
+  );
+}
+
+/**
+ * The pill that brings a channel back to its newest messages. It keeps its own state, so a press
+ * repaints the pill alone, saying the newest are on their way, and `onJump`, which sets the
+ * whole list moving, starts only once that is on screen.
+ */
+function JumpToLatest({ onJump }: { onJump: () => Promise<void> }) {
+  const m = useMessages();
+  const [jumping, setJumping] = useState(false);
+  return (
+    <Button
+      onPress={() => {
+        setJumping(true);
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            void onJump().finally(() => {
+              setJumping(false);
+            });
+          }, 0);
+        });
+      }}
+      isPending={jumping}
+      className="motion-rise sticky bottom-3 left-1/2 flex w-fit -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+    >
+      {jumping && (
+        <span
+          aria-hidden="true"
+          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent-contrast/40 border-t-accent-contrast"
+        />
+      )}
+      {jumping ? m.jumpingToLatest : m.jumpToLatest}
+    </Button>
   );
 }
 

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { bob, general, signInToWorld, settleAnimations } from "./world";
+import { bob, general, signInToWorld, settleAnimations, submit } from "./world";
 
 /**
  * Tagging, against the stubbed world in `world.ts`, where #roadmap holds two unread messages
@@ -50,7 +50,7 @@ test("typing @ offers people to tag, and a pick is sent as a tag", async ({ page
   const sent = page.waitForRequest(
     (r) => r.method() === "POST" && r.url().endsWith(`/channels/${general}/messages`),
   );
-  await box.press("Enter");
+  await submit(page);
   expect(((await sent).postDataJSON() as { content: string }).content).toBe(`hi <@${bob}> see you`);
 });
 
@@ -112,7 +112,7 @@ test("a screen reader user tags someone from the keyboard alone", async ({ page 
   await expect(page.getByRole("status")).toHaveText("");
 
   await page.keyboard.type("for the photos");
-  await page.keyboard.press("Enter");
+  await submit(page);
   // The message names Bob by his name, as a control that opens his card.
   const sent = page.locator("article").filter({ hasText: "for the photos" });
   await expect(

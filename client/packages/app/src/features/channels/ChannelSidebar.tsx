@@ -46,6 +46,7 @@ import { insertIds, reorderIds } from "@/features/layout/reorder";
 import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
+import { SidebarHeader } from "@/features/layout/SidebarHeader";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
@@ -80,14 +81,11 @@ export function ChannelSidebar({ community }: { community: Community }) {
       aria-labelledby={headingId}
       className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2">
-        <h1 id={headingId} className="min-w-0 flex-1 truncate font-semibold">
-          {community.name}
-        </h1>
+      <SidebarHeader headingId={headingId} title={community.name}>
         <CommunitySettingsDialog community={community} triggerClassName={headerIconButtonClass} />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
         <CopyIdButton id={community.id} thing="community" className="p-1.5" />
-      </div>
+      </SidebarHeader>
       {moderating && (
         <p className="border-b border-line bg-accent-soft px-4 py-2 text-xs text-accent-strong">
           {m.communitySettings.moderatorNote}

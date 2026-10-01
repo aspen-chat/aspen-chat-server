@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
-import { bob, general, helper, me, signInToWorld, type Publish } from "./world";
+import { bob, general, helper, me, signInToWorld, type Publish, submit } from "./world";
 
 /**
  * Bots' commands in the message box, against the stubbed world in `world.ts`, where Kate's bot
@@ -70,7 +70,7 @@ test("typing / offers the bots' commands, and a person picked is sent as their i
   await page.keyboard.press("Enter");
   await expect(box).toHaveValue("/poke @bob ");
   const sent = invoked(page);
-  await page.keyboard.press("Enter");
+  await submit(page);
   expect((await sent).postDataJSON()).toEqual({
     bot: helper,
     name: "poke",
@@ -91,7 +91,7 @@ test("a value its pattern refuses is flagged, and the last parameter takes the r
   await page.keyboard.type("2d6 for  luck");
   await expect(page.getByText("dice doesn't take this.")).toBeHidden();
   const sent = invoked(page);
-  await page.keyboard.press("Enter");
+  await submit(page);
   expect((await sent).postDataJSON()).toMatchObject({ arguments: ["2d6", "for  luck"] });
 });
 
@@ -101,7 +101,7 @@ test("a line no bot here answers is sent as a message", async ({ page }) => {
   const sent = page.waitForRequest(
     (r) => r.method() === "POST" && r.url().endsWith(`/channels/${general}/messages`),
   );
-  await box.press("Enter");
+  await submit(page);
   expect(((await sent).postDataJSON() as { content: string }).content).toBe("/shrug hi");
 });
 

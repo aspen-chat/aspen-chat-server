@@ -1,4 +1,5 @@
 import { ApiProblemError } from "@aspen/protocol";
+import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useSync } from "@/api/hooks";
@@ -23,6 +24,7 @@ export function MessageEditor({
   onDone: () => void;
 }) {
   const m = useMessages();
+  const touchOnly = useMediaQuery(TOUCH_ONLY);
   const sync = useSync();
   const [decoded] = useState(() => {
     const store = sync.store;
@@ -66,7 +68,12 @@ export function MessageEditor({
     if (event.key === "Escape") {
       event.preventDefault();
       onDone();
-    } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    } else if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing &&
+      !touchOnly
+    ) {
       event.preventDefault();
       void save();
     }

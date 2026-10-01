@@ -1274,3 +1274,18 @@ export async function settleAnimations(page: Page): Promise<void> {
     ),
   );
 }
+
+/**
+ * Sends what is in the message box as the device would: Enter on a computer, the Send button
+ * on a touch screen, whose keyboard writes a new line with Enter.
+ */
+export async function submit(page: Page): Promise<void> {
+  const touchOnly = await page.evaluate(
+    () => window.matchMedia("(hover: none) and (pointer: coarse)").matches,
+  );
+  if (touchOnly) {
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+  } else {
+    await page.keyboard.press("Enter");
+  }
+}

@@ -40,7 +40,7 @@ export function SidebarFooter() {
 function UserFooter() {
   const me = useMe();
   return (
-    <div className="flex items-center gap-2 border-t border-line px-3 py-2">
+    <div className="flex items-center gap-2 border-t border-line py-2 ps-3 pe-5">
       {me !== null && <Avatar name={displayNameOf(me)} iconId={me.icon} size="sm" />}
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm font-medium">
