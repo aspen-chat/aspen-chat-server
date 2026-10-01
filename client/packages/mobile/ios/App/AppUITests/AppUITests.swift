@@ -61,7 +61,10 @@ final class AppUITests: XCTestCase {
     func testReadingBackMovesOnlyWithTheFinger() throws {
         try signIn()
         let channel = ProcessInfo.processInfo.environment["ASPEN_TEST_CHANNEL"] ?? "general"
-        let row = web.staticTexts[channel].firstMatch
+        // The row's label says when the channel is unread ("general, unread").
+        let row = web.staticTexts.matching(
+            NSPredicate(format: "label == %@ OR label BEGINSWITH %@", channel, channel + ",")
+        ).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 20), "no channel \(channel)")
         row.tap()
         XCTAssertTrue(web.textViews["Message"].firstMatch.waitForExistence(timeout: 20))
@@ -108,7 +111,10 @@ final class AppUITests: XCTestCase {
     func testReadingBackQuicklyNeverJumps() throws {
         try signIn()
         let channel = ProcessInfo.processInfo.environment["ASPEN_TEST_CHANNEL"] ?? "general"
-        let row = web.staticTexts[channel].firstMatch
+        // The row's label says when the channel is unread ("general, unread").
+        let row = web.staticTexts.matching(
+            NSPredicate(format: "label == %@ OR label BEGINSWITH %@", channel, channel + ",")
+        ).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 20), "no channel \(channel)")
         row.tap()
         XCTAssertTrue(web.textViews["Message"].firstMatch.waitForExistence(timeout: 20))

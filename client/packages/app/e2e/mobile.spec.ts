@@ -71,6 +71,22 @@ async function openChannel(page: Page, name: string) {
   await expect(page.getByRole("heading", { name })).toBeVisible();
 }
 
+/** Scrolls the message list, which scrolls itself, by a wheel's turn of `deltaY` pixels. */
+async function wheel(list: Locator, deltaY: number) {
+  await list.evaluate((element, by) => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: by, bubbles: true }));
+  }, deltaY);
+}
+
+/** Scrolls the message list to `offset` pixels from the top of what it holds. */
+async function wheelTo(list: Locator, offset: number) {
+  await list.evaluate((element, to) => {
+    element.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: to - element.scrollTop, bubbles: true }),
+    );
+  }, offset);
+}
+
 test.describe("on a phone", () => {
   test.beforeEach(async ({ page }) => {
     await signInToWorld(page);
@@ -164,11 +180,8 @@ test.describe("on a phone", () => {
   });
 
   test("reading back through history keeps the message in view still", async ({ page }) => {
-    // iOS Safari has no scroll anchoring of its own, so the list keeps the view still itself;
-    // anchoring is turned off here so that what is tested is the list, on every engine.
-    await page.addStyleTag({ content: "* { overflow-anchor: none !important; }" });
     await openChannel(page, "general");
-    const scroller = page.locator("div.overflow-y-auto").filter({ has: page.locator("article") });
+    const scroller = page.locator("[data-message-list]");
     const articles = scroller.locator("article");
     await expect(articles.first()).toBeVisible();
     const before = await articles.count();
@@ -191,17 +204,11 @@ test.describe("on a phone", () => {
           ? Infinity
           : article.getBoundingClientRect().top - element.getBoundingClientRect().top;
       }, id);
-    // Near the top of what is loaded, where the previous page is read: below the space the
-    // list keeps for it.
-    await scroller.evaluate((element) => {
-      const seam = element.querySelector<HTMLElement>('p[aria-live="polite"]');
-      element.scrollTop = (seam?.offsetTop ?? 0) + 400;
-    });
+    // Near the top, where the previous page is read.
+    await wheelTo(scroller, 400);
     await expect(scroller.getByText("Loading…")).toBeVisible();
     // The reader keeps going while the page is on its way.
-    await scroller.evaluate((element) => {
-      element.scrollTop -= 150;
-    });
+    await wheel(scroller, -150);
     const reading = await topmost();
     await expect.poll(() => articles.count()).toBeGreaterThan(before);
     await expect(scroller.getByText("Loading…")).toBeHidden();
@@ -210,14 +217,12 @@ test.describe("on a phone", () => {
   });
 
   test("content growing above what is being read does not move it", async ({ page }) => {
-    // As a picture does when it loads above the reader: the list holds the message being
-    // read where it was, itself, since iOS Safari has no scroll anchoring to do it.
+    // As a picture does when it loads above the reader: the list keeps the message being
+    // read where it was.
     await openChannel(page, "general");
-    const scroller = page.locator("div.overflow-y-auto").filter({ has: page.locator("article") });
+    const scroller = page.locator("[data-message-list]");
     await expect(scroller.locator("article").first()).toBeVisible();
-    await scroller.evaluate((element) => {
-      element.scrollTop = element.scrollHeight - element.clientHeight - 300;
-    });
+    await wheel(scroller, -300);
     // At rest before anything loads; the list leaves a moving view to the reader.
     await page.waitForTimeout(400);
     const reading = await scroller.evaluate((element) => {
@@ -460,10 +465,9 @@ test.describe("on a phone", () => {
 
   test("the view keeps its bottom when the keyboard takes the screen's space", async ({ page }) => {
     await openChannel(page, "general");
-    const list = page.locator("div.overflow-y-auto:has([data-message-id])").first();
-    await list.evaluate((element) => {
-      element.scrollTop = element.scrollHeight - element.clientHeight - 200;
-    });
+    const list = page.locator("[data-message-list]");
+    await expect(list.locator("article").first()).toBeVisible();
+    await wheel(list, -200);
     const lowest = () =>
       list.evaluate((element) => {
         const view = element.getBoundingClientRect();

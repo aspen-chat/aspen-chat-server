@@ -153,7 +153,7 @@ function sample(page: Page) {
         setTimeout(resolve, 0);
       });
     });
-    const scroller = document.querySelector("article")?.closest(".overflow-y-auto");
+    const scroller = document.querySelector("article")?.closest("[data-message-list]");
     if (!(scroller instanceof HTMLElement)) {
       return null;
     }
@@ -241,7 +241,7 @@ test("reading slowly back through a long history never waits and never moves by 
     .locator("article")
     .first()
     .evaluate((article) => {
-      const rect = article.closest(".overflow-y-auto")?.getBoundingClientRect();
+      const rect = article.closest("[data-message-list]")?.getBoundingClientRect();
       return rect === undefined
         ? null
         : { x: rect.x + rect.width / 2, top: rect.top, bottom: rect.bottom };
@@ -263,8 +263,9 @@ test("reading slowly back through a long history never waits and never moves by 
   let last = await sample(page);
   for (let step = 0; step < STEPS; step++) {
     if (finger + STEP_PX > bottom) {
-      // The finger lifts and comes back to the top, as a reader's does; the list must stay
-      // where it was left while it is away.
+      // The finger rests, lifts, and comes back to the top, as a reader's does; the list must
+      // stay where it was left while it is away. A finger lifted while moving flings instead.
+      await page.waitForTimeout(120);
       await touch(cdp, "touchEnd", x, finger);
       const resting = await sample(page);
       await page.waitForTimeout(400);
@@ -318,6 +319,7 @@ test("reading slowly back through a long history never waits and never moves by 
     last = now;
     reached = now ?? reached;
   }
+  await page.waitForTimeout(120);
   await touch(cdp, "touchEnd", x, finger);
 
   // The reader got a long way back, or the test would prove little.
@@ -353,7 +355,7 @@ test("flicking back through a long history keeps ahead of the reader", async ({
     record.seamFrames = 0;
     record.frames = 0;
     const tick = () => {
-      const scroller = document.querySelector("article")?.closest(".overflow-y-auto");
+      const scroller = document.querySelector("article")?.closest("[data-message-list]");
       const seam = scroller?.querySelector('p[aria-live="polite"]');
       if (scroller instanceof HTMLElement && seam !== null && seam !== undefined) {
         const view = scroller.getBoundingClientRect();
@@ -371,7 +373,7 @@ test("flicking back through a long history keeps ahead of the reader", async ({
   const centre = await page.evaluate(() => {
     const rect = document
       .querySelector("article")
-      ?.closest(".overflow-y-auto")
+      ?.closest("[data-message-list]")
       ?.getBoundingClientRect();
     return rect === undefined
       ? { x: 200, y: 400 }
@@ -471,7 +473,7 @@ test("reading back through a history a little longer than the window keeps what 
     record.vanished = [];
     let inView: string[] = [];
     const tick = () => {
-      const scroller = document.querySelector("article")?.closest(".overflow-y-auto");
+      const scroller = document.querySelector("article")?.closest("[data-message-list]");
       if (scroller instanceof HTMLElement) {
         for (const id of inView) {
           if (scroller.querySelector(`article[data-message-id="${id}"]`) === null) {
@@ -495,7 +497,7 @@ test("reading back through a history a little longer than the window keeps what 
     .locator("article")
     .first()
     .evaluate((article) => {
-      const rect = article.closest(".overflow-y-auto")?.getBoundingClientRect();
+      const rect = article.closest("[data-message-list]")?.getBoundingClientRect();
       return rect === undefined ? null : { x: rect.x + rect.width / 2, y: rect.top + 60 };
     });
   const x = box?.x ?? 200;
@@ -529,4 +531,65 @@ test("reading back through a history a little longer than the window keeps what 
   expect(vanished, "messages in view that left the page").toEqual([]);
   expect(strays, "times the view changed while the reader rested").toEqual([]);
   expect(reads, "reads of newer messages while reading back").toEqual([]);
+});
+
+test("a drag that starts on a picture scrolls, and a tap on it opens it", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  // Nothing pans the list but the list itself, so nothing cancels a press under a finger that
+  // drags; the list must, or lifting the finger over a tall picture would open it.
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1000);
+  const list = page.locator("[data-message-list]");
+  const view = await list.boundingBox();
+  const pictures = list.getByRole("button", { name: "Open image" });
+  // A picture whose middle is in view; the content moves with the finger, so a drag from
+  // there stays on it.
+  let picture: { x: number; y: number } | null = null;
+  for (let i = (await pictures.count()) - 1; i >= 0 && picture === null; i--) {
+    const box = await pictures.nth(i).boundingBox();
+    if (box === null || view === null) {
+      continue;
+    }
+    const middle = box.y + box.height / 2;
+    if (middle > view.y + 20 && middle < view.y + view.height - 20) {
+      picture = { x: box.x + box.width / 2, y: middle };
+    }
+  }
+  expect(picture, "a picture in view").not.toBeNull();
+  const x = picture?.x ?? 0;
+  const y = picture?.y ?? 0;
+  const cdp = await page.context().newCDPSession(page);
+  const before = await sample(page);
+  await touch(cdp, "touchStart", x, y);
+  for (let move = 1; move <= 6; move++) {
+    await touch(cdp, "touchMove", x, y + move * 12);
+    await frames(page);
+  }
+  await page.waitForTimeout(120);
+  await touch(cdp, "touchEnd", x, y + 72);
+  await page.waitForTimeout(300);
+  await expect(page.getByRole("button", { name: "Close gallery" })).toHaveCount(0);
+  const after = await sample(page);
+  const moved = before !== null && after !== null ? moves(before.tops, after.tops) : [];
+  expect(moved.length, "something in view to measure").toBeGreaterThan(0);
+  for (const by of moved) {
+    expect(Math.abs(by - 72)).toBeLessThanOrEqual(1);
+  }
+  // A tap, which moves nothing, opens the picture.
+  await touch(cdp, "touchStart", x, y);
+  await touch(cdp, "touchEnd", x, y);
+  await expect(page.getByRole("button", { name: "Close gallery" })).toBeVisible();
 });

@@ -1,15 +1,22 @@
-import { useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore, type RefObject } from "react";
 import { Button } from "react-aria-components";
 import { copyText } from "@/features/layout/clipboard";
 import type { ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
 
 /**
  * The scroll diagnostics over the list, in a build made with `VITE_SCROLL_DEBUG=1`: how many
- * jumps the list has seen, named `scroll-diagnostics` so a device test can read it, and a
- * button that copies the whole record for pasting into a report. Not localized, since it is a
- * developer's tool and never in a build people use.
+ * jumps its watcher has seen in the `viewport`, named `scroll-diagnostics` so a device test can
+ * read it, the entries around the first jump out of sight for the same test, and a button that
+ * copies the whole record for pasting into a report. Not localized, since it is a developer's
+ * tool and never in a build people use.
  */
-export function ScrollDiagnosticsPanel({ diagnostics }: { diagnostics: ScrollDiagnostics }) {
+export function ScrollDiagnosticsPanel({
+  diagnostics,
+  viewport,
+}: {
+  diagnostics: ScrollDiagnostics;
+  viewport: RefObject<HTMLElement | null>;
+}) {
   const panel = useRef<HTMLDivElement>(null);
   const jumps = useSyncExternalStore(
     (listener) => diagnostics.subscribe(listener),
@@ -19,6 +26,13 @@ export function ScrollDiagnosticsPanel({ diagnostics }: { diagnostics: ScrollDia
     (listener) => diagnostics.subscribe(listener),
     () => diagnostics.firstJump,
   );
+  useEffect(() => {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    return diagnostics.watch(box);
+  }, [diagnostics, viewport]);
   return (
     <div
       ref={panel}

@@ -1,11 +1,13 @@
 import type { Attachment } from "@aspen/protocol";
 import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
-import { useState, type CSSProperties } from "react";
+import { useLayoutEffect, useState, type CSSProperties } from "react";
+import { flushSync } from "react-dom";
 import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
 import { isImageType, splitInline, type Picture } from "@/features/messages/images";
+import { useKeepStill } from "@/features/messages/keepStill";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
@@ -173,19 +175,26 @@ const MAX_PICTURE_HEIGHT = 320;
 /**
  * A picture in the message; pressing it opens the message's gallery on that picture. A picture
  * whose size is known keeps exactly its room while it loads (`keptRoom`). One whose size is not
- * keeps a fixed square, a conservative guess, until it has arrived, and then takes its own size,
- * which the list keeps the view still through when it is above it (`MessageList`). Either
- * pulses as a skeleton until it has loaded.
+ * keeps a fixed square, a conservative guess, until it has arrived, and then takes its own size:
+ * rendered as it arrives and told to the list in the same task (`useKeepStill`), so the list
+ * keeps the view still through the change before anything else runs. Either pulses as a
+ * skeleton until it has loaded.
  */
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
+  const keepStill = useKeepStill();
   const [arrived, setArrived] = useState<string | null>(null);
   const known = picture.width != null && picture.height != null;
   const waiting = arrived !== picture.src;
   const guessed = !known && waiting;
   const arrive = () => {
-    setArrived(picture.src);
+    flushSync(() => {
+      setArrived(picture.src);
+    });
   };
+  useLayoutEffect(() => {
+    keepStill();
+  }, [arrived, keepStill]);
   return (
     <Button
       onPress={onOpen}

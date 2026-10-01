@@ -1,8 +1,9 @@
 /**
- * A record of what the message list does with its scroll position, for finding where a view
- * jumps on a device, where nothing else can watch: the list notes each touch, scroll, page
- * shown, and correction, and a scroll event that moves the view by more than a screen at once,
- * which no finger or fling does between two events, is noted as a jump.
+ * A record of what the message list does with its offset, for finding where a view jumps on
+ * a device, where nothing else can watch: the list notes each touch, page shown, and change
+ * absorbed, and tells of every move it makes on purpose (`moved`); a watcher samples a row in
+ * view after each frame is painted and counts as a jump any frame in which the row moved by
+ * other than what the list meant to move it.
  *
  * Built only with `VITE_SCROLL_DEBUG=1`, which `MessageList` shows the record under
  * (`ScrollDiagnosticsPanel`); otherwise `SCROLL_DEBUG` is false and every use of it is left
@@ -12,71 +13,95 @@ export const SCROLL_DEBUG = import.meta.env.VITE_SCROLL_DEBUG === "1";
 
 /** How many of the latest entries are kept. */
 const KEPT = 400;
+/** How far a row may be off what the list meant, in pixels, before a frame counts as a jump. */
+const TOLERANCE = 2;
 
 export class ScrollDiagnostics {
   readonly #entries: string[] = [];
   readonly #started = performance.now();
   readonly #listeners = new Set<() => void>();
-  #lastScrollTop: number | null = null;
   #jumps = 0;
+  /** How far the list has meant to move the view since the last sample. */
+  #meant = 0;
+  /** The entries around the first jump: forty before it, and ten after. */
+  #firstJump: { before: string[]; after: string[] } | null = null;
 
   /** Notes something the list did or saw. */
   note(what: string): void {
     const at = (performance.now() - this.#started) / 1000;
-    this.#entries.push(`${at.toFixed(3)} ${what}`);
+    const entry = `${at.toFixed(3)} ${what}`;
+    this.#entries.push(entry);
     if (this.#entries.length > KEPT) {
       this.#entries.shift();
     }
     if (this.#firstJump !== null && this.#firstJump.after.length < 10) {
-      this.#firstJump.after.push(`${at.toFixed(3)} ${what}`);
+      this.#firstJump.after.push(entry);
     }
     for (const listener of this.#listeners) {
       listener();
     }
   }
 
-  /**
-   * Notes a scroll event. One that moves the view by more than the screen's height since the
-   * last known position, however that position was reached, is a jump.
-   */
-  noteScroll(scrollTop: number, clientHeight: number, ours: boolean): void {
-    const last = this.#lastScrollTop;
-    const delta = last === null ? 0 : scrollTop - last;
-    this.#lastScrollTop = scrollTop;
-    const jumped = Math.abs(delta) > clientHeight;
-    if (jumped) {
-      this.#jumps += 1;
-    }
-    this.note(
-      `${jumped ? "JUMP " : ""}scroll ${String(Math.round(scrollTop))} by ${String(Math.round(delta))}${ours ? " (own)" : ""}`,
-    );
-    if (jumped && this.#firstJump === null) {
-      // What led to it, kept as it stood, and what follows added over the next entries.
-      this.#firstJump = { before: this.#entries.slice(-40), after: [] };
-    }
+  /** The list moved the view by `by` pixels on purpose: a finger, a fling, a key, a wheel. */
+  moved(by: number): void {
+    this.#meant += by;
   }
 
-  /** The entries around the first jump: forty before it, and ten after. */
-  #firstJump: { before: string[]; after: string[] } | null = null;
+  /**
+   * Watches rows in `viewport` frame by frame, after each is painted, for one that moved by
+   * other than what the list meant. Returns a way to stop.
+   */
+  watch(viewport: HTMLElement): () => void {
+    let stopped = false;
+    let last: { id: string; top: number } | null = null;
+    const sample = () => {
+      if (stopped) {
+        return;
+      }
+      const view = viewport.getBoundingClientRect();
+      let seen: { id: string; top: number } | null = null;
+      for (const row of viewport.querySelectorAll<HTMLElement>("[data-message-id]")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom > view.top && rect.top < view.bottom) {
+          seen = { id: row.dataset.messageId ?? "", top: rect.top };
+          break;
+        }
+      }
+      const meant = this.#meant;
+      this.#meant = 0;
+      if (seen !== null && last !== null && seen.id === last.id) {
+        const actual = seen.top - last.top;
+        const expected = -meant;
+        if (Math.abs(actual - expected) > TOLERANCE) {
+          this.#jumps += 1;
+          this.note(
+            `JUMP row ${seen.id.slice(-4)} moved ${String(Math.round(actual))}, meant ${String(Math.round(expected))}`,
+          );
+          this.#firstJump ??= { before: this.#entries.slice(-40), after: [] };
+        }
+      }
+      last = seen;
+      requestAnimationFrame(() => {
+        setTimeout(sample, 0);
+      });
+    };
+    requestAnimationFrame(() => {
+      setTimeout(sample, 0);
+    });
+    return () => {
+      stopped = true;
+    };
+  }
+
+  get jumps(): number {
+    return this.#jumps;
+  }
 
   get firstJump(): string | null {
     if (this.#firstJump === null) {
       return null;
     }
     return [...this.#firstJump.before, ...this.#firstJump.after].join("\n");
-  }
-
-  /** The position the list set or saw set, so the next scroll event is measured from it. */
-  noteMoved(scrollTop: number, why: string): void {
-    const last = this.#lastScrollTop;
-    this.#lastScrollTop = scrollTop;
-    this.note(
-      `${why} ${last === null ? "" : String(Math.round(last)) + "->"}${String(Math.round(scrollTop))}`,
-    );
-  }
-
-  get jumps(): number {
-    return this.#jumps;
   }
 
   get text(): string {

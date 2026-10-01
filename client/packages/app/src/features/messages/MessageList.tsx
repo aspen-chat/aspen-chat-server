@@ -2,6 +2,7 @@ import { HISTORY_PAGE_SIZE, WINDOW_MAX_MESSAGES, type MessageWindow } from "@asp
 import { useNavigate } from "@tanstack/react-router";
 import {
   Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -27,32 +28,45 @@ import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useDeparting, type Departing } from "@/features/messages/departing";
+import { KeepStillContext } from "@/features/messages/keepStill";
 import { useMotion } from "@/features/layout/motion";
 import { SCROLL_DEBUG, ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
 import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
-import { HistorySkeleton, MessageSkeleton } from "@/features/messages/MessageSkeleton";
+import {
+  COASTING_STOPS,
+  MAX_VELOCITY,
+  SPRING_MS,
+  VelocityTracker,
+  bounds,
+  clamp,
+  coast,
+  shown as shownOffset,
+  spring,
+} from "@/features/messages/scrollPhysics";
+import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 
 /**
- * The loaded window of a channel, oldest at the top. Stays pinned to the bottom while the user
- * is there, and otherwise keeps what is in view still through every change above it: a page of
- * older messages arriving, a picture loading, a deleted message's space closing.
+ * The loaded window of a channel, oldest at the top, in a viewport that scrolls itself. Its
+ * box hides its overflow, so no finger, wheel, or key scrolls it: the list takes those itself
+ * and sets the box's scroll position from them, with its own coasting, spring, and indicator
+ * (`scrollPhysics.ts` for the arithmetic). A box the browser scrolls for the user is the one
+ * thing that cannot be kept still on iOS, which scrolls such a box in a process of its own
+ * and places it from where a pan began plus the finger's travel, overriding whatever the
+ * page set meanwhile; a box only scripts scroll has no such gesture, so nothing overrides what
+ * the list sets, and the same code runs on every platform. Scripts still scroll it, so focus,
+ * find-in-page, assistive technology, and tests bring things into view as they always did.
  *
- * It does so without moving the scroll position, which is the one thing that cannot be done
- * safely: iOS scrolls in a process of its own, and its pan gesture places the view from where
- * the pan began plus the finger's travel, so a position set from the page while a finger drags
- * or a fling runs is overridden by the pan's next update, and the view lands wherever the change
- * put it. Instead the list keeps a reserve of space above its oldest message while there is
- * older history (`reserve`, drawn as skeleton rows), and whatever grows above the view takes
- * exactly its height from the reserve in the same layout, so nothing in view moves and there is
- * no position to override: a page can show at any moment, mid-drag and mid-fling included. The
- * browser's own scroll anchoring is off, so it never corrects the same change again. Only
- * refilling the reserve once pages have used it, and letting it go once the channel's start is
- * reached, move the position, and those wait for a quiet moment and take a frame, not a render.
- * History is read well ahead of the reader in the way they are heading, and the store keeps the
- * window bounded, so a long scroll drops what is far from the viewport, and the jump control
- * returns to the present.
+ * So what is in view never moves when something above it changes: a page of older messages
+ * arriving is measured by the topmost message in view, noted and rendered in one task
+ * (`flushSync`), and its height is added to the position in the same layout; a row growing
+ * above the view, as a picture loads or a deleted message's space closes, is seen by a
+ * `ResizeObserver` on every row and added the same way, before the frame is painted. The
+ * list stays pinned to the bottom while the user is there and keeps its bottom edge when the
+ * keyboard takes the screen's space. History is read well ahead of the reader in the way they
+ * are heading, the store keeps the window bounded, and the jump control returns to the
+ * present.
  *
  * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
  * even when a window around it had to be read first; staying at the bottom gives way to it.
@@ -69,9 +83,6 @@ import { useMessages } from "@/i18n/context";
  * open; a linked message among them opens its row. The row stands for its last message, both
  * as an anchor for the view and as what the reader has seen.
  */
-const PROGRAMMATIC_SCROLL_MS = 200;
-/** How long after a wheel, touch, scrollbar press, or key a scroll event still counts as the reader's. */
-const USER_SCROLL_MS = 500;
 /**
  * How close to the end of the window the reader is heading for, in screens of the list, the
  * next page is read: far enough that a reader flinging through history meets what is loaded
@@ -86,34 +97,23 @@ const LOAD_AHEAD_SCREENS = 20;
  */
 const LOAD_UNSURE_SCREENS = 2;
 /**
- * How much space is kept above the oldest message while there is older history, in pages the
- * size of the rows loaded so far: enough for the pages that may arrive before a quiet moment
- * refills it.
+ * How far a finger moves before its touch is a drag rather than a tap: from then on nothing
+ * under it may take a press, as nothing would under a pan the browser made.
  */
-const RESERVE_PAGES = 3;
-/** How many skeleton rows are drawn at the bottom of the reserve; above them it is empty. */
-const RESERVE_ROWS = 24;
-/**
- * How long the list must have been quiet, with no finger on it and no scroll event, before its
- * position is moved to refill or let go of the reserve: short enough to come between a reader's
- * strokes, and the move takes a frame, so a finger landing in it is unlikely.
- */
-const QUIET_MS = 300;
+const DRAG_SLOP_PX = 8;
+/** How far an arrow key moves the list, and how much of a screen a page key leaves in view. */
+const ARROW_PX = 40;
+const PAGE_OVERLAP_PX = 40;
+/** How far one wheel line is, for a wheel that counts in lines. */
+const WHEEL_LINE_PX = 16;
+/** How long the indicator stays after the list last moved. */
+const INDICATOR_MS = 700;
+/** The least height the indicator's thumb is drawn at. */
+const THUMB_MIN_PX = 24;
 /** How long a deleted message's space takes to close at normal speed, as `--motion-base`. */
 const COLLAPSE_MS = 200;
 /** The ids of a list with no window yet, one array so its identity holds. */
 const NO_IDS: readonly string[] = [];
-/** The keys that move the list back through history; the other scroll keys move it forward. */
-const OLDER_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "PageUp", "Home"]);
-const SCROLL_KEYS: ReadonlySet<string> = new Set([
-  "ArrowUp",
-  "ArrowDown",
-  "PageUp",
-  "PageDown",
-  "Home",
-  "End",
-  " ",
-]);
 
 /** A message in the viewport and where it sat, so a change can be measured by it. */
 interface Anchor {
@@ -144,12 +144,41 @@ export function MessageList({
   // A thread's messages cannot start threads, and link to the thread rather than to a place in
   // a channel's history.
   const parentId = channel?.ty === "thread" ? (channel.parentChannel ?? null) : null;
-  const scroller = useRef<HTMLDivElement>(null);
+  /** The box the list is seen through, whose scroll position the list sets. */
+  const viewport = useRef<HTMLDivElement>(null);
+  /** Everything the list holds; drawn past an end, while a finger pulls it there, by a transform. */
+  const content = useRef<HTMLDivElement>(null);
   /** The rows: messages, blocked runs, the new-messages line, and spaces closing. */
   const rows = useRef<HTMLDivElement>(null);
-  /** The reserve above the oldest message, and its height in pixels. */
-  const reserveBox = useRef<HTMLDivElement>(null);
-  const reserve = useRef(0);
+  const thumb = useRef<HTMLDivElement>(null);
+  const indicator = useRef<HTMLDivElement>(null);
+  /** How far past an end a finger has pulled the list, which its scroll position cannot hold. */
+  const over = useRef(0);
+  /** The scroll positions the content allows in the viewport, as last measured. */
+  const range = useRef({ min: 0, max: 0 });
+  /**
+   * Where the list last scrolled its box to. The scroll event that lands there is its own, and
+   * any other is a script's: focus, find-in-page, assistive technology.
+   */
+  const ownScrollTop = useRef<number | null>(null);
+  /** A finger on the list, where it last was, how far it has gone, and whether it drags yet. */
+  const drag = useRef<{
+    y: number;
+    travelled: number;
+    dragging: boolean;
+    tracker: VelocityTracker;
+  } | null>(null);
+  /**
+   * The list coasting after a fling, or springing back from past an end. Its times are the
+   * animation frames' clock, taken from the first frame that runs it.
+   */
+  const motion = useRef<
+    | { kind: "coast"; velocity: number; at: number | null }
+    | { kind: "spring"; from: number; to: number; startedAt: number | null }
+    | null
+  >(null);
+  const frame = useRef<number | null>(null);
+  const indicatorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
   /** Whether the newest page is being read for "Jump to latest". */
@@ -159,41 +188,65 @@ export function MessageList({
   const stickToBottom = useRef(true);
   /** The highlighted message already scrolled to, so it is done once per link. */
   const highlightShown = useRef<string | null>(null);
-  /** Scroll events before this time were caused by this component, not the user. */
-  const programmaticUntil = useRef(0);
   /**
-   * Where the list last scrolled itself to. The scroll event that lands there is its own, and
-   * any other is someone else's: the reader's, find-in-page's, a screen reader's. It is told by
-   * where the view lands rather than by when, because a reader's scroll in the midst of the
-   * list's own is still theirs.
-   */
-  const ownScrollTop = useRef<number | null>(null);
-  /** What the list does with its position, in a build made to find a jump (see the module). */
-  const [diagnostics] = useState(() => (SCROLL_DEBUG ? new ScrollDiagnostics() : null));
-  function scrollSelf(element: HTMLDivElement, move: () => void) {
-    programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
-    const before = element.scrollTop;
-    move();
-    ownScrollTop.current = element.scrollTop === before ? null : element.scrollTop;
-    diagnostics?.noteMoved(element.scrollTop, "self");
-  }
-  /**
-   * When the reader last acted on the list: a wheel or touch move, a press on its scrollbar, or a
-   * navigation key. A scroll event is theirs only if it follows one of these closely; the browser
-   * also fires scroll events when a modal opening changes the layout, when an image loads, or
-   * when a script scrolls a message into view, and none of those mean the reader moved on.
-   */
-  const userScrollAt = useRef(0);
-  /** When the list last scrolled, and whether a finger is on it. */
-  const scrolledAt = useRef(0);
-  const touching = useRef(false);
-  /**
-   * Which way the reader last moved the list, by their own input rather than by scroll
-   * positions, which content changing size above the view moves too; a fling keeps the way of
+   * Which way the reader last moved the list, by their own input; a fling keeps the way of
    * the stroke that started it.
    */
   const heading = useRef<"older" | "newer" | null>(null);
-  const touchY = useRef<number | null>(null);
+  /** Sets every row's remembered height to its current one, so a change already absorbed is not seen again. */
+  const syncRowHeights = useRef<() => void>(() => undefined);
+  /**
+   * The topmost row in view and where it stands in the content, which does not change with
+   * scrolling, noted after every move and change: a row that tells of a change of its height
+   * is measured against it (`keepStill`).
+   */
+  const still = useRef<{ id: string; top: number } | null>(null);
+  function noteStill() {
+    const box = viewport.current;
+    if (box === null) {
+      still.current = null;
+      return;
+    }
+    const origin = box.getBoundingClientRect().top;
+    for (const row of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
+      if (row.getBoundingClientRect().bottom > origin) {
+        still.current = { id: row.dataset.messageId ?? "", top: row.offsetTop };
+        return;
+      }
+    }
+    still.current = null;
+  }
+  /**
+   * A row's height just changed in the DOM: keeps the view still through it now, in the same
+   * task, by what the noted row has moved in the content; pinned to the bottom, the list stays
+   * there. The rows' observer then has nothing left to see of the change. Rows get one function
+   * for the list's life, which runs this render's.
+   */
+  function keepStillNow() {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    measureRange();
+    if (stickToBottom.current && atLatestNow.current && drag.current === null) {
+      moveTo(range.current.max, false);
+    } else {
+      const noted = still.current;
+      const row =
+        noted === null ? null : box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
+      if (noted !== null && row !== null) {
+        absorb(row.offsetTop - noted.top, "row told");
+      }
+    }
+    syncRowHeights.current();
+    noteStill();
+  }
+  const keepStillLatest = useRef(keepStillNow);
+  const keepStill = useCallback(() => {
+    keepStillLatest.current();
+  }, []);
+  /** What the list does with its offset, in a build made to find a jump (see the module). */
+  const [diagnostics] = useState(() => (SCROLL_DEBUG ? new ScrollDiagnostics() : null));
   const store = useStore();
   const readState = useReadState(channelId);
   /**
@@ -229,7 +282,7 @@ export function MessageList({
 
   // The store's window, not the one shown: a deleted message's row empties as the store drops
   // it, before the shown window catches up, and its space must be there in that same frame.
-  const { departing, measure, forget } = useDeparting(scroller, latest?.ids ?? NO_IDS, store);
+  const { departing, measure, forget } = useDeparting(viewport, latest?.ids ?? NO_IDS, store);
   const closing = useRef(false);
   useEffect(() => {
     closing.current = departing.length > 0;
@@ -241,71 +294,357 @@ export function MessageList({
   const lastId = ids?.[ids.length - 1];
   const hasOlder = window?.hasOlder ?? false;
   const atLatest = window?.atLatest ?? true;
-  const hasOlderNow = useRef(hasOlder);
-  hasOlderNow.current = hasOlder;
+  const atLatestNow = useRef(atLatest);
+  // What this render knows, for the handlers and observers that outlive it.
+  useLayoutEffect(() => {
+    atLatestNow.current = atLatest;
+    keepStillLatest.current = keepStillNow;
+  });
 
-  /** The topmost message with any part in view, and its offset from the top of the scroller. */
+  /** Reads the content's and the viewport's heights afresh. */
+  function measureRange() {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    range.current = bounds(box.scrollHeight, box.clientHeight);
+  }
+
+  /** The list's position: its box's, and what a finger has pulled it past an end by. */
+  function current(): number {
+    return (viewport.current?.scrollTop ?? 0) + over.current;
+  }
+
+  /** Scrolls the box to `at`, which is the list's own doing. */
+  function scrollBoxTo(at: number) {
+    const box = viewport.current;
+    if (box === null || box.scrollTop === at) {
+      return;
+    }
+    ownScrollTop.current = at;
+    box.scrollTop = at;
+  }
+
+  /** Shows the content at `next`, and the indicator with it. */
+  function place(next: number) {
+    const body = content.current;
+    const box = viewport.current;
+    if (body === null || box === null) {
+      return;
+    }
+    const within = clamp(next, range.current);
+    scrollBoxTo(within);
+    over.current = next - within;
+    const pulled = shownOffset(next, range.current, box.clientHeight) - within;
+    body.style.transform = pulled === 0 ? "" : `translate3d(0, ${String(-pulled)}px, 0)`;
+    const bar = thumb.current;
+    const track = indicator.current;
+    if (bar !== null && track !== null) {
+      const { min, max } = range.current;
+      const span = max - min;
+      const trackHeight = track.clientHeight;
+      const height =
+        span <= 0
+          ? trackHeight
+          : Math.max(THUMB_MIN_PX, (box.clientHeight / box.scrollHeight) * trackHeight);
+      const top = span <= 0 ? 0 : ((within - min) / span) * (trackHeight - height);
+      bar.style.height = `${String(height)}px`;
+      bar.style.transform = `translate3d(0, ${String(top)}px, 0)`;
+      track.style.opacity = span <= 0 ? "0" : "1";
+    }
+  }
+
+  /** Shows the indicator for a moment: the list moved. */
+  function showIndicator() {
+    const track = indicator.current;
+    if (track === null) {
+      return;
+    }
+    track.dataset.moving = "";
+    clearTimeout(indicatorTimer.current);
+    indicatorTimer.current = setTimeout(() => {
+      delete track.dataset.moving;
+    }, INDICATOR_MS);
+  }
+
+  /** What follows a move of the view: the pin to the bottom, reading, the next page. */
+  function afterMove(byUser: boolean) {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    noteStill();
+    showIndicator();
+    if (byUser) {
+      stickToBottom.current = atLatestNow.current && range.current.max - box.scrollTop < 8;
+    }
+    noteSeenSoon();
+    loadNearEnds();
+  }
+
+  /**
+   * Moves the view to `next` on purpose: a finger, a fling, a key, the wheel. A move of the
+   * reader's drops a linked message from the URL.
+   */
+  function moveTo(next: number, byUser: boolean) {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    const before = shownOffset(current(), range.current, box.clientHeight);
+    place(next);
+    const after = shownOffset(current(), range.current, box.clientHeight);
+    diagnostics?.moved(after - before);
+    afterMove(byUser);
+    if (byUser && highlightId !== undefined) {
+      void navigate({ ...channelLink(home, channelId), replace: true });
+    }
+  }
+
+  /** Keeps the view still through a change of `by` pixels in what is above it. */
+  function absorb(by: number, why: string) {
+    const box = viewport.current;
+    if (box === null || Math.abs(by) < 0.5) {
+      return;
+    }
+    diagnostics?.note(
+      `${why} ${String(Math.round(by))} absorbed at ${String(Math.round(box.scrollTop))}`,
+    );
+    scrollBoxTo(box.scrollTop + by);
+    noteStill();
+  }
+
+  /**
+   * The box scrolled: by the list, which is nothing new, or by a script, as focus,
+   * find-in-page, and assistive technology do, which the list follows.
+   */
+  function onScroll() {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    const own = ownScrollTop.current;
+    if (own !== null && Math.abs(box.scrollTop - own) < 1) {
+      ownScrollTop.current = null;
+      return;
+    }
+    diagnostics?.note(`scrolled by a script to ${String(Math.round(box.scrollTop))}`);
+    stopMotion();
+    over.current = 0;
+    afterMove(true);
+  }
+
+  function stopMotion() {
+    motion.current = null;
+    if (frame.current !== null) {
+      cancelAnimationFrame(frame.current);
+      frame.current = null;
+    }
+  }
+
+  /** Runs the list's coasting or spring, a frame at a time, until it comes to rest. */
+  function animate() {
+    frame.current = requestAnimationFrame((now) => {
+      frame.current = null;
+      const moving = motion.current;
+      const box = viewport.current;
+      if (moving === null || box === null) {
+        return;
+      }
+      if (moving.kind === "coast") {
+        // By the time passed, however long a frame took: a list stalled by a long render coasts
+        // on to where it would have been.
+        const { velocity, travelled } = coast(moving.velocity, now - (moving.at ?? now));
+        const { min, max } = range.current;
+        let next = current() + travelled;
+        let done = Math.abs(velocity) < COASTING_STOPS;
+        if (next < min || next > max) {
+          // Coasting ends at an end; there is nothing past it to see.
+          next = clamp(next, range.current);
+          done = true;
+        }
+        motion.current = done ? null : { kind: "coast", velocity, at: now };
+        moveTo(next, true);
+      } else {
+        const startedAt = moving.startedAt ?? now;
+        const elapsed = now - startedAt;
+        const next = spring(moving.from, moving.to, elapsed);
+        motion.current = elapsed >= SPRING_MS ? null : { ...moving, startedAt };
+        moveTo(next, true);
+      }
+      if (motion.current !== null) {
+        animate();
+      }
+    });
+  }
+
+  /** Lets a list pulled past an end go: it springs back. Otherwise it coasts with the finger's speed. */
+  function release(velocity: number) {
+    const at = current();
+    const past = clamp(at, range.current);
+    if (past !== at) {
+      motion.current = { kind: "spring", from: at, to: past, startedAt: null };
+      animate();
+      return;
+    }
+    if (Math.abs(velocity) >= COASTING_STOPS) {
+      const capped = Math.sign(velocity) * Math.min(Math.abs(velocity), MAX_VELOCITY);
+      motion.current = { kind: "coast", velocity: capped, at: null };
+      animate();
+    }
+  }
+
+  function onTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    const touch = event.touches[0];
+    if (touch === undefined) {
+      return;
+    }
+    stopMotion();
+    const tracker = new VelocityTracker();
+    tracker.add(touch.clientY, Date.now());
+    drag.current = { y: touch.clientY, travelled: 0, dragging: false, tracker };
+    diagnostics?.note("touch start");
+  }
+
+  function onTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
+    const touch = event.touches[0];
+    const dragging = drag.current;
+    if (touch === undefined || dragging === null) {
+      return;
+    }
+    const dy = dragging.y - touch.clientY;
+    dragging.y = touch.clientY;
+    dragging.travelled += Math.abs(dy);
+    dragging.tracker.add(touch.clientY, Date.now());
+    if (!dragging.dragging && dragging.travelled >= DRAG_SLOP_PX) {
+      // A drag, not a tap: whatever the finger lifts over, a picture or a button, must not
+      // take the lift as a press. The browser's own pan would have cancelled the pointer; the
+      // rows take no pointer until the finger has lifted, which comes after the pointer has.
+      dragging.dragging = true;
+      if (content.current !== null) {
+        content.current.style.pointerEvents = "none";
+      }
+    }
+    if (dy !== 0) {
+      // A finger moving down the screen draws older messages into view.
+      heading.current = dy < 0 ? "older" : "newer";
+      moveTo(current() + dy, true);
+    }
+  }
+
+  function onTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    const dragging = drag.current;
+    if (dragging === null || event.touches.length > 0) {
+      return;
+    }
+    drag.current = null;
+    letRowsTakePointers();
+    diagnostics?.note("touch end");
+    // The finger's speed down the screen is the content's speed up it.
+    release(-dragging.tracker.velocity(Date.now()));
+  }
+
+  function onTouchCancel() {
+    drag.current = null;
+    letRowsTakePointers();
+    diagnostics?.note("touch cancel");
+    release(0);
+  }
+
+  function letRowsTakePointers() {
+    if (content.current !== null) {
+      content.current.style.pointerEvents = "";
+    }
+  }
+
+  function onWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    const box = viewport.current;
+    if (box === null || event.deltaY === 0) {
+      return;
+    }
+    stopMotion();
+    const by =
+      event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? event.deltaY * WHEEL_LINE_PX
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? event.deltaY * box.clientHeight
+          : event.deltaY;
+    heading.current = by < 0 ? "older" : "newer";
+    moveTo(clamp(current() + by, range.current), true);
+  }
+
+  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const box = viewport.current;
+    if (box === null || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
+    const page = box.clientHeight - PAGE_OVERLAP_PX;
+    const { min, max } = range.current;
+    const at = current();
+    const moves: Record<string, number | undefined> = {
+      ArrowUp: at - ARROW_PX,
+      ArrowDown: at + ARROW_PX,
+      PageUp: at - page,
+      PageDown: at + page,
+      Home: min,
+      End: max,
+      " ": event.shiftKey ? at - page : at + page,
+    };
+    const next = moves[event.key];
+    if (next === undefined) {
+      return;
+    }
+    event.preventDefault();
+    stopMotion();
+    heading.current = next < at ? "older" : "newer";
+    moveTo(clamp(next, range.current), true);
+  }
+
+  /** The indicator's thumb dragged with a pointer: the view follows it along the track. */
+  function onThumbPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const track = indicator.current;
+    const bar = thumb.current;
+    if (track === null || bar === null) {
+      return;
+    }
+    event.preventDefault();
+    stopMotion();
+    const startY = event.clientY;
+    const startOffset = clamp(current(), range.current);
+    const travel = track.clientHeight - bar.clientHeight;
+    const { min, max } = range.current;
+    const onMove = (move: PointerEvent) => {
+      if (travel <= 0) {
+        return;
+      }
+      const next = startOffset + ((move.clientY - startY) / travel) * (max - min);
+      heading.current = next < current() ? "older" : "newer";
+      moveTo(clamp(next, range.current), true);
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  }
+
+  /** The topmost message with any part in view, and its offset from the top of the viewport. */
   function captureAnchor(): Anchor | null {
-    const element = scroller.current;
-    if (element === null) {
+    const box = viewport.current;
+    if (box === null) {
       return null;
     }
-    const origin = element.getBoundingClientRect().top;
-    for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
+    const origin = box.getBoundingClientRect().top;
+    for (const article of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
       const rect = article.getBoundingClientRect();
       if (rect.bottom > origin) {
         return { id: article.dataset.messageId ?? "", top: rect.top - origin };
       }
     }
     return null;
-  }
-
-  function setReserve(px: number) {
-    reserve.current = px;
-    if (reserveBox.current !== null) {
-      reserveBox.current.style.height = `${String(px)}px`;
-    }
-  }
-
-  /** The reserve to keep: `RESERVE_PAGES` pages the size of the rows loaded so far. */
-  function reserveTarget(): number {
-    const box = rows.current;
-    const count = ids?.length ?? 0;
-    if (box === null || count === 0) {
-      return 0;
-    }
-    return Math.round((box.offsetHeight / count) * HISTORY_PAGE_SIZE * RESERVE_PAGES);
-  }
-
-  /**
-   * Keeps the view still through a change of `by` pixels in the height of what is above it:
-   * the reserve gives up that much, or takes it back when what was above shrank. Only when the
-   * reserve has nothing left to give is the position moved, by what remains; a pan under way
-   * on iOS overrides that, so the reserve is kept from running out (`maintain`).
-   */
-  function absorb(element: HTMLDivElement, by: number, why: string) {
-    if (Math.abs(by) < 0.5) {
-      return;
-    }
-    let remaining = by;
-    if (reserveBox.current !== null) {
-      const left = reserve.current - by;
-      if (left >= 0) {
-        diagnostics?.note(
-          `${why} ${String(Math.round(by))} from reserve ${String(Math.round(reserve.current))}->${String(Math.round(left))}`,
-        );
-        setReserve(left);
-        return;
-      }
-      remaining = -left;
-      diagnostics?.note(
-        `${why} ${String(Math.round(by))} empties reserve ${String(Math.round(reserve.current))}, moving ${String(Math.round(remaining))}`,
-      );
-      setReserve(0);
-    }
-    scrollSelf(element, () => {
-      element.scrollTop += remaining;
-    });
   }
 
   // Shows the store's window, at once unless a deleted message's space is closing: rendering
@@ -329,7 +668,7 @@ export function MessageList({
           linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
       }
       diagnostics?.note(
-        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} at ${String(scroller.current?.scrollTop ?? 0)} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
+        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
       );
       // Rendered in this same task, so the view noted is the view the change lands in: nothing
       // the reader does can come between them.
@@ -344,141 +683,108 @@ export function MessageList({
   }, [channelId, latest, shown, highlightId, diagnostics]);
 
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (element === null) {
-      return;
+    if (viewport.current !== null) {
+      position();
     }
-    position(element);
     // Positioned when the window's edges, the link, or being at the latest change; what it
     // reads besides is current in the refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstId, lastId, highlightId, atLatest]);
 
   /** Places the view after the window or the link changed: see the effect above. */
-  function position(element: HTMLDivElement) {
+  function position() {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    measureRange();
     if (highlightId === undefined) {
       highlightShown.current = null;
     } else if (highlightShown.current !== highlightId) {
       // A linked message goes to the middle of the view once it is in the window, whatever
       // view was being kept, and the list lets go of the bottom so that nothing arriving or
       // growing later pulls the view away from it.
-      const target = element.querySelector(`[data-message-id="${highlightId}"]`);
+      const target = box.querySelector(`[data-message-id="${highlightId}"]`);
       if (target !== null) {
         highlightShown.current = highlightId;
         anchor.current = null;
         stickToBottom.current = false;
-        scrollSelf(element, () => {
-          target.scrollIntoView({ block: "center" });
-        });
-        scheduleMaintain();
+        stopMotion();
+        over.current = 0;
+        target.scrollIntoView({ block: "center" });
+        ownScrollTop.current = box.scrollTop;
+        afterMove(false);
+        syncRowHeights.current();
         return;
       }
     }
     const measured = anchor.current;
     if (measured !== null) {
       anchor.current = null;
-      const target = element.querySelector(`[data-message-id="${measured.id}"]`);
+      const target = box.querySelector(`[data-message-id="${measured.id}"]`);
       if (target !== null) {
         const drift =
-          target.getBoundingClientRect().top - element.getBoundingClientRect().top - measured.top;
-        absorb(element, drift, "page");
+          target.getBoundingClientRect().top - box.getBoundingClientRect().top - measured.top;
+        absorb(drift, "page");
       }
-      scheduleMaintain();
+      syncRowHeights.current();
+      noteStill();
       return;
     }
     if (highlightId !== undefined) {
       return;
     }
     if (stickToBottom.current && atLatest) {
-      // A channel's first page is pinned to the bottom, with the reserve above it in place from
-      // the start, so its first older pages take from it and move nothing.
-      if (hasOlder && reserve.current === 0) {
-        setReserve(reserveTarget());
-      }
-      scrollSelf(element, () => {
-        element.scrollTop = element.scrollHeight;
-      });
+      stopMotion();
+      moveTo(range.current.max, false);
     }
+    syncRowHeights.current();
+    noteStill();
   }
 
-  // A different channel starts pinned to the bottom, with no reserve yet and no way known that
-  // its reader is going; a linked message's own scroll unpins it.
+  // A different channel starts pinned to the bottom, with no way known that its reader is going;
+  // a linked message's own scroll unpins it.
   useEffect(() => {
     stickToBottom.current = true;
     heading.current = null;
-    setReserve(0);
+    stopMotion();
+    drag.current = null;
+    letRowsTakePointers();
+    // Deliberately runs when the channel changes.
   }, [channelId]);
 
-  /**
-   * The moves of the position that keep the reserve able to absorb: refilling it once pages
-   * have taken from it, and letting it go once the channel's start has been reached. Made only
-   * after `QUIET_MS` with no finger on the list and no scroll event, in one frame, so a pan
-   * that overrides them is unlikely to be under way.
-   */
-  const maintainTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  function scheduleMaintain() {
-    clearTimeout(maintainTimer.current);
-    maintainTimer.current = setTimeout(maintain, QUIET_MS);
-  }
-  function maintain() {
-    maintainTimer.current = undefined;
-    const element = scroller.current;
-    if (element === null) {
-      return;
-    }
-    const quietFor = Date.now() - scrolledAt.current;
-    if (touching.current || quietFor < QUIET_MS) {
-      maintainTimer.current = setTimeout(maintain, Math.max(QUIET_MS - quietFor, 16));
-      return;
-    }
-    const pinned = stickToBottom.current && atLatest;
-    if (!hasOlderNow.current) {
-      if (reserve.current > 0) {
-        const gone = reserve.current;
-        diagnostics?.note(`reserve let go ${String(gone)}`);
-        setReserve(0);
-        scrollSelf(element, () => {
-          element.scrollTop = pinned ? element.scrollHeight : element.scrollTop - gone;
-        });
-      }
-      return;
-    }
-    const target = reserveTarget();
-    if (reserve.current < target / 2) {
-      const added = target - reserve.current;
-      diagnostics?.note(`reserve refilled ${String(reserve.current)}->${String(target)}`);
-      setReserve(target);
-      scrollSelf(element, () => {
-        element.scrollTop = pinned ? element.scrollHeight : element.scrollTop + added;
-      });
-    }
-  }
   useEffect(
     () => () => {
-      clearTimeout(maintainTimer.current);
+      stopMotion();
+      clearTimeout(indicatorTimer.current);
     },
-    [channelId],
+    [],
   );
 
   // Rows change size without the window changing: pictures and link cards load, reactions come
-  // and go, a deleted message's space closes. One wholly above the view takes the change from
-  // the reserve, so nothing in view moves; pinned to the bottom, the list stays there. Each
-  // row's size is followed from when it appears, so a change is known however the layout that
-  // brought it is reached.
+  // and go, a deleted message's space closes. One wholly above the view adds the change to the
+  // offset, so nothing in view moves; pinned to the bottom, the list stays there. Each row's
+  // size is followed from when it appears, so a change is known however the layout that
+  // brought it is reached, and before the frame is painted.
   useEffect(() => {
-    const element = scroller.current;
-    const box = rows.current;
+    const box = viewport.current;
+    const body = rows.current;
     if (
-      element === null ||
       box === null ||
+      body === null ||
       typeof ResizeObserver === "undefined" ||
       typeof MutationObserver === "undefined"
     ) {
       return;
     }
     const heights = new WeakMap<Element, number>();
+    syncRowHeights.current = () => {
+      for (const child of body.children) {
+        heights.set(child, child.getBoundingClientRect().height);
+      }
+    };
     const observer = new ResizeObserver((entries) => {
-      const viewTop = element.getBoundingClientRect().top;
+      const viewTop = box.getBoundingClientRect().top;
       let above = 0;
       for (const entry of entries) {
         const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
@@ -494,22 +800,22 @@ export function MessageList({
         }
       }
       measure();
-      if (stickToBottom.current && atLatest) {
-        scrollSelf(element, () => {
-          element.scrollTop = element.scrollHeight;
-        });
+      measureRange();
+      if (stickToBottom.current && atLatestNow.current && drag.current === null) {
+        moveTo(range.current.max, false);
         return;
       }
       if (above !== 0) {
-        absorb(element, above, "rows above");
+        absorb(above, "rows above");
       }
+      noteStill();
     });
     const watch = (node: Node) => {
       if (node instanceof Element) {
         observer.observe(node);
       }
     };
-    for (const child of box.children) {
+    for (const child of body.children) {
       watch(child);
     }
     const arrivals = new MutationObserver((records) => {
@@ -517,44 +823,46 @@ export function MessageList({
         record.addedNodes.forEach(watch);
       }
     });
-    arrivals.observe(box, { childList: true });
+    arrivals.observe(body, { childList: true });
     return () => {
       arrivals.disconnect();
       observer.disconnect();
+      syncRowHeights.current = () => undefined;
     };
-    // The observers read the rest through refs; made again when being at the latest changes
-    // what growth does.
+    // The observers read the rest through refs; made once there is a list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, atLatest]);
+  }, [loaded]);
 
-  // The list itself shrinks when something takes the screen's space, as the keyboard does when
-  // the message box is chosen on a phone. Its bottom edge stays where it was, so what was just
-  // above the box, likely what is being answered, stays in view: pinned to the newest message,
-  // or moved down by what the list lost. Growing back leaves the view where it is.
+  // The viewport changes size: something takes the screen's space, as the keyboard does when
+  // the message box is chosen on a phone, or gives it back. Its bottom edge stays where it was,
+  // so what was just above the box, likely what is being answered, stays in view: pinned to
+  // the newest message, or moved by what the viewport lost or gained.
   useEffect(() => {
-    const element = scroller.current;
-    if (element === null || typeof ResizeObserver === "undefined") {
+    const box = viewport.current;
+    if (box === null || typeof ResizeObserver === "undefined") {
       return;
     }
-    let height = element.clientHeight;
+    let height = box.clientHeight;
     const observer = new ResizeObserver(() => {
-      const lost = height - element.clientHeight;
-      height = element.clientHeight;
-      if (lost <= 0) {
+      const lost = height - box.clientHeight;
+      height = box.clientHeight;
+      measureRange();
+      if (lost === 0) {
         return;
       }
-      scrollSelf(element, () => {
-        element.scrollTop =
-          stickToBottom.current && atLatest ? element.scrollHeight : element.scrollTop + lost;
-      });
+      const next =
+        stickToBottom.current && atLatestNow.current
+          ? range.current.max
+          : clamp(current() + lost, range.current);
+      moveTo(next, false);
     });
-    observer.observe(element);
+    observer.observe(box);
     return () => {
       observer.disconnect();
     };
-    // Reads the pin through its ref; made again when being at the latest changes.
+    // Reads the pin through its ref; made once there is a list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, atLatest]);
+  }, [loaded]);
 
   /**
    * Whether a page read at one end leaves the other end's messages that a full window drops
@@ -562,20 +870,20 @@ export function MessageList({
    * see goes, and they meet the dropped end only after reading their way back towards it.
    */
   function roomFor(way: "older" | "newer"): boolean {
-    const element = scroller.current;
+    const box = viewport.current;
     const dropped = (ids?.length ?? 0) + HISTORY_PAGE_SIZE - WINDOW_MAX_MESSAGES;
-    if (element === null || ids === undefined || dropped <= 0) {
+    if (box === null || ids === undefined || dropped <= 0) {
       return true;
     }
     // The dropped message nearest the view.
     const nearest = way === "older" ? ids[ids.length - dropped] : ids[dropped - 1];
-    const row = element.querySelector(`[data-message-id="${nearest ?? ""}"]`);
+    const row = box.querySelector(`[data-message-id="${nearest ?? ""}"]`);
     if (row === null) {
       return true;
     }
-    const view = element.getBoundingClientRect();
+    const view = box.getBoundingClientRect();
     const rect = row.getBoundingClientRect();
-    const margin = element.clientHeight * LOAD_UNSURE_SCREENS;
+    const margin = box.clientHeight * LOAD_UNSURE_SCREENS;
     return way === "older" ? rect.top > view.bottom + margin : rect.bottom < view.top - margin;
   }
 
@@ -609,16 +917,17 @@ export function MessageList({
 
   /** Reads the next page when the viewport is near an end of the window that has more. */
   function loadNearEnds() {
-    const element = scroller.current;
-    if (element === null) {
+    const box = viewport.current;
+    if (box === null) {
       return;
     }
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    // The window's top is below the reserve.
-    const distanceFromTop = element.scrollTop - reserve.current;
+    const { min, max } = range.current;
+    const at = current();
+    const distanceFromTop = at - min;
+    const distanceFromBottom = max - at;
     const toward = heading.current;
     const screens = toward === null ? LOAD_UNSURE_SCREENS : LOAD_AHEAD_SCREENS;
-    const near = element.clientHeight * screens;
+    const near = box.clientHeight * screens;
     if (toward !== "newer" && distanceFromTop < near) {
       loadOlder();
     }
@@ -627,7 +936,7 @@ export function MessageList({
     }
   }
 
-  // A window shorter than the viewport gives no scroll events, so ask once it is rendered.
+  // A window shorter than the viewport moves nothing, so ask once it is rendered.
   useEffect(() => {
     if (loaded) {
       loadNearEnds();
@@ -636,91 +945,16 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, firstId, lastId]);
 
-  function onScroll() {
-    const element = scroller.current;
-    if (element === null) {
-      return;
-    }
-    const own = ownScrollTop.current;
-    const ours = own !== null && Math.abs(element.scrollTop - own) < 1;
-    diagnostics?.noteScroll(element.scrollTop, element.clientHeight, ours);
-    if (ours) {
-      ownScrollTop.current = null;
-    } else {
-      scrolledAt.current = Date.now();
-    }
-    noteSeenSoon();
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const byUser = Date.now() - userScrollAt.current < USER_SCROLL_MS;
-    // Whether the list is pinned to the bottom follows every scroll but its own: the reader's,
-    // and those of find-in-page or a screen reader.
-    if (!ours) {
-      stickToBottom.current = atLatest && distanceFromBottom < 8;
-    }
-    loadNearEnds();
-    if (highlightId !== undefined && byUser && Date.now() > programmaticUntil.current) {
-      void navigate({ ...channelLink(home, channelId), replace: true });
-    }
-    scheduleMaintain();
-  }
-
-  function noteUserScroll() {
-    userScrollAt.current = Date.now();
-  }
-
-  /** A press on the scroller's own scrollbar, which sits in the gap past its content box. */
-  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (
-      event.target === event.currentTarget &&
-      event.nativeEvent.offsetX >= event.currentTarget.clientWidth
-    ) {
-      noteUserScroll();
-      // A scrollbar may be dragged either way.
-      heading.current = null;
-    }
-  }
-
-  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (SCROLL_KEYS.has(event.key)) {
-      noteUserScroll();
-      heading.current = OLDER_KEYS.has(event.key) ? "older" : "newer";
-    }
-  }
-
-  function onWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    noteUserScroll();
-    if (event.deltaY !== 0) {
-      heading.current = event.deltaY < 0 ? "older" : "newer";
-    }
-  }
-
-  function onTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
-    noteUserScroll();
-    const y = event.touches[0]?.clientY;
-    if (y === undefined) {
-      return;
-    }
-    // A finger moving down the screen draws older messages into view.
-    if (touchY.current !== null && y !== touchY.current) {
-      heading.current = y > touchY.current ? "older" : "newer";
-    }
-    touchY.current = y;
-  }
-
   /** Back to the present: the newest page replaces the window and the view pins to the bottom. */
   function jumpToLatest(): Promise<void> {
     stickToBottom.current = true;
     heading.current = null;
     anchor.current = null;
     jumping.current = true;
+    stopMotion();
     // The list goes to the end of what it holds while the newest are on their way; the next
     // page after it is not read, since the newest replace the window.
-    const element = scroller.current;
-    if (element !== null) {
-      scrollSelf(element, () => {
-        element.scrollTop = element.scrollHeight;
-      });
-    }
+    moveTo(range.current.max, false);
     if (highlightId !== undefined) {
       void navigate({ ...channelLink(home, channelId), replace: true });
     }
@@ -738,9 +972,9 @@ export function MessageList({
    * not this channel's to mark.
    */
   function noteSeen() {
-    const element = scroller.current;
+    const box = viewport.current;
     if (
-      element === null ||
+      box === null ||
       readState === undefined ||
       ids === undefined ||
       document.visibilityState !== "visible" ||
@@ -749,9 +983,9 @@ export function MessageList({
       return;
     }
     const inWindow = new Set(ids);
-    const view = element.getBoundingClientRect();
+    const view = box.getBoundingClientRect();
     let seen: string | undefined;
-    for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
+    for (const article of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
       const id = article.dataset.messageId;
       if (id === undefined || !inWindow.has(id)) {
         continue;
@@ -829,112 +1063,105 @@ export function MessageList({
 
   return (
     <div
-      ref={scroller}
+      ref={viewport}
+      data-message-list=""
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchCancel}
       onScroll={onScroll}
       onWheel={onWheel}
-      onTouchStart={(event) => {
-        touching.current = true;
-        touchY.current = event.touches[0]?.clientY ?? null;
-        diagnostics?.note("touch start");
-      }}
-      onTouchEnd={() => {
-        touching.current = false;
-        diagnostics?.note("touch end");
-        scheduleMaintain();
-      }}
-      onTouchCancel={() => {
-        touching.current = false;
-        diagnostics?.note("touch cancel");
-        scheduleMaintain();
-      }}
-      onTouchMove={onTouchMove}
-      onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      // The list keeps its own view still (see above); the browser's anchoring would correct
-      // the same changes again.
-      className="relative min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+      // Hidden overflow: only scripts scroll this box, the list's own among them, and fingers
+      // pan it through the handlers above. The list keeps its own view still (see above).
+      className="relative min-h-0 flex-1 touch-none overflow-hidden [overflow-anchor:none]"
     >
-      <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
-        <div
-          ref={reserveBox}
-          aria-hidden="true"
-          className="shrink-0 overflow-hidden"
-          style={{ height: `${String(reserve.current)}px` }}
-        >
-          <div className="flex h-full flex-col justify-end gap-1">
-            {Array.from({ length: RESERVE_ROWS }, (_, index) => (
-              <MessageSkeleton key={index} index={index} />
-            ))}
-          </div>
-        </div>
-        {window.hasOlder ? (
-          // Its height does not change with its text: the text comes and goes above what is being
-          // read, and a line appearing there would push the view down.
-          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-            {loadingOlder && (
-              <>
-                <LoadingLabel />
-                <Skeleton className="h-3 w-24" />
-              </>
-            )}
-          </p>
-        ) : (
-          <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-        )}
-        <div ref={rows} className="flex flex-col gap-1">
-          {lineIndex === -1 && <NewMessagesLine />}
-          {leaving(null)}
-          {parts.map((part) => {
-            const item = (id: string) => (
-              <MessageItem
-                id={id}
-                home={home}
-                channelId={channelId}
-                parentId={parentId}
-                highlighted={id === highlightId}
-              />
-            );
-            if (part.kind === "message") {
+      <KeepStillContext.Provider value={keepStill}>
+        <div ref={content} className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
+          {window.hasOlder ? (
+            // Its height does not change with its text: the text comes and goes above what is being
+            // read, and a line appearing there would push the view down.
+            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+              {loadingOlder && (
+                <>
+                  <LoadingLabel />
+                  <Skeleton className="h-3 w-24" />
+                </>
+              )}
+            </p>
+          ) : (
+            <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+          )}
+          <div ref={rows} className="flex flex-col gap-1">
+            {lineIndex === -1 && <NewMessagesLine />}
+            {leaving(null)}
+            {parts.map((part) => {
+              const item = (id: string) => (
+                <MessageItem
+                  id={id}
+                  home={home}
+                  channelId={channelId}
+                  parentId={parentId}
+                  highlighted={id === highlightId}
+                />
+              );
+              if (part.kind === "message") {
+                return (
+                  <Fragment key={part.id}>
+                    {item(part.id)}
+                    {leaving(part.id)}
+                    {part.index === lineIndex && <NewMessagesLine />}
+                  </Fragment>
+                );
+              }
+              const lineOffset =
+                lineIndex !== null &&
+                lineIndex >= part.index &&
+                lineIndex < part.index + part.ids.length
+                  ? lineIndex - part.index
+                  : null;
               return (
-                <Fragment key={part.id}>
-                  {item(part.id)}
-                  {leaving(part.id)}
-                  {part.index === lineIndex && <NewMessagesLine />}
+                <Fragment key={part.ids[0]}>
+                  <BlockedRun
+                    ids={part.ids}
+                    lineOffset={lineOffset}
+                    highlightId={highlightId}
+                    item={item}
+                  />
+                  {part.ids.flatMap((id) => leaving(id))}
                 </Fragment>
               );
-            }
-            const lineOffset =
-              lineIndex !== null &&
-              lineIndex >= part.index &&
-              lineIndex < part.index + part.ids.length
-                ? lineIndex - part.index
-                : null;
-            return (
-              <Fragment key={part.ids[0]}>
-                <BlockedRun
-                  ids={part.ids}
-                  lineOffset={lineOffset}
-                  highlightId={highlightId}
-                  item={item}
-                />
-                {part.ids.flatMap((id) => leaving(id))}
-              </Fragment>
-            );
-          })}
+            })}
+          </div>
+          {!window.atLatest && (
+            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+              {loadingNewer && (
+                <>
+                  <LoadingLabel />
+                  <Skeleton className="h-3 w-24" />
+                </>
+              )}
+            </p>
+          )}
         </div>
-        {!window.atLatest && (
-          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-            {loadingNewer && (
-              <>
-                <LoadingLabel />
-                <Skeleton className="h-3 w-24" />
-              </>
-            )}
-          </p>
-        )}
+      </KeepStillContext.Provider>
+      <div
+        ref={indicator}
+        aria-hidden="true"
+        // Over the list's own padding, taking no pointer but its thumb's, and that only where
+        // there is a pointer to drag it with.
+        className="pointer-events-none absolute end-0.5 top-1 bottom-1 w-1.5 opacity-0 transition-opacity duration-300 data-moving:opacity-100 pointer-fine:w-2.5 pointer-fine:hover:opacity-100"
+      >
+        <div
+          ref={thumb}
+          onPointerDown={onThumbPointerDown}
+          className="absolute inset-x-0 top-0 rounded-full bg-ink/35 pointer-fine:pointer-events-auto"
+        />
       </div>
       {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
-      {diagnostics !== null && <ScrollDiagnosticsPanel diagnostics={diagnostics} />}
+      {diagnostics !== null && (
+        <ScrollDiagnosticsPanel diagnostics={diagnostics} viewport={viewport} />
+      )}
     </div>
   );
 }
