@@ -9,6 +9,8 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button } from "react-aria-components";
 import {
@@ -62,14 +64,61 @@ import { useMessages } from "@/i18n/context";
 const PROGRAMMATIC_SCROLL_MS = 200;
 /** How long after a wheel, touch, scrollbar press, or key a scroll event still counts as the reader's. */
 const USER_SCROLL_MS = 500;
-/** How close to either end of the window, in pixels, the next page is read. */
-const LOAD_MORE_PX = 800;
+/**
+ * How close to the end of the window the reader is heading for, in screens of the list, the
+ * next page is read: far enough that a reader flinging through history meets what is loaded
+ * rather than its end.
+ */
+const LOAD_AHEAD_SCREENS = 20;
+/**
+ * How close to the other end, or to either while which way the reader is going is unknown, the
+ * next page is read. Reading far that way too would drop what the reader is heading into, in a
+ * window of short messages, for a page they are leaving behind.
+ */
+const LOAD_BEHIND_SCREENS = 2;
 /** How long after its last scroll event, with no finger down, the list counts as at rest. */
 const SETTLE_MS = 150;
+
+/**
+ * Whether the browser keeps the view still itself when content above it grows
+ * (`overflow-anchor`), found once by trying it, since an engine may know the property without
+ * doing it.
+ */
+let browserAnchors: boolean | undefined;
+
+function tryAnchoring(): boolean {
+  const box = document.createElement("div");
+  box.style.cssText =
+    "position:fixed;left:0;top:0;width:10px;height:100px;overflow:auto;opacity:0;pointer-events:none";
+  const above = document.createElement("div");
+  above.style.height = "10px";
+  const rest = document.createElement("div");
+  rest.style.height = "1000px";
+  box.append(above, rest);
+  document.body.append(box);
+  box.scrollTop = 500;
+  // Laid out at that position before the content above it grows.
+  box.getBoundingClientRect();
+  above.style.height = "110px";
+  const anchored = box.scrollTop === 600;
+  box.remove();
+  return anchored;
+}
+
+/** Whether the browser keeps this list's view still itself (see `browserAnchors`). */
+function anchors(element: HTMLElement | null): boolean {
+  if (element === null || getComputedStyle(element).overflowAnchor !== "auto") {
+    return false;
+  }
+  browserAnchors ??= tryAnchoring();
+  return browserAnchors;
+}
 /** How long a deleted message's space takes to close at normal speed, as `--motion-base`. */
 const COLLAPSE_MS = 200;
 /** The ids of a list with no window yet, one array so its identity holds. */
 const NO_IDS: readonly string[] = [];
+/** The keys that move the list back through history; the other scroll keys move it forward. */
+const OLDER_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "PageUp", "Home"]);
 const SCROLL_KEYS: ReadonlySet<string> = new Set([
   "ArrowUp",
   "ArrowDown",
@@ -84,6 +133,8 @@ const SCROLL_KEYS: ReadonlySet<string> = new Set([
 interface Anchor {
   id: string;
   top: number;
+  /** The scroller's position then, by which to tell how far the reader moved it since. */
+  scrollTop: number;
 }
 
 export function MessageList({
@@ -144,6 +195,13 @@ export function MessageList({
   /** When the list last scrolled, and whether a finger is on it. */
   const scrolledAt = useRef(0);
   const touching = useRef(false);
+  /**
+   * Which way the reader last moved the list, by their own input rather than by scroll
+   * positions, which content changing size above the view moves too; a fling keeps the way of
+   * the stroke that started it.
+   */
+  const heading = useRef<"older" | "newer" | null>(null);
+  const touchY = useRef<number | null>(null);
   /** The list's rest, which what changes size by itself waits for (`stillness.ts`). */
   const [stillness] = useState(() => new Stillness());
   const store = useStore();
@@ -204,7 +262,11 @@ export function MessageList({
     for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
       const rect = article.getBoundingClientRect();
       if (rect.bottom > origin) {
-        return { id: article.dataset.messageId ?? "", top: rect.top - origin };
+        return {
+          id: article.dataset.messageId ?? "",
+          top: rect.top - origin,
+          scrollTop: element.scrollTop,
+        };
       }
     }
     return null;
@@ -226,7 +288,7 @@ export function MessageList({
       const target = element.querySelector(`[data-message-id="${highlightId}"]`);
       if (target !== null) {
         const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
-        hold.current = { id: highlightId, top };
+        hold.current = { id: highlightId, top, scrollTop: element.scrollTop };
         return;
       }
     }
@@ -246,7 +308,14 @@ export function MessageList({
       const quietFor = Date.now() - scrolledAt.current;
       // A deleted message's space closing waits for nothing: rendering the whole list again
       // meanwhile would use its moment up before it is seen.
-      if (!direct && (touching.current || quietFor < SETTLE_MS || closing.current)) {
+      // Where the browser anchors scrolling, it holds the view through the change, so the page
+      // shows at once even mid-fling and nothing is noted to put back; elsewhere it waits for
+      // the list to rest. No browser anchors a view at the very top, which a reader who
+      // outran the page is at, so there the list puts it back itself.
+      const element = scroller.current;
+      const anchored = anchors(element) && element !== null && element.scrollTop > 0;
+      const moving = !anchored && (touching.current || quietFor < SETTLE_MS);
+      if (!direct && (moving || closing.current)) {
         timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
         return;
       }
@@ -254,7 +323,9 @@ export function MessageList({
         // A linked message waiting to be shown decides where the view goes, not what was in it.
         const linking = highlightId !== undefined && highlightShown.current !== highlightId;
         anchor.current =
-          linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
+          linking || anchored || (stickToBottom.current && latest?.atLatest === true)
+            ? null
+            : captureAnchor();
       }
       setShown({ channelId, window: latest });
     };
@@ -300,10 +371,19 @@ export function MessageList({
       anchor.current = null;
       const target = element.querySelector(`[data-message-id="${restore.id}"]`);
       if (target !== null) {
-        const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
-        scrollSelf(element, () => {
-          element.scrollTop += top - restore.top;
-        });
+        // The reader may have moved the list while the change rendered, a finger landing just
+        // as a page shows; what they moved is theirs to keep, and only the change is undone.
+        // Assigning the position even unchanged would cut a running fling short.
+        const moved = element.scrollTop - restore.scrollTop;
+        const drift =
+          target.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          (restore.top - moved);
+        if (Math.abs(drift) >= 1) {
+          scrollSelf(element, () => {
+            element.scrollTop += drift;
+          });
+        }
       }
       return;
     }
@@ -407,8 +487,8 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, atLatest]);
 
-  // A page already read but not yet shown is waiting for the list to settle; reading the next
-  // one before it shows would only pile changes up.
+  // A page already read but not yet shown is waiting for the list to settle, or for the next
+  // render; reading the next one before it shows would only pile changes up.
   function loadOlder() {
     if (loadingOlder || !hasOlder || held) {
       return;
@@ -442,10 +522,12 @@ export function MessageList({
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (element.scrollTop < LOAD_MORE_PX) {
+    const screens = (way: "older" | "newer") =>
+      element.clientHeight * (heading.current === way ? LOAD_AHEAD_SCREENS : LOAD_BEHIND_SCREENS);
+    if (element.scrollTop < screens("older")) {
       loadOlder();
     }
-    if (distanceFromBottom < LOAD_MORE_PX && !jumping.current) {
+    if (distanceFromBottom < screens("newer") && !jumping.current) {
       loadNewer();
     }
   }
@@ -510,7 +592,28 @@ export function MessageList({
   function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (SCROLL_KEYS.has(event.key)) {
       noteUserScroll();
+      heading.current = OLDER_KEYS.has(event.key) ? "older" : "newer";
     }
+  }
+
+  function onWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    noteUserScroll();
+    if (event.deltaY !== 0) {
+      heading.current = event.deltaY < 0 ? "older" : "newer";
+    }
+  }
+
+  function onTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
+    noteUserScroll();
+    const y = event.touches[0]?.clientY;
+    if (y === undefined) {
+      return;
+    }
+    // A finger moving down the screen draws older messages into view.
+    if (touchY.current !== null && y !== touchY.current) {
+      heading.current = y > touchY.current ? "older" : "newer";
+    }
+    touchY.current = y;
   }
 
   /** Back to the present: the newest page replaces the window and the view pins to the bottom. */
@@ -636,9 +739,10 @@ export function MessageList({
     <div
       ref={scroller}
       onScroll={onScroll}
-      onWheel={noteUserScroll}
-      onTouchStart={() => {
+      onWheel={onWheel}
+      onTouchStart={(event) => {
         touching.current = true;
+        touchY.current = event.touches[0]?.clientY ?? null;
         stillness.setTouching(true);
       }}
       onTouchEnd={() => {
@@ -649,7 +753,7 @@ export function MessageList({
         touching.current = false;
         stillness.setTouching(false);
       }}
-      onTouchMove={noteUserScroll}
+      onTouchMove={onTouchMove}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       className="relative min-h-0 flex-1 overflow-y-auto"

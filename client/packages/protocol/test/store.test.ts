@@ -527,25 +527,30 @@ describe("RecordStore window bounds", () => {
 
   it("drops the newest messages when older ones push the window past its cap", () => {
     const store = bootstrapped();
-    store.replaceWindow(general.id, page(200, 100), { hasOlder: true, atLatest: true });
-    store.prependWindow(general.id, page(100, 100), true);
+    // Two halves of the window and a page more, which it cannot all hold.
+    const half = WINDOW_MAX_MESSAGES / 2 + 10;
+    store.replaceWindow(general.id, page(100 + half, half), { hasOlder: true, atLatest: true });
+    store.prependWindow(general.id, page(100, half), true);
     const window = store.messages(general.id);
+    const kept = 100 + WINDOW_MAX_MESSAGES - 1;
     expect(window?.ids).toHaveLength(WINDOW_MAX_MESSAGES);
     expect(window?.ids[0]).toBe(message(100).id);
-    expect(window?.ids.at(-1)).toBe(message(249).id);
+    expect(window?.ids.at(-1)).toBe(message(kept).id);
     expect(window?.atLatest).toBe(false);
-    expect(store.message(message(299).id)).toBeUndefined();
-    expect(store.message(message(249).id)).toBeDefined();
+    expect(store.message(message(kept + 1).id)).toBeUndefined();
+    expect(store.message(message(kept).id)).toBeDefined();
   });
 
   it("drops the oldest messages when newer ones push the window past its cap", () => {
     const store = bootstrapped();
-    store.replaceWindow(general.id, page(100, 100), { hasOlder: false, atLatest: false });
-    store.appendWindow(general.id, page(200, 100), true);
+    const half = WINDOW_MAX_MESSAGES / 2 + 10;
+    store.replaceWindow(general.id, page(100, half), { hasOlder: false, atLatest: false });
+    store.appendWindow(general.id, page(100 + half, half), true);
     const window = store.messages(general.id);
+    const newest = 100 + 2 * half - 1;
     expect(window?.ids).toHaveLength(WINDOW_MAX_MESSAGES);
-    expect(window?.ids[0]).toBe(message(150).id);
-    expect(window?.ids.at(-1)).toBe(message(299).id);
+    expect(window?.ids[0]).toBe(message(newest - WINDOW_MAX_MESSAGES + 1).id);
+    expect(window?.ids.at(-1)).toBe(message(newest).id);
     expect(window).toMatchObject({ hasOlder: true, atLatest: true });
     expect(store.message(message(100).id)).toBeUndefined();
   });

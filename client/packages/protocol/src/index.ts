@@ -96,6 +96,7 @@ export {
   AspenSync,
   EVENT_REPLAY_WINDOW_MS,
   MESSAGE_AROUND_RADIUS,
+  HISTORY_PAGE_SIZE,
   MESSAGE_PAGE_SIZE,
   type AspenSyncOptions,
   type InviteLookup,

@@ -108,7 +108,7 @@ export type MissingKind = "user" | "icon" | "poll" | "attachment";
  * messages, and their records, from the other end, so a long scroll through history never
  * holds more than this many messages in memory; what was dropped is read again on the way back.
  */
-export const WINDOW_MAX_MESSAGES = 150;
+export const WINDOW_MAX_MESSAGES = 300;
 
 /** Stands for the DMs among `RecordStore.unreadPlaces`, beside community ids. */
 export const UNREAD_DMS = "dms";

@@ -20,6 +20,10 @@ const PAGE_DELAY_MS = 300;
 /** How far the finger moves at each step, and how many steps it takes. */
 const STEP_PX = 12;
 const STEPS = 2000;
+/** How many flicks the flicking test makes. */
+const FLICKS = 40;
+/** The share of frames in which the flicking test lets the top of what is loaded show. */
+const SEAM_SHARE = 0.02;
 
 const id = (n: number) => `0190f0a0-0000-7000-8002-${n.toString(16).padStart(12, "0")}`;
 const attachmentId = (n: number) => `0190f0a0-0000-7000-8003-${n.toString(16).padStart(12, "0")}`;
@@ -322,3 +326,83 @@ for (const anchoring of [true, false]) {
     expect(oldestSeen).toBeLessThan(COUNT - 80);
   });
 }
+
+test("flicking back through a long history keeps ahead of the reader", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  test.setTimeout(300_000);
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1500);
+  // Every frame: whether the top of what is loaded, where a page is awaited, is in view.
+  await page.evaluate(() => {
+    const record = window as unknown as { seamFrames: number; frames: number };
+    record.seamFrames = 0;
+    record.frames = 0;
+    const tick = () => {
+      const scroller = document.querySelector("article")?.closest(".overflow-y-auto");
+      const seam = scroller?.querySelector('p[aria-live="polite"]');
+      if (scroller instanceof HTMLElement && seam !== null && seam !== undefined) {
+        const view = scroller.getBoundingClientRect();
+        const rect = seam.getBoundingClientRect();
+        record.frames += 1;
+        if (rect.bottom > view.top && rect.top < view.bottom) {
+          record.seamFrames += 1;
+        }
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  const centre = await page.evaluate(() => {
+    const rect = document
+      .querySelector("article")
+      ?.closest(".overflow-y-auto")
+      ?.getBoundingClientRect();
+    return rect === undefined
+      ? { x: 200, y: 400 }
+      : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  });
+  // A reader flicks back, glances at where they landed, and flicks again.
+  for (let flick = 0; flick < FLICKS; flick++) {
+    // A quick stroke released while moving, which the browser carries on as a fling.
+    await touch(cdp, "touchStart", centre.x, centre.y - 200);
+    for (let move = 1; move <= 8; move++) {
+      await touch(cdp, "touchMove", centre.x, centre.y - 200 + move * 50);
+      await page.waitForTimeout(4);
+    }
+    await touch(cdp, "touchEnd", centre.x, centre.y + 200);
+    await page.waitForTimeout(500);
+  }
+  const { seamFrames, frames } = await page.evaluate(() => {
+    const record = window as unknown as { seamFrames: number; frames: number };
+    return { seamFrames: record.seamFrames, frames: record.frames };
+  });
+  const oldest = await page.evaluate(() =>
+    Math.min(
+      ...Array.from(document.querySelectorAll<HTMLElement>("article[data-message-id]"), (a) =>
+        parseInt((a.dataset.messageId ?? "").slice(-12), 16),
+      ),
+    ),
+  );
+  expect(oldest, "how far back the flicks reached").toBeLessThan(COUNT - 200);
+  // Flicks in quick succession gather speed, as on a phone, until one crosses a page's worth
+  // of pictures before it has arrived; the reader may then glimpse where it is awaited, for a
+  // moment and seldom.
+  expect(
+    seamFrames / frames,
+    `share of frames in which the top of what was loaded was in view (${String(seamFrames)} of ${String(frames)})`,
+  ).toBeLessThan(SEAM_SHARE);
+});

@@ -880,11 +880,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   id, or `null` for a DM) and build their links with `src/features/messages/links.ts`. A message link's id segment leaves the URL once the reader scrolls on
   their own (wheel, touch, scrollbar, or a navigation key, tracked in `MessageList.tsx`); scroll
   events the browser fires for layout changes, image loads, or scripted scrolling do not count,
-  and dropping the segment never reloads the window. History pages in on its own as the reader
-  nears either end of the loaded window (`loadOlder` / `loadNewer`), and the store keeps the
-  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records; the viewport is
-  re-anchored on the topmost visible message after every change, measured when the change is
-  shown rather than when its page was asked for, since the reader keeps scrolling meanwhile.
+  and dropping the segment never reloads the window. History pages in on its own, well ahead
+  of the reader (`loadOlder` / `loadNewer`, `HISTORY_PAGE_SIZE` messages at a time): within
+  `LOAD_AHEAD_SCREENS` of the end they are heading for, as their own wheel, finger, or keys
+  last moved the list, and `LOAD_BEHIND_SCREENS` of the other, so a window of short messages
+  never drops what the reader is heading into for a page they are leaving. The store keeps the
+  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records. Where the browser
+  anchors scrolling, a new page shows at once, even mid-fling, and the browser keeps the view;
+  elsewhere, and at the very top, where no browser anchors, the viewport is re-anchored on the
+  topmost visible message, measured when the change is shown rather than when its page was
+  asked for, and less whatever the reader scrolled while it rendered, so a finger landing just
+  as a page shows keeps its own movement.
   Content that changes size without the window changing (pictures and link cards loading,
   reactions) moves nothing either: the list holds the linked message while it is shown, or
   else the topmost message in view, and puts it back wherever a `ResizeObserver` sees the
@@ -901,9 +907,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   view by other than the finger's distance, or if the top of what is loaded, where a page would
   be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
   it from the bottom; every other scroll does, the reader's and find-in-page's alike.
-  `MessageList` shows a change only once the list is at rest (no finger on it, and no scroll event
-  for `SETTLE_MS`): iOS Safari has no scroll anchoring of its own and loses or fights a scroll
-  correction made while the list is dragged or coasting. Nothing above the view may change height
+  Where the browser does not anchor (found by trying it, `anchors`), `MessageList` shows a change
+  only once the list is at rest (no finger on it, and no scroll event for `SETTLE_MS`): iOS
+  Safari has no scroll anchoring of its own and loses or fights a scroll correction made while
+  the list is dragged or coasting. A second test flicks back through the same history in quick,
+  gathering flicks, and allows the awaited top to show in at most `SEAM_SHARE` of its frames. Nothing above the view may change height
   while a page loads; the loading lines keep theirs. A window that is not at the
   latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
   which reloads the newest page.

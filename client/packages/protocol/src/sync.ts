@@ -137,8 +137,13 @@ export interface InviteLookup {
   member: boolean;
 }
 
-/** Messages fetched per page, for the latest window and each older page. */
+/** Messages fetched for a channel's latest window, which is read before anything shows. */
 export const MESSAGE_PAGE_SIZE = 50;
+/**
+ * Messages fetched per page further back or forward through history, which is read ahead of
+ * the reader: larger, so a reader moving fast stays inside what is loaded.
+ */
+export const HISTORY_PAGE_SIZE = 100;
 /** Messages fetched on each side of a linked message. */
 export const MESSAGE_AROUND_RADIUS = 25;
 /** How long the server keeps events replayable; mirrors the server's `MAX_EVENT_AGE`. */
@@ -516,9 +521,9 @@ export class AspenSync {
       }
       const messages = await this.#readMessages(channelId, {
         before: oldest,
-        limit: MESSAGE_PAGE_SIZE,
+        limit: HISTORY_PAGE_SIZE,
       });
-      this.store.prependWindow(channelId, messages, messages.length === MESSAGE_PAGE_SIZE);
+      this.store.prependWindow(channelId, messages, messages.length === HISTORY_PAGE_SIZE);
     });
   }
 
@@ -535,9 +540,9 @@ export class AspenSync {
       }
       const messages = await this.#readMessages(channelId, {
         after: newest,
-        limit: MESSAGE_PAGE_SIZE,
+        limit: HISTORY_PAGE_SIZE,
       });
-      this.store.appendWindow(channelId, messages, messages.length < MESSAGE_PAGE_SIZE);
+      this.store.appendWindow(channelId, messages, messages.length < HISTORY_PAGE_SIZE);
     });
   }
 
