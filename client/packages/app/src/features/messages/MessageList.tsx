@@ -1,4 +1,4 @@
-import type { MessageWindow } from "@aspen/protocol";
+import { HISTORY_PAGE_SIZE, WINDOW_MAX_MESSAGES, type MessageWindow } from "@aspen/protocol";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Fragment,
@@ -13,6 +13,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button } from "react-aria-components";
+import { flushSync } from "react-dom";
 import {
   useBlockedUsers,
   useChannel,
@@ -35,16 +36,16 @@ import { useMessages } from "@/i18n/context";
 /**
  * The loaded window of a channel, oldest at the top. Stays pinned to the bottom while the user
  * is there and keeps the message under the viewport still when the window changes around it,
- * and when content changes size under it, as pictures and link cards load: the list holds its
- * view itself (`hold`), since Safari has no scroll anchoring and other browsers' is unreliable
- * across a jump, and turns the browser's off so the two never fight.
- * Keeping it still takes a scroll correction, which is made against where the view is when the
- * change is shown, and only while the list is at rest: iOS Safari has no scroll anchoring of its
- * own, and a correction made while a finger drags the list or it coasts afterwards is lost or
- * fought, so a change that arrives meanwhile waits until the list settles.
- * Nearing the top reads the previous page of history; nearing the bottom of a window that is
- * not at the latest reads the next one. The store keeps the window bounded, so a long scroll
- * drops what is far from the viewport, and the jump control returns to the present.
+ * and when content changes size under it, as pictures and link cards load: the browser's own
+ * scroll anchoring does it where there is any, and the list corrects whatever is left
+ * (`hold`), which is nothing where the browser anchored.
+ * A window change shows while the list moves only where the browser anchors scrolling on the
+ * page's thread (`showsWhileMoving`); elsewhere, iOS above all, a change made while a finger
+ * drags the list or it coasts afterwards is not kept still, and a correction then is lost or
+ * fought, so it waits until the list settles.
+ * History is read well ahead of the reader in the way they are heading. The store keeps the
+ * window bounded, so a long scroll drops what is far from the viewport, and the jump control
+ * returns to the present.
  *
  * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
  * even when a window around it had to be read first; keeping the old view still gives way to it,
@@ -71,11 +72,12 @@ const USER_SCROLL_MS = 500;
  */
 const LOAD_AHEAD_SCREENS = 20;
 /**
- * How close to the other end, or to either while which way the reader is going is unknown, the
- * next page is read. Reading far that way too would drop what the reader is heading into, in a
- * window of short messages, for a page they are leaving behind.
+ * How close to either end the next page is read while which way the reader is going is
+ * unknown. The end behind a reader is never read: each page read at one end of a full window
+ * drops messages from the other, so reading at both would trade pages back and forth for as
+ * long as the reader is near both, changing what is above the view each time.
  */
-const LOAD_BEHIND_SCREENS = 2;
+const LOAD_UNSURE_SCREENS = 2;
 /** How long after its last scroll event, with no finger down, the list counts as at rest. */
 const SETTLE_MS = 150;
 
@@ -105,9 +107,18 @@ function tryAnchoring(): boolean {
   return anchored;
 }
 
-/** Whether the browser keeps this list's view still itself (see `browserAnchors`). */
-function anchors(element: HTMLElement | null): boolean {
-  if (element === null || getComputedStyle(element).overflowAnchor !== "auto") {
+/**
+ * Whether iOS scrolls the page, as it does in a process of its own: a list changed while a
+ * finger drags it or a fling carries it there is not kept still, whatever the engine anchors.
+ */
+const SCROLLS_APART = typeof CSS !== "undefined" && CSS.supports("-webkit-touch-callout", "none");
+
+/**
+ * Whether a change may show while the list moves: where the browser keeps the view still
+ * itself (see `browserAnchors`) and moves it on the page's own thread.
+ */
+function showsWhileMoving(element: HTMLElement | null): boolean {
+  if (SCROLLS_APART || element === null || getComputedStyle(element).overflowAnchor !== "auto") {
     return false;
   }
   browserAnchors ??= tryAnchoring();
@@ -133,8 +144,6 @@ const SCROLL_KEYS: ReadonlySet<string> = new Set([
 interface Anchor {
   id: string;
   top: number;
-  /** The scroller's position then, by which to tell how far the reader moved it since. */
-  scrollTop: number;
 }
 
 export function MessageList({
@@ -262,11 +271,7 @@ export function MessageList({
     for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
       const rect = article.getBoundingClientRect();
       if (rect.bottom > origin) {
-        return {
-          id: article.dataset.messageId ?? "",
-          top: rect.top - origin,
-          scrollTop: element.scrollTop,
-        };
+        return { id: article.dataset.messageId ?? "", top: rect.top - origin };
       }
     }
     return null;
@@ -288,7 +293,7 @@ export function MessageList({
       const target = element.querySelector(`[data-message-id="${highlightId}"]`);
       if (target !== null) {
         const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
-        hold.current = { id: highlightId, top, scrollTop: element.scrollTop };
+        hold.current = { id: highlightId, top };
         return;
       }
     }
@@ -308,13 +313,13 @@ export function MessageList({
       const quietFor = Date.now() - scrolledAt.current;
       // A deleted message's space closing waits for nothing: rendering the whole list again
       // meanwhile would use its moment up before it is seen.
-      // Where the browser anchors scrolling, it holds the view through the change, so the page
-      // shows at once even mid-fling and nothing is noted to put back; elsewhere it waits for
-      // the list to rest. No browser anchors a view at the very top, which a reader who
-      // outran the page is at, so there the list puts it back itself.
+      // Where the browser anchors scrolling on the page's thread, it holds the view through
+      // the change, so the page shows at once even mid-fling; elsewhere it waits for the list
+      // to rest. No browser anchors a view at the very top, which a reader who outran the page
+      // is at, and the list's own correction below finds nothing to do wherever one did.
       const element = scroller.current;
-      const anchored = anchors(element) && element !== null && element.scrollTop > 0;
-      const moving = !anchored && (touching.current || quietFor < SETTLE_MS);
+      const anywhere = showsWhileMoving(element) && element !== null && element.scrollTop > 0;
+      const moving = !anywhere && (touching.current || quietFor < SETTLE_MS);
       if (!direct && (moving || closing.current)) {
         timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
         return;
@@ -323,11 +328,13 @@ export function MessageList({
         // A linked message waiting to be shown decides where the view goes, not what was in it.
         const linking = highlightId !== undefined && highlightShown.current !== highlightId;
         anchor.current =
-          linking || anchored || (stickToBottom.current && latest?.atLatest === true)
-            ? null
-            : captureAnchor();
+          linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
       }
-      setShown({ channelId, window: latest });
+      // Rendered in this same task, so the view noted is the view the change lands in: nothing
+      // the reader does can come between them.
+      flushSync(() => {
+        setShown({ channelId, window: latest });
+      });
     };
     timer = setTimeout(commit, 0);
     return () => {
@@ -371,14 +378,10 @@ export function MessageList({
       anchor.current = null;
       const target = element.querySelector(`[data-message-id="${restore.id}"]`);
       if (target !== null) {
-        // The reader may have moved the list while the change rendered, a finger landing just
-        // as a page shows; what they moved is theirs to keep, and only the change is undone.
-        // Assigning the position even unchanged would cut a running fling short.
-        const moved = element.scrollTop - restore.scrollTop;
+        // Nothing is left to correct where the browser anchored the view itself, and assigning
+        // the position even unchanged would cut a running fling short.
         const drift =
-          target.getBoundingClientRect().top -
-          element.getBoundingClientRect().top -
-          (restore.top - moved);
+          target.getBoundingClientRect().top - element.getBoundingClientRect().top - restore.top;
         if (Math.abs(drift) >= 1) {
           scrollSelf(element, () => {
             element.scrollTop += drift;
@@ -397,18 +400,20 @@ export function MessageList({
     }
   }
 
-  // A different channel starts pinned to the bottom; a linked message's own scroll unpins it.
+  // A different channel starts pinned to the bottom, with no way known that its reader is going;
+  // a linked message's own scroll unpins it.
   useEffect(() => {
     stickToBottom.current = true;
+    heading.current = null;
   }, [channelId]);
 
   // Content changes size without the window changing: pictures and link cards load, reactions
   // come and go. The view stays where it is through it: pinned to the bottom there, and
   // otherwise with the held message (see `hold`) where it was, so a picture loading above what
   // is being read never pushes it away. Where the browser anchors scrolling itself
-  // (`overflow-anchor`, everywhere but Safari), it holds the view through such changes even
-  // while a finger drags or a fling runs, and this finds nothing left to correct. Where it does
-  // not, the list corrects only at rest: while the reader is moving the list, a correction
+  // (`overflow-anchor`), it holds the view through such changes even while a finger drags or a
+  // fling runs, and this finds nothing left to correct. Where it does not, the list corrects
+  // only at rest: while the reader is moving the list, a correction
   // would fight a finger or cut a fling short, and their next scroll holds wherever they leave
   // it. `e2e/historyScroll.spec.ts` drags back through a long history to check it.
   useEffect(() => {
@@ -487,10 +492,33 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, atLatest]);
 
+  /**
+   * Whether a page read at one end leaves the other end's messages that a full window drops
+   * well out of view: at least `LOAD_UNSURE_SCREENS` past the view, so nothing the reader can
+   * see goes, and they meet the dropped end only after reading their way back towards it.
+   */
+  function roomFor(way: "older" | "newer"): boolean {
+    const element = scroller.current;
+    const dropped = (ids?.length ?? 0) + HISTORY_PAGE_SIZE - WINDOW_MAX_MESSAGES;
+    if (element === null || ids === undefined || dropped <= 0) {
+      return true;
+    }
+    // The dropped message nearest the view.
+    const nearest = way === "older" ? ids[ids.length - dropped] : ids[dropped - 1];
+    const row = element.querySelector(`[data-message-id="${nearest ?? ""}"]`);
+    if (row === null) {
+      return true;
+    }
+    const view = element.getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
+    const margin = element.clientHeight * LOAD_UNSURE_SCREENS;
+    return way === "older" ? rect.top > view.bottom + margin : rect.bottom < view.top - margin;
+  }
+
   // A page already read but not yet shown is waiting for the list to settle, or for the next
   // render; reading the next one before it shows would only pile changes up.
   function loadOlder() {
-    if (loadingOlder || !hasOlder || held) {
+    if (loadingOlder || !hasOlder || held || !roomFor("older")) {
       return;
     }
     setLoadingOlder(true);
@@ -503,7 +531,7 @@ export function MessageList({
   }
 
   function loadNewer() {
-    if (loadingNewer || atLatest || held) {
+    if (loadingNewer || atLatest || held || !roomFor("newer")) {
       return;
     }
     setLoadingNewer(true);
@@ -522,12 +550,13 @@ export function MessageList({
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const screens = (way: "older" | "newer") =>
-      element.clientHeight * (heading.current === way ? LOAD_AHEAD_SCREENS : LOAD_BEHIND_SCREENS);
-    if (element.scrollTop < screens("older")) {
+    const toward = heading.current;
+    const screens = toward === null ? LOAD_UNSURE_SCREENS : LOAD_AHEAD_SCREENS;
+    const near = element.clientHeight * screens;
+    if (toward !== "newer" && element.scrollTop < near) {
       loadOlder();
     }
-    if (distanceFromBottom < screens("newer") && !jumping.current) {
+    if (toward !== "older" && distanceFromBottom < near && !jumping.current) {
       loadNewer();
     }
   }
@@ -586,6 +615,8 @@ export function MessageList({
       event.nativeEvent.offsetX >= event.currentTarget.clientWidth
     ) {
       noteUserScroll();
+      // A scrollbar may be dragged either way.
+      heading.current = null;
     }
   }
 
@@ -619,6 +650,7 @@ export function MessageList({
   /** Back to the present: the newest page replaces the window and the view pins to the bottom. */
   function jumpToLatest(): Promise<void> {
     stickToBottom.current = true;
+    heading.current = null;
     anchor.current = null;
     jumping.current = true;
     // The list goes to the end of what it holds while the newest are on their way; the next

@@ -93,7 +93,7 @@ function attachmentOf(picture: Picture) {
 }
 
 /** #general's history, paged as the server pages it, newest first. */
-async function serveHistory(page: Page) {
+async function serveHistory(page: Page, messages: typeof history = history) {
   await page.route(`**/api/v1/channels/${general}/messages*`, async (route) => {
     const url = new URL(route.request().url());
     const limit = Number(url.searchParams.get("limit") ?? "50");
@@ -102,13 +102,13 @@ async function serveHistory(page: Page) {
     let slice: typeof history;
     if (before !== null) {
       await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
-      const start = history.findIndex((m) => (m.record.id as string) < before);
-      slice = start === -1 ? [] : history.slice(start, start + limit);
+      const start = messages.findIndex((m) => (m.record.id as string) < before);
+      slice = start === -1 ? [] : messages.slice(start, start + limit);
     } else if (after !== null) {
-      const newer = history.filter((m) => (m.record.id as string) > after).reverse();
+      const newer = messages.filter((m) => (m.record.id as string) > after).reverse();
       slice = newer.slice(0, limit).reverse();
     } else {
-      slice = history.slice(0, limit);
+      slice = messages.slice(0, limit);
     }
     await route.fulfill({
       json: {
@@ -207,8 +207,19 @@ async function touch(
   });
 }
 
-for (const anchoring of [true, false]) {
-  test(`reading slowly back through a long history never waits and never moves by itself${anchoring ? "" : ", where the browser anchors nothing (as Safari)"}`, async ({
+/**
+ * The browsers the slow test reads in, by what they do when content above the view changes:
+ * anchor it while the list moves, anchor it but take no change while the list moves (as iOS,
+ * which scrolls apart from the page), or not anchor it at all (as older Safari).
+ */
+const SCROLLERS = [
+  { name: "", anchoring: true, ios: false },
+  { name: ", where changes wait for rest (as iOS)", anchoring: true, ios: true },
+  { name: ", where the browser anchors nothing (as older Safari)", anchoring: false, ios: false },
+];
+
+for (const { name, anchoring, ios } of SCROLLERS) {
+  test(`reading slowly back through a long history never waits and never moves by itself${name}`, async ({
     page,
     browserName,
     isMobile,
@@ -218,9 +229,17 @@ for (const anchoring of [true, false]) {
       "a finger is driven through Chromium's protocol",
     );
     test.setTimeout(600_000);
+    if (ios) {
+      // A finger cannot be driven through WebKit here, so Chromium is taken for iOS by the
+      // property only iOS knows, and the list then shows no change while it moves.
+      await page.addInitScript(() => {
+        const supports = CSS.supports.bind(CSS) as (property: string, value: string) => boolean;
+        CSS.supports = ((property: string, value: string) =>
+          property === "-webkit-touch-callout" || supports(property, value)) as typeof CSS.supports;
+      });
+    }
     if (!anchoring) {
-      // Safari does not anchor scrolling, and a finger cannot be driven through WebKit here, so
-      // Chromium is made to anchor nothing either: the list's own holding is then all there is.
+      // Chromium is made to anchor nothing: the list's own holding is then all there is.
       await page.addInitScript(() => {
         document.addEventListener("DOMContentLoaded", () => {
           const style = document.createElement("style");
@@ -405,4 +424,126 @@ test("flicking back through a long history keeps ahead of the reader", async ({
     seamFrames / frames,
     `share of frames in which the top of what was loaded was in view (${String(seamFrames)} of ${String(frames)})`,
   ).toBeLessThan(SEAM_SHARE);
+});
+
+/**
+ * A history a little longer than the window the list keeps, newest first: short lines from one
+ * person, moments apart, so all of it is only a few screens tall.
+ */
+const SHORT_COUNT = 320;
+const shortHistory = Array.from({ length: SHORT_COUNT }, (_, i) => {
+  const n = SHORT_COUNT - i;
+  const { record } = messageOf(n);
+  return {
+    record: {
+      ...record,
+      author: bob,
+      timestamp: new Date(Date.UTC(2026, 0, 1) + n * 5_000).toISOString(),
+      content: `Line ${String(n)}`,
+      attachments: [],
+    },
+    picture: null,
+  };
+});
+
+test("reading back through a history a little longer than the window keeps what is in view", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  test.setTimeout(120_000);
+  // Each page read at one end of a full window drops messages from the other: the newest,
+  // while the reader is still among them, or, read back at the bottom, the oldest above the
+  // view, again and again.
+  const reads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith(`/channels/${general}/messages`) && url.searchParams.has("after")) {
+      reads.push(url.search);
+    }
+  });
+  // A tall phone, on which the whole of what the window holds is within reading ahead.
+  await page.setViewportSize({ width: 430, height: 1400 });
+  await signInToWorld(page, (p) => serveHistory(p, shortHistory));
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  const newest = page.locator(`article[data-message-id="${id(SHORT_COUNT)}"]`);
+  await expect(newest).toBeVisible();
+  // History pages in ahead of a reader who has not yet moved, and what they are reading stays.
+  await page.waitForTimeout(3000);
+  await expect(
+    newest,
+    "the newest message, still in view once history has paged in",
+  ).toBeInViewport();
+  // Every frame: whether a message that was in view in the last one has left the page.
+  await page.evaluate(() => {
+    const record = window as unknown as { vanished: string[] };
+    record.vanished = [];
+    let inView: string[] = [];
+    const tick = () => {
+      const scroller = document.querySelector("article")?.closest(".overflow-y-auto");
+      if (scroller instanceof HTMLElement) {
+        for (const id of inView) {
+          if (scroller.querySelector(`article[data-message-id="${id}"]`) === null) {
+            record.vanished.push(id.slice(-4));
+          }
+        }
+        const view = scroller.getBoundingClientRect();
+        inView = Array.from(scroller.querySelectorAll<HTMLElement>("article[data-message-id]"))
+          .filter((article) => {
+            const rect = article.getBoundingClientRect();
+            return rect.bottom > view.top && rect.top < view.bottom;
+          })
+          .map((article) => article.dataset.messageId ?? "");
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  const box = await page
+    .locator("article")
+    .first()
+    .evaluate((article) => {
+      const rect = article.closest(".overflow-y-auto")?.getBoundingClientRect();
+      return rect === undefined ? null : { x: rect.x + rect.width / 2, y: rect.top + 60 };
+    });
+  const x = box?.x ?? 200;
+  const y = box?.y ?? 160;
+  const strays: string[] = [];
+  for (let stroke = 0; stroke < 40; stroke++) {
+    // A gentle stroke back through history, and a pause to read, in which nothing may move.
+    await touch(cdp, "touchStart", x, y);
+    for (let move = 1; move <= 10; move++) {
+      await touch(cdp, "touchMove", x, y + move * 15);
+      await page.waitForTimeout(16);
+    }
+    await page.waitForTimeout(200);
+    await touch(cdp, "touchEnd", x, y + 150);
+    const resting = await sample(page);
+    await page.waitForTimeout(800);
+    const rested = await sample(page);
+    if (resting !== null && rested !== null) {
+      const gone = Object.keys(resting.tops).filter((key) => !(key in rested.tops));
+      const drift = moves(resting.tops, rested.tops).filter((d) => Math.abs(d) > 1);
+      if (gone.length > 0 || drift.length > 0) {
+        strays.push(
+          `after stroke ${String(stroke)}: ${String(gone.length)} gone, moved ${drift.join(", ")}`,
+        );
+      }
+    }
+  }
+  const vanished = await page.evaluate(
+    () => (window as unknown as { vanished: string[] }).vanished,
+  );
+  expect(vanished, "messages in view that left the page").toEqual([]);
+  expect(strays, "times the view changed while the reader rested").toEqual([]);
+  expect(reads, "reads of newer messages while reading back").toEqual([]);
 });

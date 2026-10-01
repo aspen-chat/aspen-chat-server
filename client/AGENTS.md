@@ -883,19 +883,20 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   and dropping the segment never reloads the window. History pages in on its own, well ahead
   of the reader (`loadOlder` / `loadNewer`, `HISTORY_PAGE_SIZE` messages at a time): within
   `LOAD_AHEAD_SCREENS` of the end they are heading for, as their own wheel, finger, or keys
-  last moved the list, and `LOAD_BEHIND_SCREENS` of the other, so a window of short messages
-  never drops what the reader is heading into for a page they are leaving. The store keeps the
-  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records. Where the browser
-  anchors scrolling, a new page shows at once, even mid-fling, and the browser keeps the view;
-  elsewhere, and at the very top, where no browser anchors, the viewport is re-anchored on the
-  topmost visible message, measured when the change is shown rather than when its page was
-  asked for, and less whatever the reader scrolled while it rendered, so a finger landing just
-  as a page shows keeps its own movement.
+  last moved the list, and never at the end behind them (within `LOAD_UNSURE_SCREENS` of either
+  while that is unknown): a page read at one end of a full window drops messages from the
+  other, and reading at both would trade pages back and forth, changing what is above the view
+  each time. Nor is a page read whose arrival would drop messages within `LOAD_UNSURE_SCREENS`
+  of the view (`roomFor`): in a channel a little longer than the window, and only a few screens
+  tall, reading ahead would otherwise drop the very messages being read. The store keeps the
+  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records. Every change is
+  re-anchored on the topmost visible message, noted and rendered in one task (`flushSync`) so
+  nothing the reader does comes between them, and put back only by whatever the browser's own
+  anchoring left to do.
   Content that changes size without the window changing (pictures and link cards loading,
   reactions) moves nothing either: the list holds the linked message while it is shown, or
   else the topmost message in view, and puts it back wherever a `ResizeObserver` sees the
-  content change. Where the browser anchors scrolling itself (`overflow-anchor`, everywhere but
-  Safari), it holds the view through such changes even while the reader drags or the list
+  content change. Where the browser anchors scrolling itself (`overflow-anchor`), it holds the view through such changes even while the reader drags or the list
   coasts, and the list's own correction finds nothing left to do; where it does not, the list
   corrects only at rest, and holds wherever the reader leaves it. So nothing may change size
   while the list moves: a picture whose size is known keeps exactly its room before it loads
@@ -903,15 +904,18 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   arrived and the list is at rest (`Stillness`, `useStillness`, which the list provides),
   taking its own size then, in a frame the list corrects. `e2e/historyScroll.spec.ts` drags a
   phone back through 600 messages of tall pictures and paragraphs, a few pixels at a time, with
-  the browser's anchoring and, as in Safari, without it, and fails if any step moves what is in
+  the browser's anchoring, with it but changes held for rest as on iOS, and without it, and fails if any step moves what is in
   view by other than the finger's distance, or if the top of what is loaded, where a page would
   be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
   it from the bottom; every other scroll does, the reader's and find-in-page's alike.
-  Where the browser does not anchor (found by trying it, `anchors`), `MessageList` shows a change
-  only once the list is at rest (no finger on it, and no scroll event for `SETTLE_MS`): iOS
-  Safari has no scroll anchoring of its own and loses or fights a scroll correction made while
-  the list is dragged or coasting. A second test flicks back through the same history in quick,
-  gathering flicks, and allows the awaited top to show in at most `SEAM_SHARE` of its frames. Nothing above the view may change height
+  A window change shows while the list moves only where the browser anchors scrolling (found by
+  trying it) on the page's own thread (`showsWhileMoving`). Elsewhere `MessageList` shows it
+  once the list is at rest (no finger on it, and no scroll event for `SETTLE_MS`): iOS scrolls
+  apart from the page, so a change made while the list is dragged or coasting is not held still
+  there even though WebKit anchors, and a correction made then is lost or fought. A second test flicks back through the same history in quick,
+  gathering flicks, and allows the awaited top to show in at most `SEAM_SHARE` of its frames; a
+  third reads back through a history of short lines a little longer than the window and fails
+  if any message in view leaves the page, or if anything newer is read meanwhile. Nothing above the view may change height
   while a page loads; the loading lines keep theirs. A window that is not at the
   latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
   which reloads the newest page.
