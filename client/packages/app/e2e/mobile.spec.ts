@@ -191,9 +191,11 @@ test.describe("on a phone", () => {
           ? Infinity
           : article.getBoundingClientRect().top - element.getBoundingClientRect().top;
       }, id);
-    // Near the top, where the previous page is read.
+    // Near the top of what is loaded, where the previous page is read: below the space the
+    // list keeps for it.
     await scroller.evaluate((element) => {
-      element.scrollTop = 400;
+      const seam = element.querySelector<HTMLElement>('p[aria-live="polite"]');
+      element.scrollTop = (seam?.offsetTop ?? 0) + 400;
     });
     await expect(scroller.getByText("Loading…")).toBeVisible();
     // The reader keeps going while the page is on its way.

@@ -1,7 +1,6 @@
 import type { Attachment } from "@aspen/protocol";
-import { useStillness } from "@/features/messages/stillness";
 import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -174,36 +173,18 @@ const MAX_PICTURE_HEIGHT = 320;
 /**
  * A picture in the message; pressing it opens the message's gallery on that picture. A picture
  * whose size is known keeps exactly its room while it loads (`keptRoom`). One whose size is not
- * keeps a fixed square, a conservative guess, until it has arrived and the list it is in is at
- * rest (`useStillness`), and only then takes its own size, which the list's view holds still
- * through in the frame it is drawn; a size changed while the list moves would show as a jump
- * where the browser does not anchor scrolling itself. Either pulses as a skeleton until it has
- * loaded.
+ * keeps a fixed square, a conservative guess, until it has arrived, and then takes its own size,
+ * which the list keeps the view still through when it is above it (`MessageList`). Either
+ * pulses as a skeleton until it has loaded.
  */
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
-  const stillness = useStillness();
   const [arrived, setArrived] = useState<string | null>(null);
-  const [sized, setSized] = useState<string | null>(null);
   const known = picture.width != null && picture.height != null;
   const waiting = arrived !== picture.src;
-  const guessed = !known && sized !== picture.src;
-  const stopWaiting = useRef<(() => void) | null>(null);
-  useEffect(
-    () => () => {
-      stopWaiting.current?.();
-    },
-    [],
-  );
+  const guessed = !known && waiting;
   const arrive = () => {
     setArrived(picture.src);
-    if (!known) {
-      const src = picture.src;
-      stopWaiting.current?.();
-      stopWaiting.current = stillness.whenStill(() => {
-        setSized(src);
-      });
-    }
   };
   return (
     <Button

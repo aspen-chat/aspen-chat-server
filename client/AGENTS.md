@@ -889,34 +889,42 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   each time. Nor is a page read whose arrival would drop messages within `LOAD_UNSURE_SCREENS`
   of the view (`roomFor`): in a channel a little longer than the window, and only a few screens
   tall, reading ahead would otherwise drop the very messages being read. The store keeps the
-  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records. Every change is
-  re-anchored on the topmost visible message, noted and rendered in one task (`flushSync`) so
-  nothing the reader does comes between them, and put back only by whatever the browser's own
-  anchoring left to do.
-  Content that changes size without the window changing (pictures and link cards loading,
-  reactions) moves nothing either: the list holds the linked message while it is shown, or
-  else the topmost message in view, and puts it back wherever a `ResizeObserver` sees the
-  content change. Where the browser anchors scrolling itself (`overflow-anchor`), it holds the view through such changes even while the reader drags or the list
-  coasts, and the list's own correction finds nothing left to do; where it does not, the list
-  corrects only at rest, and holds wherever the reader leaves it. So nothing may change size
-  while the list moves: a picture whose size is known keeps exactly its room before it loads
-  (`keptRoom` in `Attachments.tsx`), and one whose size is not keeps a fixed square until it has
-  arrived and the list is at rest (`Stillness`, `useStillness`, which the list provides),
-  taking its own size then, in a frame the list corrects. `e2e/historyScroll.spec.ts` drags a
-  phone back through 600 messages of tall pictures and paragraphs, a few pixels at a time, with
-  the browser's anchoring, with it but changes held for rest as on iOS, and without it, and fails if any step moves what is in
-  view by other than the finger's distance, or if the top of what is loaded, where a page would
-  be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
-  it from the bottom; every other scroll does, the reader's and find-in-page's alike.
-  A window change shows while the list moves only where the browser anchors scrolling (found by
-  trying it) on the page's own thread (`showsWhileMoving`). Elsewhere `MessageList` shows it
-  once the list is at rest (no finger on it, and no scroll event for `SETTLE_MS`): iOS scrolls
-  apart from the page, so a change made while the list is dragged or coasting is not held still
-  there even though WebKit anchors, and a correction made then is lost or fought. A second test flicks back through the same history in quick,
-  gathering flicks, and allows the awaited top to show in at most `SEAM_SHARE` of its frames; a
-  third reads back through a history of short lines a little longer than the window and fails
-  if any message in view leaves the page, or if anything newer is read meanwhile. Nothing above the view may change height
-  while a page loads; the loading lines keep theirs. A window that is not at the
+  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records.
+  What is in view never moves when something above it changes: a page arriving, a picture or
+  link card loading, a reaction, a deleted message's space closing. The list does this without
+  moving the scroll position, because that cannot be done safely: iOS scrolls in a process of
+  its own, and its pan gesture places the view from where the pan began plus the finger's
+  travel, so a position set from the page while a finger drags or a fling runs is applied and
+  then overridden by the pan's next update, and the view lands wherever the change put it, a
+  page's height away. Instead the list keeps a reserve of space above its oldest message while
+  there is older history (`reserve` in `MessageList.tsx`, `RESERVE_PAGES` pages the size of the
+  rows loaded so far, drawn as skeleton rows), and whatever grows above the view takes exactly
+  its height from the reserve in the same layout: a window change is measured by the topmost
+  message in view, noted and rendered in one task (`flushSync`), and a row's growth by a
+  `ResizeObserver` on every row, which follows each row's size from when it appears. So nothing
+  in view moves, there is no position to override, and a page shows at any moment, mid-drag and
+  mid-fling included, on every platform. The browser's own scroll anchoring is off on the list
+  (`overflow-anchor: none`), so it never corrects the same change again. A picture whose size
+  is known still keeps exactly its room before it loads (`keptRoom` in `Attachments.tsx`), and
+  one whose size is not keeps a square until it arrives. Only two things move the position:
+  refilling the reserve once pages have used it, and letting it go once the channel's start is
+  reached (`maintain`), each made after `QUIET_MS` with no finger on the list and no scroll
+  event, in one frame, so a pan is unlikely to be under way; a reader who outruns the loading
+  scrolls into the skeleton rows until the page fills them from the bottom. The list's own
+  scrolls never pin or unpin it from the bottom; every other scroll does, the reader's and
+  find-in-page's alike. `e2e/historyScroll.spec.ts` drags a phone back through 600 messages of
+  tall pictures and paragraphs, a few pixels at a time, and fails if any step moves what is in
+  view by other than the finger's distance, or if the top of what is loaded, where a page
+  would be awaited, ever comes into view; a second test flicks back through the same history
+  in quick, gathering flicks, and allows the awaited top to show in at most `SEAM_SHARE` of its
+  frames; a third reads back through a history of short lines a little longer than the window
+  and fails if any message in view leaves the page, or if anything newer is read meanwhile.
+  The iOS simulator test `testReadingBackQuicklyNeverJumps` reads at a person's pace, with
+  flicks and drags that begin as soon as the last ended, against a build made with
+  `VITE_SCROLL_DEBUG=1`, in which the list records what it does with its position and counts
+  any scroll of more than a screen as a jump (`scrollDiagnostics.ts`, shown over the list by
+  `ScrollDiagnosticsPanel` with a copy of the record); it is how the pan's override was found.
+  A window that is not at the
   latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
   which reloads the newest page.
 - The UI thread is the only thread. Anything that awaits (network, storage) must not block

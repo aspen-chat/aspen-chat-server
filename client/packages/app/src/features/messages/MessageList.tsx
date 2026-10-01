@@ -28,31 +28,36 @@ import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useDeparting, type Departing } from "@/features/messages/departing";
 import { useMotion } from "@/features/layout/motion";
-import { Stillness, StillnessContext } from "@/features/messages/stillness";
 import { SCROLL_DEBUG, ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
 import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
-import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
+import { HistorySkeleton, MessageSkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 
 /**
  * The loaded window of a channel, oldest at the top. Stays pinned to the bottom while the user
- * is there and keeps the message under the viewport still when the window changes around it,
- * and when content changes size under it, as pictures and link cards load: the browser's own
- * scroll anchoring does it where there is any, and the list corrects whatever is left
- * (`hold`), which is nothing where the browser anchored.
- * A window change shows while the list moves only where the browser anchors scrolling on the
- * page's thread (`showsWhileMoving`); elsewhere, iOS above all, a change made while a finger
- * drags the list or it coasts afterwards is not kept still, and a correction then is lost or
- * fought, so it waits until the list settles.
- * History is read well ahead of the reader in the way they are heading. The store keeps the
+ * is there, and otherwise keeps what is in view still through every change above it: a page of
+ * older messages arriving, a picture loading, a deleted message's space closing.
+ *
+ * It does so without moving the scroll position, which is the one thing that cannot be done
+ * safely: iOS scrolls in a process of its own, and its pan gesture places the view from where
+ * the pan began plus the finger's travel, so a position set from the page while a finger drags
+ * or a fling runs is overridden by the pan's next update, and the view lands wherever the change
+ * put it. Instead the list keeps a reserve of space above its oldest message while there is
+ * older history (`reserve`, drawn as skeleton rows), and whatever grows above the view takes
+ * exactly its height from the reserve in the same layout, so nothing in view moves and there is
+ * no position to override: a page can show at any moment, mid-drag and mid-fling included. The
+ * browser's own scroll anchoring is off, so it never corrects the same change again. Only
+ * refilling the reserve once pages have used it, and letting it go once the channel's start is
+ * reached, move the position, and those wait for a quiet moment and take a frame, not a render.
+ * History is read well ahead of the reader in the way they are heading, and the store keeps the
  * window bounded, so a long scroll drops what is far from the viewport, and the jump control
  * returns to the present.
  *
  * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
- * even when a window around it had to be read first; keeping the old view still gives way to it,
- * and so does staying at the bottom. The first scroll the user makes afterwards drops
- * the message from the URL, so the link is shareable but does not keep pulling the view back.
+ * even when a window around it had to be read first; staying at the bottom gives way to it.
+ * The first scroll the user makes afterwards drops the message from the URL, so the link is
+ * shareable but does not keep pulling the view back.
  *
  * In a channel that keeps a read position (any but a thread), the newest message on screen
  * counts as read while the page is visible and has focus. A channel opened with something
@@ -80,52 +85,20 @@ const LOAD_AHEAD_SCREENS = 20;
  * long as the reader is near both, changing what is above the view each time.
  */
 const LOAD_UNSURE_SCREENS = 2;
-/** How long after its last scroll event, with no finger down, the list counts as at rest. */
-const SETTLE_MS = 150;
-
 /**
- * Whether the browser keeps the view still itself when content above it grows
- * (`overflow-anchor`), found once by trying it, since an engine may know the property without
- * doing it.
+ * How much space is kept above the oldest message while there is older history, in pages the
+ * size of the rows loaded so far: enough for the pages that may arrive before a quiet moment
+ * refills it.
  */
-let browserAnchors: boolean | undefined;
-
-function tryAnchoring(): boolean {
-  const box = document.createElement("div");
-  box.style.cssText =
-    "position:fixed;left:0;top:0;width:10px;height:100px;overflow:auto;opacity:0;pointer-events:none";
-  const above = document.createElement("div");
-  above.style.height = "10px";
-  const rest = document.createElement("div");
-  rest.style.height = "1000px";
-  box.append(above, rest);
-  document.body.append(box);
-  box.scrollTop = 500;
-  // Laid out at that position before the content above it grows.
-  box.getBoundingClientRect();
-  above.style.height = "110px";
-  const anchored = box.scrollTop === 600;
-  box.remove();
-  return anchored;
-}
-
+const RESERVE_PAGES = 3;
+/** How many skeleton rows are drawn at the bottom of the reserve; above them it is empty. */
+const RESERVE_ROWS = 24;
 /**
- * Whether iOS scrolls the page, as it does in a process of its own: a list changed while a
- * finger drags it or a fling carries it there is not kept still, whatever the engine anchors.
+ * How long the list must have been quiet, with no finger on it and no scroll event, before its
+ * position is moved to refill or let go of the reserve: short enough to come between a reader's
+ * strokes, and the move takes a frame, so a finger landing in it is unlikely.
  */
-const SCROLLS_APART = typeof CSS !== "undefined" && CSS.supports("-webkit-touch-callout", "none");
-
-/**
- * Whether a change may show while the list moves: where the browser keeps the view still
- * itself (see `browserAnchors`) and moves it on the page's own thread.
- */
-function showsWhileMoving(element: HTMLElement | null): boolean {
-  if (SCROLLS_APART || element === null || getComputedStyle(element).overflowAnchor !== "auto") {
-    return false;
-  }
-  browserAnchors ??= tryAnchoring();
-  return browserAnchors;
-}
+const QUIET_MS = 300;
 /** How long a deleted message's space takes to close at normal speed, as `--motion-base`. */
 const COLLAPSE_MS = 200;
 /** The ids of a list with no window yet, one array so its identity holds. */
@@ -142,7 +115,7 @@ const SCROLL_KEYS: ReadonlySet<string> = new Set([
   " ",
 ]);
 
-/** A message at the top of the viewport and where it sat, so it can be put back after a change. */
+/** A message in the viewport and where it sat, so a change can be measured by it. */
 interface Anchor {
   id: string;
   top: number;
@@ -161,8 +134,8 @@ export function MessageList({
   const sync = useSync();
   const navigate = useNavigate();
   const latest = useMessageWindow(channelId);
-  // What is on screen: the store's window, except that a change to it waits while the list
-  // moves. A different channel, or the first page of one, is shown at once.
+  // What is on screen: the store's window, except that a change to it waits while a deleted
+  // message's space is closing. A different channel, or the first page of one, is shown at once.
   const [shown, setShown] = useState({ channelId, window: latest });
   const window =
     shown.channelId === channelId && shown.window !== undefined ? shown.window : latest;
@@ -172,11 +145,16 @@ export function MessageList({
   // a channel's history.
   const parentId = channel?.ty === "thread" ? (channel.parentChannel ?? null) : null;
   const scroller = useRef<HTMLDivElement>(null);
+  /** The rows: messages, blocked runs, the new-messages line, and spaces closing. */
+  const rows = useRef<HTMLDivElement>(null);
+  /** The reserve above the oldest message, and its height in pixels. */
+  const reserveBox = useRef<HTMLDivElement>(null);
+  const reserve = useRef(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
   /** Whether the newest page is being read for "Jump to latest". */
   const jumping = useRef(false);
-  /** Where the viewport was before a page was read, restored once the window has changed. */
+  /** Where the view was before the window changed, so the change is measured by it. */
   const anchor = useRef<Anchor | null>(null);
   const stickToBottom = useRef(true);
   /** The highlighted message already scrolled to, so it is done once per link. */
@@ -186,10 +164,12 @@ export function MessageList({
   /**
    * Where the list last scrolled itself to. The scroll event that lands there is its own, and
    * any other is someone else's: the reader's, find-in-page's, a screen reader's. It is told by
-   * where the view lands rather than by when, because the list scrolls itself again and again
-   * while content loads, and a reader's scroll in the midst of that is still theirs.
+   * where the view lands rather than by when, because a reader's scroll in the midst of the
+   * list's own is still theirs.
    */
   const ownScrollTop = useRef<number | null>(null);
+  /** What the list does with its position, in a build made to find a jump (see the module). */
+  const [diagnostics] = useState(() => (SCROLL_DEBUG ? new ScrollDiagnostics() : null));
   function scrollSelf(element: HTMLDivElement, move: () => void) {
     programmaticUntil.current = Date.now() + PROGRAMMATIC_SCROLL_MS;
     const before = element.scrollTop;
@@ -214,10 +194,6 @@ export function MessageList({
    */
   const heading = useRef<"older" | "newer" | null>(null);
   const touchY = useRef<number | null>(null);
-  /** The list's rest, which what changes size by itself waits for (`stillness.ts`). */
-  const [stillness] = useState(() => new Stillness());
-  /** What the list does with its position, in a build made to find a jump (see the module). */
-  const [diagnostics] = useState(() => (SCROLL_DEBUG ? new ScrollDiagnostics() : null));
   const store = useStore();
   const readState = useReadState(channelId);
   /**
@@ -265,6 +241,8 @@ export function MessageList({
   const lastId = ids?.[ids.length - 1];
   const hasOlder = window?.hasOlder ?? false;
   const atLatest = window?.atLatest ?? true;
+  const hasOlderNow = useRef(hasOlder);
+  hasOlderNow.current = hasOlder;
 
   /** The topmost message with any part in view, and its offset from the top of the scroller. */
   function captureAnchor(): Anchor | null {
@@ -282,31 +260,56 @@ export function MessageList({
     return null;
   }
 
-  /**
-   * Where the view is, held still whenever content changes size under it: the linked message
-   * while it is being shown, or else the topmost message in view, at its offset from the top.
-   * Nothing is held while the list is pinned to the bottom, which the bottom holds instead.
-   */
-  const hold = useRef<Anchor | null>(null);
-  function captureHold() {
-    const element = scroller.current;
-    if (element === null || (stickToBottom.current && atLatest)) {
-      hold.current = null;
-      return;
+  function setReserve(px: number) {
+    reserve.current = px;
+    if (reserveBox.current !== null) {
+      reserveBox.current.style.height = `${String(px)}px`;
     }
-    if (highlightId !== undefined && highlightShown.current === highlightId) {
-      const target = element.querySelector(`[data-message-id="${highlightId}"]`);
-      if (target !== null) {
-        const top = target.getBoundingClientRect().top - element.getBoundingClientRect().top;
-        hold.current = { id: highlightId, top };
-        return;
-      }
-    }
-    hold.current = captureAnchor();
   }
 
-  // Shows the store's window once the list is at rest, noting where the view was so the layout
-  // effect below can keep it there.
+  /** The reserve to keep: `RESERVE_PAGES` pages the size of the rows loaded so far. */
+  function reserveTarget(): number {
+    const box = rows.current;
+    const count = ids?.length ?? 0;
+    if (box === null || count === 0) {
+      return 0;
+    }
+    return Math.round((box.offsetHeight / count) * HISTORY_PAGE_SIZE * RESERVE_PAGES);
+  }
+
+  /**
+   * Keeps the view still through a change of `by` pixels in the height of what is above it:
+   * the reserve gives up that much, or takes it back when what was above shrank. Only when the
+   * reserve has nothing left to give is the position moved, by what remains; a pan under way
+   * on iOS overrides that, so the reserve is kept from running out (`maintain`).
+   */
+  function absorb(element: HTMLDivElement, by: number, why: string) {
+    if (Math.abs(by) < 0.5) {
+      return;
+    }
+    let remaining = by;
+    if (reserveBox.current !== null) {
+      const left = reserve.current - by;
+      if (left >= 0) {
+        diagnostics?.note(
+          `${why} ${String(Math.round(by))} from reserve ${String(Math.round(reserve.current))}->${String(Math.round(left))}`,
+        );
+        setReserve(left);
+        return;
+      }
+      remaining = -left;
+      diagnostics?.note(
+        `${why} ${String(Math.round(by))} empties reserve ${String(Math.round(reserve.current))}, moving ${String(Math.round(remaining))}`,
+      );
+      setReserve(0);
+    }
+    scrollSelf(element, () => {
+      element.scrollTop += remaining;
+    });
+  }
+
+  // Shows the store's window, at once unless a deleted message's space is closing: rendering
+  // the whole list again meanwhile would use its moment up before it is seen.
   useEffect(() => {
     if (shown.channelId === channelId && shown.window === latest) {
       return;
@@ -315,21 +318,8 @@ export function MessageList({
     const direct = shown.channelId !== channelId || shown.window === undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const commit = () => {
-      const quietFor = Date.now() - scrolledAt.current;
-      // A deleted message's space closing waits for nothing: rendering the whole list again
-      // meanwhile would use its moment up before it is seen.
-      // Where the browser anchors scrolling on the page's thread, it holds the view through
-      // the change, so the page shows at once even mid-fling; elsewhere it waits for the list
-      // to rest. No browser anchors a view at the very top, which a reader who outran the page
-      // is at, and the list's own correction below finds nothing to do wherever one did.
-      const element = scroller.current;
-      const anywhere = showsWhileMoving(element) && element !== null && element.scrollTop > 0;
-      const moving = !anywhere && (touching.current || quietFor < SETTLE_MS);
-      if (!direct && (moving || closing.current)) {
-        diagnostics?.note(
-          `commit waits touching=${String(touching.current)} quiet=${String(quietFor)} closing=${String(closing.current)}`,
-        );
-        timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
+      if (!direct && closing.current) {
+        timer = setTimeout(commit, 16);
         return;
       }
       if (!direct) {
@@ -339,14 +329,13 @@ export function MessageList({
           linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
       }
       diagnostics?.note(
-        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} at ${String(element?.scrollTop ?? 0)} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
+        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} at ${String(scroller.current?.scrollTop ?? 0)} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
       );
       // Rendered in this same task, so the view noted is the view the change lands in: nothing
       // the reader does can come between them.
       flushSync(() => {
         setShown({ channelId, window: latest });
       });
-      diagnostics?.noteMoved(element?.scrollTop ?? 0, "committed, now at");
     };
     timer = setTimeout(commit, 0);
     return () => {
@@ -360,7 +349,6 @@ export function MessageList({
       return;
     }
     position(element);
-    captureHold();
     // Positioned when the window's edges, the link, or being at the latest change; what it
     // reads besides is current in the refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -382,63 +370,129 @@ export function MessageList({
         scrollSelf(element, () => {
           target.scrollIntoView({ block: "center" });
         });
+        scheduleMaintain();
         return;
       }
     }
-    const restore = anchor.current;
-    if (restore !== null) {
+    const measured = anchor.current;
+    if (measured !== null) {
       anchor.current = null;
-      const target = element.querySelector(`[data-message-id="${restore.id}"]`);
+      const target = element.querySelector(`[data-message-id="${measured.id}"]`);
       if (target !== null) {
-        // Nothing is left to correct where the browser anchored the view itself, and assigning
-        // the position even unchanged would cut a running fling short.
         const drift =
-          target.getBoundingClientRect().top - element.getBoundingClientRect().top - restore.top;
-        diagnostics?.note(`restore ${restore.id.slice(-4)} drift ${String(Math.round(drift))}`);
-        if (Math.abs(drift) >= 1) {
-          scrollSelf(element, () => {
-            element.scrollTop += drift;
-          });
-        }
+          target.getBoundingClientRect().top - element.getBoundingClientRect().top - measured.top;
+        absorb(element, drift, "page");
       }
+      scheduleMaintain();
       return;
     }
     if (highlightId !== undefined) {
       return;
     }
     if (stickToBottom.current && atLatest) {
+      // A channel's first page is pinned to the bottom, with the reserve above it in place from
+      // the start, so its first older pages take from it and move nothing.
+      if (hasOlder && reserve.current === 0) {
+        setReserve(reserveTarget());
+      }
       scrollSelf(element, () => {
         element.scrollTop = element.scrollHeight;
       });
     }
   }
 
-  // A different channel starts pinned to the bottom, with no way known that its reader is going;
-  // a linked message's own scroll unpins it.
+  // A different channel starts pinned to the bottom, with no reserve yet and no way known that
+  // its reader is going; a linked message's own scroll unpins it.
   useEffect(() => {
     stickToBottom.current = true;
     heading.current = null;
+    setReserve(0);
   }, [channelId]);
 
-  // Content changes size without the window changing: pictures and link cards load, reactions
-  // come and go. The view stays where it is through it: pinned to the bottom there, and
-  // otherwise with the held message (see `hold`) where it was, so a picture loading above what
-  // is being read never pushes it away. Where the browser anchors scrolling itself
-  // (`overflow-anchor`), it holds the view through such changes even while a finger drags or a
-  // fling runs, and this finds nothing left to correct. Where it does not, the list corrects
-  // only at rest: while the reader is moving the list, a correction
-  // would fight a finger or cut a fling short, and their next scroll holds wherever they leave
-  // it. `e2e/historyScroll.spec.ts` drags back through a long history to check it.
+  /**
+   * The moves of the position that keep the reserve able to absorb: refilling it once pages
+   * have taken from it, and letting it go once the channel's start has been reached. Made only
+   * after `QUIET_MS` with no finger on the list and no scroll event, in one frame, so a pan
+   * that overrides them is unlikely to be under way.
+   */
+  const maintainTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function scheduleMaintain() {
+    clearTimeout(maintainTimer.current);
+    maintainTimer.current = setTimeout(maintain, QUIET_MS);
+  }
+  function maintain() {
+    maintainTimer.current = undefined;
+    const element = scroller.current;
+    if (element === null) {
+      return;
+    }
+    const quietFor = Date.now() - scrolledAt.current;
+    if (touching.current || quietFor < QUIET_MS) {
+      maintainTimer.current = setTimeout(maintain, Math.max(QUIET_MS - quietFor, 16));
+      return;
+    }
+    const pinned = stickToBottom.current && atLatest;
+    if (!hasOlderNow.current) {
+      if (reserve.current > 0) {
+        const gone = reserve.current;
+        diagnostics?.note(`reserve let go ${String(gone)}`);
+        setReserve(0);
+        scrollSelf(element, () => {
+          element.scrollTop = pinned ? element.scrollHeight : element.scrollTop - gone;
+        });
+      }
+      return;
+    }
+    const target = reserveTarget();
+    if (reserve.current < target / 2) {
+      const added = target - reserve.current;
+      diagnostics?.note(`reserve refilled ${String(reserve.current)}->${String(target)}`);
+      setReserve(target);
+      scrollSelf(element, () => {
+        element.scrollTop = pinned ? element.scrollHeight : element.scrollTop + added;
+      });
+    }
+  }
+  useEffect(
+    () => () => {
+      clearTimeout(maintainTimer.current);
+    },
+    [channelId],
+  );
+
+  // Rows change size without the window changing: pictures and link cards load, reactions come
+  // and go, a deleted message's space closes. One wholly above the view takes the change from
+  // the reserve, so nothing in view moves; pinned to the bottom, the list stays there. Each
+  // row's size is followed from when it appears, so a change is known however the layout that
+  // brought it is reached.
   useEffect(() => {
     const element = scroller.current;
-    if (element === null || typeof ResizeObserver === "undefined") {
+    const box = rows.current;
+    if (
+      element === null ||
+      box === null ||
+      typeof ResizeObserver === "undefined" ||
+      typeof MutationObserver === "undefined"
+    ) {
       return;
     }
-    const content = element.firstElementChild;
-    if (content === null) {
-      return;
-    }
-    const observer = new ResizeObserver(() => {
+    const heights = new WeakMap<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      const viewTop = element.getBoundingClientRect().top;
+      let above = 0;
+      for (const entry of entries) {
+        const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
+        const was = heights.get(entry.target);
+        heights.set(entry.target, height);
+        if (was === undefined || height === was) {
+          continue;
+        }
+        // Where the row's bottom was before the change, which moved it by as much.
+        const bottomBefore = entry.target.getBoundingClientRect().bottom - (height - was);
+        if (bottomBefore <= viewTop + 1) {
+          above += height - was;
+        }
+      }
       measure();
       if (stickToBottom.current && atLatest) {
         scrollSelf(element, () => {
@@ -446,35 +500,32 @@ export function MessageList({
         });
         return;
       }
-      const held = hold.current;
-      const moving = touching.current || Date.now() - scrolledAt.current < SETTLE_MS;
-      if (held === null || moving) {
-        return;
-      }
-      const target = element.querySelector(`[data-message-id="${held.id}"]`);
-      if (target === null) {
-        captureHold();
-        return;
-      }
-      const drift =
-        target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.top;
-      diagnostics?.note(
-        `resize ${String(Math.round(content.getBoundingClientRect().height))} hold ${held.id.slice(-4)} drift ${String(Math.round(drift))}`,
-      );
-      if (Math.abs(drift) >= 1) {
-        scrollSelf(element, () => {
-          element.scrollTop += drift;
-        });
+      if (above !== 0) {
+        absorb(element, above, "rows above");
       }
     });
-    observer.observe(content);
+    const watch = (node: Node) => {
+      if (node instanceof Element) {
+        observer.observe(node);
+      }
+    };
+    for (const child of box.children) {
+      watch(child);
+    }
+    const arrivals = new MutationObserver((records) => {
+      for (const record of records) {
+        record.addedNodes.forEach(watch);
+      }
+    });
+    arrivals.observe(box, { childList: true });
     return () => {
+      arrivals.disconnect();
       observer.disconnect();
     };
-    // The observer reads the held position and the rest through refs; it is made again when
-    // being at the latest, or the link, changes what it holds.
+    // The observers read the rest through refs; made again when being at the latest changes
+    // what growth does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, atLatest, highlightId]);
+  }, [loaded, atLatest]);
 
   // The list itself shrinks when something takes the screen's space, as the keyboard does when
   // the message box is chosen on a phone. Its bottom edge stays where it was, so what was just
@@ -496,9 +547,6 @@ export function MessageList({
         element.scrollTop =
           stickToBottom.current && atLatest ? element.scrollHeight : element.scrollTop + lost;
       });
-      if (!(stickToBottom.current && atLatest)) {
-        captureHold();
-      }
     });
     observer.observe(element);
     return () => {
@@ -531,8 +579,8 @@ export function MessageList({
     return way === "older" ? rect.top > view.bottom + margin : rect.bottom < view.top - margin;
   }
 
-  // A page already read but not yet shown is waiting for the list to settle, or for the next
-  // render; reading the next one before it shows would only pile changes up.
+  // A page already read but not yet shown is waiting for the next render; reading the next one
+  // before it shows would only pile changes up.
   function loadOlder() {
     if (loadingOlder || !hasOlder || held || !roomFor("older")) {
       return;
@@ -566,10 +614,12 @@ export function MessageList({
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    // The window's top is below the reserve.
+    const distanceFromTop = element.scrollTop - reserve.current;
     const toward = heading.current;
     const screens = toward === null ? LOAD_UNSURE_SCREENS : LOAD_AHEAD_SCREENS;
     const near = element.clientHeight * screens;
-    if (toward !== "newer" && element.scrollTop < near) {
+    if (toward !== "newer" && distanceFromTop < near) {
       loadOlder();
     }
     if (toward !== "older" && distanceFromBottom < near && !jumping.current) {
@@ -587,9 +637,6 @@ export function MessageList({
   }, [loaded, firstId, lastId]);
 
   function onScroll() {
-    // The list's own scrolls are not movement, and do not move what it holds: one that
-    // corrects for a picture loading may be read only after the next picture has grown, and
-    // holding the view where it then is would keep that picture's push.
     const element = scroller.current;
     if (element === null) {
       return;
@@ -601,14 +648,12 @@ export function MessageList({
       ownScrollTop.current = null;
     } else {
       scrolledAt.current = Date.now();
-      stillness.noteScroll();
     }
     noteSeenSoon();
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
     const byUser = Date.now() - userScrollAt.current < USER_SCROLL_MS;
     // Whether the list is pinned to the bottom follows every scroll but its own: the reader's,
-    // and those of find-in-page or a screen reader. Content loading moves nothing by itself
-    // with the browser's anchoring off, so it never unpins the list.
+    // and those of find-in-page or a screen reader.
     if (!ours) {
       stickToBottom.current = atLatest && distanceFromBottom < 8;
     }
@@ -616,9 +661,7 @@ export function MessageList({
     if (highlightId !== undefined && byUser && Date.now() > programmaticUntil.current) {
       void navigate({ ...channelLink(home, channelId), replace: true });
     }
-    if (!ours) {
-      captureHold();
-    }
+    scheduleMaintain();
   }
 
   function noteUserScroll() {
@@ -792,40 +835,53 @@ export function MessageList({
       onTouchStart={(event) => {
         touching.current = true;
         touchY.current = event.touches[0]?.clientY ?? null;
-        stillness.setTouching(true);
         diagnostics?.note("touch start");
       }}
       onTouchEnd={() => {
         touching.current = false;
-        stillness.setTouching(false);
         diagnostics?.note("touch end");
+        scheduleMaintain();
       }}
       onTouchCancel={() => {
         touching.current = false;
-        stillness.setTouching(false);
         diagnostics?.note("touch cancel");
+        scheduleMaintain();
       }}
       onTouchMove={onTouchMove}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      className="relative min-h-0 flex-1 overflow-y-auto"
+      // The list keeps its own view still (see above); the browser's anchoring would correct
+      // the same changes again.
+      className="relative min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
     >
-      <StillnessContext.Provider value={stillness}>
-        <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
-          {window.hasOlder ? (
-            // Its height does not change with its text: the text comes and goes above what is being
-            // read, and a line appearing there would push the view down.
-            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-              {loadingOlder && (
-                <>
-                  <LoadingLabel />
-                  <Skeleton className="h-3 w-24" />
-                </>
-              )}
-            </p>
-          ) : (
-            <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-          )}
+      <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
+        <div
+          ref={reserveBox}
+          aria-hidden="true"
+          className="shrink-0 overflow-hidden"
+          style={{ height: `${String(reserve.current)}px` }}
+        >
+          <div className="flex h-full flex-col justify-end gap-1">
+            {Array.from({ length: RESERVE_ROWS }, (_, index) => (
+              <MessageSkeleton key={index} index={index} />
+            ))}
+          </div>
+        </div>
+        {window.hasOlder ? (
+          // Its height does not change with its text: the text comes and goes above what is being
+          // read, and a line appearing there would push the view down.
+          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+            {loadingOlder && (
+              <>
+                <LoadingLabel />
+                <Skeleton className="h-3 w-24" />
+              </>
+            )}
+          </p>
+        ) : (
+          <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+        )}
+        <div ref={rows} className="flex flex-col gap-1">
           {lineIndex === -1 && <NewMessagesLine />}
           {leaving(null)}
           {parts.map((part) => {
@@ -865,18 +921,18 @@ export function MessageList({
               </Fragment>
             );
           })}
-          {!window.atLatest && (
-            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-              {loadingNewer && (
-                <>
-                  <LoadingLabel />
-                  <Skeleton className="h-3 w-24" />
-                </>
-              )}
-            </p>
-          )}
         </div>
-      </StillnessContext.Provider>
+        {!window.atLatest && (
+          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+            {loadingNewer && (
+              <>
+                <LoadingLabel />
+                <Skeleton className="h-3 w-24" />
+              </>
+            )}
+          </p>
+        )}
+      </div>
       {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
       {diagnostics !== null && <ScrollDiagnosticsPanel diagnostics={diagnostics} />}
     </div>
