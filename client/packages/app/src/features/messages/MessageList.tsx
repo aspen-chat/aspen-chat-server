@@ -25,6 +25,7 @@ import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useDeparting, type Departing } from "@/features/messages/departing";
 import { useMotion } from "@/features/layout/motion";
+import { Stillness, StillnessContext } from "@/features/messages/stillness";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
@@ -143,6 +144,8 @@ export function MessageList({
   /** When the list last scrolled, and whether a finger is on it. */
   const scrolledAt = useRef(0);
   const touching = useRef(false);
+  /** The list's rest, which what changes size by itself waits for (`stillness.ts`). */
+  const [stillness] = useState(() => new Stillness());
   const store = useStore();
   const readState = useReadState(channelId);
   /**
@@ -470,6 +473,7 @@ export function MessageList({
       ownScrollTop.current = null;
     } else {
       scrolledAt.current = Date.now();
+      stillness.noteScroll();
     }
     noteSeenSoon();
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -635,83 +639,88 @@ export function MessageList({
       onWheel={noteUserScroll}
       onTouchStart={() => {
         touching.current = true;
+        stillness.setTouching(true);
       }}
       onTouchEnd={() => {
         touching.current = false;
+        stillness.setTouching(false);
       }}
       onTouchCancel={() => {
         touching.current = false;
+        stillness.setTouching(false);
       }}
       onTouchMove={noteUserScroll}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       className="relative min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
-        {window.hasOlder ? (
-          // Its height does not change with its text: the text comes and goes above what is being
-          // read, and a line appearing there would push the view down.
-          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-            {loadingOlder && (
-              <>
-                <LoadingLabel />
-                <Skeleton className="h-3 w-24" />
-              </>
-            )}
-          </p>
-        ) : (
-          <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-        )}
-        {lineIndex === -1 && <NewMessagesLine />}
-        {leaving(null)}
-        {parts.map((part) => {
-          const item = (id: string) => (
-            <MessageItem
-              id={id}
-              home={home}
-              channelId={channelId}
-              parentId={parentId}
-              highlighted={id === highlightId}
-            />
-          );
-          if (part.kind === "message") {
+      <StillnessContext.Provider value={stillness}>
+        <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
+          {window.hasOlder ? (
+            // Its height does not change with its text: the text comes and goes above what is being
+            // read, and a line appearing there would push the view down.
+            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+              {loadingOlder && (
+                <>
+                  <LoadingLabel />
+                  <Skeleton className="h-3 w-24" />
+                </>
+              )}
+            </p>
+          ) : (
+            <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+          )}
+          {lineIndex === -1 && <NewMessagesLine />}
+          {leaving(null)}
+          {parts.map((part) => {
+            const item = (id: string) => (
+              <MessageItem
+                id={id}
+                home={home}
+                channelId={channelId}
+                parentId={parentId}
+                highlighted={id === highlightId}
+              />
+            );
+            if (part.kind === "message") {
+              return (
+                <Fragment key={part.id}>
+                  {item(part.id)}
+                  {leaving(part.id)}
+                  {part.index === lineIndex && <NewMessagesLine />}
+                </Fragment>
+              );
+            }
+            const lineOffset =
+              lineIndex !== null &&
+              lineIndex >= part.index &&
+              lineIndex < part.index + part.ids.length
+                ? lineIndex - part.index
+                : null;
             return (
-              <Fragment key={part.id}>
-                {item(part.id)}
-                {leaving(part.id)}
-                {part.index === lineIndex && <NewMessagesLine />}
+              <Fragment key={part.ids[0]}>
+                <BlockedRun
+                  ids={part.ids}
+                  lineOffset={lineOffset}
+                  highlightId={highlightId}
+                  item={item}
+                />
+                {part.ids.flatMap((id) => leaving(id))}
               </Fragment>
             );
-          }
-          const lineOffset =
-            lineIndex !== null &&
-            lineIndex >= part.index &&
-            lineIndex < part.index + part.ids.length
-              ? lineIndex - part.index
-              : null;
-          return (
-            <Fragment key={part.ids[0]}>
-              <BlockedRun
-                ids={part.ids}
-                lineOffset={lineOffset}
-                highlightId={highlightId}
-                item={item}
-              />
-              {part.ids.flatMap((id) => leaving(id))}
-            </Fragment>
-          );
-        })}
-        {!window.atLatest && (
-          <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
-            {loadingNewer && (
-              <>
-                <LoadingLabel />
-                <Skeleton className="h-3 w-24" />
-              </>
-            )}
-          </p>
-        )}
-      </div>
+          })}
+          {!window.atLatest && (
+            <p aria-live="polite" className="flex min-h-9 items-center justify-center py-2">
+              {loadingNewer && (
+                <>
+                  <LoadingLabel />
+                  <Skeleton className="h-3 w-24" />
+                </>
+              )}
+            </p>
+          )}
+        </div>
+      </StillnessContext.Provider>
       {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
     </div>
   );

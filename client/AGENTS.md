@@ -884,12 +884,15 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   content change. Where the browser anchors scrolling itself (`overflow-anchor`, everywhere but
   Safari), it holds the view through such changes even while the reader drags or the list
   coasts, and the list's own correction finds nothing left to do; where it does not, the list
-  corrects only at rest, and holds wherever the reader leaves it. A picture whose size is known
-  keeps exactly its room before it loads (`keptRoom` in `Attachments.tsx`), so only pictures of
-  unknown size move anything to hold. `e2e/historyScroll.spec.ts` drags a phone back through 600
-  messages of tall pictures and paragraphs, a few pixels at a time, and fails if any step moves
-  what is in view by other than the finger's distance, or if the top of what is loaded, where
-  a page would be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
+  corrects only at rest, and holds wherever the reader leaves it. So nothing may change size
+  while the list moves: a picture whose size is known keeps exactly its room before it loads
+  (`keptRoom` in `Attachments.tsx`), and one whose size is not keeps a fixed square until it has
+  arrived and the list is at rest (`Stillness`, `useStillness`, which the list provides),
+  taking its own size then, in a frame the list corrects. `e2e/historyScroll.spec.ts` drags a
+  phone back through 600 messages of tall pictures and paragraphs, a few pixels at a time, with
+  the browser's anchoring and, as in Safari, without it, and fails if any step moves what is in
+  view by other than the finger's distance, or if the top of what is loaded, where a page would
+  be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
   it from the bottom; every other scroll does, the reader's and find-in-page's alike.
   `MessageList` shows a change only once the list is at rest (no finger on it, and no scroll event
   for `SETTLE_MS`): iOS Safari has no scroll anchoring of its own and loses or fights a scroll
