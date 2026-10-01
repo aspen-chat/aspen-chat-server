@@ -18,7 +18,7 @@ import { planeClass } from "@/features/invites/dialog";
 import { useDeploymentPermissions, useIsAdmin, useSync } from "@/api/hooks";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
-import { useDeploymentRoles } from "@/features/admin/deploymentRoles";
+import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { FileTransferLog } from "@/features/admin/FileTransferLog";
 import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";

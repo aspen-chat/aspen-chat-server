@@ -9,7 +9,7 @@ import {
   DEPLOYMENT_PERMISSIONS,
   rankOf,
   type DeploymentRoles,
-} from "@/features/admin/deploymentRoles";
+} from "@/features/admin/deploymentRoleRecords";
 import {
   alertClass,
   fieldClass,

@@ -33,7 +33,7 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useDeploymentCan, useMe, useSync, useIdWizard } from "@/api/hooks";
-import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoles";
+import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { markClass } from "@/features/layout/choices";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";

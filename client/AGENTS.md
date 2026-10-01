@@ -653,7 +653,7 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   adding a deployment, which is contacted at once; and the directory of those known, each
   checked again, put on the lists the gates read, its offered key reviewed and accepted, or
   forgotten), and the deployment roles to everyone, editable with `manageDeploymentRoles` below
-  the caller's highest role (`deploymentRoles.ts`). The directories share `Directory`, which
+  the caller's highest role (`deploymentRoleRecords.ts`). The directories share `Directory`, which
   reads its page again when its `version` changes. The users directory shows each person's deployment roles and, for
   those who may, a picker to change them; for a moderator, it lists anyone's DMs to open, and
   the communities directory opens any community. The moderation log names what each entry names from the server's `details`: people as chips that open their cards, communities, channels, DMs, and messages as links while they stand, deleted ones by name, and only what has no name as its id. A moderator's access is part of the resolver
