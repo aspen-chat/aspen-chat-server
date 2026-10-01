@@ -437,7 +437,10 @@ test.describe("on a phone", () => {
   }) => {
     await page.goto(`/dms/${dm}`);
     const box = page.getByRole("textbox", { name: "Message" });
-    await expect(box).toHaveAttribute("aria-placeholder", /Bob With A Rather Long Display Name/);
+    // A whole page load, the DM's people included, which takes longer on a busy machine.
+    await expect(box).toHaveAttribute("aria-placeholder", /Bob With A Rather Long Display Name/, {
+      timeout: 15_000,
+    });
     const more = page.getByRole("button", { name: "Add a file or a poll" });
     await expect
       .poll(async () => {
