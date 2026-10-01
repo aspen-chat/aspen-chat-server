@@ -881,9 +881,15 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   Content that changes size without the window changing (pictures and link cards loading,
   reactions) moves nothing either: the list holds the linked message while it is shown, or
   else the topmost message in view, and puts it back wherever a `ResizeObserver` sees the
-  content change, with the browser's own scroll anchoring off (`overflow-anchor: none`); it
-  lets the reader move the list undisturbed while they are dragging or it coasts, and holds
-  wherever they leave it. The list's own scrolls never re-record what it holds, nor pin or unpin
+  content change. Where the browser anchors scrolling itself (`overflow-anchor`, everywhere but
+  Safari), it holds the view through such changes even while the reader drags or the list
+  coasts, and the list's own correction finds nothing left to do; where it does not, the list
+  corrects only at rest, and holds wherever the reader leaves it. A picture whose size is known
+  keeps exactly its room before it loads (`keptRoom` in `Attachments.tsx`), so only pictures of
+  unknown size move anything to hold. `e2e/historyScroll.spec.ts` drags a phone back through 600
+  messages of tall pictures and paragraphs, a few pixels at a time, and fails if any step moves
+  what is in view by other than the finger's distance, or if the top of what is loaded, where
+  a page would be awaited, ever comes into view. The list's own scrolls never re-record what it holds, nor pin or unpin
   it from the bottom; every other scroll does, the reader's and find-in-page's alike.
   `MessageList` shows a change only once the list is at rest (no finger on it, and no scroll event
   for `SETTLE_MS`): iOS Safari has no scroll anchoring of its own and loses or fights a scroll

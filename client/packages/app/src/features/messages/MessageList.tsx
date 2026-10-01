@@ -322,10 +322,12 @@ export function MessageList({
   // Content changes size without the window changing: pictures and link cards load, reactions
   // come and go. The view stays where it is through it: pinned to the bottom there, and
   // otherwise with the held message (see `hold`) where it was, so a picture loading above what
-  // is being read never pushes it away. Browsers' own scroll anchoring would do some of this,
-  // but not in Safari, and not always; the list does it itself, with the browser's turned off.
-  // While the reader is moving the list, it is theirs to move: a correction then would fight a
-  // finger or cut a fling short, and their next scroll holds wherever they leave it.
+  // is being read never pushes it away. Where the browser anchors scrolling itself
+  // (`overflow-anchor`, everywhere but Safari), it holds the view through such changes even
+  // while a finger drags or a fling runs, and this finds nothing left to correct. Where it does
+  // not, the list corrects only at rest: while the reader is moving the list, a correction
+  // would fight a finger or cut a fling short, and their next scroll holds wherever they leave
+  // it. `e2e/historyScroll.spec.ts` drags back through a long history to check it.
   useEffect(() => {
     const element = scroller.current;
     if (element === null || typeof ResizeObserver === "undefined") {
@@ -643,7 +645,7 @@ export function MessageList({
       onTouchMove={noteUserScroll}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      className="relative min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+      className="relative min-h-0 flex-1 overflow-y-auto"
     >
       <div className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
         {window.hasOlder ? (

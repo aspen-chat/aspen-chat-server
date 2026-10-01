@@ -1,6 +1,6 @@
 import type { Attachment } from "@aspen/protocol";
 import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -100,7 +100,7 @@ export function MessageMedia({
         </li>
       ))}
       {shown.map((picture, i) => (
-        <li key={picture.src + String(i)} className="relative">
+        <li key={picture.src + String(i)} className="relative min-w-0 max-w-full">
           <InlineImage
             picture={picture}
             onOpen={() => {
@@ -159,6 +159,23 @@ export function MessageMedia({
  * conservative guess at it, which the channel's view holds still through when the picture
  * comes in larger or smaller. Either pulses as a skeleton until it has loaded.
  */
+/**
+ * The room a picture of known size takes before and after it loads: as wide as it is, or as
+ * the 320px it may be tall (`max-h-80`) allows, and no wider than its column (`max-w-full`),
+ * at its own proportions. Width and proportions are set outright, because an image's room is
+ * otherwise worked out from the image itself, which is nothing until it arrives.
+ */
+function keptRoom(width: number, height: number): CSSProperties {
+  return {
+    // Wider than its column, `max-w-full` narrows it, and its proportions keep its height.
+    width: `${String(Math.min(width, (MAX_PICTURE_HEIGHT * width) / height))}px`,
+    aspectRatio: `${String(width)} / ${String(height)}`,
+  };
+}
+
+/** The tallest a picture is drawn inline, as `max-h-80`. */
+const MAX_PICTURE_HEIGHT = 320;
+
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
   const [loaded, setLoaded] = useState<string | null>(null);
@@ -168,7 +185,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
     <Button
       onPress={onOpen}
       aria-label={m.openImage}
-      className="inline-block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <img
         src={picture.src}
@@ -176,6 +193,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         loading="lazy"
         referrerPolicy="no-referrer"
         {...(known ? { width: picture.width ?? 0, height: picture.height ?? 0 } : {})}
+        style={known ? keptRoom(picture.width ?? 1, picture.height ?? 1) : undefined}
         onLoad={() => {
           setLoaded(picture.src);
         }}
@@ -184,7 +202,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         }}
         className={
           imageClass +
-          (known ? " h-auto w-auto" : "") +
+          (known ? " h-auto" : "") +
           (waiting
             ? " animate-pulse bg-surface-hover motion-reduce:animate-none" +
               (known ? "" : " min-h-48 min-w-48")
