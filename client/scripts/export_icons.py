@@ -30,6 +30,7 @@ BRAND = CLIENT / "brand"
 APP_PUBLIC = CLIENT / "packages/app/public"
 DESKTOP_BUILD = CLIENT / "packages/desktop/build"
 ANDROID_RES = CLIENT / "packages/mobile/android/app/src/main/res"
+IOS_ASSETS = CLIENT / "packages/mobile/ios/App/App/Assets.xcassets"
 PASSKEY_PAGE = REPO / "server/src/api/passkey_page/page.html"
 
 EMERALD = "#047857"
@@ -251,6 +252,20 @@ def android() -> None:
         render(svg(width, height, body), splash, (width, height))
 
 
+def ios() -> None:
+    # iOS rounds the corners itself and refuses transparency in an app icon, so it is the full
+    # charcoal square, one 1024px image the system scales for every place it is shown.
+    render(tile(1024, rounded=False), IOS_ASSETS / "AppIcon.appiconset/AppIcon-512@2x.png", 1024)
+    # The launch screen fills with its image (`LaunchScreen.storyboard`), the mark small at its
+    # middle on charcoal, as Android's splash is.
+    for splash in sorted((IOS_ASSETS / "Splash.imageset").glob("splash-*.png")):
+        size = 2732
+        body = f'<rect width="{size}" height="{size}" fill="{INK}"/>' + mark(
+            FULL, size / 2, size / 2, size * 0.12, "p", bark=BARK
+        )
+        render(svg(size, size, body), splash, size)
+
+
 def desktop() -> None:
     # electron-builder makes each platform's format from these: Linux takes the sized PNGs as
     # they are, Windows the .ico, and macOS an .icns built from icon-mac.png.
@@ -293,4 +308,5 @@ if __name__ == "__main__":
     web()
     desktop()
     android()
+    ios()
     passkey_page()

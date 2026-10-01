@@ -2,7 +2,7 @@
   "name": "@aspen/mobile",
   "private": true,
   "version": "0.1.0",
-  "description": "Capacitor shell for Android and iOS. Wraps the @aspen/app build; the Android project is kept here, the iOS one generated with `cap add ios`.",
+  "description": "Capacitor shell for Android and iOS. Wraps the @aspen/app build; both native projects are kept here.",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
