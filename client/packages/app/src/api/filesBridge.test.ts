@@ -7,7 +7,6 @@ let chosen: string | null = "doc-1";
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
     isNativePlatform: () => true,
-    getPlatform: () => "android",
     isPluginAvailable: (name: string) => name === "AspenFiles",
   },
   registerPlugin: () =>
@@ -34,7 +33,7 @@ describe("filesBridge", () => {
     chosen = "doc-1";
   });
 
-  it("is used in the Android app", () => {
+  it("is used in a mobile app that has the plugin", () => {
     expect(nativeCanChooseDestination()).toBe(true);
   });
 

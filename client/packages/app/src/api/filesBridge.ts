@@ -2,9 +2,10 @@ import type { FileSink } from "@aspen/protocol";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 /**
- * The Android app's native side of receiving files (`AspenFilesPlugin`): the system's
- * create-document picker chooses where a file goes before it arrives, and the transfer writes
- * to it by id as it comes. Writes cross the bridge as base64, gathered into pieces of about
+ * The mobile apps' native side of receiving files (`AspenFilesPlugin`, in each): the system's
+ * picker chooses where a file goes before it arrives (on Android the file itself, on iOS the
+ * folder it is made in, under the name it was sent with), and the transfer writes to it by id
+ * as it comes. Writes cross the bridge as base64, gathered into pieces of about
  * `PIECE_BYTES` so that the bridge is crossed rarely.
  */
 interface AspenFilesPlugin {
@@ -19,13 +20,9 @@ const AspenFiles = registerPlugin<AspenFilesPlugin>("AspenFiles");
 /** How much is gathered before it is handed to the native side. */
 const PIECE_BYTES = 1024 * 1024;
 
-/** Whether this is the Android app, whose native side can choose where a file goes. */
+/** Whether this is a mobile app, whose native side can choose where a file goes. */
 export function nativeCanChooseDestination(): boolean {
-  return (
-    Capacitor.isNativePlatform() &&
-    Capacitor.getPlatform() === "android" &&
-    Capacitor.isPluginAvailable("AspenFiles")
-  );
+  return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable("AspenFiles");
 }
 
 /** Base64 of `blob`, read by the browser rather than a loop over its bytes. */

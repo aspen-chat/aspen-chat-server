@@ -130,10 +130,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   calls are `FileTransfers` (`packages/protocol/src/transfers.ts`), which `VoiceCall` feeds its
   signalling frames and whose state it carries as `files`; its peer connections are injected
   (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. The
-  root AGENTS.md's File transfers describes the flow. In the Android app a receiver chooses
-  where a file goes through `AspenFilesPlugin` (`android/.../files/`), which `filesBridge.ts`
-  wraps as a `FileSink`, writing through the bridge in base64 pieces of about a megabyte;
-  `DocumentSinkTest` checks the native side on a device.
+  root AGENTS.md's File transfers describes the flow. In the mobile apps a receiver chooses
+  where a file goes through `AspenFilesPlugin` (Android's `android/.../files/`, iOS's
+  `ios/App/App/AspenFilesPlugin.swift`, where the user picks a folder and the file is made in
+  it under the name it was sent with), which `filesBridge.ts` wraps as a `FileSink`, writing
+  through the bridge in base64 pieces of about a megabyte; `DocumentSinkTest` checks Android's
+  native side on a device. The iOS app registers its own plugins in `MainViewController`.
+- The iOS project (`packages/mobile/ios`) is kept, as Android's is. Its UI tests
+  (`ios/App/AppUITests`, scheme `App`) drive the app with real taps and finger drags in WebKit
+  against the server the web build names, signing in as `ASPEN_TEST_USER`/`ASPEN_TEST_PASSWORD`
+  (given to `xcodebuild test` as `TEST_RUNNER_`-prefixed variables; without them they skip):
+  `testReadingBackMovesOnlyWithTheFinger` is Safari's own answer to `historyScroll.spec.ts`.
   The Administration Dashboard's user directory shows a user of another deployment as
   `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
   `AspenSync.setForeignUserBanned`).
