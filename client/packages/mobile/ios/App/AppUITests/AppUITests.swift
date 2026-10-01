@@ -99,6 +99,49 @@ final class AppUITests: XCTestCase {
         XCTAssertEqual(strays, [], strays.joined(separator: "\n"))
     }
 
+    /// Reading back as a person does: a drag the finger lifts from almost at once, with the next
+    /// beginning as soon as the test can, and flicks that coast. iOS scrolls in a process of its
+    /// own, so a page the list shows while it thinks the list is at rest may land as the next
+    /// drag begins there, and a view that jumps shows as a scroll of more than a screen, which
+    /// the list counts when built with `VITE_SCROLL_DEBUG=1` (`scrollDiagnostics.ts`), and as
+    /// the text followed leaving the screen or moving by other than the finger's distance.
+    func testReadingBackQuicklyNeverJumps() throws {
+        try signIn()
+        let channel = ProcessInfo.processInfo.environment["ASPEN_TEST_CHANNEL"] ?? "general"
+        let row = web.staticTexts[channel].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no channel \(channel)")
+        row.tap()
+        XCTAssertTrue(web.textViews["Message"].firstMatch.waitForExistence(timeout: 20))
+        sleep(3)
+        let counter = web.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'scroll-diagnostics'")
+        ).firstMatch
+        XCTAssertTrue(counter.waitForExistence(timeout: 5), "built without VITE_SCROLL_DEBUG=1")
+
+        // The list's own count is the measure here: following something in view walks the
+        // whole accessibility tree, far too slowly to keep up with a reader's pace, and the
+        // jumps this reading provokes happen while the list moves, where frames show nothing.
+        let drag: CGFloat = 180
+        for step in 0..<48 {
+            let flick = step % 4 == 3
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            let end = start.withOffset(CGVector(dx: 0, dy: flick ? drag * 2 : drag))
+            start.press(
+                forDuration: 0.05, thenDragTo: end,
+                withVelocity: XCUIGestureVelocity(flick ? 2500 : 600),
+                thenHoldForDuration: flick ? 0 : 0.1)
+            if flick {
+                sleep(3)
+            }
+        }
+        let jumps = counter.label
+        let log = web.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'scroll-jump-log'"))
+            .firstMatch
+        let around = log.exists ? log.label : "(no jump log)"
+        XCTAssertEqual(
+            jumps, "scroll-diagnostics jumps 0", "the list counted jumps: \(jumps)\n\(around)")
+    }
+
     /// Something in view, between the top and the message box, that only one element shows:
     /// a line of text, or a picture by its description.
     private func middleText() -> (label: String, element: XCUIElement)? {

@@ -29,6 +29,8 @@ import { MessageItem } from "@/features/messages/MessageItem";
 import { useDeparting, type Departing } from "@/features/messages/departing";
 import { useMotion } from "@/features/layout/motion";
 import { Stillness, StillnessContext } from "@/features/messages/stillness";
+import { SCROLL_DEBUG, ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
+import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
@@ -193,6 +195,7 @@ export function MessageList({
     const before = element.scrollTop;
     move();
     ownScrollTop.current = element.scrollTop === before ? null : element.scrollTop;
+    diagnostics?.noteMoved(element.scrollTop, "self");
   }
   /**
    * When the reader last acted on the list: a wheel or touch move, a press on its scrollbar, or a
@@ -213,6 +216,8 @@ export function MessageList({
   const touchY = useRef<number | null>(null);
   /** The list's rest, which what changes size by itself waits for (`stillness.ts`). */
   const [stillness] = useState(() => new Stillness());
+  /** What the list does with its position, in a build made to find a jump (see the module). */
+  const [diagnostics] = useState(() => (SCROLL_DEBUG ? new ScrollDiagnostics() : null));
   const store = useStore();
   const readState = useReadState(channelId);
   /**
@@ -321,6 +326,9 @@ export function MessageList({
       const anywhere = showsWhileMoving(element) && element !== null && element.scrollTop > 0;
       const moving = !anywhere && (touching.current || quietFor < SETTLE_MS);
       if (!direct && (moving || closing.current)) {
+        diagnostics?.note(
+          `commit waits touching=${String(touching.current)} quiet=${String(quietFor)} closing=${String(closing.current)}`,
+        );
         timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
         return;
       }
@@ -330,17 +338,21 @@ export function MessageList({
         anchor.current =
           linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
       }
+      diagnostics?.note(
+        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} at ${String(element?.scrollTop ?? 0)} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
+      );
       // Rendered in this same task, so the view noted is the view the change lands in: nothing
       // the reader does can come between them.
       flushSync(() => {
         setShown({ channelId, window: latest });
       });
+      diagnostics?.noteMoved(element?.scrollTop ?? 0, "committed, now at");
     };
     timer = setTimeout(commit, 0);
     return () => {
       clearTimeout(timer);
     };
-  }, [channelId, latest, shown, highlightId]);
+  }, [channelId, latest, shown, highlightId, diagnostics]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -382,6 +394,7 @@ export function MessageList({
         // the position even unchanged would cut a running fling short.
         const drift =
           target.getBoundingClientRect().top - element.getBoundingClientRect().top - restore.top;
+        diagnostics?.note(`restore ${restore.id.slice(-4)} drift ${String(Math.round(drift))}`);
         if (Math.abs(drift) >= 1) {
           scrollSelf(element, () => {
             element.scrollTop += drift;
@@ -445,6 +458,9 @@ export function MessageList({
       }
       const drift =
         target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.top;
+      diagnostics?.note(
+        `resize ${String(Math.round(content.getBoundingClientRect().height))} hold ${held.id.slice(-4)} drift ${String(Math.round(drift))}`,
+      );
       if (Math.abs(drift) >= 1) {
         scrollSelf(element, () => {
           element.scrollTop += drift;
@@ -580,6 +596,7 @@ export function MessageList({
     }
     const own = ownScrollTop.current;
     const ours = own !== null && Math.abs(element.scrollTop - own) < 1;
+    diagnostics?.noteScroll(element.scrollTop, element.clientHeight, ours);
     if (ours) {
       ownScrollTop.current = null;
     } else {
@@ -776,14 +793,17 @@ export function MessageList({
         touching.current = true;
         touchY.current = event.touches[0]?.clientY ?? null;
         stillness.setTouching(true);
+        diagnostics?.note("touch start");
       }}
       onTouchEnd={() => {
         touching.current = false;
         stillness.setTouching(false);
+        diagnostics?.note("touch end");
       }}
       onTouchCancel={() => {
         touching.current = false;
         stillness.setTouching(false);
+        diagnostics?.note("touch cancel");
       }}
       onTouchMove={onTouchMove}
       onPointerDown={onPointerDown}
@@ -858,6 +878,7 @@ export function MessageList({
         </div>
       </StillnessContext.Provider>
       {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
+      {diagnostics !== null && <ScrollDiagnosticsPanel diagnostics={diagnostics} />}
     </div>
   );
 }

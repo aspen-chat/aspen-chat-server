@@ -6,6 +6,11 @@ interface ImportMetaEnv {
    * the page's own origin (same-origin deployment, or the Vite dev proxy).
    */
   readonly VITE_ASPEN_SERVER_URL?: string;
+  /**
+   * `1` builds the message list with its scroll diagnostics
+   * (`features/messages/scrollDiagnostics.ts`), for finding where a view jumps on a device.
+   */
+  readonly VITE_SCROLL_DEBUG?: string;
 }
 
 /** Where an external sender delivers SRTP, as the voice server describes it. */
