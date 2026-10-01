@@ -173,12 +173,14 @@ function ReactionChip({
         }}
         className={
           (fresh ? "motion-pop " : "") +
+          // The reader's own reaction is marked by a darker outline alone, in the chips' neutral
+          // colours, so a message's reactions never outshine the message.
           (reactions.me
-            ? chipClass + " border-accent bg-accent-soft text-accent-strong"
+            ? chipClass + " border-ink-faint bg-surface-raised hover:bg-surface-hover"
             : plainChipClass)
         }
       >
-        <span>{emoji}</span>
+        <span className="text-[1.5em] leading-none">{emoji}</span>
         <span
           key={grown}
           className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}

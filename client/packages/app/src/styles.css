@@ -358,19 +358,18 @@ body {
  * reader's animation speed (`MOTION_SPEED`): `MotionSpeed` sets `--motion-scale` on <html>, 1 at
  * normal speed and larger when slower, and `data-motion="off"` when animations are off, which
  * stops every animation and transition but those marked `data-motion-essential` (whose motion
- * says something, like which way a file travels). At normal speed nothing takes longer than
- * 200ms but a highlight, which must last long enough to be seen.
+ * says something, like which way a file travels). At normal speed most take 200ms or less; a
+ * panel's slide a little more, and a highlight, which must last long enough to be seen, more.
  *
  * Where the device asks to reduce motion, things fade but do not travel or grow: the distances
- * and scales below go to nothing, and a collapse is at once.
+ * and scales below go to nothing, and a deleted message's space closes at once.
  */
 :root {
   --motion-scale: 1;
-  --motion-fast: calc(120ms * var(--motion-scale));
-  --motion-base: calc(150ms * var(--motion-scale));
-  --motion-slow: calc(200ms * var(--motion-scale));
-  --motion-highlight: calc(1200ms * var(--motion-scale));
-  --motion-collapse: var(--motion-base);
+  --motion-fast: calc(160ms * var(--motion-scale));
+  --motion-base: calc(200ms * var(--motion-scale));
+  --motion-slow: calc(270ms * var(--motion-scale));
+  --motion-highlight: calc(1600ms * var(--motion-scale));
   --motion-distance: 4px;
   --motion-panel-distance: 24px;
   --motion-zoom: 0.96;
@@ -385,7 +384,6 @@ body {
     --motion-panel-distance: 0px;
     --motion-zoom: 1;
     --motion-pop: 1;
-    --motion-collapse: 0ms;
   }
 }
 
@@ -526,23 +524,4 @@ body {
   :root[data-motion="off"] & {
     background-color: var(--color-accent-soft);
   }
-}
-
-/* The space a deleted message leaves, closing: from its height, `--from-h`, to nothing, taking
-   the list's gap between messages (`--collapse-gap`) with it. */
-@keyframes aspen-collapse {
-  from {
-    height: var(--from-h);
-  }
-  to {
-    height: 0;
-    margin-top: var(--collapse-gap, 0px);
-  }
-}
-
-@utility motion-collapse {
-  overflow: hidden;
-  height: 0;
-  margin-top: var(--collapse-gap, 0px);
-  animation: aspen-collapse var(--motion-collapse) var(--motion-ease-out) both;
 }

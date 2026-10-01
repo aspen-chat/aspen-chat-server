@@ -106,7 +106,8 @@ function SignedIn() {
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />
-        <div className="flex min-h-0 flex-1">
+        {/* Panels slide in from beyond the screen's edge; nothing there may widen the page. */}
+        <div className="flex min-h-0 flex-1 overflow-x-clip">
           <div className={channelId === undefined ? "flex" : "hidden md:flex"}>
             <CommunityRail />
           </div>

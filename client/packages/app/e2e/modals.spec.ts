@@ -46,7 +46,14 @@ test("settings, invites, and new polls close from their X", async ({ page }) => 
     .first()
     .getByText("general", { exact: true })
     .click();
-  await expectClosesFromCorner(page, () =>
-    page.getByRole("button", { name: "Create a new poll" }).click(),
-  );
+  await expectClosesFromCorner(page, async () => {
+    // On a narrow screen the poll is behind the box's + button.
+    const more = page.getByRole("button", { name: "Add a file or a poll" });
+    if (await more.isVisible()) {
+      await more.click();
+      await page.getByRole("menuitem", { name: "Create a new poll" }).click();
+    } else {
+      await page.getByRole("button", { name: "Create a new poll" }).click();
+    }
+  });
 });

@@ -92,4 +92,4 @@ export function useReorderGlide(list: RefObject<HTMLElement | null>, order: stri
 }
 
 /** How long a row glides at normal speed, as `--motion-base` in `styles.css`. */
-const GLIDE_MS = 150;
+const GLIDE_MS = 200;

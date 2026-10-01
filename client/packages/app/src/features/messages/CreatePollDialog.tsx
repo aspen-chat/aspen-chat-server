@@ -76,21 +76,48 @@ export function CreatePollDialog({
   triggerClassName: string;
 }) {
   const m = useMessages();
+  const [open, setOpen] = useState(false);
   return (
-    <DialogTrigger>
+    <>
       <Tooltip text={m.poll.open}>
-        <Button aria-label={m.poll.open} className={triggerClassName}>
+        <Button
+          aria-label={m.poll.open}
+          onPress={() => {
+            setOpen(true);
+          }}
+          className={triggerClassName}
+        >
           <ChartBarIcon size={20} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            {({ close }) => <PollForm channelId={channelId} close={close} />}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+      <CreatePollModal channelId={channelId} isOpen={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
+/** The poll form in a modal, opened by whatever offers to make a poll. */
+export function CreatePollModal({
+  channelId,
+  isOpen,
+  onOpenChange,
+}: {
+  channelId: string;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <ModalOverlay
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      className={overlayClass}
+      isDismissable
+    >
+      <Modal className={modalClass}>
+        <Dialog className={dialogClass}>
+          {({ close }) => <PollForm channelId={channelId} close={close} />}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 

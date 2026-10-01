@@ -87,7 +87,7 @@ test("opening a notification keeps what was being typed, to the last keystroke",
   await box(page).fill("I was just saying");
   // Opened the instant after typing, before the draft's pause has passed.
   await page.evaluate(() => window.openedNotifications[0]?.onclick?.());
-  await expect(box(page)).toHaveAttribute("placeholder", "Message #roadmap");
+  await expect(box(page)).toHaveAttribute("aria-placeholder", "Message #roadmap");
   await openChannel(page, "general");
   await expect(box(page)).toHaveValue("I was just saying");
 });

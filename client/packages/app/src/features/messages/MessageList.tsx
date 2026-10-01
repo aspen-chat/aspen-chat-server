@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -25,6 +24,7 @@ import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { useDeparting, type Departing } from "@/features/messages/departing";
+import { useMotion } from "@/features/layout/motion";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
@@ -65,6 +65,8 @@ const USER_SCROLL_MS = 500;
 const LOAD_MORE_PX = 800;
 /** How long after its last scroll event, with no finger down, the list counts as at rest. */
 const SETTLE_MS = 150;
+/** How long a deleted message's space takes to close at normal speed, as `--motion-base`. */
+const COLLAPSE_MS = 200;
 /** The ids of a list with no window yet, one array so its identity holds. */
 const NO_IDS: readonly string[] = [];
 const SCROLL_KEYS: ReadonlySet<string> = new Set([
@@ -109,6 +111,7 @@ export function MessageList({
   const scroller = useRef<HTMLDivElement>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
+  const [jumping, setJumping] = useState(false);
   /** Where the viewport was before a page was read, restored once the window has changed. */
   const anchor = useRef<Anchor | null>(null);
   const stickToBottom = useRef(true);
@@ -172,7 +175,13 @@ export function MessageList({
     });
   }, [window, blockedUsers, store]);
 
-  const { departing, measure } = useDeparting(scroller, window?.ids ?? NO_IDS, store);
+  // The store's window, not the one shown: a deleted message's row empties as the store drops
+  // it, before the shown window catches up, and its space must be there in that same frame.
+  const { departing, measure, forget } = useDeparting(scroller, latest?.ids ?? NO_IDS, store);
+  const closing = useRef(false);
+  useEffect(() => {
+    closing.current = departing.length > 0;
+  });
 
   const loaded = window !== undefined;
   const ids = window?.ids;
@@ -231,7 +240,9 @@ export function MessageList({
     let timer: ReturnType<typeof setTimeout> | undefined;
     const commit = () => {
       const quietFor = Date.now() - scrolledAt.current;
-      if (!direct && (touching.current || quietFor < SETTLE_MS)) {
+      // A deleted message's space closing waits for nothing: rendering the whole list again
+      // meanwhile would use its moment up before it is seen.
+      if (!direct && (touching.current || quietFor < SETTLE_MS || closing.current)) {
         timer = setTimeout(commit, Math.max(SETTLE_MS - quietFor, 16));
         return;
       }
@@ -358,6 +369,38 @@ export function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, atLatest, highlightId]);
 
+  // The list itself shrinks when something takes the screen's space, as the keyboard does when
+  // the message box is chosen on a phone. Its bottom edge stays where it was, so what was just
+  // above the box, likely what is being answered, stays in view: pinned to the newest message,
+  // or moved down by what the list lost. Growing back leaves the view where it is.
+  useEffect(() => {
+    const element = scroller.current;
+    if (element === null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    let height = element.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const lost = height - element.clientHeight;
+      height = element.clientHeight;
+      if (lost <= 0) {
+        return;
+      }
+      scrollSelf(element, () => {
+        element.scrollTop =
+          stickToBottom.current && atLatest ? element.scrollHeight : element.scrollTop + lost;
+      });
+      if (!(stickToBottom.current && atLatest)) {
+        captureHold();
+      }
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+    // Reads the pin through its ref; made again when being at the latest changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, atLatest]);
+
   // A page already read but not yet shown is waiting for the list to settle; reading the next
   // one before it shows would only pile changes up.
   function loadOlder() {
@@ -467,7 +510,21 @@ export function MessageList({
   function jumpToLatest() {
     stickToBottom.current = true;
     anchor.current = null;
-    void sync.loadLatest(channelId);
+    // The press is answered at once: the list goes to the end of what it holds, and the pill
+    // says the newest are on their way, until they come.
+    const element = scroller.current;
+    if (element !== null) {
+      scrollSelf(element, () => {
+        element.scrollTop = element.scrollHeight;
+      });
+    }
+    setJumping(true);
+    void sync
+      .loadLatest(channelId)
+      .catch(() => undefined)
+      .finally(() => {
+        setJumping(false);
+      });
     if (highlightId !== undefined) {
       void navigate({ ...channelLink(home, channelId), replace: true });
     }
@@ -558,7 +615,15 @@ export function MessageList({
     leavingAfter.set(gone.after, [...(leavingAfter.get(gone.after) ?? []), gone]);
   }
   const leaving = (after: string | null) =>
-    (leavingAfter.get(after) ?? []).map((gone) => <DepartingSpace key={gone.id} gone={gone} />);
+    (leavingAfter.get(after) ?? []).map((gone) => (
+      <DepartingSpace
+        key={gone.id}
+        gone={gone}
+        onClosed={() => {
+          forget(gone.id);
+        }}
+      />
+    ));
 
   return (
     <div
@@ -647,9 +712,16 @@ export function MessageList({
       {!window.atLatest && (
         <Button
           onPress={jumpToLatest}
-          className="motion-rise sticky bottom-3 left-1/2 block w-fit -translate-x-1/2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+          isPending={jumping}
+          className="motion-rise sticky bottom-3 left-1/2 flex w-fit -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
         >
-          {m.jumpToLatest}
+          {jumping && (
+            <span
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent-contrast/40 border-t-accent-contrast"
+            />
+          )}
+          {jumping ? m.jumpingToLatest : m.jumpToLatest}
         </Button>
       )}
     </div>
@@ -658,16 +730,51 @@ export function MessageList({
 
 /**
  * The space a deleted message leaves, closing over a moment; the list's `gap-1` between messages
- * closes with it.
+ * closes with it. The closing starts a frame after the list has rendered without the message,
+ * not as the space is made: a long render would otherwise spend most of it before anything is
+ * painted.
  */
-function DepartingSpace({ gone }: { gone: Departing }) {
+function DepartingSpace({ gone, onClosed }: { gone: Departing; onClosed: () => void }) {
+  const space = useRef<HTMLDivElement>(null);
+  const motion = useMotion();
+  useLayoutEffect(() => {
+    const element = space.current;
+    if (element === null) {
+      return;
+    }
+    let closing: Animation | undefined;
+    // Two frames on: the frame the space is made in may have begun long before a slow render
+    // ended, and an animation started in it would count from then.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(start);
+    });
+    const start = () => {
+      closing = element.animate(
+        [
+          { height: `${String(gone.height)}px`, marginTop: "0px" },
+          { height: "0px", marginTop: "-0.25rem" },
+        ],
+        {
+          duration: COLLAPSE_MS * motion.scale,
+          easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+          fill: "forwards",
+        },
+      );
+      closing.finished.then(onClosed, () => undefined);
+    };
+    return () => {
+      cancelAnimationFrame(frame);
+      closing?.cancel();
+    };
+    // Closes once, from where it was made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div
+      ref={space}
       aria-hidden="true"
-      className="motion-collapse"
-      style={
-        { "--from-h": `${String(gone.height)}px`, "--collapse-gap": "-0.25rem" } as CSSProperties
-      }
+      className="overflow-hidden"
+      style={{ height: `${String(gone.height)}px` }}
     />
   );
 }

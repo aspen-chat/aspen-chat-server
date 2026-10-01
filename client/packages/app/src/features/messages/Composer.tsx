@@ -1,7 +1,16 @@
 import { ApiProblemError, type Attachment } from "@aspen/protocol";
-import { FileIcon, PaperclipIcon, XIcon } from "@phosphor-icons/react";
+import { ChartBarIcon, FileIcon, PaperclipIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { Button, ProgressBar, TextArea, TextField } from "react-aria-components";
+import {
+  Button,
+  Menu,
+  MenuItem,
+  MenuTrigger,
+  Popover,
+  ProgressBar,
+  TextArea,
+  TextField,
+} from "react-aria-components";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
 import {
@@ -14,7 +23,8 @@ import {
   useUser,
 } from "@/api/hooks";
 import { isImageType } from "@/features/messages/images";
-import { CreatePollDialog } from "@/features/messages/CreatePollDialog";
+import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
+import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -40,6 +50,10 @@ let nextKey = 1;
 
 /** How long typing pauses before the draft is kept. */
 const DRAFT_SAVE_DELAY_MS = 400;
+
+const menuItemClass =
+  "flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-sm outline-none " +
+  "focus:bg-surface-hover pointer-coarse:py-2.5";
 
 const toolButtonClass =
   "rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -88,6 +102,8 @@ export function Composer({
   const blockedPeer = useBlockedDmPeer(channelId);
   const systemPeer = useSystemDmPeer(channelId);
   const commands = useCommandLine({ channelId, draft, setDraft });
+  const wide = useMediaQuery(MEDIUM_SCREEN);
+  const [polling, setPolling] = useState(false);
   const tagging = useTagging({
     channelId,
     draft,
@@ -342,19 +358,58 @@ export function Composer({
           aria-hidden="true"
           tabIndex={-1}
         />
-        {permissions.has("attachFiles") && (
-          <Tooltip text={m.attachFile}>
-            <Button
-              aria-label={m.attachFile}
-              onPress={() => fileInput.current?.click()}
-              className={toolButtonClass}
-            >
-              <PaperclipIcon size={20} aria-hidden="true" />
-            </Button>
-          </Tooltip>
-        )}
-        {permissions.has("createPolls") && (
-          <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
+        {wide ? (
+          <>
+            {permissions.has("attachFiles") && (
+              <Tooltip text={m.attachFile}>
+                <Button
+                  aria-label={m.attachFile}
+                  onPress={() => fileInput.current?.click()}
+                  className={toolButtonClass}
+                >
+                  <PaperclipIcon size={20} aria-hidden="true" />
+                </Button>
+              </Tooltip>
+            )}
+            {permissions.has("createPolls") && (
+              <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
+            )}
+          </>
+        ) : (
+          (permissions.has("attachFiles") || permissions.has("createPolls")) && (
+            // On a narrow screen the box's other controls share one button, leaving it room.
+            <MenuTrigger>
+              <Button aria-label={m.composerMore} className={toolButtonClass}>
+                <PlusIcon size={20} aria-hidden="true" />
+              </Button>
+              <Popover className="rounded-md border border-line bg-surface-raised p-1 shadow-lg">
+                <Menu
+                  className="min-w-44 outline-none"
+                  onAction={(key) => {
+                    if (key === "attach") {
+                      fileInput.current?.click();
+                    } else if (key === "poll") {
+                      setPolling(true);
+                    }
+                  }}
+                >
+                  {permissions.has("attachFiles") && (
+                    <MenuItem id="attach" textValue={m.attachFile} className={menuItemClass}>
+                      <PaperclipIcon size={18} aria-hidden="true" />
+                      {m.attachFile}
+                    </MenuItem>
+                  )}
+                  {permissions.has("createPolls") && (
+                    <MenuItem id="poll" textValue={m.poll.open} className={menuItemClass}>
+                      <ChartBarIcon size={18} aria-hidden="true" />
+                      {m.poll.open}
+                    </MenuItem>
+                  )}
+                </Menu>
+              </Popover>
+              <CreatePollModal channelId={channelId} isOpen={polling} onOpenChange={setPolling} />
+            </MenuTrigger>
+          )
         )}
         <TextField
           aria-label={m.messageLabel}
@@ -382,16 +437,26 @@ export function Composer({
               tagging.boxProps.onClick(event);
               commands.follow(event);
             }}
-            placeholder={placeholder}
+            aria-placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}
-            className="max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
+            className="block max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
+          {draft === "" && (
+            // The box's own placeholder would wrap, and grow the box, where it is too long for
+            // one line; this one is cut short with an ellipsis instead.
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-[13px] bottom-[9px] truncate text-ink-faint"
+            >
+              {placeholder}
+            </span>
+          )}
         </TextField>
         <Button
           type="submit"
           isDisabled={!canSend}
-          className="rounded-md bg-accent px-4 py-2 font-medium text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="rounded-md border border-transparent bg-accent px-4 py-2 font-medium text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           {m.send}
         </Button>

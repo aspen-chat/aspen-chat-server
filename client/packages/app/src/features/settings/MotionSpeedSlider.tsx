@@ -58,9 +58,7 @@ export function MotionSpeedSlider() {
       </div>
       <SliderTrack className="relative h-6 w-full">
         <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-line" />
-        <SliderThumb
-          className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
-        />
+        <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
       </SliderTrack>
       <Text slot="description" className="text-xs text-ink-muted">
         {m.settings.motionHint}

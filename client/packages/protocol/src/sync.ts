@@ -291,6 +291,8 @@ export class AspenSync {
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
   readonly #commandLoads = new Map<string, Promise<void>>();
+  /** Reads of a channel's newest page under way, which a second ask joins. */
+  readonly #latestLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
   readonly #notifyListeners = new Set<(message: Message) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
@@ -478,13 +480,30 @@ export class AspenSync {
 
   /** Loads the newest page of a channel, replacing whatever window is loaded. */
   loadLatest(channelId: string): Promise<void> {
-    return this.#loadWindow(channelId, async () => {
-      const messages = await this.#readMessages(channelId, { limit: MESSAGE_PAGE_SIZE });
-      this.store.replaceWindow(channelId, messages, {
-        hasOlder: messages.length === MESSAGE_PAGE_SIZE,
-        atLatest: true,
+    const latest = this.#latestLoads.get(channelId);
+    if (latest !== undefined) {
+      return latest;
+    }
+    // A page already on its way may be one that does not reach the latest; this follows it.
+    const pending = this.#windowLoads.get(channelId);
+    const load = (pending ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() =>
+        this.#loadWindow(channelId, async () => {
+          const messages = await this.#readMessages(channelId, { limit: MESSAGE_PAGE_SIZE });
+          this.store.replaceWindow(channelId, messages, {
+            hasOlder: messages.length === MESSAGE_PAGE_SIZE,
+            atLatest: true,
+          });
+        }),
+      )
+      .finally(() => {
+        if (this.#latestLoads.get(channelId) === load) {
+          this.#latestLoads.delete(channelId);
+        }
       });
-    });
+    this.#latestLoads.set(channelId, load);
+    return load;
   }
 
   /** Extends the loaded window backwards by one page. No-op without a window or older messages. */

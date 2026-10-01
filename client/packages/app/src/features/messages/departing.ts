@@ -1,5 +1,5 @@
 import type { RecordStore } from "@aspen/protocol";
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { useMotion } from "@/features/layout/motion";
 
 /** A message deleted while shown: where it stood, and how tall it was. */
@@ -12,13 +12,11 @@ export interface Departing {
 
 /** How long after a deletion a message's leaving may still be drawn. */
 const RECENT_MS = 1000;
-/** The collapse's length at normal speed, as `--motion-collapse` in `styles.css`. */
-const COLLAPSE_MS = 150;
 
 /**
  * The messages just deleted from a list, each to be drawn for a moment as an empty space of
- * its height that closes (`motion-collapse`), so what was below it moves up into its place
- * rather than jumping. Only deletions count (`RecordStore.departedAt`): messages that leave
+ * its height that closes (`DepartingSpace`), so what was below it moves up into its place
+ * rather than jumping; each is forgotten (`forget`) once its space has closed. Only deletions count (`RecordStore.departedAt`): messages that leave
  * because the window moved, or the channel changed, go at once, as they do with animations off
  * or where the device asks to reduce motion. Heights are measured from the list's
  * `[data-message-id]` elements whenever the ids change and whenever `measure` is called, as
@@ -28,7 +26,7 @@ export function useDeparting(
   scroller: RefObject<HTMLElement | null>,
   ids: readonly string[],
   store: RecordStore,
-): { departing: readonly Departing[]; measure: () => void } {
+): { departing: readonly Departing[]; measure: () => void; forget: (id: string) => void } {
   const motion = useMotion();
   const heights = useRef(new Map<string, number>());
   const last = useRef<readonly string[]>([]);
@@ -84,20 +82,9 @@ export function useDeparting(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ids]);
 
-  useEffect(() => {
-    if (departing.length === 0) {
-      return;
-    }
-    const timer = setTimeout(
-      () => {
-        setDeparting([]);
-      },
-      COLLAPSE_MS * motion.scale + 50,
-    );
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [departing, motion.scale]);
+  const forget = (id: string) => {
+    setDeparting((current) => current.filter((gone) => gone.id !== id));
+  };
 
-  return { departing, measure };
+  return { departing, measure, forget };
 }

@@ -530,17 +530,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   set by `MotionSpeedSlider` in Settings, Appearance): `useFollowMotionSpeed` writes
   `--motion-scale` on `<html>`, and `data-motion="off"` there stops every animation and
   transition but those marked `data-motion-essential`. Tailwind's `transition-*` utilities take
-  the scaled duration too. At normal speed nothing takes longer than 200ms but a highlight. A
+  the scaled duration too. At normal speed most take 200ms or less (`--motion-base`), a panel's slide 270ms, and a highlight 1.6s. A
   device set to reduce motion keeps fades and drops travel and growth (the distance and scale
   tokens go to nothing). The utilities are `motion-backdrop` and `motion-dialog` for modals
   (every modal has them through `overlayClass` and the modal classes), `motion-rise`,
   `motion-drop`, `motion-fade`, `motion-grow`, and `motion-from-end` for things that appear,
-  `motion-pop` for something that changed, `motion-flash` for a message gone to, and
-  `motion-collapse` for the space a deleted message leaves; every popover, menu, select list,
+  `motion-pop` for something that changed, and `motion-flash` for a message gone to; every popover, menu, select list,
   and tooltip moves by one rule on `[data-placement]`, so a new one needs nothing. What moves:
   modals and overlays; messages that arrive while shown (`RecordStore.arrivedAt`), never
   history; the space of a message deleted while shown closing (`useDeparting`,
-  `RecordStore.departedAt`); a message gone to flashing; reaction chips and mention badges
+  `RecordStore.departedAt`, and `DepartingSpace`, which starts closing on the first frame after
+  the render that made it, so a slow render does not use the animation up unseen); a message gone to flashing; reaction chips and mention badges
   popping as they grow (`useGrowthKey`); channels revealed by unfolding a category and
   communities of a folder opened here dropping in; rows gliding to new places when an order
   changes (`useReorderGlide`); the thread panel and member list sliding in; call tiles, the
@@ -556,6 +556,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   is ignored, so an update that changes a pane enough to need it raises that pane's version and
   resets it alone; otherwise widths are left as the reader made them. On one-pane screens a
   pane fills the screen and has no edge.
+- The message box (`Composer`) sits level with its buttons, all 42px tall. On a narrow screen
+  its other controls share one + button whose menu offers attaching a file and making a poll
+  (`CreatePollModal`, which the wide screen's own poll button opens too). Its placeholder is
+  drawn by the box itself on one line, cut short with an ellipsis, since the textarea's own
+  would wrap and grow the box; the textarea carries it as `aria-placeholder`. When the list
+  shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it was (pinned to the
+  newest message, or moved down by what it lost), so what is being answered stays in view; the
+  web app asks for this with `interactive-widget=resizes-content` in its viewport. "Jump to
+  latest" answers at once (the list goes to the end of what it holds, the pill says the newest
+  are on their way), and `AspenSync.loadLatest` follows any page already being read rather than
+  settling for it.
 - Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent
   (text, picked tags, files already uploaded, and a thread's echo choice) waits in its channel
   on this device, per account, through going elsewhere, a notification opened, and a reload,

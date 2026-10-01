@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { inviteCode, ownText, pollQuestion, signInToWorld, starterText } from "./world";
+import { dm, inviteCode, ownText, pollQuestion, signInToWorld, starterText } from "./world";
 
 /**
  * The app on a phone: a narrow, touch-only screen, where there is no hover and one list or
@@ -305,7 +305,9 @@ test.describe("on a phone", () => {
     browserName,
   }) => {
     await openChannel(page, "general");
-    await page.getByRole("button", { name: "Create a new poll" }).tap();
+    // On a phone the poll is one of the box's other controls, behind its + button.
+    await page.getByRole("button", { name: "Add a file or a poll" }).tap();
+    await page.getByRole("menuitem", { name: "Create a new poll" }).tap();
     const form = page.getByRole("dialog", { name: "New poll" });
     await expect(form).toBeVisible();
     // Enough options to be taller than any phone.
@@ -400,5 +402,62 @@ test.describe("on a phone", () => {
     expect(fit.listOverflow).toBeLessThanOrEqual(0);
     expect(fit.perRow).toBe(7);
     expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
+  });
+
+  test("the message box sits level with its buttons, which share one + menu", async ({ page }) => {
+    await openChannel(page, "general");
+    const box = page.getByRole("textbox", { name: "Message" });
+    const more = page.getByRole("button", { name: "Add a file or a poll" });
+    const send = page.getByRole("button", { name: "Send" });
+    const tops = await Promise.all([box, more, send].map((l) => l.boundingBox()));
+    expect(new Set(tops.map((b) => Math.round(b?.y ?? -1))).size).toBe(1);
+    expect(new Set(tops.map((b) => Math.round(b?.height ?? -1))).size).toBe(1);
+    await more.tap();
+    await expect(page.getByRole("menuitem")).toHaveText(["Attach a file", "Create a new poll"]);
+  });
+
+  test("a placeholder too long for the box is cut short, never making it taller", async ({
+    page,
+  }) => {
+    await page.goto(`/dms/${dm}`);
+    const box = page.getByRole("textbox", { name: "Message" });
+    await expect(box).toHaveAttribute("aria-placeholder", /Bob With A Rather Long Display Name/);
+    const more = page.getByRole("button", { name: "Add a file or a poll" });
+    await expect
+      .poll(async () => {
+        const [boxSize, moreSize] = await Promise.all([box.boundingBox(), more.boundingBox()]);
+        return Math.round(boxSize?.height ?? 0) - Math.round(moreSize?.height ?? -1);
+      })
+      .toBe(0);
+    // The placeholder is drawn just after the box, on one line, ending in an ellipsis.
+    const cut = await page
+      .locator("textarea + span")
+      .evaluate((span) => span.scrollWidth > span.clientWidth);
+    expect(cut).toBe(true);
+  });
+
+  test("the view keeps its bottom when the keyboard takes the screen's space", async ({ page }) => {
+    await openChannel(page, "general");
+    const list = page.locator("div.overflow-y-auto:has([data-message-id])").first();
+    await list.evaluate((element) => {
+      element.scrollTop = element.scrollHeight - element.clientHeight - 200;
+    });
+    const lowest = () =>
+      list.evaluate((element) => {
+        const view = element.getBoundingClientRect();
+        let found: [string, number] | null = null;
+        for (const article of element.querySelectorAll<HTMLElement>("[data-message-id]")) {
+          const rect = article.getBoundingClientRect();
+          if (rect.top < view.bottom - 4 && rect.bottom > view.top) {
+            found = [article.dataset.messageId ?? "", Math.round(view.bottom - rect.bottom)];
+          }
+        }
+        return found;
+      });
+    await page.waitForTimeout(300);
+    const before = await lowest();
+    const size = page.viewportSize() ?? { width: 390, height: 844 };
+    await page.setViewportSize({ width: size.width, height: size.height - 300 });
+    await expect.poll(lowest).toEqual(before);
   });
 });

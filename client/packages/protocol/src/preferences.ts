@@ -260,8 +260,8 @@ export const LANGUAGE: PreferenceDefinition<string> = {
 export const MAX_MOTION_SPEED = 2;
 
 /**
- * How fast the app's animations run, as a multiple of their normal speed, which keeps most
- * within 200 milliseconds; 0 turns them off. It follows the account, so every device moves
+ * How fast the app's animations run, as a multiple of their normal speed, at which most take
+ * 200 milliseconds or less; 0 turns them off. It follows the account, so every device moves
  * alike, while each device's own "reduce motion" setting still keeps movement out of its fades.
  */
 export const MOTION_SPEED: PreferenceDefinition<number> = {
