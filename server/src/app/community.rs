@@ -10,7 +10,6 @@ use crate::app::permissions::{Permissions, community_access, missing, require_me
 use crate::app::{
     CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId, publish_event,
 };
-use crate::database::schema::channel;
 use crate::database::schema::community;
 use crate::database::schema::community_member_role;
 use crate::database::schema::community_user;
@@ -695,57 +694,4 @@ pub(crate) async fn read_community_member(
         .await?
         .pop()
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))
-}
-
-/// Every live channel of each of `communities`, including those filed under a category, ordered
-/// by community and then sort index. This is the batch a client needs to render the channel
-/// tree of every community it belongs to in one request.
-pub(crate) async fn read_communities_channels(
-    state: &GlobalServerContext,
-    communities: &[CommunityId],
-) -> app::error::Result<Vec<app::channel::Channel>> {
-    if communities.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut conn = state.connection_pool.get().await?;
-    let channels = channel::table
-        .select(app::channel::Channel::as_select())
-        .filter(
-            channel::community
-                .eq_any(communities)
-                // Threads record their community too, but belong under their parent channel.
-                .and(channel::parent_channel.is_null())
-                .and(channel::deleted_at.is_null()),
-        )
-        .order_by((channel::community.asc(), channel::sort_index.asc()))
-        .load(conn.as_mut())
-        .await?;
-    Ok(channels)
-}
-
-/// The top-level channels of a community the caller may view.
-pub(crate) async fn read_community_channels(
-    state: &GlobalServerContext,
-    caller: UserId,
-    community: CommunityId,
-) -> app::error::Result<Vec<app::channel::Channel>> {
-    let mut conn = state.connection_pool.get().await?;
-    require_member(conn.as_mut(), caller, community).await?;
-    let visibility = app::visibility::Visibility::load(state, caller, &[community]).await?;
-    let channels = channel::table
-        .select(app::channel::Channel::as_select())
-        .filter(
-            channel::community
-                .eq(community)
-                .and(channel::parent_category.is_null())
-                .and(channel::parent_channel.is_null())
-                .and(channel::deleted_at.is_null()),
-        )
-        .order_by(channel::sort_index.asc())
-        .load::<app::channel::Channel>(conn.as_mut())
-        .await?
-        .into_iter()
-        .filter(|c| visibility.can_view(c.id))
-        .collect();
-    Ok(channels)
 }

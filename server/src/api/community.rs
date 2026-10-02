@@ -101,7 +101,7 @@ pub async fn sideload_communities(
     ) = tokio::try_join!(
         async {
             if include.contains(CommunityInclude::Channels) {
-                app::community::read_communities_channels(state, communities)
+                app::channel::read_communities_channels(state, communities)
                     .await
                     .map(Some)
             } else {
@@ -544,7 +544,7 @@ pub async fn list_community_channels(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
 ) -> ApiResult<Json<Vec<Channel>>> {
-    let channels = app::community::read_community_channels(&state, user.id, community).await?;
+    let channels = app::channel::read_community_channels(&state, user.id, community).await?;
     Ok(Json(
         channels
             .into_iter()
