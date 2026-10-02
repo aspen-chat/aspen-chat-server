@@ -184,6 +184,15 @@ export function MessageList({
   const ownScrollTop = useRef<number | null>(null);
   /** The box's position at its last scroll event, by which the browser's own scrolls are measured. */
   const lastScrollTop = useRef(0);
+  /**
+   * The position the list last scrolled its box to, exactly. A box holds whole pixels, and
+   * WebKit truncates a position set between them (999.7 reads back as 999), so a list that
+   * built each move on what its box reads back would gain up to a pixel a move going up: a
+   * finger's drag, many small moves, ran ahead of the finger by a few percent. Moves build on
+   * this while the box is still within a pixel of it, and on the box's own position once
+   * anything else has scrolled it.
+   */
+  const exactTop = useRef<number | null>(null);
   /** A finger on the list, where it last was, how far it has gone, and whether it drags yet. */
   const drag = useRef<{
     y: number;
@@ -412,9 +421,19 @@ export function MessageList({
     setFarBack(box.clientHeight > 0 && range.current.max - box.scrollTop >= box.clientHeight);
   }
 
+  /** Where the box is scrolled to: exactly where the list put it, unless something since moved it. */
+  function boxTop(): number {
+    const box = viewport.current;
+    if (box === null) {
+      return 0;
+    }
+    const exact = exactTop.current;
+    return exact !== null && Math.abs(exact - box.scrollTop) < 1 ? exact : box.scrollTop;
+  }
+
   /** The list's position: its box's, and what a finger has pulled it past an end by. */
   function current(): number {
-    return (viewport.current?.scrollTop ?? 0) + over.current;
+    return boxTop() + over.current;
   }
 
   /**
@@ -423,7 +442,11 @@ export function MessageList({
    */
   function scrollBoxTo(at: number) {
     const box = viewport.current;
-    if (box === null || box.scrollTop === at) {
+    if (box === null) {
+      return;
+    }
+    exactTop.current = at;
+    if (box.scrollTop === at) {
       return;
     }
     box.scrollTop = at;
@@ -517,7 +540,7 @@ export function MessageList({
     diagnostics?.note(
       `${why} ${String(Math.round(by))} absorbed at ${String(Math.round(box.scrollTop))}`,
     );
-    scrollBoxTo(box.scrollTop + by);
+    scrollBoxTo(boxTop() + by);
     noteStill();
   }
 
@@ -546,6 +569,7 @@ export function MessageList({
       heading.current = by < 0 ? "older" : "newer";
     }
     stopMotion();
+    exactTop.current = null;
     over.current = 0;
     afterMove(true);
   }
@@ -805,6 +829,7 @@ export function MessageList({
         over.current = 0;
         target.scrollIntoView({ block: "center" });
         ownScrollTop.current = box.scrollTop;
+        exactTop.current = null;
         afterMove(false);
         return;
       }

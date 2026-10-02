@@ -362,6 +362,62 @@ for (const { name, ios } of SCROLLERS) {
   });
 }
 
+// A finger reports where it is in fractions of a pixel, and moves a fraction at a time on a
+// dense screen, while a box holds its position in whole pixels: WebKit truncates what it is set
+// to, Chromium rounds it. A list that built each move on what its box read back gained up to a
+// pixel a move on iOS, running ahead of the finger, and here loses each move short of half a
+// pixel, standing still under it.
+test("a finger moving a fraction of a pixel at a time moves the list as far as it goes, with the list scrolling itself as on iOS", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  test.setTimeout(120_000);
+  await asIos(page);
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1500);
+
+  const cdp = await page.context().newCDPSession(page);
+  const box = await page.locator("[data-message-list]").first().boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 400) / 2;
+  let finger = (box?.y ?? 100) + 40;
+  await touch(cdp, "touchStart", x, finger);
+  finger += 20;
+  await touch(cdp, "touchMove", x, finger);
+  await frames(page);
+  const before = await sample(page);
+  const distance = 120;
+  const step = 0.375;
+  for (let moved = 0; moved < distance; moved += step) {
+    finger += step;
+    await touch(cdp, "touchMove", x, finger);
+  }
+  await frames(page);
+  const after = await sample(page);
+  await page.waitForTimeout(120);
+  await touch(cdp, "touchEnd", x, finger);
+
+  const both = moves(before?.tops ?? {}, after?.tops ?? {});
+  expect(both.length, "messages in view before and after").toBeGreaterThan(0);
+  for (const moved of both) {
+    expect(
+      Math.abs(moved - distance),
+      `moved ${String(moved)}px, not ${String(distance)}`,
+    ).toBeLessThan(1.5);
+  }
+});
+
 for (const { name, ios } of SCROLLERS) {
   test(`flicking back through a long history keeps ahead of the reader${name}`, async ({
     page,
