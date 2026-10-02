@@ -4,6 +4,7 @@
 mod capacity;
 mod config;
 mod limits;
+mod media;
 mod metrics;
 mod reporter;
 mod rooms;

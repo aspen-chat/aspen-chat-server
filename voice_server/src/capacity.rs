@@ -16,7 +16,7 @@
 //! leans towards too little rather than too much.
 
 use crate::config::MediaConfig;
-use crate::rooms::{h264_parameters, local_tuple, media_codecs};
+use crate::media::{h264_parameters, local_tuple, media_codecs};
 use anyhow::{Context, bail};
 use mediasoup::prelude::*;
 use mediasoup::worker::WorkerLogLevel;
