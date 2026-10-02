@@ -184,6 +184,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   const m = useMessages();
   const keepStill = useKeepStill();
   const [arrived, setArrived] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const known = picture.width != null && picture.height != null;
   const waiting = arrived !== picture.src;
   const guessed = !known && waiting;
@@ -194,7 +195,23 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   };
   useLayoutEffect(() => {
     keepStill();
-  }, [arrived, keepStill]);
+  }, [arrived, failed, keepStill]);
+  // A link named like a picture that is not one (a page, or one gone) shows as the link it
+  // is, not as a broken picture; a stored picture that fails is said to be unavailable.
+  if (failed === picture.src) {
+    return picture.attachmentId === undefined ? (
+      <a
+        href={picture.src}
+        target="_blank"
+        rel="noreferrer"
+        className="text-sm break-all text-accent underline-offset-2 hover:underline"
+      >
+        {picture.name}
+      </a>
+    ) : (
+      <span className="text-sm text-ink-faint">{m.attachmentUnavailable}</span>
+    );
+  }
   return (
     <Button
       onPress={onOpen}
@@ -211,7 +228,11 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         {...(known ? { width: picture.width ?? 0, height: picture.height ?? 0 } : {})}
         style={known ? keptRoom(picture.width ?? 1, picture.height ?? 1) : undefined}
         onLoad={arrive}
-        onError={arrive}
+        onError={() => {
+          flushSync(() => {
+            setFailed(picture.src);
+          });
+        }}
         className={
           imageClass +
           (known ? " h-auto" : "") +

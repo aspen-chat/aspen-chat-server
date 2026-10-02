@@ -167,6 +167,11 @@ const message = (
   ...extra,
 });
 
+/** A share page named like a gif, which is a page; its preview's picture is the gif. */
+export const gifPageLink = "https://tenor.com/view/ghost-12345.gif";
+/** A link to a picture that no longer exists, which the tests answer with nothing. */
+export const missingPictureLink = "https://pictures.example.com/missing-picture.png";
+
 /** The thread's starter, in #general. */
 export const starterText = "Who is bringing snacks on Saturday?";
 /** A message of the caller's own, which offers editing and deleting. */
@@ -196,6 +201,24 @@ const generalMessages = [
   message(203, me, starterText, 60, { thread }),
   message(202, bob, `Morning all! <:${customEmojiId}>`, 90),
   message(201, me, "Welcome to the family server.", 120),
+  // A share page named like a gif, whose preview carries the gif itself; and a link to a
+  // picture that is gone.
+  message(200, bob, gifPageLink, 130, {
+    linkPreviews: [
+      {
+        url: gifPageLink,
+        title: "Ghost GIF",
+        description: "Click to view the GIF",
+        siteName: "Tenor",
+        imageUrl: PIXEL_PNG,
+        imageWidth: 1,
+        imageHeight: 1,
+        themeColor: null,
+        video: null,
+      },
+    ],
+  }),
+  message(199, bob, missingPictureLink, 140),
   // Older history, enough for several pages, so reading back through it can be exercised.
   ...Array.from({ length: 120 }, (_, i) =>
     message(120 - i, i % 2 === 0 ? me : bob, `Older message ${String(120 - i)}`, 180 + i * 10),

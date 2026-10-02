@@ -32,16 +32,34 @@ export function MessageBody({
 }) {
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
-  const linkedImages = imageUrls(message.content);
+  const imageLinks = imageUrls(message.content);
+  // A link that looks like a picture by its extension is drawn from the server's copy of what
+  // it found there when the preview carries one: a share page named like a gif
+  // (tenor.com/….gif) is a page, and only the preview's picture, its og:image, is the gif.
+  // Without a preview's picture the link itself is shown, so a plain link to a picture never
+  // waits for the server.
+  const found = new Map(
+    message.linkPreviews.flatMap((p) => (p.imageUrl == null ? [] : [[p.url, p] as const])),
+  );
+  const linkedImages = imageLinks.filter((url) => !found.has(url));
+  const foundImages = imageLinks.flatMap((url) => {
+    const p = found.get(url);
+    return p?.imageUrl == null
+      ? []
+      : [{ src: p.imageUrl, name: url, width: p.imageWidth, height: p.imageHeight }];
+  });
   // A link the client already shows as a picture needs no card from the server for the same URL.
-  const previews = message.linkPreviews.filter((p) => !linkedImages.includes(p.url));
+  const previews = message.linkPreviews.filter((p) => !imageLinks.includes(p.url));
   // Links the server found to be images themselves join the message's pictures; the rest
   // are cards.
-  const previewImages = previews.flatMap((p) =>
-    isPictureOnly(p) && p.imageUrl != null
-      ? [{ src: p.imageUrl, name: p.url, width: p.imageWidth, height: p.imageHeight }]
-      : [],
-  );
+  const previewImages = [
+    ...foundImages,
+    ...previews.flatMap((p) =>
+      isPictureOnly(p) && p.imageUrl != null
+        ? [{ src: p.imageUrl, name: p.url, width: p.imageWidth, height: p.imageHeight }]
+        : [],
+    ),
+  ];
   const cards = previews.filter((p) => !isPictureOnly(p));
   const pictureOnly = onlyImageLinks(
     message.content,
