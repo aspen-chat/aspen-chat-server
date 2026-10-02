@@ -60,7 +60,7 @@ export function Growth() {
   const sync = useSync();
   const [range, setRange] = useState<GrowthRange>("threeMonths");
   const [asTable, setAsTable] = useState(false);
-  const load = useCallback(() => sync.adminGrowth(range), [sync, range]);
+  const load = useCallback(() => sync.admin.adminGrowth(range), [sync, range]);
   const { data, error, reload } = useAdminRead(load);
   // The last answer stays drawn, faded, while another range loads.
   const [shown, setShown] = useState<{ range: GrowthRange; series: GrowthSeries } | null>(null);

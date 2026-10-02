@@ -942,8 +942,8 @@ describe("AspenSync", () => {
     });
     await goLive(sync);
     expect(Array.from(sync.store.deploymentPermissions())).toEqual(["viewDashboard"]);
-    await sync.adminUsers({ name: "  kate " });
-    await sync.adminUsers({ name: " ", sort: "-name", offset: 30, limit: 15 });
+    await sync.admin.adminUsers({ name: "  kate " });
+    await sync.admin.adminUsers({ name: " ", sort: "-name", offset: 30, limit: 15 });
     expect(searches.map((s) => new URLSearchParams(s))).toEqual([
       new URLSearchParams({ "filter[name]": "kate" }),
       new URLSearchParams({ sort: "-name", offset: "30", limit: "15" }),

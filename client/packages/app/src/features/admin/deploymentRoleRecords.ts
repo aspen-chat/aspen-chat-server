@@ -25,7 +25,10 @@ export interface DeploymentRoles {
 export function useDeploymentRoles() {
   const sync = useSync();
   const load = useCallback(async (): Promise<DeploymentRoles> => {
-    const [roles, mine] = await Promise.all([sync.deploymentRoles(), sync.deploymentAccess()]);
+    const [roles, mine] = await Promise.all([
+      sync.admin.deploymentRoles(),
+      sync.admin.deploymentAccess(),
+    ]);
     return { roles, mine };
   }, [sync]);
   return useAdminRead(load);

@@ -69,7 +69,7 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
     }
     ids[at + by] = role.id;
     ids[at] = other;
-    run(sync.reorderDeploymentRoles(ids));
+    run(sync.admin.reorderDeploymentRoles(ids));
   }
 
   return (
@@ -144,7 +144,7 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
             <Button
               onPress={() => {
                 setError(null);
-                sync.createDeploymentRole(m.roles.newName, []).then(
+                sync.admin.createDeploymentRole(m.roles.newName, []).then(
                   (role) => {
                     setSelected(role.id);
                     read.reload();
@@ -215,7 +215,7 @@ function DeploymentRoleEditor({
   function save() {
     setSaving(true);
     setError(null);
-    sync
+    sync.admin
       .updateDeploymentRole(role.id, {
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(permissionsChanged ? { permissions: Array.from(permissions) } : {}),
@@ -292,7 +292,7 @@ function DeploymentRoleEditor({
                   setConfirmingDelete(true);
                   return;
                 }
-                sync.deleteDeploymentRole(role.id).then(onDeleted, (e: unknown) => {
+                sync.admin.deleteDeploymentRole(role.id).then(onDeleted, (e: unknown) => {
                   setError(problemText(e));
                 });
               }}

@@ -13,9 +13,10 @@
  * hold covers the first bootstrap, which makes both paths one piece of code.
  */
 
+import { AdminApi, adminRead } from "./admin";
 import { EventStream, type EventStreamOptions } from "./events";
 import type { CustomEmoji, ServerEvent } from "./generated/events";
-import type { components, paths } from "./generated/openapi";
+import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
@@ -33,6 +34,8 @@ import {
 } from "./preferences";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
 import type { Invocation, NotificationLevel } from "./storeTypes";
+import { lazyBrowserMedia, pageStorage } from "./platform";
+import { type UploadTarget, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
 
@@ -46,34 +49,6 @@ type Category = components["schemas"]["Category"];
 type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
-export type AdminOverview = components["schemas"]["AdminOverview"];
-export type AdminUserEntry = components["schemas"]["AdminUserEntry"];
-export type AdminCommunityEntry = components["schemas"]["AdminCommunityEntry"];
-export type RegistrationInvite = components["schemas"]["RegistrationInvite"];
-export type RegistrationInviteRequest = components["schemas"]["RegistrationInviteRequest"];
-export type Fleet = components["schemas"]["Fleet"];
-export type ApiServerHealth = components["schemas"]["ApiServerHealth"];
-export type VoiceServerHealth = components["schemas"]["VoiceServerHealth"];
-export type FederationOverview = components["schemas"]["FederationOverview"];
-export type FederatedDeployment = components["schemas"]["FederatedDeployment"];
-export type FederationList = components["schemas"]["FederationList"];
-export type ContactResult = components["schemas"]["ContactResult"];
-export type Gate = components["schemas"]["Gate"];
-
-export type UserSort = NonNullable<
-  NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
->;
-export type CommunitySort = NonNullable<
-  NonNullable<paths["/api/v1/admin/communities"]["get"]["parameters"]["query"]>["sort"]
->;
-export type Growth = components["schemas"]["Growth"];
-export type DeploymentRole = components["schemas"]["DeploymentRole"];
-export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
-export type ModerationEntry = components["schemas"]["ModerationEntry"];
-export type LoggedChannel = components["schemas"]["LoggedChannel"];
-export type LoggedMessage = components["schemas"]["LoggedMessage"];
-export type FileOfferEntry = components["schemas"]["FileOfferEntry"];
-export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
 export type MessageHolding = components["schemas"]["MessageHolding"];
 
 /** What to search messages for (`AspenSync.searchMessages`); at least one of the first four. */
@@ -94,30 +69,6 @@ export interface MessageSearch {
 /** How many messages one page of search results holds. */
 export const SEARCH_PAGE = 25;
 
-/** A page of one of the dashboard's lists. */
-export interface AdminListQuery<S extends string> {
-  /** Only those whose names contain this, ignoring case. */
-  name?: string;
-  /** The order; newest first when absent. */
-  sort?: S;
-  /** How many rows to skip. */
-  offset?: number;
-  /** How many rows the page holds. */
-  limit?: number;
-}
-
-function listQuery<S extends string>(
-  query: AdminListQuery<S>,
-): { "filter[name]"?: string; sort?: S; offset?: number; limit?: number } {
-  return {
-    ...(query.name === undefined || query.name.trim() === ""
-      ? {}
-      : { "filter[name]": query.name.trim() }),
-    ...(query.sort === undefined ? {} : { sort: query.sort }),
-    ...(query.offset === undefined || query.offset === 0 ? {} : { offset: query.offset }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
-  };
-}
 type Icon = components["schemas"]["Icon"];
 type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"];
@@ -256,6 +207,8 @@ export const ACCESS_RELOAD_SPREAD_MS = 2000;
 
 export class AspenSync {
   readonly store: RecordStore;
+  /** The Administration Dashboard's calls. */
+  readonly admin: AdminApi;
   /** The voice call, if any; a `VoiceCall` even when idle so the UI can subscribe once. */
   readonly voice: VoiceCall;
   /** The user's preferences, device-scoped and account-scoped alike. */
@@ -303,6 +256,7 @@ export class AspenSync {
 
   constructor(options: AspenSyncOptions) {
     this.#client = options.client;
+    this.admin = new AdminApi(options.client);
     this.store = options.store ?? new RecordStore({ now: options.now ?? (() => Date.now()) });
     this.#now = options.now ?? (() => Date.now());
     this.#uploadFetch = options.uploadFetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -576,45 +530,14 @@ export class AspenSync {
    * straight to storage, and confirming, and caches the resulting record. The attachment can
    * then be named in a message.
    */
-  async uploadAttachment(
+  uploadAttachment(
     file: File,
     /** A picture's size in pixels, which readers use to make room for it before it loads. */
     size?: { readonly width: number; readonly height: number },
     /** Told how many of the file's bytes have reached storage, as they go. */
     onProgress?: (sent: number, total: number) => void,
   ): Promise<Attachment> {
-    const init = await this.#client.api.POST("/api/v1/attachments", {
-      body: {
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        ...(size === undefined ? {} : { width: size.width, height: size.height }),
-      },
-    });
-    if (init.data === undefined) {
-      throw new ApiProblemError(problemOf(init.error, init.response));
-    }
-    const contentType = file.type || "application/octet-stream";
-    const put =
-      onProgress !== undefined && !this.#customUpload && typeof XMLHttpRequest !== "undefined"
-        ? await putWithProgress(init.data.uploadUrl, file, contentType, onProgress)
-        : await this.#uploadFetch(init.data.uploadUrl, {
-            method: "PUT",
-            headers: { "content-type": contentType },
-            body: file,
-          }).then((response) => ({ status: response.status, statusText: response.statusText }));
-    if (put.status < 200 || put.status >= 300) {
-      throw new ApiProblemError(
-        transportProblem(`upload failed: ${String(put.status)} ${put.statusText}`, put.status),
-      );
-    }
-    const confirm = await this.#client.api.POST("/api/v1/attachments/{attachment}/confirm", {
-      params: { path: { attachment: init.data.id } },
-    });
-    if (confirm.data === undefined) {
-      throw new ApiProblemError(problemOf(confirm.error, confirm.response));
-    }
-    this.store.ingest({ attachments: [confirm.data] });
-    return confirm.data;
+    return uploadAttachment(this.#uploadTarget(), file, size, onProgress);
   }
 
   /**
@@ -622,29 +545,17 @@ export class AspenSync {
    * storage, and confirming, and caches the record. The caller then names the icon on a user
    * or community.
    */
-  async uploadIcon(bytes: Blob, mimeType: string): Promise<Icon> {
-    const init = await this.#client.api.POST("/api/v1/icons", { body: { mimeType } });
-    if (init.data === undefined) {
-      throw new ApiProblemError(problemOf(init.error, init.response));
-    }
-    const put = await this.#uploadFetch(init.data.uploadUrl, {
-      method: "PUT",
-      headers: { "content-type": mimeType },
-      body: bytes,
-    });
-    if (!put.ok) {
-      throw new ApiProblemError(
-        transportProblem(`upload failed: ${String(put.status)} ${put.statusText}`, put.status),
-      );
-    }
-    const confirm = await this.#client.api.POST("/api/v1/icons/{icon}/confirm", {
-      params: { path: { icon: init.data.id } },
-    });
-    if (confirm.data === undefined) {
-      throw new ApiProblemError(problemOf(confirm.error, confirm.response));
-    }
-    this.store.putIcon(confirm.data);
-    return confirm.data;
+  uploadIcon(bytes: Blob, mimeType: string): Promise<Icon> {
+    return uploadIcon(this.#uploadTarget(), bytes, mimeType);
+  }
+
+  #uploadTarget(): UploadTarget {
+    return {
+      client: this.#client,
+      store: this.store,
+      uploadFetch: this.#uploadFetch,
+      customUpload: this.#customUpload,
+    };
   }
 
   /** Fetches an icon record the cache lacks, once, for a user or community that names it. */
@@ -1197,248 +1108,12 @@ export class AspenSync {
     });
   }
 
-  // --- The Administration Dashboard. Its reads are queries rather than cached records: each
-  // answers what the server says now, and the dashboard holds the answer while it shows it.
-
-  /** The deployment's totals. */
-  async adminOverview(): Promise<AdminOverview> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/overview"));
-  }
-
-  /** A page of the deployment's users, searched and sorted. */
-  async adminUsers(query: AdminListQuery<UserSort> = {}): Promise<AdminUserEntry[]> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/users", { params: { query: listQuery(query) } }),
-    );
-  }
-
-  /** A page of the deployment's communities, searched and sorted. */
-  async adminCommunities(
-    query: AdminListQuery<CommunitySort> = {},
-  ): Promise<AdminCommunityEntry[]> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/communities", {
-        params: { query: listQuery(query) },
-      }),
-    );
-  }
-
-  /** The newest registration invites, usable or not. */
-  async registrationInvites(): Promise<RegistrationInvite[]> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/registration-invites"));
-  }
-
-  /** Makes a registration invite. */
-  async createRegistrationInvite(request: RegistrationInviteRequest): Promise<RegistrationInvite> {
-    return this.#adminRead(
-      await this.#client.api.POST("/api/v1/admin/registration-invites", { body: request }),
-    );
-  }
-
-  /** Revokes a registration invite; the accounts it made are kept. */
-  async revokeRegistrationInvite(code: string): Promise<void> {
-    const result = await this.#client.api.DELETE("/api/v1/admin/registration-invites/{code}", {
-      params: { path: { code } },
-    });
-    if (result.error !== undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-  }
-
-  /** This deployment's part in federation: its domain, key, gates, and lists in force. */
-  async federation(): Promise<FederationOverview> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/federation"));
-  }
-
-  /** A page of the other deployments this one knows, alphabetically, searched by domain. */
-  async federatedDeployments(
-    query: Omit<AdminListQuery<never>, "sort"> = {},
-  ): Promise<FederatedDeployment[]> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/federation/deployments", {
-        params: { query: listQuery(query) },
-      }),
-    );
-  }
-
-  /** Adds a deployment to the directory, not yet contacted. */
-  async addFederatedDeployment(domain: string, note?: string): Promise<FederatedDeployment> {
-    return this.#adminRead(
-      await this.#client.api.POST("/api/v1/admin/federation/deployments", {
-        body: {
-          domain,
-          ...(note === undefined || note.trim() === "" ? {} : { note: note.trim() }),
-        },
-      }),
-    );
-  }
-
-  /** Changes or, with `null`, clears the note kept on a deployment. */
-  async setFederatedDeploymentNote(
-    domain: string,
-    note: string | null,
-  ): Promise<FederatedDeployment> {
-    return this.#adminRead(
-      await this.#client.api.PATCH("/api/v1/admin/federation/deployments/{domain}", {
-        params: { path: { domain } },
-        body: { note },
-      }),
-    );
-  }
-
-  /** Forgets a deployment: its pinned key and the lists it is on. */
-  async removeFederatedDeployment(domain: string): Promise<void> {
-    const result = await this.#client.api.DELETE("/api/v1/admin/federation/deployments/{domain}", {
-      params: { path: { domain } },
-    });
-    if (result.error !== undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-  }
-
-  /** Reads a deployment's document now, pinning or checking its key. */
-  async contactFederatedDeployment(domain: string): Promise<ContactResult> {
-    return this.#adminRead(
-      await this.#client.api.POST("/api/v1/admin/federation/deployments/{domain}/contact", {
-        params: { path: { domain } },
-      }),
-    );
-  }
-
-  /** Accepts the key a deployment offers in place of its pinned one: exactly `publicKey`. */
-  async acceptFederatedDeploymentKey(
-    domain: string,
-    publicKey: string,
-  ): Promise<FederatedDeployment> {
-    return this.#adminRead(
-      await this.#client.api.PUT("/api/v1/admin/federation/deployments/{domain}/key", {
-        params: { path: { domain } },
-        body: { publicKey },
-      }),
-    );
-  }
-
-  /** Puts a deployment on a list or takes it off. */
-  async setFederationListed(domain: string, list: FederationList, listed: boolean): Promise<void> {
-    const params = { params: { path: { domain, list } } };
-    const result = listed
-      ? await this.#client.api.PUT(
-          "/api/v1/admin/federation/deployments/{domain}/lists/{list}",
-          params,
-        )
-      : await this.#client.api.DELETE(
-          "/api/v1/admin/federation/deployments/{domain}/lists/{list}",
-          params,
-        );
-    if (result.error !== undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-  }
-
-  /** How many users and communities there were at each step of `range`. */
-  async adminGrowth(range: GrowthRange): Promise<Growth> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/growth", { params: { query: { range } } }),
-    );
-  }
-
-  /** The health of the deployment's API and voice servers. */
-  async fleet(): Promise<Fleet> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/fleet"));
-  }
-
-  /** What the caller may do across the deployment, and the roles that give it. */
-  async deploymentAccess(): Promise<{ permissions: DeploymentPermission[]; roles: string[] }> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/users/@me/admin"));
-  }
-
-  /** The deployment's roles, lowest first, as a query of the moment. */
-  async deploymentRoles(): Promise<DeploymentRole[]> {
-    return this.#adminRead(await this.#client.api.GET("/api/v1/admin/roles"));
-  }
-
-  async createDeploymentRole(
-    name: string,
-    permissions: readonly DeploymentPermission[],
-  ): Promise<DeploymentRole> {
-    return this.#adminRead(
-      await this.#client.api.POST("/api/v1/admin/roles", {
-        body: { name, permissions: [...permissions] },
-      }),
-    );
-  }
-
-  async updateDeploymentRole(
-    roleId: string,
-    patch: { name?: string; permissions?: readonly DeploymentPermission[] },
-  ): Promise<DeploymentRole> {
-    return this.#adminRead(
-      await this.#client.api.PATCH("/api/v1/admin/roles/{role}", {
-        params: { path: { role: roleId } },
-        body: {
-          ...(patch.name !== undefined ? { name: patch.name } : {}),
-          ...(patch.permissions !== undefined ? { permissions: [...patch.permissions] } : {}),
-        },
-      }),
-    );
-  }
-
-  async deleteDeploymentRole(roleId: string): Promise<void> {
-    const result = await this.#client.api.DELETE("/api/v1/admin/roles/{role}", {
-      params: { path: { role: roleId } },
-    });
-    if (result.error !== undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-  }
-
-  /** Orders the deployment roles below the caller's highest, lowest first. */
-  async reorderDeploymentRoles(roleIds: readonly string[]): Promise<DeploymentRole[]> {
-    return this.#adminRead(
-      await this.#client.api.PUT("/api/v1/admin/role-order", { body: { roles: [...roleIds] } }),
-    );
-  }
-
-  /** Gives someone a deployment role, or takes it away. */
-  async setUserDeploymentRole(userId: string, roleId: string, held: boolean): Promise<void> {
-    const params = { params: { path: { user: userId, role: roleId } } };
-    const result = held
-      ? await this.#client.api.PUT("/api/v1/admin/users/{user}/roles/{role}", params)
-      : await this.#client.api.DELETE("/api/v1/admin/users/{user}/roles/{role}", params);
-    if (result.error !== undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-  }
-
-  /** A page of the moderation log, newest first. */
-  async moderationLog(before?: string): Promise<ModerationEntry[]> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/moderation-log", {
-        params: { query: before === undefined ? {} : { before } },
-      }),
-    );
-  }
-
-  /** A page of the record of files offered in calls, newest first, optionally one user's. */
-  async fileTransferLog(before?: string, user?: string): Promise<FileOfferEntry[]> {
-    return this.#adminRead(
-      await this.#client.api.GET("/api/v1/admin/file-transfers", {
-        params: {
-          query: {
-            ...(before === undefined ? {} : { before }),
-            ...(user === undefined ? {} : { "filter[user]": user }),
-          },
-        },
-      }),
-    );
-  }
-
   /**
    * Someone's DMs, for a deployment moderator to open; they are put in the store so the DM
    * screen can show one, and reading any is logged by the server.
    */
   async userDms(userId: string): Promise<Channel[]> {
-    const dms = this.#adminRead(
+    const dms = adminRead(
       await this.#client.api.GET("/api/v1/admin/users/{user}/dms", {
         params: { path: { user: userId } },
       }),
@@ -1517,13 +1192,6 @@ export class AspenSync {
       return false;
     }
     return this.store.communities().some((c) => c.id === communityId);
-  }
-
-  #adminRead<T>(result: { data?: T; error?: unknown; response: Response }): T {
-    if (result.data === undefined) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-    return result.data;
   }
 
   /** Collapses or expands a category in the caller's channel list. The store follows the event. */
@@ -2975,74 +2643,4 @@ export class AspenSync {
     );
     return result.data.data;
   }
-}
-
-/**
- * The browser media, created only when a call first needs it, so the sync layer can be built
- * where there is no browser at all.
- */
-function lazyBrowserMedia(): VoiceMedia {
-  let real: VoiceMedia | null = null;
-  const media = async (): Promise<VoiceMedia> => {
-    if (real === null) {
-      const { browserVoiceMedia } = await import("./browserMedia");
-      real = browserVoiceMedia();
-    }
-    return real;
-  };
-  return {
-    createDevice: async () => (await media()).createDevice(),
-    getMicrophone: async (choice) => (await media()).getMicrophone(choice),
-    getCamera: async (choice) => (await media()).getCamera(choice),
-    setOutput: async (choice) => (await media()).setOutput(choice),
-    getScreen: async () => (await media()).getScreen(),
-    setVolume: (consumerId, gain) => {
-      if (real !== null) {
-        real.setVolume(consumerId, gain);
-      }
-    },
-    play: (id, track) => {
-      real?.play(id, track);
-    },
-    stop: (id) => {
-      real?.stop(id);
-    },
-  };
-}
-
-/** The page's `localStorage`, when there is one and it can be touched. */
-function pageStorage(): PreferenceStorage | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * `PUT`s `body` to storage with `XMLHttpRequest`, which, unlike `fetch`, says how much of a
- * request body has been sent. A failure to reach storage at all rejects, as `fetch`'s would.
- */
-function putWithProgress(
-  url: string,
-  body: Blob,
-  contentType: string,
-  onProgress: (sent: number, total: number) => void,
-): Promise<{ status: number; statusText: string }> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("PUT", url);
-    request.setRequestHeader("content-type", contentType);
-    request.upload.onprogress = (event) => {
-      onProgress(event.loaded, event.lengthComputable ? event.total : body.size);
-    };
-    request.onload = () => {
-      resolve({ status: request.status, statusText: request.statusText });
-    };
-    request.onerror = () => {
-      reject(new TypeError("the upload could not reach storage"));
-    };
-    request.onabort = request.onerror;
-    request.send(body);
-  });
 }

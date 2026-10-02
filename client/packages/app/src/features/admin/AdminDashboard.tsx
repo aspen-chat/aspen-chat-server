@@ -206,7 +206,7 @@ function InvitesWithTotals() {
 
 function useOverview() {
   const sync = useSync();
-  const load = useCallback(() => sync.adminOverview(), [sync]);
+  const load = useCallback(() => sync.admin.adminOverview(), [sync]);
   return useAdminRead(load);
 }
 

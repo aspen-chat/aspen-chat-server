@@ -87,7 +87,7 @@ export function RegistrationInvites({
   const m = useMessages();
   const { count, day, moment } = useFigures();
   const sync = useSync();
-  const load = useCallback(() => sync.registrationInvites(), [sync]);
+  const load = useCallback(() => sync.admin.registrationInvites(), [sync]);
   const invites = useAdminRead(load);
   const [revoking, setRevoking] = useState<string | null>(null);
   const now = invites.at;
@@ -216,7 +216,7 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
     setError(null);
     try {
       const seconds = EXPIRIES.find((e) => e.key === expiry)?.seconds ?? null;
-      await sync.createRegistrationInvite({
+      await sync.admin.createRegistrationInvite({
         maxUses: uses,
         ...(seconds === null ? {} : { expiresInSeconds: seconds }),
         ...(note.trim() === "" ? {} : { note: note.trim() }),
@@ -313,7 +313,7 @@ function RevokeDialog({
     setPending(true);
     setError(null);
     try {
-      await sync.revokeRegistrationInvite(target);
+      await sync.admin.revokeRegistrationInvite(target);
       onRevoked();
       onClose();
     } catch (e) {

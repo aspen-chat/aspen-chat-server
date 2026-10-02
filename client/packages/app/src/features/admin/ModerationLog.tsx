@@ -51,7 +51,7 @@ export function ModerationLog() {
 
   const read = useCallback(
     (before: string | undefined, isCurrent: () => boolean) => {
-      sync.moderationLog(before).then(
+      sync.admin.moderationLog(before).then(
         (page) => {
           if (!isCurrent()) {
             return;

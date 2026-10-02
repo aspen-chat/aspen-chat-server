@@ -21,7 +21,7 @@ const FLEET_REFRESH_MS = 10_000;
 export function FleetHealth() {
   const m = useMessages();
   const sync = useSync();
-  const load = useCallback(() => sync.fleet(), [sync]);
+  const load = useCallback(() => sync.admin.fleet(), [sync]);
   const { data, at: now, error, reload } = useAdminRead(load, FLEET_REFRESH_MS);
   const wizard = useIdWizard();
   return (

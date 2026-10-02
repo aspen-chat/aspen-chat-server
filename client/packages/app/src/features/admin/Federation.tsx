@@ -75,7 +75,7 @@ export function FederationSection() {
   const m = useMessages();
   const { moment } = useFigures();
   const sync = useSync();
-  const loadOverview = useCallback(() => sync.federation(), [sync]);
+  const loadOverview = useCallback(() => sync.admin.federation(), [sync]);
   const overview = useAdminRead(loadOverview);
   const [version, setVersion] = useState(0);
   const changed = useCallback(() => {
@@ -83,7 +83,7 @@ export function FederationSection() {
   }, []);
   const load = useCallback(
     async (query: { name?: string; offset?: number; limit?: number }) =>
-      (await sync.federatedDeployments(query)).map((d): Row => ({ ...d, id: d.domain })),
+      (await sync.admin.federatedDeployments(query)).map((d): Row => ({ ...d, id: d.domain })),
     [sync],
   );
   const listsInForce = overview.data?.listsInForce ?? [];
@@ -277,7 +277,7 @@ function AddDeployment({ onAdded }: { onAdded: () => void }) {
     setResult(null);
     let added: FederatedDeployment;
     try {
-      added = await sync.addFederatedDeployment(domain, note);
+      added = await sync.admin.addFederatedDeployment(domain, note);
     } catch (e) {
       setError(problemText(e));
       setPending(false);
@@ -286,7 +286,7 @@ function AddDeployment({ onAdded }: { onAdded: () => void }) {
     setDomain("");
     setNote("");
     try {
-      const contacted = await sync.contactFederatedDeployment(added.domain);
+      const contacted = await sync.admin.contactFederatedDeployment(added.domain);
       setResult(format(m.federation.outcome[contacted.outcome], { domain: added.domain }));
     } catch (e) {
       setResult(
@@ -401,7 +401,7 @@ function Actions({
           onPress={() => {
             setChecking(true);
             setSaid(null);
-            sync.contactFederatedDeployment(domain).then(
+            sync.admin.contactFederatedDeployment(domain).then(
               (contacted) => {
                 setSaid({
                   text: format(m.federation.outcome[contacted.outcome], { domain }),
@@ -570,7 +570,7 @@ function ListsDialog({
               }
               setOn(next);
               setError(null);
-              sync
+              sync.admin
                 .setFederationListed(deployment.domain, list, selected)
                 .then(onChanged, (e: unknown) => {
                   setOn(lists);
@@ -641,7 +641,7 @@ function KeyDialog({
           }
           setPending(true);
           setError(null);
-          sync.acceptFederatedDeploymentKey(deployment.domain, deployment.offeredKey).then(
+          sync.admin.acceptFederatedDeploymentKey(deployment.domain, deployment.offeredKey).then(
             () => {
               setPending(false);
               onChanged();
@@ -694,7 +694,7 @@ function ForgetDialog({
         onPress={() => {
           setPending(true);
           setError(null);
-          sync.removeFederatedDeployment(domain).then(
+          sync.admin.removeFederatedDeployment(domain).then(
             () => {
               setPending(false);
               onChanged();

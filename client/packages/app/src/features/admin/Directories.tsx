@@ -82,7 +82,10 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
   const manage = useDeploymentCan("manageDeploymentRoles");
   const moderator = useDeploymentCan("moderateCommunities");
   const manageBots = useDeploymentCan("manageBots");
-  const load = useCallback((query: AdminListQuery<UserSort>) => sync.adminUsers(query), [sync]);
+  const load = useCallback(
+    (query: AdminListQuery<UserSort>) => sync.admin.adminUsers(query),
+    [sync],
+  );
   return (
     <Directory<AdminUserEntry, UserSort>
       idThing="user"
@@ -317,7 +320,7 @@ function UserRoles({
                   isDisabled={role.position >= rank}
                   onChange={(selected) => {
                     setError(null);
-                    sync.setUserDeploymentRole(user.id, role.id, selected).then(
+                    sync.admin.setUserDeploymentRole(user.id, role.id, selected).then(
                       () => {
                         setHeld((now) =>
                           selected ? [...now, role.id] : now.filter((id) => id !== role.id),
@@ -419,7 +422,7 @@ export function CommunityDirectory() {
   const sync = useSync();
   const moderator = useDeploymentCan("moderateCommunities");
   const load = useCallback(
-    (query: AdminListQuery<CommunitySort>) => sync.adminCommunities(query),
+    (query: AdminListQuery<CommunitySort>) => sync.admin.adminCommunities(query),
     [sync],
   );
   return (

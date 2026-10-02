@@ -34,7 +34,7 @@ export function FileTransferLog() {
 
   const read = useCallback(
     (before: string | undefined, isCurrent: () => boolean) => {
-      sync.fileTransferLog(before).then(
+      sync.admin.fileTransferLog(before).then(
         (page) => {
           if (!isCurrent()) {
             return;
