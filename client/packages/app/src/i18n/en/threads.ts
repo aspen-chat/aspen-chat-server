@@ -1,0 +1,16 @@
+export const threads = {
+  replyInThread: "Reply in thread",
+  heading: "Thread",
+  close: "Close thread",
+  oneReply: "1 reply",
+  replies: "{count} replies",
+  lastReply: "last reply {time}",
+  viewThread: "View thread",
+  echoToParent: "Also send to {channel}",
+  placeholder: "Reply…",
+  repliedInThread: "replied in a thread",
+  replyDeleted: "This reply was deleted.",
+  starterDeleted: "The message that started this thread was deleted.",
+  notFound: "This thread could not be opened.",
+  thisConversation: "this conversation",
+} as const;

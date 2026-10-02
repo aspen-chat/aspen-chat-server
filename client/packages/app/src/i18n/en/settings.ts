@@ -1,0 +1,32 @@
+export const settings = {
+  motionSpeed: "Animation speed",
+  motionOff: "Off",
+  motionNormal: "Normal",
+  motionTimes: "{speed}×",
+  motionHint:
+    "All your devices share this. At the far left, nothing animates. Where a device is set to reduce motion, things fade in place rather than move.",
+  title: "Settings",
+  account: "Account",
+  audio: "Audio and video",
+  appearance: "Appearance",
+  language: "Language",
+  languageLabel: "Show Aspen in",
+  languageAutomatic: "Automatic ({language})",
+  languageHint:
+    "Automatic follows your browser's languages. Your choice follows your account to every device, and servers write their messages in it too.",
+  pseudoAccented: "Accented English (for testing)",
+  pseudoMirrored: "Mirrored English (for testing right-to-left)",
+  microphone: "Microphone",
+  speaker: "Speaker",
+  notificationOutput: "Notification sounds",
+  systemDefault: "System default",
+  sameAsVoice: "Same as voice chat",
+  missingDevice: "Remembered device (not connected)",
+  unnamedMicrophone: "Microphone {index}",
+  unnamedSpeaker: "Speaker {index}",
+  unnamedCamera: "Camera {index}",
+  camera: "Camera",
+  microphoneDenied:
+    "Microphone access was refused, so devices cannot be named. Allow it in the browser to choose one.",
+  outputUnsupported: "This browser cannot choose a speaker; the system default is used.",
+} as const;

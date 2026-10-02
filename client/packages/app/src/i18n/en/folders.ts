@@ -1,0 +1,23 @@
+export const folders = {
+  untitled: "Folder",
+  label: "{name} folder, {count} communities",
+  labelOpen: "{name} folder, open, {count} communities",
+  labelOne: "{name} folder, 1 community",
+  labelOpenOne: "{name} folder, open, 1 community",
+  options: "Options for {name} folder",
+  rename: "Rename",
+  renameHeading: "Rename folder",
+  nameLabel: "Name",
+  save: "Save",
+  color: "Colour",
+  colors: {
+    accent: "Theme",
+    sky: "Sky",
+    violet: "Violet",
+    rose: "Rose",
+    amber: "Amber",
+    slate: "Slate",
+  },
+  ungroup: "Ungroup",
+  drag: "Move {name} folder",
+} as const;
