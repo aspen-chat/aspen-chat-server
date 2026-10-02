@@ -1,5 +1,4 @@
 import {
-  ApiProblemError,
   explain,
   type AccessDecision,
   type OverrideGrant,
@@ -52,6 +51,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { primaryButtonClass } from "@/features/auth/styles";
+import { problemText } from "@/api/problemText";
 
 /** A channel or a category, whose overrides the dialog edits. */
 export type AccessTarget =
@@ -67,10 +67,6 @@ const POSTING: readonly Permission[] = [
   "startThreads",
   "createPolls",
 ];
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * Which of the simple settings the overrides amount to, and the roles it names: everyone's

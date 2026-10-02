@@ -1,5 +1,4 @@
 import {
-  ApiProblemError,
   type FederatedDeployment,
   type FederationList,
   type FederationOverview,
@@ -43,6 +42,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { problemText } from "@/api/problemText";
 
 /** The longest note kept on a deployment, as the server's `MAX_NOTE_CHARS`. */
 const MAX_NOTE_CHARS = 200;
@@ -59,10 +59,6 @@ function protocolRange(protocol: { version: number; minimum: number }): string {
   return protocol.minimum === protocol.version
     ? String(protocol.version)
     : `${String(protocol.minimum)}–${String(protocol.version)}`;
-}
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
 }
 
 /**

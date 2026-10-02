@@ -1,4 +1,4 @@
-import { ApiProblemError, type DeploymentPermission, type DeploymentRole } from "@aspen/protocol";
+import type { DeploymentPermission, DeploymentRole } from "@aspen/protocol";
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button, GridList, GridListItem, Input, Label, TextField } from "react-aria-components";
@@ -26,14 +26,11 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { problemText } from "@/api/problemText";
 
 const iconButtonClass =
   "rounded p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-accent/50";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * The deployment's roles, highest first, and the editor for the one chosen. Those who may manage

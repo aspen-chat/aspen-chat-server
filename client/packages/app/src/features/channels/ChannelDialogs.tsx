@@ -1,4 +1,4 @@
-import { ApiProblemError, type Channel } from "@aspen/protocol";
+import type { Channel } from "@aspen/protocol";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -30,10 +30,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, communityLink } from "@/features/messages/links";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
+import { problemText } from "@/api/problemText";
 
 /** Renames a channel, for those who may manage channels or moderate the server. */
 export function RenameChannelDialog({

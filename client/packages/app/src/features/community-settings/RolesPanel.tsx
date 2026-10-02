@@ -1,10 +1,4 @@
-import {
-  ApiProblemError,
-  TEMPLATES,
-  type CommunityPermissions,
-  type Permission,
-  type Role,
-} from "@aspen/protocol";
+import { TEMPLATES, type CommunityPermissions, type Permission, type Role } from "@aspen/protocol";
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button, GridList, GridListItem, Input, Label, TextField } from "react-aria-components";
@@ -29,14 +23,11 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { problemText } from "@/api/problemText";
 
 const iconButtonClass =
   "rounded p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-accent/50";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * A community's roles, highest first, and the editor for the one chosen. Roles ranked below the

@@ -1,4 +1,4 @@
-import { ApiProblemError, type Community, type User } from "@aspen/protocol";
+import type { Community, User } from "@aspen/protocol";
 import { GearSixIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -47,14 +47,11 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { problemText } from "@/api/problemText";
 
 const tabClass =
   "cursor-default rounded-md px-3 py-1.5 text-sm outline-none hover:bg-surface-hover " +
   "selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * The community's settings, from the gear in its sidebar: its name, its owner (who alone may

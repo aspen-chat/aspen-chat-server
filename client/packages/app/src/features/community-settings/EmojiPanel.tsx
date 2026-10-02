@@ -1,4 +1,4 @@
-import { ApiProblemError } from "@aspen/protocol";
+import { problemText } from "@/api/problemText";
 import { useRef, useState } from "react";
 import { Button, Input, Label, TextField } from "react-aria-components";
 import { useAccess, useCustomEmoji, useSync } from "@/api/hooks";
@@ -18,10 +18,6 @@ import {
 } from "@/features/invites/dialog";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * The community's own emoji, by name, each with its picture; holders of Manage custom emoji

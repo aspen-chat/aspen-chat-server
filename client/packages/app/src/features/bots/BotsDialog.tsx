@@ -1,4 +1,4 @@
-import { ALL_PERMISSIONS, ApiProblemError, type Permission, type User } from "@aspen/protocol";
+import { ALL_PERMISSIONS, type Permission, type User } from "@aspen/protocol";
 import { CopyIcon, PlusIcon, RobotIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -34,12 +34,9 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { problemText } from "@/api/problemText";
 
 const EVERY_PERMISSION: ReadonlySet<Permission> = new Set(ALL_PERMISSIONS);
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
 
 /**
  * The bots the user owns, opened from developer mode in Settings: making one, and for each,

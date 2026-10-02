@@ -1,4 +1,4 @@
-import { ApiProblemError, type Role, type User } from "@aspen/protocol";
+import type { Role, User } from "@aspen/protocol";
 import { CaretDownIcon, CheckIcon, CrownSimpleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import {
@@ -37,10 +37,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
-
-function problemText(e: unknown): string {
-  return e instanceof ApiProblemError ? e.message : String(e);
-}
+import { problemText } from "@/api/problemText";
 
 /**
  * The community's members, each with their roles: the member sample, or, for those who may search
