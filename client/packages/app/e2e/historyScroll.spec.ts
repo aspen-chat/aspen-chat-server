@@ -488,6 +488,42 @@ const shortHistory = Array.from({ length: SHORT_COUNT }, (_, i) => {
   };
 });
 
+test("the Jump to latest pill offers itself a screen above the newest, and goes when they are near", async ({
+  page,
+}) => {
+  await signInToWorld(page, (p) => serveHistory(p, shortHistory));
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  const newest = page.locator(`article[data-message-id="${id(SHORT_COUNT)}"]`);
+  await expect(newest).toBeVisible();
+  const pill = page.getByRole("button", { name: "Jump to latest" });
+  await expect(pill).toHaveCount(0);
+  // The newest messages are still in the window; the view alone is far from them.
+  const list = page.locator("[data-message-list]");
+  const screensUp = (screens: number) =>
+    list.evaluate((element, n) => {
+      element.scrollTop = element.scrollHeight - element.clientHeight * (1 + n);
+    }, screens);
+  await screensUp(2);
+  await expect(pill).toBeVisible();
+  await screensUp(0.5);
+  await expect(pill).toHaveCount(0);
+  await screensUp(1.5);
+  await expect(pill).toBeVisible();
+  // Reached from the keyboard, it stays where the view is; it is not where it would be in
+  // the flow of the content, at the end.
+  const before = await list.evaluate((element) => element.scrollTop);
+  await pill.focus();
+  await expect(pill).toBeFocused();
+  expect(await list.evaluate((element) => element.scrollTop)).toBe(before);
+  await page.keyboard.press("Enter");
+  await expect(newest).toBeVisible();
+  await expect(pill).toHaveCount(0);
+});
+
 test("reading back through a history a little longer than the window keeps what is in view", async ({
   page,
   browserName,

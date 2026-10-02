@@ -204,6 +204,11 @@ export function MessageList({
   const indicatorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
+  /**
+   * Whether the view is at least a screen above the newest the list holds, which offers the
+   * Jump to latest pill even with the newest messages in the window.
+   */
+  const [farBack, setFarBack] = useState(false);
   /** Whether the newest page is being read for "Jump to latest". */
   const jumping = useRef(false);
   const stickToBottom = useRef(true);
@@ -395,6 +400,16 @@ export function MessageList({
       return;
     }
     range.current = bounds(box.scrollHeight, box.clientHeight);
+    noteDistance();
+  }
+
+  /** Whether the view is at least a screen above the newest the list holds. */
+  function noteDistance() {
+    const box = viewport.current;
+    if (box === null) {
+      return;
+    }
+    setFarBack(box.clientHeight > 0 && range.current.max - box.scrollTop >= box.clientHeight);
   }
 
   /** The list's position: its box's, and what a finger has pulled it past an end by. */
@@ -466,6 +481,7 @@ export function MessageList({
     }
     noteStill();
     showIndicator();
+    noteDistance();
     if (byUser) {
       stickToBottom.current = atLatestNow.current && range.current.max - box.scrollTop < 8;
     }
@@ -1174,7 +1190,7 @@ export function MessageList({
           />
         </div>
       )}
-      {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
+      {(!window.atLatest || farBack) && <JumpToLatest onJump={jumpToLatest} />}
       {diagnostics !== null && (
         <ScrollDiagnosticsPanel diagnostics={diagnostics} viewport={viewport} />
       )}

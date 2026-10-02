@@ -897,7 +897,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   tall, reading ahead would otherwise drop the very messages being read. The store keeps the
   window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records, except that a
   window followed live grows to `LIVE_WINDOW_MAX_MESSAGES` (twice that) before its oldest go,
-  since the reader may be on the oldest of a full window when a message arrives.
+  since the reader may be on the oldest of a full window when a message arrives. The Jump to
+  latest pill is offered while the window lacks the newest messages, and while the view is at
+  least a screen above the newest it holds (`farBack`), so a reader a few screens up in a
+  channel followed live has it too; within a screen of the bottom it goes.
   On iOS and iPadOS the list scrolls itself (`OWNS_SCROLLING` in `MessageList.tsx`, with the
   arithmetic in `scrollPhysics.ts`): its box hides its overflow, so no finger, wheel, or key
   scrolls it, and the list takes those itself and sets the box's scroll position from them,
