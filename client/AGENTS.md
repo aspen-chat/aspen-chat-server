@@ -727,7 +727,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   listen, opening no microphone. `src/features/community-settings` is the management UI: the
   sidebar gear's `CommunitySettingsDialog` (name and icon, ownership, delete or leave; roles,
   with templates and a grouped `PermissionChecklist` whose unheld permissions are disabled; and
-  members, with their roles and Remove), and `AccessDialog`, opened from a channel's menu or a
+  members, with their roles, Remove, and, for holders of Ban members, Ban: `BanDialog` takes a
+  reason, how long for, and, for a banner who also holds Manage messages, whether their messages
+  from the last hour or day go too, and `BannedList` beneath the members shows the standing
+  bans (`RecordStore.bans`, topic `bans:<communityId>`, read on first use by `useBans` and kept
+  by `communityBan` events, which reach holders of Ban members) with Lift ban; someone banned
+  who tries an invite is answered `banned` with the reason, which the invite screen shows), and
+  `AccessDialog`, opened from a channel's menu or a
   category's lock, which leads with three presets (everyone, only some roles, read-only) and
   keeps per-role allow, default, and deny under Advanced and a per-member explanation
   (`explain`) under Check access. Wherever a member is chosen (the Members tab, handing over
@@ -798,7 +804,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 - Something done and done with, where nothing on the page will say so (text copied), is said in
   a toast: `toast(text)` (`src/features/layout/toast.ts`, React Aria's toast queue) from
   anywhere, shown by `Toasts` for a few seconds, dropping in over the top of the channel's
-  messages (`ChannelScreen`, and the thread panel's own where it is the whole screen).
+  messages (`ChannelScreen`, and the thread panel's own where it is the whole screen); the root
+  mounts a `fallback` region fixed to the top of the page, shown only while no channel's region
+  is mounted, so a toast sent from the channel list or a dialog opened there still shows, once.
 - Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken).
   Prefer an icon to an emoji glyph in controls. Emoji reactions use `emoji-picker-react` with
   native glyphs, loaded lazily by `src/features/messages/Reactions.tsx`; it fetches nothing.

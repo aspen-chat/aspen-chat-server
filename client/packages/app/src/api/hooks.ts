@@ -14,6 +14,7 @@ import type {
   ChannelOverride,
   ChannelVoice,
   Community,
+  CommunityBan,
   CommunityPermissions,
   CustomEmoji,
   DeploymentPermission,
@@ -514,6 +515,21 @@ export function useRoles(communityId: string): readonly Role[] {
 /** A community's own emoji, by name. */
 export function useCustomEmoji(communityId: string): readonly CustomEmoji[] {
   return useTopic(`emoji:${communityId}`, (s) => s.customEmoji(communityId));
+}
+
+/**
+ * A community's standing bans, newest first, read on first use for a holder of Ban members;
+ * `undefined` until read.
+ */
+export function useBans(communityId: string): readonly CommunityBan[] | undefined {
+  const sync = useSync();
+  const bans = useTopic(`bans:${communityId}`, (s) => s.bans(communityId));
+  useEffect(() => {
+    if (bans === undefined) {
+      void sync.loadBans(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, bans]);
+  return bans;
 }
 
 /** The roles a member holds besides everyone's, or `undefined` while unknown. */

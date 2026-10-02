@@ -135,6 +135,8 @@ endpoints = [
   "DELETE /voice-servers/{server}",
   "PUT /communities/{community}/owner",
   "POST /communities/{community}/roles",
+  "PUT /communities/{community}/bans/{user}",
+  "DELETE /communities/{community}/bans/{user}",
   "POST /communities/{community}/emoji",
   "PATCH /emoji/{emoji}",
   "DELETE /emoji/{emoji}",

@@ -146,6 +146,7 @@ export type {
   PollOption,
   PollOptionResult,
   PollWriteIn,
+  CommunityBan,
   CustomEmoji,
   Role,
   User,

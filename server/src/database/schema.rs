@@ -136,6 +136,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    community_ban (community, user) {
+        community -> Uuid,
+        user -> Uuid,
+        banned_by -> Nullable<Uuid>,
+        reason -> Nullable<Text>,
+        banned_at -> Timestamptz,
+        until -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     community_member_role (user, role) {
         user -> Uuid,
         community -> Uuid,
@@ -640,6 +651,7 @@ diesel::joinable!(channel_mute -> user (user));
 diesel::joinable!(channel_override -> channel (channel));
 diesel::joinable!(channel_override -> community_role (role));
 diesel::joinable!(community -> user (owner));
+diesel::joinable!(community_ban -> community (community));
 diesel::joinable!(community_member_role -> community_role (role));
 diesel::joinable!(community_role -> community (community));
 diesel::joinable!(community_role -> user (bot));
@@ -719,6 +731,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     channel_mute,
     channel_override,
     community,
+    community_ban,
     community_member_role,
     community_role,
     community_user,

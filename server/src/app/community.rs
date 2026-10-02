@@ -293,6 +293,8 @@ pub(crate) async fn add_member(
     community: CommunityId,
     roles: &[RoleId],
 ) -> app::Result<message_enum::UserCommunity> {
+    // Every way in passes here, so a standing ban refuses them all.
+    app::ban::check_not_banned(conn, community, user).await?;
     let last: Option<i32> = community_user::table
         .filter(community_user::user.eq(user))
         .select(diesel::dsl::max(community_user::sort_index))

@@ -4,6 +4,7 @@ import { AspenProvider } from "@/api/AspenProvider";
 import { defaultServerUrl, rememberServerUrl } from "@/config";
 import { ServerForm } from "@/features/auth/ServerForm";
 import { ServerChoiceContext } from "@/features/auth/serverChoice";
+import { Toasts } from "@/features/layout/Toasts";
 import { router } from "@/router";
 
 /**
@@ -40,6 +41,7 @@ export function App() {
         }}
       >
         <RouterProvider router={router} />
+        <Toasts fallback />
       </ServerChoiceContext.Provider>
     </AspenProvider>
   );

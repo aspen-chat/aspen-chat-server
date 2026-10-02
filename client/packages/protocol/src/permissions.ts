@@ -31,6 +31,7 @@ export const COMMUNITY_PERMISSIONS: readonly Permission[] = [
   "manageCalls",
   "addBots",
   "manageCustomEmoji",
+  "banMembers",
 ];
 
 /** Permissions a channel or category override may allow or deny. */
@@ -89,6 +90,7 @@ export const TEMPLATES = {
     "manageCalls",
     "addBots",
     "manageCustomEmoji",
+    "banMembers",
   ],
   admin: ALL_PERMISSIONS,
 } as const satisfies Record<string, readonly Permission[]>;

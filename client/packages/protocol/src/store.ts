@@ -25,6 +25,7 @@ import type {
   Channel,
   ChannelOverride,
   Community,
+  CommunityBan,
   CustomEmoji,
   DeploymentPermission,
   Invite,
@@ -260,6 +261,8 @@ export class RecordStore {
   readonly #reactions = new Map<string, Reactions>();
   /** Every community's own emoji, by id. */
   readonly #customEmoji = new Map<string, CustomEmoji>();
+  /** The standing bans of the communities whose bans a read has brought, by community then user. */
+  readonly #bans = new Map<string, Map<string, CommunityBan>>();
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
@@ -464,6 +467,27 @@ export class RecordStore {
         .filter((e) => e.community === communityId)
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
+  }
+
+  /**
+   * Topic `bans:<communityId>`: the community's standing bans, newest first, or `undefined`
+   * before a read has brought them (`AspenSync.loadBans`); events then keep them.
+   */
+  bans(communityId: string): readonly CommunityBan[] | undefined {
+    return this.#memoized(`bans:${communityId}`, () => {
+      const held = this.#bans.get(communityId);
+      return held === undefined
+        ? undefined
+        : Array.from(held.values()).sort((a, b) => b.bannedAt.localeCompare(a.bannedAt));
+    });
+  }
+
+  /** Keeps a read's whole list of a community's standing bans. */
+  replaceBans(communityId: string, bans: readonly CommunityBan[]): void {
+    this.#batch(() => {
+      this.#bans.set(communityId, new Map(bans.map((b) => [b.user, b])));
+      this.#touch(`bans:${communityId}`);
+    });
   }
 
   /** One custom emoji by id, under its community's `emoji:<communityId>` topic. */
@@ -1730,6 +1754,7 @@ export class RecordStore {
       this.#blocked.clear();
       this.#roles.clear();
       this.#customEmoji.clear();
+      this.#bans.clear();
       this.#pins.clear();
       this.#forgetCommands();
       this.#channelOverrides.clear();
@@ -1784,6 +1809,19 @@ export class RecordStore {
             this.#removeCommunity(event.id);
           }
           break;
+        case "communityBan": {
+          // Only a community whose bans were read is followed; the rest are read when shown.
+          const held = this.#bans.get(event.community);
+          if (held !== undefined) {
+            if (event.type === "create") {
+              held.set(event.user, created(event));
+            } else {
+              held.delete(event.user);
+            }
+            this.#touch(`bans:${event.community}`);
+          }
+          break;
+        }
         case "customEmoji":
           if (event.type === "create") {
             this.#putCustomEmoji(created(event));

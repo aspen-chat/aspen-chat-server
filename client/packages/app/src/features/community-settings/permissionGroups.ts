@@ -15,6 +15,7 @@ export const PERMISSION_GROUPS = [
       "manageRoles",
       "assignRoles",
       "removeMembers",
+      "banMembers",
       "addBots",
     ],
   },

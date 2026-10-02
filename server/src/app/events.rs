@@ -139,6 +139,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::Invite(_)
         | ServerEvent::Role(_)
         | ServerEvent::CustomEmoji(_)
+        | ServerEvent::CommunityBan(_)
         | ServerEvent::ChannelOverride(_)
         | ServerEvent::CategoryOverride(_) => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,
@@ -354,12 +355,16 @@ async fn governing_channel(
 
 /// Who besides the holders of a permission may receive an event: the permission it needs, and
 /// the one member who receives it without. An invite is its code, so every event about one
-/// reaches only those who may manage invites and whoever made it.
+/// reaches only those who may manage invites and whoever made it; a ban is a moderation
+/// record, reaching those who may ban.
 async fn audience(
     conn: &mut AsyncPgConnection,
     event: &ServerEvent,
 ) -> app::Result<Option<(Permission, Option<UserId>)>> {
     use crate::api::message_enum::server_event::InviteEvent;
+    if let ServerEvent::CommunityBan(_) = event {
+        return Ok(Some((Permission::BanMembers, None)));
+    }
     let ServerEvent::Invite(event) = event else {
         return Ok(None);
     };

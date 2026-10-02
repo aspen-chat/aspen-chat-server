@@ -67,6 +67,7 @@ const roles = [
       "manageCalls",
       "addBots",
       "manageCustomEmoji",
+      "banMembers",
       ...channelPermissions,
     ],
     everyone: false,
@@ -817,6 +818,7 @@ async function answer(
   publish: Publish,
   admin: ReturnType<typeof administration>,
   blocks: Set<string>,
+  bans: Map<string, Record<string, unknown>>,
 ) {
   const request = route.request();
   const url = new URL(request.url());
@@ -1047,6 +1049,47 @@ async function answer(
         const bot = users.find((u) => u.id === path.split("/")[2]);
         const { public: botPublic } = request.postDataJSON() as { public: boolean };
         return bot === undefined ? undefined : { ...bot, botPublic };
+      },
+    ],
+    // Bans: the standing list, banning (which ends the membership and tells everyone), and
+    // lifting.
+    ["GET", new RegExp(`^/communities/${community}/bans$`), () => Array.from(bans.values())],
+    [
+      "PUT",
+      new RegExp(`^/communities/${community}/bans/[^/]+$`),
+      () => {
+        const user = path.split("/").pop() ?? "";
+        const request = route.request().postDataJSON() as {
+          reason?: string;
+          durationSeconds?: number;
+          deleteMessagesSeconds?: number;
+        };
+        const ban = {
+          community,
+          user,
+          reason: request.reason ?? null,
+          until:
+            request.durationSeconds === undefined
+              ? null
+              : new Date(Date.now() + request.durationSeconds * 1000).toISOString(),
+          bannedBy: me,
+          bannedAt: new Date().toISOString(),
+        };
+        const replaced = bans.has(user);
+        bans.set(user, ban);
+        publish({ serverEvent: "userCommunity", type: "delete", community, user });
+        publish({ serverEvent: "communityBan", type: "create", ...ban });
+        return reply({ ban, deletedMessages: 0 }, replaced ? 200 : 201);
+      },
+    ],
+    [
+      "DELETE",
+      new RegExp(`^/communities/${community}/bans/[^/]+$`),
+      () => {
+        const user = path.split("/").pop() ?? "";
+        bans.delete(user);
+        publish({ serverEvent: "communityBan", type: "delete", community, user });
+        return reply(null, 204);
       },
     ],
     [
@@ -1367,7 +1410,9 @@ export async function signInToWorld(
   const poll = lunch(publish);
   const admin = administration();
   const blocks = new Set<string>();
-  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks));
+  /** The community's standing bans, by user, as the tests make and lift them. */
+  const bans = new Map<string, Record<string, unknown>>();
+  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks, bans));
   await before?.(page);
   await page.goto("/");
   await page.getByLabel("Username").fill("kate");

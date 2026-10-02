@@ -22,6 +22,8 @@ import {
   useSync,
 } from "@/api/hooks";
 import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/features/auth/styles";
+import { BanDialog } from "@/features/community-settings/BanDialog";
+import { BannedList } from "@/features/community-settings/BannedList";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
@@ -50,6 +52,8 @@ export function MembersPanel({ communityId }: { communityId: string }) {
   const m = useMessages();
   const [query, setQuery] = useState("");
   const { members, searching, error, canSearch } = useMemberSearch(communityId, query);
+  const access = useAccess(communityId);
+  const mayBan = access?.has("banMembers") ?? false;
   return (
     <div className="flex flex-col gap-2">
       {canSearch && (
@@ -73,6 +77,7 @@ export function MembersPanel({ communityId }: { communityId: string }) {
           <MemberRow key={member.id} communityId={communityId} member={member} />
         ))}
       </ul>
+      {mayBan && <BannedList communityId={communityId} />}
     </div>
   );
 }
@@ -94,6 +99,8 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
   const theirs = store.access(communityId, member.id);
   const outranked = access !== null && theirs !== null && access.outranks(theirs.rank);
   const mayRemove = access?.has("removeMembers") === true && !self && !owner && outranked;
+  const mayBan = access?.has("banMembers") === true && !self && !owner && outranked;
+  const [banning, setBanning] = useState(false);
   const assignable = useAssignableRoles(communityId, member.id);
   const shown = roles.filter((r) => !r.everyone && (held ?? []).includes(r.id));
 
@@ -141,6 +148,25 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
               canGive={(role) => assignable.includes(role)}
               onError={setError}
             />
+          )}
+          {mayBan && (
+            <>
+              <Button
+                onPress={() => {
+                  setBanning(true);
+                }}
+                className={secondaryButtonClass + " text-danger"}
+              >
+                {m.members.ban}
+              </Button>
+              <BanDialog
+                communityId={communityId}
+                userId={member.id}
+                name={name}
+                isOpen={banning}
+                onOpenChange={setBanning}
+              />
+            </>
           )}
           {mayRemove &&
             (confirming ? (

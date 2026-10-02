@@ -15,6 +15,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 pub(crate) mod admin;
 pub(crate) mod attachment;
 pub(crate) mod auth;
+pub(crate) mod ban;
 pub(crate) mod block;
 pub(crate) mod bot;
 pub mod bot_command;
@@ -88,6 +89,7 @@ pub const TAG_SECURITY: &str = "security";
 pub const TAG_ADMIN: &str = "administration";
 pub const TAG_ROLES: &str = "roles";
 pub const TAG_CUSTOM_EMOJI: &str = "custom emoji";
+pub const TAG_BANS: &str = "bans";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -123,6 +125,7 @@ pub const TAG_CUSTOM_EMOJI: &str = "custom emoji";
         (name = TAG_COMMUNITIES, description = "Communities and their membership"),
         (name = TAG_ROLES, description = "Roles and permissions in a community: roles, who holds them, channel and category overrides, removing members, and ownership"),
         (name = TAG_CUSTOM_EMOJI, description = "A community's own emoji: listing, adding, renaming, and removing them"),
+        (name = TAG_BANS, description = "Bans from a community: listing, banning, and lifting"),
         (name = TAG_CATEGORIES, description = "Groupings of channels inside a community"),
         (name = TAG_CHANNELS, description = "Text and voice channels, threads, and DMs"),
         (name = TAG_MESSAGES, description = "Messages within a channel, and the threads they start"),
@@ -248,6 +251,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(community::list_community_channels))
         .routes(routes!(role::list_roles, role::create_role))
+        .routes(routes!(ban::read_community_bans))
+        .routes(routes!(ban::ban_community_member, ban::lift_community_ban))
         .routes(routes!(
             custom_emoji::read_emoji,
             custom_emoji::create_emoji

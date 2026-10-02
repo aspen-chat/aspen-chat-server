@@ -79,6 +79,8 @@ pub enum ProblemCode {
     /// A block stands between the caller and someone they would message, whichever of them
     /// made it; the problem does not say which.
     Blocked,
+    /// The caller is banned from the community (`app::ban`); `detail` carries the reason.
+    Banned,
     /// Password change: the current password did not match.
     OldPasswordIncorrect,
     /// Password change: the new password fails a requirement named in `requirement`.
@@ -118,7 +120,8 @@ impl ProblemCode {
             | ProblemCode::RegistrationInviteRequired
             | ProblemCode::RegistrationInviteInvalid
             | ProblemCode::AdminRequired
-            | ProblemCode::Blocked => StatusCode::FORBIDDEN,
+            | ProblemCode::Blocked
+            | ProblemCode::Banned => StatusCode::FORBIDDEN,
             ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
                 StatusCode::TOO_MANY_REQUESTS
             }
@@ -168,6 +171,7 @@ impl ProblemCode {
             ProblemCode::RegistrationInviteInvalid => t!("problemRegistrationInviteInvalid"),
             ProblemCode::AdminRequired => t!("problemAdminRequired"),
             ProblemCode::Blocked => t!("problemBlocked"),
+            ProblemCode::Banned => t!("problemBanned"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
@@ -291,6 +295,12 @@ impl From<app::Error> for ApiError {
             }
             app::Error::AdminRequired => Self::new(ProblemCode::AdminRequired),
             app::Error::Blocked => Self::new(ProblemCode::Blocked),
+            app::Error::Banned { reason } => {
+                Self::new(ProblemCode::Banned).with_detail(match reason {
+                    Some(reason) => t!("bannedWithReason", reason = reason),
+                    None => t!("bannedNoReason"),
+                })
+            }
             app::Error::DeploymentUnreachable(detail) => {
                 Self::new(ProblemCode::DeploymentUnreachable).with_detail(detail)
             }

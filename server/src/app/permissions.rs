@@ -57,6 +57,7 @@ bitflags::bitflags! {
         const MANAGE_CALLS = 1 << 10;
         const ADD_BOTS = 1 << 11;
         const MANAGE_CUSTOM_EMOJI = 1 << 12;
+        const BAN_MEMBERS = 1 << 13;
 
         // In a channel, and adjustable per channel and category.
         const VIEW_CHANNEL = 1 << 16;
@@ -81,7 +82,7 @@ app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
     /// Every permission that holds across the community.
-    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 13) - 1);
+    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 14) - 1);
     /// Every permission an override may adjust.
     pub const CHANNEL: Self = Self::from_bits_retain(((1 << 31) - 1) & !((1 << 16) - 1));
 
@@ -101,7 +102,8 @@ impl Permissions {
         .union(Self::PIN_MESSAGES)
         .union(Self::MANAGE_CALLS)
         .union(Self::ADD_BOTS)
-        .union(Self::MANAGE_CUSTOM_EMOJI);
+        .union(Self::MANAGE_CUSTOM_EMOJI)
+        .union(Self::BAN_MEMBERS);
     /// A new community's Admin role: everything but what only the owner may do.
     pub const ADMIN_TEMPLATE: Self = Self::all();
 
@@ -141,6 +143,7 @@ pub enum Permission {
     ManageCalls,
     AddBots,
     ManageCustomEmoji,
+    BanMembers,
     ViewChannel,
     SendMessages,
     AttachFiles,
@@ -176,6 +179,7 @@ impl Permission {
             Permission::ManageCalls => Permissions::MANAGE_CALLS,
             Permission::AddBots => Permissions::ADD_BOTS,
             Permission::ManageCustomEmoji => Permissions::MANAGE_CUSTOM_EMOJI,
+            Permission::BanMembers => Permissions::BAN_MEMBERS,
             Permission::ViewChannel => Permissions::VIEW_CHANNEL,
             Permission::SendMessages => Permissions::SEND_MESSAGES,
             Permission::AttachFiles => Permissions::ATTACH_FILES,
@@ -944,8 +948,8 @@ mod tests {
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
         assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 1_744_764_936);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_426_200);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_426_303);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_434_392);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_434_495);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

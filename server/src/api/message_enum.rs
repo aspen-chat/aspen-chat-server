@@ -422,6 +422,26 @@ enum MessageEnumSource {
         user: UserId,
         speaking: bool,
     },
+    /// A ban from a community (`app::ban`): the person is removed and refused every way back in
+    /// until `until`, or until the ban is lifted. Made and lifted through `PUT` and `DELETE
+    /// /communities/{community}/bans/{user}`; its events reach holders of Ban members.
+    #[message_gen(no_commands)]
+    CommunityBan {
+        #[message_gen(id = "client_authoritative")]
+        community: CommunityId,
+        #[message_gen(id)]
+        user: UserId,
+        // What the banned person is told, if anything.
+        #[message_gen(permanent)]
+        reason: Option<String>,
+        // When the ban ends by itself; `null` for one that lasts until it is lifted.
+        #[message_gen(permanent)]
+        until: Option<chrono::DateTime<Utc>>,
+        #[message_gen(server_authoritative)]
+        banned_by: Option<UserId>,
+        #[message_gen(server_authoritative)]
+        banned_at: chrono::DateTime<Utc>,
+    },
     #[message_gen(no_commands)]
     Invite {
         #[message_gen(id = "client_authoritative")]

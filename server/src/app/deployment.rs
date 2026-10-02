@@ -244,6 +244,10 @@ pub enum ModerationAction {
     RemoveAttachment,
     RemoveReaction,
     RemoveMember,
+    BanMember,
+    LiftBan,
+    /// A ban's deletion of the person's recent messages; the subject is the person.
+    DeleteRecentMessages,
     RenameChannel,
     DeleteChannel,
     RenameCommunity,
@@ -367,6 +371,9 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
     let id = |text: &str| uuid::Uuid::parse_str(text).ok();
     match action.parse::<ModerationAction>().ok()? {
         ModerationAction::RemoveMember
+        | ModerationAction::BanMember
+        | ModerationAction::LiftBan
+        | ModerationAction::DeleteRecentMessages
         | ModerationAction::BanForeignUser
         | ModerationAction::LiftForeignUserBan => Some(Subject::User(UserId(id(subject)?))),
         ModerationAction::DeleteMessage | ModerationAction::ReadDm => {

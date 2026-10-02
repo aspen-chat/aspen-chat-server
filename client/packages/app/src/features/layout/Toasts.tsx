@@ -5,20 +5,58 @@ import {
   UNSTABLE_ToastContent as ToastContent,
   UNSTABLE_ToastRegion as ToastRegion,
 } from "react-aria-components";
+import { useEffect, useSyncExternalStore } from "react";
 import { toasts } from "@/features/layout/toast";
 import { useMessages } from "@/i18n/context";
 
+/** How many regions over a channel's messages are mounted, for the root's fallback to know. */
+let mounted = 0;
+const listeners = new Set<() => void>();
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+function setMounted(count: number) {
+  mounted = count;
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 /**
  * Where toasts show: a region over the top of what holds it (the channel's messages), each
- * toast dropping into it. What holds it is positioned.
+ * toast dropping into it; what holds it is positioned. The root mounts one as `fallback`,
+ * fixed to the top of the page, which shows only while no channel's region is mounted (the
+ * channel list on a phone, settings opened from it), so a toast is shown once wherever it
+ * is sent from.
  */
-export function Toasts() {
+export function Toasts({ fallback = false }: { fallback?: boolean }) {
   const m = useMessages();
+  const inner = useSyncExternalStore(subscribe, () => mounted > 0);
+  useEffect(() => {
+    if (fallback) {
+      return undefined;
+    }
+    setMounted(mounted + 1);
+    return () => {
+      setMounted(mounted - 1);
+    };
+  }, [fallback]);
+  if (fallback && inner) {
+    return null;
+  }
   return (
     <ToastRegion
       queue={toasts}
       aria-label={m.toastsLabel}
-      className="pointer-events-none absolute inset-x-0 top-3 z-20 flex flex-col items-center gap-2 px-4"
+      className={
+        "pointer-events-none z-20 flex flex-col items-center gap-2 px-4 " +
+        (fallback
+          ? "fixed inset-x-0 top-[max(0.75rem,env(safe-area-inset-top))] z-50"
+          : "absolute inset-x-0 top-3")
+      }
     >
       {({ toast: shown }) => (
         <Toast

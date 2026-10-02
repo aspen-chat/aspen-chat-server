@@ -85,6 +85,10 @@ pub enum Error {
     /// A block stands between the caller and the person they would message (`app::block`).
     #[error("a block stands between these people")]
     Blocked,
+    /// The caller is banned from the community they would join (`app::ban`), with the reason
+    /// given to them, if one was.
+    #[error("banned from the community")]
+    Banned { reason: Option<String> },
     #[error("the session must verify its user again before changing security settings")]
     ReauthenticationRequired,
     #[error("the password or code presented was wrong")]

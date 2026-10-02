@@ -108,7 +108,8 @@
                     "permissions": [
                         "manageCalls",
                         "addBots",
-                        "manageCustomEmoji"
+                        "manageCustomEmoji",
+                        "banMembers"
                     ],
                     "everyone": false
                 }
@@ -127,6 +128,7 @@
                 "manageCalls",
                 "addBots",
                 "manageCustomEmoji",
+                "banMembers",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -149,6 +151,7 @@
                 "manageCalls",
                 "addBots",
                 "manageCustomEmoji",
+                "banMembers",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -209,6 +212,7 @@
                         "manageCalls",
                         "addBots",
                         "manageCustomEmoji",
+                        "banMembers",
                         "viewChannel",
                         "sendMessages",
                         "attachFiles",
@@ -346,6 +350,7 @@
                 "manageCalls",
                 "addBots",
                 "manageCustomEmoji",
+                "banMembers",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -376,6 +381,7 @@
                 "manageCalls",
                 "addBots",
                 "manageCustomEmoji",
+                "banMembers",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",

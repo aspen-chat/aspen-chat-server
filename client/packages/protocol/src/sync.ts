@@ -1956,6 +1956,54 @@ export class AspenSync {
     return result.data;
   }
 
+  /** Reads a community's standing bans into the store, for a holder of Ban members. */
+  async loadBans(communityId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/bans", {
+      params: { path: { community: communityId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.replaceBans(communityId, result.data);
+  }
+
+  /**
+   * Bans someone from a community, with a reason, for a time, and deleting their recent
+   * messages where asked; the answer is applied when its event has not come first. Returns
+   * how many messages the ban deleted.
+   */
+  async banMember(
+    communityId: string,
+    userId: string,
+    request: { reason?: string; durationSeconds?: number; deleteMessagesSeconds?: number },
+  ): Promise<number> {
+    const result = await this.#client.api.PUT("/api/v1/communities/{community}/bans/{user}", {
+      params: { path: { community: communityId, user: userId } },
+      body: request,
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({ serverEvent: "communityBan", type: "create", ...result.data.ban });
+    return result.data.deletedMessages;
+  }
+
+  /** Lifts a ban; its deletion event changes the cache. */
+  async liftBan(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/communities/{community}/bans/{user}", {
+      params: { path: { community: communityId, user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "communityBan",
+      type: "delete",
+      community: communityId,
+      user: userId,
+    });
+  }
+
   /**
    * Adds a custom emoji to a community: uploads its picture as an icon, then names it. The
    * answer is applied when its event has not come first.

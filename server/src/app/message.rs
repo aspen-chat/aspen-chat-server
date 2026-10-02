@@ -11,7 +11,8 @@ use crate::app::mention::{self, Mentions};
 use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::user::User;
 use crate::app::{
-    AttachmentId, ChannelId, EventScope, PollId, UserId, publish_event, read_state, thread,
+    AttachmentId, ChannelId, CommunityId, EventScope, PollId, UserId, publish_event, read_state,
+    thread,
 };
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
@@ -19,7 +20,7 @@ use crate::database::schema::channel;
 use crate::database::schema::message;
 use crate::database::schema::message_attachment;
 use crate::t;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl,
     OptionalExtension, QueryDsl, Queryable, Selectable, SelectableHelper,
@@ -566,60 +567,91 @@ pub async fn delete_message(
         .await?;
     }
     conn.transaction(|conn| {
-        async move {
-            // Drop link-preview image objects from S3 first — the FK cascade
-            // on `deleted_at` isn't actually a hard delete, but keeping the
-            // two destructions close together mirrors the attachment path
-            // and keeps the "soft-delete removes visible artefacts" model
-            // consistent.
-            diesel::delete(message_attachment::table)
-                .filter(message_attachment::message_id.eq(id))
-                .execute(conn.as_mut())
-                .await?;
-            let Some(deleted) = diesel::update(message::table)
-                .set(message::deleted_at.eq(diesel::dsl::now))
-                .filter(message::id.eq(id).and(message::deleted_at.is_null()))
-                .returning(Message::as_select())
-                .load(conn.as_mut())
-                .await?
-                .into_iter()
-                .next()
-            else {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            };
-            // A reply's echo goes first, so no client ever holds an echo whose reply is gone.
-            if deleted.kind != MessageKind::ThreadEcho {
-                thread::delete_echo_of(state, conn.as_mut(), id).await?;
-            }
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Channel(*deleted.channel.id()),
-                &ServerEvent::Message(MessageEvent::Delete { id }),
-            )
-            .await?;
-            // Deleting the message a poll is shown in ends the poll; its announcement, if
-            // any, is an ordinary message and stays.
-            if deleted.kind == MessageKind::Poll
-                && let Some(poll) = deleted.poll
-            {
-                app::poll::delete_poll(state, conn.as_mut(), poll, *deleted.channel.id()).await?;
-            }
-            let ty: ChannelType = channel::table
-                .select(channel::ty)
-                .filter(channel::id.eq(*deleted.channel.id()))
-                .first(conn.as_mut())
-                .await?;
-            if ty == ChannelType::Thread {
-                thread::record_removal(state, conn.as_mut(), *deleted.channel.id()).await?;
-            }
-            Ok(())
-        }
-        .scope_boxed()
+        async move { soft_delete(state, conn.as_mut(), id).await }.scope_boxed()
     })
     .await?;
     delete_images_for_message(state, conn.as_mut(), id).await?;
     Ok(())
+}
+
+/// Marks a message deleted inside the caller's transaction, announcing it and everything that
+/// goes with it: its attachments' rows, a reply's echo (first, so no client ever holds an echo
+/// whose reply is gone), a poll shown in it, and a thread's count. Its stored images are
+/// removed after the transaction commits (`delete_images_for_message`), by the caller.
+pub(crate) async fn soft_delete(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    id: MessageId,
+) -> Result<(), app::Error> {
+    diesel::delete(message_attachment::table)
+        .filter(message_attachment::message_id.eq(id))
+        .execute(conn)
+        .await?;
+    let Some(deleted) = diesel::update(message::table)
+        .set(message::deleted_at.eq(diesel::dsl::now))
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .returning(Message::as_select())
+        .load(conn)
+        .await?
+        .into_iter()
+        .next()
+    else {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    };
+    if deleted.kind != MessageKind::ThreadEcho {
+        thread::delete_echo_of(state, conn, id).await?;
+    }
+    publish_event(
+        state,
+        conn,
+        EventScope::Channel(*deleted.channel.id()),
+        &ServerEvent::Message(MessageEvent::Delete { id }),
+    )
+    .await?;
+    // Deleting the message a poll is shown in ends the poll; its announcement, if any, is an
+    // ordinary message and stays.
+    if deleted.kind == MessageKind::Poll
+        && let Some(poll) = deleted.poll
+    {
+        app::poll::delete_poll(state, conn, poll, *deleted.channel.id()).await?;
+    }
+    let ty: ChannelType = channel::table
+        .select(channel::ty)
+        .filter(channel::id.eq(*deleted.channel.id()))
+        .first(conn)
+        .await?;
+    if ty == ChannelType::Thread {
+        thread::record_removal(state, conn, *deleted.channel.id()).await?;
+    }
+    Ok(())
+}
+
+/// Deletes every message `author` posted in `community`'s channels and threads since `since`,
+/// inside the caller's transaction, which has checked who may (a ban with a deletion window,
+/// `app::ban`). Echoes go with their replies. Returns the ids, whose stored images the caller
+/// removes once the transaction commits.
+pub(crate) async fn delete_recent_by(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    author: UserId,
+    since: DateTime<Utc>,
+) -> Result<Vec<MessageId>, app::Error> {
+    let ids: Vec<MessageId> = message::table
+        .inner_join(channel::table.on(channel::id.eq(message::channel)))
+        .select(message::id)
+        .filter(channel::community.eq(community))
+        .filter(message::author.eq(author))
+        .filter(message::deleted_at.is_null())
+        .filter(message::timestamp.ge(since))
+        .filter(message::kind.ne(MessageKind::ThreadEcho))
+        .order(message::id.desc())
+        .load(conn)
+        .await?;
+    for id in &ids {
+        soft_delete(state, conn, *id).await?;
+    }
+    Ok(ids)
 }
 
 /// Pins a message in its channel, after every pin already there, or unpins it. In a community
