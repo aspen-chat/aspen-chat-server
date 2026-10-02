@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "fetch:libobs": "node scripts/fetch-libobs.mjs",
     "build:native": "cargo build --release --manifest-path native/obs-capture/Cargo.toml && node scripts/copy-native.mjs",
     "typecheck": "tsc --noEmit",
     "test": "echo \"@aspen/desktop has no unit tests yet\"",

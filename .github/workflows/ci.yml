@@ -102,6 +102,47 @@ jobs:
           pnpm --filter @aspen/app exec playwright install --with-deps chromium
           pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium
 
+  desktop-windows:
+    name: Desktop (Windows) — installer with libobs
+    needs: rust
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: client
+    env:
+      # bindgen reads libobs's headers through libclang, which the runner's LLVM provides.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/packages/desktop/native/obs-capture
+      # MSVC's `lib` writes the import library the helper links obs.dll through.
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      # The OBS Project's own signed release files, pinned by checksum (`scripts/fetch-libobs.mjs`).
+      - run: pnpm --filter @aspen/desktop fetch:libobs
+      - run: pnpm --filter @aspen/desktop package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: client/packages/desktop/release/*.exe
+
   android:
     name: Android — build, unit, and device tests
     needs: rust

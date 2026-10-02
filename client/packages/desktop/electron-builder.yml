@@ -52,3 +52,13 @@ win:
   icon: build/icon.ico
   target:
     - nsis
+  # The libobs the helper uses, the OBS Project's own signed release files as
+  # `scripts/fetch-libobs.mjs` lays them out (`pnpm fetch:libobs` before packaging).
+  extraResources:
+    - from: native/libobs
+      to: libobs
+      filter:
+        - bin/**
+        - obs-plugins/**
+        - data/**
+        - VERSION

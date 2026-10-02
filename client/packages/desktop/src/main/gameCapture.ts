@@ -109,10 +109,31 @@ function helperPath(): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
+/**
+ * The libobs the Windows build ships (`scripts/fetch-libobs.mjs`): `bin/64bit` with the
+ * libraries, `obs-plugins/64bit` with the modules, and `data`. Packaged builds carry it as a
+ * resource; in development it is beside the crate. Elsewhere `null`, and the helper uses the
+ * paths it was built with.
+ */
+function bundledLibobs(): string | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  const candidates = [
+    join(process.resourcesPath, "libobs"),
+    join(app.getAppPath(), "native", "libobs"),
+  ];
+  return (
+    candidates.find((candidate) => existsSync(join(candidate, "bin", "64bit", "obs.dll"))) ?? null
+  );
+}
+
 class CaptureHost {
   #child: ChildProcess | null = null;
   #owner: WebContents | null = null;
   #nextId = 1;
+  /** Where the helper's libobs modules and data are, when the build ships them. */
+  #dirs: { pluginDir?: string; dataDir?: string } = {};
   readonly #pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -126,7 +147,18 @@ class CaptureHost {
     if (helper === null) {
       return null;
     }
-    const child = spawn(helper, [], { stdio: ["pipe", "pipe", "inherit"] });
+    // With a bundled libobs, the helper finds obs.dll and what it loads through the PATH, and
+    // is told where the modules and their data are with every request.
+    const libobs = bundledLibobs();
+    const env =
+      libobs === null
+        ? process.env
+        : { ...process.env, PATH: `${join(libobs, "bin", "64bit")};${process.env.PATH ?? ""}` };
+    this.#dirs =
+      libobs === null
+        ? {}
+        : { pluginDir: join(libobs, "obs-plugins", "64bit"), dataDir: join(libobs, "data") };
+    const child = spawn(helper, [], { stdio: ["pipe", "pipe", "inherit"], env });
     // stdout is a pipe, so it is present; readline turns it into whole lines.
     createInterface({ input: child.stdout }).on("line", (line) => {
       this.#onReply(JSON.parse(line) as Reply);
@@ -180,7 +212,10 @@ class CaptureHost {
     if (helperPath() === null) {
       return { kinds: [], applicationAudio: null, testMedia };
     }
-    const listed = (await this.#request({ type: "kinds" })) as Omit<CaptureCatalogue, "testMedia"> & {
+    const listed = (await this.#request({ type: "kinds", ...this.#dirs })) as Omit<
+      CaptureCatalogue,
+      "testMedia"
+    > & {
       /** Whether the helper can capture a picture at all (a build with libobs). */
       pictures: boolean;
     };
@@ -193,13 +228,13 @@ class CaptureHost {
   }
 
   async start(sender: WebContents, options: StartOptions): Promise<void> {
-    await this.#request({ type: "start", options });
+    await this.#request({ type: "start", options: { ...options, ...this.#dirs } });
     this.#own(sender);
   }
 
   /** Captures one application's sound alone, the picture coming from the browser's screen share. */
   async startAudio(sender: WebContents, audio: AudioOptions): Promise<void> {
-    await this.#request({ type: "startAudio", options: { audio } });
+    await this.#request({ type: "startAudio", options: { audio, ...this.#dirs } });
     this.#own(sender);
   }
 

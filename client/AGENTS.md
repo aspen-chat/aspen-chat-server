@@ -359,9 +359,19 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   by `pnpm build:native` in `packages/desktop`, which can run while a shell is open on Linux
   and macOS) links libobs on Windows and macOS (`src/obs.rs`, behind `cfg(obs)`), and on
   Linux only when built with its `libobs` feature, for developing the picture path there; a
-  Linux build otherwise needs PipeWire's and libopus's development files and no libobs. Where
-  it links libobs it needs libobs's development files, which on Linux `pkg-config` finds and on
-  Windows and macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: on macOS the `libobs`
+  Linux build otherwise needs PipeWire's and libopus's development files and no libobs. On
+  Windows the libobs is the build's own: `pnpm fetch:libobs` (`scripts/fetch-libobs.mjs`) lays
+  the OBS Project's release, pinned by version and SHA-256, out in `native/libobs` (gitignored)
+  with its files exactly as the OBS Project signed them, since anti-cheat systems whitelist the
+  injected game hook by that signature: `obs.dll` and the libraries it and the modules need,
+  the five modules the helper loads, their data with the hook's files, headers from the same
+  tag's source, and `obs.lib` written from `obs.dll`'s exports (MSVC's `lib` or LLVM's
+  `llvm-dlltool`), where the helper's build script finds them; the installer ships that
+  directory as the `libobs` resource (`electron-builder.yml`), and the shell starts the helper
+  with its libraries on the `PATH` and names its modules and data in every request
+  (`bundledLibobs` in `gameCapture.ts`). CI packages the Windows installer that way. Where
+  it links libobs otherwise it needs libobs's development files, which on Linux `pkg-config`
+  finds and on macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: on macOS the `libobs`
   directory of an OBS Studio source checkout at the installed version, with an `obsconfig.h`
   written from its `.in` (OBS.app's `Contents/PlugIns` and `Contents/Resources/data` as the
   paths), a directory holding a `libobs.dylib` link to OBS.app's
@@ -374,7 +384,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   it as H.264 constrained baseline, and sends it as SRTP straight to the voice server's plain
   RTP transport, answering the server's RTCP itself. With it goes the captured window's own
   sound: Windows through `wasapi_process_output_capture` and macOS through `sck_audio_capture`
-  (both beta OBS features), each pointed at the same window as the picture. The audio is
+  (both beta OBS features), each pointed at the same window as the picture. A game capture
+  whose hook delivers no frame within `HOOK_TIMEOUT` (eight seconds: the game never presented,
+  an anti-cheat refused the hook, or the window is not a game) is replaced in the scene by a
+  window capture of the same window through Windows.Graphics.Capture (`window_capture` with
+  the Windows 10 method, `libobs-winrt`), logged on stderr, the sound unchanged. The audio is
   encoded as Opus by obs-ffmpeg and sent as its own SRTP stream to a second producer
   (`produceRtp` with source `screenAudio`), which the sharer does not consume back. The
   helper's RTCP answers: NACKs from a buffer of recent packets, the receiver's bandwidth

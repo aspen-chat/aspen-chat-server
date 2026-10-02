@@ -3,11 +3,13 @@
 //!
 //! libobs is linked on Windows and macOS, and on Linux only with the `libobs` feature (the
 //! picture path, for developing it there); the code that needs it is behind `cfg(obs)`. On
-//! Linux `pkg-config` finds libobs. On Windows and macOS OBS Studio ships no development
-//! files, so `LIBOBS_INCLUDE_DIR` (the `libobs` directory of an OBS Studio source checkout
-//! matching the installed version, with an `obsconfig.h` written from its template) and
-//! `LIBOBS_LIB_DIR` (where `obs.lib` is, or on macOS a `libobs.dylib` linking to OBS.app's
-//! `Contents/Frameworks/libobs.framework/Versions/A/libobs`) must be set.
+//! Linux `pkg-config` finds libobs. On Windows it is the release the build ships, fetched by
+//! `scripts/fetch-libobs.mjs` into `native/libobs` (headers in `include/`, `obs.lib` beside
+//! them), found there unless `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name another. On
+//! macOS OBS Studio ships no development files, so those must be set: `LIBOBS_INCLUDE_DIR`
+//! (the `libobs` directory of an OBS Studio source checkout matching the installed version,
+//! with an `obsconfig.h` written from its template) and `LIBOBS_LIB_DIR` (a `libobs.dylib`
+//! linking to OBS.app's `Contents/Frameworks/libobs.framework/Versions/A/libobs`).
 
 use std::env;
 use std::path::PathBuf;
@@ -35,9 +37,25 @@ fn main() {
 
     let mut plugin_dir = None;
     let mut data_dir = None;
-    if let Ok(include) = env::var("LIBOBS_INCLUDE_DIR") {
+    // On Windows the libobs the build ships is what `scripts/fetch-libobs.mjs` put beside this
+    // crate, unless the environment names another.
+    let fetched = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))
+        .join("..")
+        .join("libobs");
+    let include_dir = env::var("LIBOBS_INCLUDE_DIR").ok().or_else(|| {
+        (env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+            && fetched.join("include").is_dir())
+        .then(|| fetched.join("include").to_string_lossy().into_owned())
+    });
+    let lib_dir = env::var("LIBOBS_LIB_DIR").ok().or_else(|| {
+        fetched
+            .join("obs.lib")
+            .is_file()
+            .then(|| fetched.to_string_lossy().into_owned())
+    });
+    if let Some(include) = include_dir {
         builder = builder.clang_arg(format!("-I{include}"));
-        if let Ok(lib) = env::var("LIBOBS_LIB_DIR") {
+        if let Some(lib) = lib_dir {
             println!("cargo:rustc-link-search=native={lib}");
         }
         println!("cargo:rustc-link-lib=obs");

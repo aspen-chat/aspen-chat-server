@@ -2,3 +2,5 @@ native/obs-capture/target/
 native/aspen-obs-capture
 native/aspen-obs-capture.exe
 native/aspen-obs-capture*.new
+native/libobs/
+native/libobs-cache/
