@@ -349,11 +349,23 @@ test("flicking back through a long history keeps ahead of the reader", async ({
     .click();
   await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
   await page.waitForTimeout(1500);
-  // Every frame: whether the top of what is loaded, where a page is awaited, is in view.
+  // Every frame: whether the top of what is loaded, where a page is awaited, is in view. And
+  // the longest the main thread was held, which a page's render does: a finger is frozen for
+  // as long.
   await page.evaluate(() => {
-    const record = window as unknown as { seamFrames: number; frames: number };
+    const record = window as unknown as {
+      seamFrames: number;
+      frames: number;
+      longestTask: number;
+    };
     record.seamFrames = 0;
     record.frames = 0;
+    record.longestTask = 0;
+    new PerformanceObserver((entries) => {
+      for (const entry of entries.getEntries()) {
+        record.longestTask = Math.max(record.longestTask, entry.duration);
+      }
+    }).observe({ type: "longtask" });
     const tick = () => {
       const scroller = document.querySelector("article")?.closest("[data-message-list]");
       const seam = scroller?.querySelector('p[aria-live="polite"]');
@@ -390,10 +402,19 @@ test("flicking back through a long history keeps ahead of the reader", async ({
     await touch(cdp, "touchEnd", centre.x, centre.y + 200);
     await page.waitForTimeout(500);
   }
-  const { seamFrames, frames } = await page.evaluate(() => {
-    const record = window as unknown as { seamFrames: number; frames: number };
-    return { seamFrames: record.seamFrames, frames: record.frames };
+  const { seamFrames, frames, longestTask } = await page.evaluate(() => {
+    const record = window as unknown as {
+      seamFrames: number;
+      frames: number;
+      longestTask: number;
+    };
+    return {
+      seamFrames: record.seamFrames,
+      frames: record.frames,
+      longestTask: record.longestTask,
+    };
   });
+  console.log(`longest task ${String(Math.round(longestTask))}ms`);
   const oldest = await page.evaluate(() =>
     Math.min(
       ...Array.from(document.querySelectorAll<HTMLElement>("article[data-message-id]"), (a) =>

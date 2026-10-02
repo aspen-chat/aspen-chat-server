@@ -7,7 +7,7 @@ import {
   RobotIcon,
 } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import {
   useChannel,
@@ -64,7 +64,7 @@ const ARRIVING_MS = 1000;
  * tap on a link in the message focuses the message first (Safari gives links no focus), and
  * actions that moved the message's content, or caught taps while unseen, would take the tap.
  */
-export function MessageItem({
+export const MessageItem = memo(function MessageItem({
   id,
   home,
   channelId,
@@ -329,7 +329,7 @@ export function MessageItem({
       </div>
     </article>
   );
-}
+});
 
 /**
  * The thread reply an echo shows, read from the reply itself so its edits show here too, with

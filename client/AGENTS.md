@@ -907,7 +907,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   in view, noted and rendered in one task (`flushSync`), and its height added to the position
   in the same layout; a row's growth, as a picture loads or a deleted message's space closes,
   is seen by a `ResizeObserver` on every row, which follows each row's size from when it
-  appears, and added the same way before the frame is painted. The browser's own scroll
+  appears, and added the same way before the frame is painted. A page renders as a transition,
+  in slices between which the finger is heard, and `MessageItem` is memoized, so a change to the
+  list renders only the rows it changes: an unmemoized row made every change to the list, a
+  loading line's included, render every row through its Markdown again, synchronously, for
+  half a second at a time. The browser's own scroll
   anchoring is off on the list. A picture whose size is known keeps exactly its room before it
   loads (`keptRoom` in `Attachments.tsx`), and one whose size is not keeps a square until it
   arrives. The list's own scrolls never pin or unpin it from the bottom; a script's, as

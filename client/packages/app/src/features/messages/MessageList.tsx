@@ -2,6 +2,7 @@ import { HISTORY_PAGE_SIZE, WINDOW_MAX_MESSAGES, type MessageWindow } from "@asp
 import { useNavigate } from "@tanstack/react-router";
 import {
   Fragment,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -14,7 +15,6 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button } from "react-aria-components";
-import { flushSync } from "react-dom";
 import {
   useBlockedUsers,
   useChannel,
@@ -58,11 +58,13 @@ import { useMessages } from "@/i18n/context";
  * the list sets, and the same code runs on every platform. Scripts still scroll it, so focus,
  * find-in-page, assistive technology, and tests bring things into view as they always did.
  *
- * So what is in view never moves when something above it changes: a page of older messages
- * arriving is measured by the topmost message in view, noted and rendered in one task
- * (`flushSync`), and its height is added to the position in the same layout; a row growing
- * above the view, as a picture loads or a deleted message's space closes, is seen by a
- * `ResizeObserver` on every row and added the same way, before the frame is painted. The
+ * So what is in view never moves when something above it changes: the list notes the topmost
+ * message in view and where it stands in the content (`still`), and a page of older messages
+ * arriving is measured by how far that message moved in the layout its arrival made, added to
+ * the position in the same layout; a row growing above the view, as a picture loads or a
+ * deleted message's space closes, is seen by a `ResizeObserver` on every row and added the
+ * same way, before the frame is painted. A page renders as a transition, in slices between
+ * which the finger is heard, so the list keeps moving while a page's rows are made. The
  * list stays pinned to the bottom while the user is there and keeps its bottom edge when the
  * keyboard takes the screen's space. History is read well ahead of the reader in the way they
  * are heading, the store keeps the window bounded, and the jump control returns to the
@@ -114,12 +116,6 @@ const THUMB_MIN_PX = 24;
 const COLLAPSE_MS = 200;
 /** The ids of a list with no window yet, one array so its identity holds. */
 const NO_IDS: readonly string[] = [];
-
-/** A message in the viewport and where it sat, so a change can be measured by it. */
-interface Anchor {
-  id: string;
-  top: number;
-}
 
 export function MessageList({
   channelId,
@@ -183,8 +179,6 @@ export function MessageList({
   const [loadingNewer, setLoadingNewer] = useState(false);
   /** Whether the newest page is being read for "Jump to latest". */
   const jumping = useRef(false);
-  /** Where the view was before the window changed, so the change is measured by it. */
-  const anchor = useRef<Anchor | null>(null);
   const stickToBottom = useRef(true);
   /** The highlighted message already scrolled to, so it is done once per link. */
   const highlightShown = useRef<string | null>(null);
@@ -203,18 +197,51 @@ export function MessageList({
   const still = useRef<{ id: string; top: number } | null>(null);
   function noteStill() {
     const box = viewport.current;
-    if (box === null) {
-      still.current = null;
-      return;
-    }
-    const origin = box.getBoundingClientRect().top;
-    for (const row of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
-      if (row.getBoundingClientRect().bottom > origin) {
-        still.current = { id: row.dataset.messageId ?? "", top: row.offsetTop };
-        return;
+    const row = box === null ? null : rowsInView(box).first;
+    still.current = row === null ? null : { id: row.dataset.messageId ?? "", top: row.offsetTop };
+  }
+
+  /**
+   * The first and last message rows with any part in view, found by their offsets in the
+   * content, which are in order, so a few reads find them among hundreds; called on every
+   * move of the list.
+   */
+  function rowsInView(box: HTMLDivElement): {
+    first: HTMLElement | null;
+    last: HTMLElement | null;
+  } {
+    const rows = box.querySelectorAll<HTMLElement>("[data-message-id]");
+    const top = box.scrollTop;
+    const bottom = top + box.clientHeight;
+    // The first row whose bottom is below the view's top.
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      const row = rows[mid];
+      if (row !== undefined && row.offsetTop + row.offsetHeight > top) {
+        high = mid;
+      } else {
+        low = mid + 1;
       }
     }
-    still.current = null;
+    const first = rows[low] ?? null;
+    if (first === null || first.offsetTop >= bottom) {
+      return { first: null, last: null };
+    }
+    // The last row whose top is above the view's bottom.
+    let last = low;
+    high = rows.length;
+    while (last < high) {
+      const mid = (last + high + 1) >> 1;
+      const row = rows[mid];
+      if (row !== undefined && row.offsetTop < bottom) {
+        last = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return { first, last: rows[last] ?? null };
   }
   /**
    * A row's height just changed in the DOM: keeps the view still through it now, in the same
@@ -631,24 +658,9 @@ export function MessageList({
     document.addEventListener("pointercancel", onUp);
   }
 
-  /** The topmost message with any part in view, and its offset from the top of the viewport. */
-  function captureAnchor(): Anchor | null {
-    const box = viewport.current;
-    if (box === null) {
-      return null;
-    }
-    const origin = box.getBoundingClientRect().top;
-    for (const article of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
-      const rect = article.getBoundingClientRect();
-      if (rect.bottom > origin) {
-        return { id: article.dataset.messageId ?? "", top: rect.top - origin };
-      }
-    }
-    return null;
-  }
-
-  // Shows the store's window, at once unless a deleted message's space is closing: rendering
-  // the whole list again meanwhile would use its moment up before it is seen.
+  // Shows the store's window, as a transition: React renders its rows in slices, between
+  // which the finger is heard. A change waits while a deleted message's space is closing:
+  // rendering the whole list again meanwhile would use its moment up before it is seen.
   useEffect(() => {
     if (shown.channelId === channelId && shown.window === latest) {
       return;
@@ -661,18 +673,10 @@ export function MessageList({
         timer = setTimeout(commit, 16);
         return;
       }
-      if (!direct) {
-        // A linked message waiting to be shown decides where the view goes, not what was in it.
-        const linking = highlightId !== undefined && highlightShown.current !== highlightId;
-        anchor.current =
-          linking || (stickToBottom.current && latest?.atLatest === true) ? null : captureAnchor();
-      }
       diagnostics?.note(
-        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} anchor=${anchor.current?.id.slice(-4) ?? "-"}@${String(Math.round(anchor.current?.top ?? 0))}`,
+        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} still=${still.current?.id.slice(-4) ?? "-"}@${String(Math.round(still.current?.top ?? 0))}`,
       );
-      // Rendered in this same task, so the view noted is the view the change lands in: nothing
-      // the reader does can come between them.
-      flushSync(() => {
+      startTransition(() => {
         setShown({ channelId, window: latest });
       });
     };
@@ -680,7 +684,7 @@ export function MessageList({
     return () => {
       clearTimeout(timer);
     };
-  }, [channelId, latest, shown, highlightId, diagnostics]);
+  }, [channelId, latest, shown, diagnostics]);
 
   useLayoutEffect(() => {
     if (viewport.current !== null) {
@@ -707,7 +711,6 @@ export function MessageList({
       const target = box.querySelector(`[data-message-id="${highlightId}"]`);
       if (target !== null) {
         highlightShown.current = highlightId;
-        anchor.current = null;
         stickToBottom.current = false;
         stopMotion();
         over.current = 0;
@@ -718,25 +721,21 @@ export function MessageList({
         return;
       }
     }
-    const measured = anchor.current;
-    if (measured !== null) {
-      anchor.current = null;
-      const target = box.querySelector(`[data-message-id="${measured.id}"]`);
-      if (target !== null) {
-        const drift =
-          target.getBoundingClientRect().top - box.getBoundingClientRect().top - measured.top;
-        absorb(drift, "page");
-      }
-      syncRowHeights.current();
-      noteStill();
-      return;
-    }
+    // A linked message not yet in the window keeps the view for it; otherwise the view holds
+    // through the change, at the bottom or by the noted message.
     if (highlightId !== undefined) {
       return;
     }
     if (stickToBottom.current && atLatest) {
       stopMotion();
       moveTo(range.current.max, false);
+    } else {
+      const noted = still.current;
+      const row =
+        noted === null ? null : box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
+      if (noted !== null && row !== null) {
+        absorb(row.offsetTop - noted.top, "page");
+      }
     }
     syncRowHeights.current();
     noteStill();
@@ -949,7 +948,6 @@ export function MessageList({
   function jumpToLatest(): Promise<void> {
     stickToBottom.current = true;
     heading.current = null;
-    anchor.current = null;
     jumping.current = true;
     stopMotion();
     // The list goes to the end of what it holds while the newest are on their way; the next
@@ -982,22 +980,14 @@ export function MessageList({
     ) {
       return;
     }
+    // The newest row in view that is this channel's: a reply an echo shows, which is not,
+    // stands under its echo's row.
+    let row = rowsInView(box).last;
     const inWindow = new Set(ids);
-    const view = box.getBoundingClientRect();
-    let seen: string | undefined;
-    for (const article of box.querySelectorAll<HTMLElement>("[data-message-id]")) {
-      const id = article.dataset.messageId;
-      if (id === undefined || !inWindow.has(id)) {
-        continue;
-      }
-      const rect = article.getBoundingClientRect();
-      if (rect.top >= view.bottom) {
-        break;
-      }
-      if (rect.bottom > view.top) {
-        seen = id;
-      }
+    while (row !== null && !inWindow.has(row.dataset.messageId ?? "")) {
+      row = row.parentElement?.closest<HTMLElement>("[data-message-id]") ?? null;
     }
+    const seen = row?.dataset.messageId;
     if (seen !== undefined) {
       sync.markRead(channelId, seen);
     }

@@ -1,6 +1,6 @@
 import { ApiProblemError, isDm, type Channel } from "@aspen/protocol";
 import { Navigate, useParams } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useChannel, useChannelRemoved, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { DmHeader } from "@/features/dms/DmHeader";
@@ -26,7 +26,12 @@ import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
 export function ChannelScreen() {
   const m = useMessages();
   const { domain, communityId, channelId, messageId, threadId } = useParams({ strict: false });
-  const home: ChannelHome = { domain: domain ?? null, community: communityId ?? null };
+  // One object for as long as the route's deployment and community hold, so the rows it is
+  // handed to, which are memoized, are not rendered again for it.
+  const home: ChannelHome = useMemo(
+    () => ({ domain: domain ?? null, community: communityId ?? null }),
+    [domain, communityId],
+  );
   const sync = useSync();
   const status = useSyncStatus();
   const channel = useChannel(channelId ?? "");
