@@ -7,9 +7,9 @@ use crate::app::bot_command::{self, Invocation};
 use crate::app::channel::Channel;
 use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
-use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
 use crate::app::mention::{self, Mentions};
+use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::user::User;
 use crate::app::{

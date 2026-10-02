@@ -346,7 +346,8 @@ pub async fn set_foreign_user_banned(
     target: UserId,
     banned: bool,
 ) -> app::Result<bool> {
-    use crate::app::deployment::{DeploymentPermission, ModerationAction, log_moderation};
+    use crate::app::deployment::DeploymentPermission;
+    use crate::app::moderation_log::{ModerationAction, log_moderation};
     use diesel_async::AsyncConnection;
     use diesel_async::scoped_futures::ScopedFutureExt;
     access.require(DeploymentPermission::ModerateCommunities)?;

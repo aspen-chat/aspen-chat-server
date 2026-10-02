@@ -5,9 +5,9 @@ use crate::app;
 use crate::app::category::Category;
 use crate::app::community::Community;
 use crate::app::context::GlobalServerContext;
-use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::load_previews;
 use crate::app::message::{Message, MessageWithRelations};
+use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, missing, require_member};
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
@@ -273,7 +273,7 @@ pub(crate) async fn read_channel_messages(
             conn.as_mut(),
             caller,
             &access,
-            app::deployment::ModerationAction::ReadDm,
+            app::moderation_log::ModerationAction::ReadDm,
             None,
         )
         .await?;

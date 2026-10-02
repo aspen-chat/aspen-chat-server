@@ -9,7 +9,7 @@
 
 use crate::api::message_enum::{self, server_event::*};
 use crate::app::context::GlobalServerContext;
-use crate::app::deployment::{ModerationAction, log_moderation};
+use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{
     CommunityAccess, Permissions, missing, require_actual_member, require_member, to_names,
 };

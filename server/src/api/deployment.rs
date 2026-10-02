@@ -1,13 +1,14 @@
-//! The deployment's own roles (`app::deployment`), under `/admin`: what they allow, who holds
-//! them, and the moderation log. Managing roles takes Manage deployment roles and reaches only
-//! roles and people ranked below the caller's highest role.
+//! The deployment's own roles (`app::deployment_role`), under `/admin`: what they allow, who
+//! holds them, and the moderation log (`app::moderation_log`). Managing roles takes Manage
+//! deployment roles and reaches only roles and people ranked below the caller's highest role.
 
 use crate::api::admin::AdminUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::{API_PREFIX, TAG_ADMIN};
 use crate::app::context::GlobalServerContext;
-use crate::app::deployment::{DeploymentPermission, DeploymentRoleRow, from_names, to_names};
+use crate::app::deployment::{DeploymentPermission, from_names, to_names};
+use crate::app::deployment_role::DeploymentRoleRow;
 use crate::app::file_transfer::{FileTransferMode, FileTransferOutcome};
 use crate::app::{self, ChannelId, CommunityId, DeploymentRoleId, UserId};
 use axum::extract::State;
@@ -56,7 +57,7 @@ pub async fn list_deployment_roles(
     _admin: AdminUser,
 ) -> ApiResult<Json<Vec<DeploymentRole>>> {
     Ok(Json(
-        app::deployment::read_roles(&state)
+        app::deployment_role::read_roles(&state)
             .await?
             .into_iter()
             .map(DeploymentRole::from)
@@ -92,7 +93,7 @@ pub async fn create_deployment_role(
     AdminUser(session, _access): AdminUser,
     Json(request): Json<DeploymentRoleCreateRequest>,
 ) -> ApiResult<Created<DeploymentRole>> {
-    let role = app::deployment::create_role(
+    let role = app::deployment_role::create_role(
         &state,
         session.user.id,
         &request.name,
@@ -136,7 +137,7 @@ pub async fn update_deployment_role(
     Path(role): Path<DeploymentRoleId>,
     Json(request): Json<DeploymentRoleUpdateRequest>,
 ) -> ApiResult<Json<DeploymentRole>> {
-    let role = app::deployment::update_role(
+    let role = app::deployment_role::update_role(
         &state,
         session.user.id,
         role,
@@ -167,7 +168,7 @@ pub async fn delete_deployment_role(
     AdminUser(session, _access): AdminUser,
     Path(role): Path<DeploymentRoleId>,
 ) -> ApiResult<NoContent> {
-    app::deployment::delete_role(&state, session.user.id, role).await?;
+    app::deployment_role::delete_role(&state, session.user.id, role).await?;
     Ok(NoContent)
 }
 
@@ -199,7 +200,7 @@ pub async fn reorder_deployment_roles(
     Json(request): Json<DeploymentRoleOrderRequest>,
 ) -> ApiResult<Json<Vec<DeploymentRole>>> {
     Ok(Json(
-        app::deployment::reorder_roles(&state, session.user.id, &request.roles)
+        app::deployment_role::reorder_roles(&state, session.user.id, &request.roles)
             .await?
             .into_iter()
             .map(DeploymentRole::from)
@@ -229,7 +230,8 @@ pub async fn add_user_deployment_role(
     AdminUser(session, _access): AdminUser,
     Path((user, role)): Path<(UserId, DeploymentRoleId)>,
 ) -> ApiResult<StatusCode> {
-    let added = app::deployment::set_user_role(&state, session.user.id, user, role, true).await?;
+    let added =
+        app::deployment_role::set_user_role(&state, session.user.id, user, role, true).await?;
     Ok(if added {
         StatusCode::CREATED
     } else {
@@ -257,7 +259,7 @@ pub async fn remove_user_deployment_role(
     AdminUser(session, _access): AdminUser,
     Path((user, role)): Path<(UserId, DeploymentRoleId)>,
 ) -> ApiResult<NoContent> {
-    app::deployment::set_user_role(&state, session.user.id, user, role, false).await?;
+    app::deployment_role::set_user_role(&state, session.user.id, user, role, false).await?;
     Ok(NoContent)
 }
 
@@ -278,11 +280,11 @@ pub struct ModerationEntry {
     pub subject: Option<String>,
     pub at: DateTime<Utc>,
     /// What the ids above name, as they stand now.
-    pub details: app::deployment::ModerationDetails,
+    pub details: app::moderation_log::ModerationDetails,
 }
 
-impl From<app::deployment::ModerationEntry> for ModerationEntry {
-    fn from(e: app::deployment::ModerationEntry) -> Self {
+impl From<app::moderation_log::ModerationEntry> for ModerationEntry {
+    fn from(e: app::moderation_log::ModerationEntry) -> Self {
         Self {
             id: e.id,
             actor: e.actor,
@@ -328,7 +330,7 @@ pub async fn read_moderation_log(
     Query(query): Query<ModerationLogQuery>,
 ) -> ApiResult<Json<Vec<ModerationEntry>>> {
     access.require(DeploymentPermission::ViewDashboard)?;
-    let entries = app::deployment::read_moderation_log(
+    let entries = app::moderation_log::read_moderation_log(
         &state,
         query.before,
         i64::from(query.limit.unwrap_or(50).clamp(1, 100)),

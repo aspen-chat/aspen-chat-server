@@ -744,7 +744,7 @@ pub async fn remove_write_in(
                         conn.as_mut(),
                         user,
                         &access,
-                        app::deployment::ModerationAction::RemoveWriteIn,
+                        app::moderation_log::ModerationAction::RemoveWriteIn,
                         Some(format!("{}/{option}", id.0)),
                     )
                     .await?;
@@ -972,7 +972,7 @@ pub async fn close_poll(
                         conn.as_mut(),
                         caller,
                         &access,
-                        app::deployment::ModerationAction::ClosePoll,
+                        app::moderation_log::ModerationAction::ClosePoll,
                         Some(poll_id.0.to_string()),
                     )
                     .await?;

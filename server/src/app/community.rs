@@ -4,8 +4,8 @@ use crate::api::message_enum::server_event::{CommunityEvent, ServerEvent, UserCo
 use crate::app;
 use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
-use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::icon::Icon;
+use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, community_access, missing, require_member};
 use crate::app::{
     CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId, publish_event,
