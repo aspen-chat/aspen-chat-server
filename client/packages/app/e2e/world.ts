@@ -1,4 +1,4 @@
-import type { Page, Route } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 import { signedIn, uuid } from "./stubs";
 
 /**
@@ -1291,4 +1291,58 @@ export async function submit(page: Page): Promise<void> {
   } else {
     await page.keyboard.press("Enter");
   }
+}
+
+/**
+ * Holds a finger on `target` for longer than a long press takes, without moving it: a real
+ * touch through Chromium's protocol, and elsewhere, which Playwright gives no held touch for,
+ * the pointer events a touch raises, dispatched to the element.
+ */
+export async function longPress(page: Page, target: Locator) {
+  // Still before it is pressed, as Playwright's own tap waits for: a press on an element
+  // that moves (a list settling to its bottom as its history loads) is cancelled by the
+  // scroll, as a finger's would be.
+  let box = await target.boundingBox();
+  for (let tries = 0; tries < 50; tries++) {
+    await target.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(100);
+    const again = await target.boundingBox();
+    const viewport = page.viewportSize();
+    if (
+      box !== null &&
+      again !== null &&
+      again.x === box.x &&
+      again.y === box.y &&
+      again.y >= 0 &&
+      (viewport === null || again.y + again.height <= viewport.height)
+    ) {
+      break;
+    }
+    box = again;
+  }
+  if (box === null) {
+    throw new Error("nothing to press");
+  }
+  const point = { x: box.x + box.width / 2, y: box.y + Math.min(box.height / 2, 20) };
+  if (page.context().browser()?.browserType().name() === "chromium") {
+    const client = await page.context().newCDPSession(page);
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await page.waitForTimeout(700);
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await client.detach();
+    return;
+  }
+  const pointer = {
+    pointerType: "touch",
+    pointerId: 1,
+    isPrimary: true,
+    clientX: point.x,
+    clientY: point.y,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  };
+  await target.dispatchEvent("pointerdown", { ...pointer, button: 0, buttons: 1 });
+  await page.waitForTimeout(700);
+  await target.dispatchEvent("pointerup", { ...pointer, button: 0, buttons: 0 });
 }

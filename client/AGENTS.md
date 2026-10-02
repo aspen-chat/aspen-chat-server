@@ -793,8 +793,14 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   such as a dev server a phone reaches by address, and `copyText` falls back to a copy that
   works there and in iOS Safari.
 - Nothing may depend on hover, which a touch screen does not have. A control revealed on hover is
-  also revealed by focus (a message focuses when tapped, which shows its actions) or shown
-  outright with `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
+  also revealed by focus, or offered another way on a touch screen: a message's actions
+  (`MessageActions`, icons at `ACTION_ICON`) sit at its corner on hover or focus where there is
+  a pointer, and on a touch-only device (`TOUCH_ONLY`) a long press on the message opens them in
+  a popover under it (`useLongPress` from `react-aria`, the one hook taken from it, since the
+  components package has no long press), settling into place with `motion-settle` and a tap
+  felt in the hand in the apps (`haptics.ts`, `@capacitor/haptics`); the press owns the
+  message there, so the browser's text selection is off on it and Copy text is among the
+  actions. Otherwise a control is shown outright with `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
   widens what a finger can hit to 44px on a touch screen without moving anything; controls side
   by side are drawn larger with `pointer-coarse:` instead, so their areas do not overlap. The app
   pads itself by the safe-area insets, since the page is laid out under a notch

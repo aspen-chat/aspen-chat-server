@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { reactedText, signInToWorld, singleReactions } from "./world";
+import { longPress, reactedText, signInToWorld, singleReactions } from "./world";
 
 /**
  * Reactions under a message, against the stubbed world in `world.ts`, where Bob's "Sounds
@@ -32,7 +32,23 @@ test("the most popular reactions come first, and only twenty show", async ({ pag
 });
 
 test("a reaction's tooltip names the first four and counts the rest", async ({ page }) => {
-  await chips(page).getByRole("button", { name: "Remove your 👍" }).hover();
+  // A tooltip closes when what it is on scrolls, and the list scrolls itself to keep the view
+  // still as the channel's history lands above it, which scrolling to the chip sets off; the
+  // chip is brought into view first, and the hover waits for the list to be still.
+  const chip = chips(page).getByRole("button", { name: "Remove your 👍" });
+  await chip.scrollIntoViewIfNeeded();
+  const list = page.locator("[data-message-list]");
+  await expect
+    .poll(
+      async () => {
+        const before = await list.evaluate((element) => element.scrollTop);
+        await page.waitForTimeout(1500);
+        return (await list.evaluate((element) => element.scrollTop)) === before;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  await chip.hover();
   await expect(page.getByRole("tooltip")).toHaveText(
     "Kate, Bob With A Rather Long Display Name … and 5 more reacted with 👍",
   );
@@ -59,11 +75,15 @@ test("adding a reaction from the chips takes one tap", async ({ page }) => {
 
 test("the message's own actions open the list of reactions", async ({ page, isMobile }) => {
   if (isMobile) {
-    await message(page).locator(".message-body").tap();
+    await longPress(page, message(page).locator(".message-body"));
+    await page
+      .getByRole("dialog", { name: "Message actions" })
+      .getByRole("button", { name: "View reactions" })
+      .tap();
   } else {
     await message(page).hover();
+    await message(page).getByRole("button", { name: "View reactions" }).click();
   }
-  await message(page).getByRole("button", { name: "View reactions" }).click();
   await expect(page.getByRole("dialog", { name: "Reactions" })).toBeVisible();
 });
 

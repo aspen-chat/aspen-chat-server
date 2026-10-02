@@ -16,6 +16,11 @@ import { helper, signInToWorld, settleAnimations } from "./world";
  */
 async function problems(page: Page, where: string, popover: boolean): Promise<string[]> {
   await settleAnimations(page);
+  // A tooltip is a floating layer too, and Firefox opens one for whatever a layout change
+  // (a panel opening) slides under the resting pointer, once that has settled; the pointer
+  // is taken off the page and any tooltip gone before the page is audited.
+  await page.mouse.move(0, 0);
+  await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
   let builder = new AxeBuilder({ page });
   if (popover) {
     builder = builder.disableRules(["region"]);

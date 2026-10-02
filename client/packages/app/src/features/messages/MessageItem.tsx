@@ -1,53 +1,47 @@
-import {
-  ArrowBendDownRightIcon,
-  ChatsCircleIcon,
-  PencilSimpleIcon,
-  PushPinIcon,
-  PushPinSlashIcon,
-  RobotIcon,
-} from "@phosphor-icons/react";
+import { ArrowBendDownRightIcon, ChatsCircleIcon, RobotIcon } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { memo, useEffect, useState } from "react";
-import { Button } from "react-aria-components";
+import { memo, useEffect, useRef, useState } from "react";
+// React Aria Components has no long press; the hook it is built on does.
+import { useLongPress } from "react-aria";
+import { Button, Dialog, Popover } from "react-aria-components";
 import {
   useChannel,
   useChannelAccess,
   useMe,
   useMessage,
-  usePins,
   useSync,
   useUser,
   useUserLoading,
 } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
-import { Tooltip } from "@/features/layout/Tooltip";
 import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
-import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { MessageMedia } from "@/features/messages/Attachments";
 import { Markdown } from "@/features/messages/Markdown";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
-import { ReactionChips, ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
+import { ReactionChips } from "@/features/messages/Reactions";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
+import { feelPress } from "@/features/messages/haptics";
+import { MessageActions } from "@/features/messages/MessageActions";
+import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
-import { CopyIdButton } from "@/features/layout/CopyId";
 import { UserMention } from "@/features/messages/Mention";
 import { formatNodes } from "@/i18n/formatNodes";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
-// On a touch screen the actions sit side by side at finger size.
-const actionClass =
-  "rounded px-2 py-0.5 text-xs text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-  "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
-  "pointer-coarse:p-3";
+/** How long a finger is held on a message before its actions are offered under it. */
+const LONG_PRESS_MS = 450;
+/** The popover the actions open in under a long-pressed message. */
+const actionsPopoverClass =
+  "max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-1 shadow-lg";
 
 /** How soon after a message arrives that it is drawn arriving. */
 const ARRIVING_MS = 1000;
@@ -58,11 +52,12 @@ const ARRIVING_MS = 1000;
  * start a thread, and one that started a thread shows its replies' summary; an echo shows the
  * thread reply it names.
  *
- * Its actions show while the pointer is over it or focus is in it. A touch screen has no
- * hover, so tapping a message focuses it and shows them, and tapping elsewhere hides them.
- * There they float over the message's corner, hidden rather than transparent until shown: a
- * tap on a link in the message focuses the message first (Safari gives links no focus), and
- * actions that moved the message's content, or caught taps while unseen, would take the tap.
+ * Its actions (`MessageActions`) show at its corner while the pointer is over it or focus is
+ * in it. A touch screen has no hover, and a row of buttons over every message would cost the
+ * screen's room, so there a long press on the message opens them in a popover under it,
+ * settling into place, with a tap felt in the hand in the apps; the press owns the message,
+ * so the browser's own long press, which would select its text, is turned off there, and the
+ * actions copy the text instead.
  */
 export const MessageItem = memo(function MessageItem({
   id,
@@ -90,6 +85,22 @@ export const MessageItem = memo(function MessageItem({
   const me = useMe();
   const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
+  // A touch screen offers the actions under a long press; a pointer, at the corner.
+  const touchOnly = useMediaQuery(TOUCH_ONLY);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const row = useRef<HTMLElement>(null);
+  // The list the popover keeps within, found as the press opens it.
+  const [listBox, setListBox] = useState<HTMLElement | null>(null);
+  const { longPressProps } = useLongPress({
+    isDisabled: !touchOnly || editing,
+    threshold: LONG_PRESS_MS,
+    accessibilityDescription: m.longPressForActions,
+    onLongPress: () => {
+      feelPress();
+      setListBox(row.current?.closest<HTMLElement>("[data-message-list]") ?? null);
+      setActionsOpen(true);
+    },
+  });
   // A message that came while the reader was here rises into place; history arrives still.
   const [arriving] = useState(() => {
     const at = sync.store.arrivedAt(id);
@@ -173,11 +184,14 @@ export const MessageItem = memo(function MessageItem({
   const tagsMe = sync.store.mentionsMe(message);
   return (
     <article
+      ref={row}
       data-message-id={id}
       data-mentions-me={tagsMe ? "true" : undefined}
       tabIndex={-1}
+      {...(touchOnly ? longPressProps : {})}
       className={
         "group relative flex gap-3 rounded-md py-1.5 outline-none " +
+        (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
         arriving +
         (highlighted ? "motion-flash " : "") +
         (tagsMe ? "border-s-2 border-accent pe-2 ps-1.5 " : "px-2 ") +
@@ -251,51 +265,64 @@ export const MessageItem = memo(function MessageItem({
               {timeFormat.format(new Date(message.timestamp))}
             </time>
           </Link>
-          {!editing && (
+          {!editing && !touchOnly && (
             <span
               role="group"
               aria-label={m.messageActionsLabel}
-              className="ms-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:invisible pointer-coarse:absolute pointer-coarse:-top-4 pointer-coarse:end-2 pointer-coarse:z-10 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-line pointer-coarse:bg-surface-raised pointer-coarse:shadow-md pointer-coarse:group-focus-within:visible"
+              className="ms-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
             >
-              {permissions.has("addReactions") && (
-                <ReactionPicker messageId={id} triggerClassName={actionClass} />
-              )}
-              {permissions.has("pinMessages") && (
-                <PinButton messageId={id} channelId={channelId} className={actionClass} />
-              )}
-              <ViewReactionsButton messageId={id} triggerClassName={actionClass} />
-              {canThread && (
-                <Tooltip text={m.threads.replyInThread}>
-                  <Button
-                    onPress={openThread}
-                    aria-label={m.threads.replyInThread}
-                    className={actionClass}
-                  >
-                    <ChatsCircleIcon size={16} aria-hidden="true" />
-                  </Button>
-                </Tooltip>
-              )}
-              {editable && (
-                <Tooltip text={m.editMessage}>
-                  <Button
-                    onPress={() => {
+              <MessageActions
+                messageId={id}
+                channelId={channelId}
+                text={message.content}
+                permissions={permissions}
+                canThread={canThread}
+                editable={editable}
+                deletable={deletable}
+                onOpenThread={openThread}
+                onEdit={() => {
+                  setEditing(true);
+                }}
+              />
+            </span>
+          )}
+          {touchOnly && (
+            // Kept within the list, so under a message at the list's bottom the popover flips
+            // above the message rather than covering the message box.
+            <Popover
+              triggerRef={row}
+              isOpen={actionsOpen}
+              onOpenChange={setActionsOpen}
+              placement="bottom start"
+              offset={4}
+              {...(listBox === null ? {} : { boundaryElement: listBox })}
+              className={"motion-settle " + actionsPopoverClass}
+            >
+              <Dialog aria-label={m.messageActionsLabel} className="outline-none">
+                <div
+                  role="group"
+                  aria-label={m.messageActionsLabel}
+                  className="flex flex-wrap gap-1"
+                >
+                  <MessageActions
+                    messageId={id}
+                    channelId={channelId}
+                    text={message.content}
+                    permissions={permissions}
+                    canThread={canThread}
+                    editable={editable}
+                    deletable={deletable}
+                    onOpenThread={openThread}
+                    onEdit={() => {
                       setEditing(true);
                     }}
-                    aria-label={m.editMessage}
-                    className={actionClass}
-                  >
-                    <PencilSimpleIcon size={16} aria-hidden="true" />
-                  </Button>
-                </Tooltip>
-              )}
-              {deletable && (
-                <DeleteMessageDialog
-                  messageId={id}
-                  triggerClassName={actionClass + " text-danger"}
-                />
-              )}
-              <CopyIdButton id={id} thing="message" className={actionClass} />
-            </span>
+                    onDone={() => {
+                      setActionsOpen(false);
+                    }}
+                  />
+                </div>
+              </Dialog>
+            </Popover>
           )}
         </div>
         {editing ? (
@@ -417,40 +444,5 @@ function ThreadSummary({
         </span>
       )}
     </Link>
-  );
-}
-
-/** Pins the message in its channel, or unpins it. */
-function PinButton({
-  messageId,
-  channelId,
-  className,
-}: {
-  messageId: string;
-  channelId: string;
-  className: string;
-}) {
-  const m = useMessages();
-  const sync = useSync();
-  const pins = usePins(channelId);
-  const pinned = pins?.some((p) => p.messageId === messageId) ?? false;
-  const label = pinned ? m.pins.unpin : m.pins.pin;
-  return (
-    <Tooltip text={label}>
-      <Button
-        aria-label={label}
-        isDisabled={pins === undefined}
-        onPress={() => {
-          void sync.setPinned(messageId, !pinned).catch(() => undefined);
-        }}
-        className={className}
-      >
-        {pinned ? (
-          <PushPinSlashIcon size={16} aria-hidden="true" />
-        ) : (
-          <PushPinIcon size={16} aria-hidden="true" />
-        )}
-      </Button>
-    </Tooltip>
   );
 }

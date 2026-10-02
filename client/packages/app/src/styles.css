@@ -374,6 +374,9 @@ body {
   --motion-panel-distance: 24px;
   --motion-zoom: 0.96;
   --motion-pop: 1.18;
+  /* How far past its size something settling into place swells first. */
+  --motion-overshoot: 1.04;
+  --motion-settle: calc(300ms * var(--motion-scale));
   --motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
   --motion-ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
@@ -384,6 +387,7 @@ body {
     --motion-panel-distance: 0px;
     --motion-zoom: 1;
     --motion-pop: 1;
+    --motion-overshoot: 1;
   }
 }
 
@@ -433,6 +437,20 @@ body {
   }
 }
 
+@keyframes aspen-settle {
+  from {
+    opacity: 0;
+    transform: scale(var(--motion-zoom));
+  }
+  55% {
+    opacity: 1;
+    transform: scale(var(--motion-overshoot));
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
 @keyframes aspen-flash {
   from {
     background-color: var(--color-accent-soft);
@@ -477,6 +495,13 @@ body {
   }
   &[data-entering] {
     animation: aspen-arrive var(--motion-fast) var(--motion-ease-out);
+  }
+  /* One appearing under a press (`motion-settle`): it grows a little past its size, then
+     settles into it, over `--motion-settle`; where motion is reduced, it fades in at its size.
+     Set here, with the entering state, so that one animation runs: the element's `animation`
+     changing as React Aria ends the entering state would start it over from nothing. */
+  &[data-entering].motion-settle {
+    animation: aspen-settle var(--motion-settle) var(--motion-ease-out);
   }
   &[data-exiting] {
     animation: aspen-fade-out var(--motion-fast) var(--motion-ease-in) forwards;

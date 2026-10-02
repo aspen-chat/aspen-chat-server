@@ -1,5 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dm, inviteCode, ownText, pollQuestion, signInToWorld, starterText } from "./world";
+import {
+  dm,
+  inviteCode,
+  longPress,
+  ownText,
+  pollQuestion,
+  signInToWorld,
+  starterText,
+} from "./world";
 
 /**
  * The app on a phone: a narrow, touch-only screen, where there is no hover and one list or
@@ -153,28 +161,51 @@ test.describe("on a phone", () => {
     }
   });
 
-  test("tapping a message shows its actions, and tapping another moves them", async ({ page }) => {
+  test("a long press on a message opens its actions under it, and a tap does not", async ({
+    page,
+  }) => {
     await openChannel(page, "general");
     const own = messageWith(page, ownText);
     const starter = messageWith(page, starterText);
-    await expect(actionsOf(own)).toBeHidden();
+    // A tap focuses the message, as a tap on a link needs, and offers nothing.
     await own.locator(".message-body").tap();
-    await expect(actionsOf(own)).toBeVisible();
-    await expect(actionsOf(starter)).toBeHidden();
-    for (const name of ["Add a reaction", "Edit message", "Delete message"]) {
-      const action = own.getByRole("button", { name });
+    await expect(page.getByRole("dialog", { name: "Message actions" })).toHaveCount(0);
+    await expect(actionsOf(own)).toHaveCount(0);
+    // A long press opens the actions in a popover below the message, each at finger size.
+    await longPress(page, own.locator(".message-body"));
+    const popover = page.getByRole("dialog", { name: "Message actions" });
+    await expect(popover).toBeVisible();
+    const messageBox = await own.boundingBox();
+    const popoverBox = await popover.boundingBox();
+    const composerBox = await page.getByRole("textbox", { name: "Message" }).boundingBox();
+    const popoverBottom = (popoverBox?.y ?? 0) + (popoverBox?.height ?? 0);
+    const messageBottom = (messageBox?.y ?? 0) + (messageBox?.height ?? 0);
+    const underMessage = (popoverBox?.y ?? 0) >= messageBottom - 1;
+    const aboveMessage = popoverBottom <= (messageBox?.y ?? 0) + 1;
+    expect(underMessage || aboveMessage).toBe(true);
+    // Never over the message box, whichever side it takes.
+    expect(popoverBottom).toBeLessThanOrEqual((composerBox?.y ?? 0) + 1);
+    for (const name of ["Add a reaction", "Edit message", "Delete message", "Copy text"]) {
+      const action = popover.getByRole("button", { name });
       await expect(action).toBeVisible();
       expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(40);
     }
-    await starter.locator(".message-body").tap();
-    await expect(actionsOf(starter)).toBeVisible();
-    await expect(actionsOf(own)).toBeHidden();
-    await expect(starter.getByRole("button", { name: "Reply in thread" })).toBeVisible();
+    // A tap elsewhere closes it (the tap lands on the popover's underlay, so it is sent by
+    // position); a long press on another message opens that one's.
+    const heading = await page.getByRole("heading", { name: "general" }).boundingBox();
+    await page.touchscreen.tap(
+      (heading?.x ?? 0) + (heading?.width ?? 0) / 2,
+      (heading?.y ?? 0) + (heading?.height ?? 0) / 2,
+    );
+    await expect(popover).toHaveCount(0);
+    await longPress(page, starter.locator(".message-body"));
+    await expect(popover).toBeVisible();
+    await expect(popover.getByRole("button", { name: "Reply in thread" })).toBeVisible();
   });
 
   test("a link in a message opens on the first tap", async ({ page }) => {
-    // Tapping a link focuses its message, which shows the message's actions; they must not
-    // move the link out from under the finger before the tap completes.
+    // Tapping a link focuses its message first; nothing that follows may move the link out
+    // from under the finger before the tap completes.
     await openChannel(page, "general");
     await page.getByRole("link", { name: /2 replies/ }).tap();
     await expect(page.getByRole("heading", { name: "Thread" })).toBeVisible();
@@ -360,8 +391,11 @@ test.describe("on a phone", () => {
   async function openReactionPicker(page: Page) {
     await openChannel(page, "general");
     const own = messageWith(page, ownText);
-    await own.locator(".message-body").tap();
-    await own.getByRole("button", { name: "Add a reaction" }).tap();
+    await longPress(page, own.locator(".message-body"));
+    await page
+      .getByRole("dialog", { name: "Message actions" })
+      .getByRole("button", { name: "Add a reaction" })
+      .tap();
     const picker = page.locator(".emoji-picker");
     await expect(picker).toBeVisible();
     // Measured the moment its first emoji show: the library places them before it has measured

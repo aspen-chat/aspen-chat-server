@@ -824,6 +824,10 @@ export const en = {
   deleteMessageHint: "It will be removed for everyone.",
   deleting: "Deleting…",
   messageActionsLabel: "Message actions",
+  /** A finger held on a message, where the actions are offered that way. */
+  longPressForActions: "Press and hold for the message's actions",
+  copyMessageText: "Copy text",
+  copiedMessageText: "Copied text",
   react: "React",
   addReaction: "Add a reaction",
   reactionsLabel: "Reactions",

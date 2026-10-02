@@ -1,3 +1,4 @@
+import { ACTION_ICON } from "@/features/messages/actionIcon";
 import {
   ApiProblemError,
   REACTORS_PAGE,
@@ -264,7 +265,7 @@ export function ViewReactionsButton({
           }}
           className={triggerClassName}
         >
-          <UsersIcon size={16} aria-hidden="true" />
+          <UsersIcon size={ACTION_ICON} aria-hidden="true" />
         </Button>
       </Tooltip>
       <ReactionsDialog messageId={messageId} isOpen={open} onOpenChange={setOpen} />
@@ -467,9 +468,12 @@ function Reactor({
 export function ReactionPicker({
   messageId,
   triggerClassName,
+  iconSize = 16,
 }: {
   messageId: string;
   triggerClassName: string;
+  /** The trigger's icon size: a chip's beside the reactions, an action's in the actions. */
+  iconSize?: number;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -478,7 +482,7 @@ export function ReactionPicker({
     <DialogTrigger>
       <Tooltip text={m.addReaction}>
         <Button className={triggerClassName} aria-label={m.addReaction}>
-          <SmileyIcon size={16} aria-hidden="true" />
+          <SmileyIcon size={iconSize} aria-hidden="true" />
         </Button>
       </Tooltip>
       <Popover

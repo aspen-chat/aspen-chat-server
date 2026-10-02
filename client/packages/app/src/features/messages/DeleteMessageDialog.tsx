@@ -1,3 +1,4 @@
+import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { ApiProblemError } from "@aspen/protocol";
 import { TrashIcon } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -26,7 +27,7 @@ export function DeleteMessageDialog({
     <DialogTrigger>
       <Tooltip text={m.deleteMessage}>
         <Button className={triggerClassName} aria-label={m.deleteMessage}>
-          <TrashIcon size={16} aria-hidden="true" />
+          <TrashIcon size={ACTION_ICON} aria-hidden="true" />
         </Button>
       </Tooltip>
       <ModalOverlay className={overlayClass} isDismissable>
