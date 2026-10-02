@@ -21,6 +21,7 @@ mod report;
 mod scenarios;
 mod scrape;
 mod stats;
+mod suspension;
 mod user;
 mod voice;
 
