@@ -32,6 +32,8 @@ import { KeepStillContext } from "@/features/messages/keepStill";
 import { useMotion } from "@/features/layout/motion";
 import { SCROLL_DEBUG, ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
 import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
+import { rowsInView } from "@/features/messages/rowsInView";
+import { useReadMarking, useReadReports } from "@/features/messages/useReadMarking";
 import {
   COASTING_STOPS,
   MAX_VELOCITY,
@@ -311,48 +313,6 @@ export function MessageList({
   }
 
   /**
-   * The first and last message rows with any part in view, found by their offsets in the
-   * content, which are in order, so a few reads find them among hundreds; called on every
-   * move of the list.
-   */
-  function rowsInView(box: HTMLDivElement): {
-    first: HTMLElement | null;
-    last: HTMLElement | null;
-  } {
-    const rows = box.querySelectorAll<HTMLElement>("[data-message-id]");
-    const top = box.scrollTop;
-    const bottom = top + box.clientHeight;
-    // The first row whose bottom is below the view's top.
-    let low = 0;
-    let high = rows.length;
-    while (low < high) {
-      const mid = (low + high) >> 1;
-      const row = rows[mid];
-      if (row !== undefined && row.offsetTop + row.offsetHeight > top) {
-        high = mid;
-      } else {
-        low = mid + 1;
-      }
-    }
-    const first = rows[low] ?? null;
-    if (first === null || first.offsetTop >= bottom) {
-      return { first: null, last: null };
-    }
-    // The last row whose top is above the view's bottom.
-    let last = low;
-    high = rows.length;
-    while (last < high) {
-      const mid = (last + high + 1) >> 1;
-      const row = rows[mid];
-      if (row !== undefined && row.offsetTop < bottom) {
-        last = mid;
-      } else {
-        high = mid - 1;
-      }
-    }
-    return { first, last: rows[last] ?? null };
-  }
-  /**
    * A row's height just changed in the DOM: keeps the view still through it now, in the same
    * task, by what the noted row has moved in the content; pinned to the bottom, the list stays
    * there. The rows' observer then finds nothing left to do. Rows get one function for the
@@ -397,7 +357,13 @@ export function MessageList({
   ) {
     setLine({ channelId, after: null });
   }
-  const seenFrame = useRef<number | null>(null);
+  const { seenFrame, noteSeenSoon } = useReadMarking({
+    viewport,
+    readState,
+    ids: window?.ids,
+    sync,
+    channelId,
+  });
   const blockedUsers = useBlockedUsers();
   const parts = useMemo(() => {
     const blocked = new Set(blockedUsers);
@@ -1060,72 +1026,7 @@ export function MessageList({
       });
   }
 
-  /**
-   * Marks the newest message with any part on screen as read, when the reader can see the page.
-   * Messages of other channels drawn inside this one's, such as the reply an echo shows, are
-   * not this channel's to mark.
-   */
-  function noteSeen() {
-    const box = viewport.current;
-    if (
-      box === null ||
-      readState === undefined ||
-      ids === undefined ||
-      document.visibilityState !== "visible" ||
-      !document.hasFocus()
-    ) {
-      return;
-    }
-    // The newest row in view that is this channel's: a reply an echo shows, which is not,
-    // stands under its echo's row.
-    let row = rowsInView(box).last;
-    const inWindow = new Set(ids);
-    while (row !== null && !inWindow.has(row.dataset.messageId ?? "")) {
-      row = row.parentElement?.closest<HTMLElement>("[data-message-id]") ?? null;
-    }
-    const seen = row?.dataset.messageId;
-    if (seen !== undefined) {
-      sync.markRead(channelId, seen);
-    }
-  }
-
-  // Once a frame at most, however fast the list scrolls.
-  function noteSeenSoon() {
-    seenFrame.current ??= requestAnimationFrame(() => {
-      seenFrame.current = null;
-      noteSeen();
-    });
-  }
-
-  // What is on screen changes with the window, and becomes seen when the page is looked at.
-  useEffect(() => {
-    noteSeenSoon();
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        sync.flushReads();
-      } else {
-        noteSeenSoon();
-      }
-    };
-    globalThis.addEventListener("focus", noteSeenSoon);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      globalThis.removeEventListener("focus", noteSeenSoon);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  });
-
-  // Leaving the channel reports what was read in it straight away.
-  useEffect(
-    () => () => {
-      if (seenFrame.current !== null) {
-        cancelAnimationFrame(seenFrame.current);
-        seenFrame.current = null;
-      }
-      sync.flushReads();
-    },
-    [sync, channelId],
-  );
+  useReadReports({ seenFrame, noteSeenSoon, sync, channelId });
 
   if (window === undefined) {
     return <HistorySkeleton />;
