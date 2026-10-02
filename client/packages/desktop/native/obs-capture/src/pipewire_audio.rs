@@ -1,14 +1,14 @@
-//! Game audio on Linux: a libobs audio source that captures one application's sound from the
-//! PipeWire graph.
+//! Game audio on Linux: a capture of one application's sound from the PipeWire graph, handed
+//! to whoever started it buffer by buffer (`app_audio` encodes and sends it).
 //!
 //! Every application playing sound is a node in the graph (media class `Stream/Output/Audio`)
 //! with an output port per channel. The source opens a capture stream of its own with
 //! autoconnect off, so the session manager leaves it alone, and links the application's output
 //! ports to its own input ports through the link factory, one link per channel. An input port
 //! mixes whatever is linked to it, so every stream of the application arrives as one signal,
-//! which the stream's adapter converts to 48 kHz stereo float, and each buffer goes to libobs
-//! through `obs_source_output_audio`. The application keeps playing to its sink; the links fan
-//! its output out. This is the same mechanism the desktop's own per-application audio tools
+//! which the stream's adapter converts to 48 kHz stereo float, and each buffer goes to the
+//! capture's callback. The application keeps playing to its sink; the links fan its output
+//! out. This is the same mechanism the desktop's own per-application audio tools
 //! use, and it needs only a PipeWire socket, not a particular session manager.
 //!
 //! The application is named by process id and name (`application.process.id` and
@@ -17,10 +17,11 @@
 //! Nodes come and go while the capture runs (games open a stream per sound device, browsers
 //! one per tab), and the registry listener relinks as they do.
 //!
-//! The source's settings: `pid` (the process id, 0 for none) and `application` (the name).
-//! `playing_applications` lists what can be captured right now in the same vocabulary.
+//! A `Target` is `pid` (the process id, 0 for none) and `application` (the name), as the
+//! settings of a `startAudio` request carry it; `playing_applications` lists what can be
+//! captured right now in the same vocabulary.
 
-use crate::{AudioTarget, ffi};
+use crate::AudioTarget;
 use pipewire as pw;
 use pw::context::ContextRc;
 use pw::core::CoreRc;
@@ -32,17 +33,14 @@ use pw::registry::{GlobalObject, Registry, RegistryRc};
 use pw::spa;
 use pw::stream::{StreamFlags, StreamRc, StreamState};
 use pw::types::ObjectType;
+use serde::Deserialize;
 use spa::utils::dict::DictRef;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::ffi::{CStr, c_char, c_void};
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
-pub const SOURCE_ID: &CStr = c"aspen_pipewire_app_audio";
 
 const RATE: u32 = 48_000;
 const CHANNELS: u32 = 2;
@@ -50,9 +48,10 @@ const OUTPUT_STREAM_CLASS: &str = "Stream/Output/Audio";
 /// How long `create` waits for the capture thread to reach PipeWire before giving up.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What the source captures, as its settings name it.
-#[derive(Clone, Debug, PartialEq, Default)]
-struct Target {
+/// What the capture captures, as the settings of a `startAudio` request name it.
+#[derive(Clone, Debug, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct Target {
     pid: Option<u32>,
     application: String,
 }
@@ -67,22 +66,16 @@ impl Target {
         serde_json::Value::Object(settings)
     }
 
-    unsafe fn from_settings(settings: *mut ffi::obs_data) -> Target {
-        if settings.is_null() {
-            return Target::default();
-        }
-        unsafe {
-            let pid = ffi::obs_data_get_int(settings, c"pid".as_ptr());
-            let application = ffi::obs_data_get_string(settings, c"application".as_ptr());
-            Target {
-                pid: u32::try_from(pid).ok().filter(|pid| *pid != 0),
-                application: if application.is_null() {
-                    String::new()
-                } else {
-                    CStr::from_ptr(application).to_string_lossy().into_owned()
-                },
-            }
-        }
+    /// The target `settings` name, a JSON object with `application` and `pid`; none, an empty
+    /// target, which captures nothing until retargeted.
+    pub fn from_settings(settings: Option<&str>) -> Result<Target, String> {
+        let Some(json) = settings else {
+            return Ok(Target::default());
+        };
+        let mut target: Target =
+            serde_json::from_str(json).map_err(|e| format!("audio settings: {e}"))?;
+        target.pid = target.pid.filter(|pid| *pid != 0);
+        Ok(target)
     }
 }
 
@@ -438,27 +431,75 @@ enum Command {
     Quit,
 }
 
-/// The libobs source's data: the thread running the PipeWire loop and the way to reach it.
-struct Capture {
+/// A running capture: the thread running the PipeWire loop and the way to reach it. Dropping
+/// it ends the capture and waits for the thread.
+pub struct Capture {
     control: pw::channel::Sender<Command>,
     thread: Option<JoinHandle<()>>,
 }
 
-/// What the process callback needs: the libobs source, as a plain integer so the closure is
-/// `Send`. The source outlives the thread, since `destroy` joins it.
-struct Pcm {
-    source: usize,
+impl Capture {
+    /// Starts capturing `target`, calling `on_audio` with each buffer of interleaved 48 kHz
+    /// stereo float on PipeWire's real-time thread, where it must not block. Fails when
+    /// PipeWire cannot be reached.
+    pub fn start(
+        target: Target,
+        on_audio: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Capture, String> {
+        let (control, commands) = pw::channel::channel();
+        let (ready, started) = mpsc::channel();
+        let delivery = Delivery {
+            on_audio: Box::new(on_audio),
+            scratch: Vec::new(),
+        };
+        let thread = std::thread::Builder::new()
+            .name("aspen-pipewire-audio".into())
+            .spawn(move || run(delivery, target, commands, ready))
+            .map_err(|error| format!("could not start the PipeWire thread: {error}"))?;
+        match started.recv_timeout(CONNECT_TIMEOUT) {
+            Ok(Ok(())) => Ok(Capture {
+                control,
+                thread: Some(thread),
+            }),
+            Ok(Err(error)) => {
+                let _ = thread.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = control.send(Command::Quit);
+                Err("PipeWire did not answer".to_string())
+            }
+        }
+    }
+
+    /// Captures `target` instead, relinking as the graph stands.
+    #[allow(dead_code)]
+    pub fn retarget(&self, target: Target) {
+        let _ = self.control.send(Command::Retarget(target));
+    }
 }
 
-/// Why the last `create` failed, for the caller to report; libobs itself only logs it.
-static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+impl Drop for Capture {
+    fn drop(&mut self) {
+        let _ = self.control.send(Command::Quit);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
 
-pub fn take_error() -> Option<String> {
-    LAST_ERROR.lock().expect("error lock").take()
+/// Where a capture's samples go, called on PipeWire's real-time thread.
+type AudioSink = Box<dyn FnMut(&[f32]) + Send>;
+
+/// What the process callback needs: where the samples go, and a buffer to unpack them into
+/// without allocating on the real-time thread.
+struct Delivery {
+    on_audio: AudioSink,
+    scratch: Vec<f32>,
 }
 
 fn run(
-    pcm: Pcm,
+    delivery: Delivery,
     target: Target,
     commands: pw::channel::Receiver<Command>,
     ready: mpsc::Sender<Result<(), String>>,
@@ -526,7 +567,7 @@ fn run(
         )
         .map_err(|e| format!("PipeWire stream: {e}"))?;
         let _stream_listener = stream
-            .add_local_listener_with_user_data(pcm)
+            .add_local_listener_with_user_data(delivery)
             .state_changed({
                 let graph = graph.clone();
                 move |stream, _, _, state| match state {
@@ -545,9 +586,9 @@ fn run(
                     _ => {}
                 }
             })
-            .process(|stream, pcm| {
+            .process(|stream, delivery| {
                 if let Some(mut buffer) = stream.dequeue_buffer() {
-                    deliver(pcm, &mut buffer);
+                    deliver(delivery, &mut buffer);
                 }
             })
             .register()
@@ -588,7 +629,7 @@ fn run(
         Ok(())
     })();
     if let Err(error) = outcome {
-        // Unheard when the loop already ran and `create` returned; the log then stands.
+        // Unheard when the loop already ran and `start` returned; the log then stands.
         eprintln!("aspen-obs-capture: PipeWire capture ended: {error}");
         let _ = ready.send(Err(error));
     }
@@ -619,9 +660,9 @@ fn format_param() -> Vec<u8> {
     .into_inner()
 }
 
-/// Hands one buffer of the stream to libobs. Runs on PipeWire's real-time thread; libobs
-/// copies the samples into the source's own buffer and stamps them against its clock.
-fn deliver(pcm: &mut Pcm, buffer: &mut pw::buffer::Buffer<'_>) {
+/// Hands one buffer of the stream to the capture's callback as interleaved float. Runs on
+/// PipeWire's real-time thread.
+fn deliver(delivery: &mut Delivery, buffer: &mut pw::buffer::Buffer<'_>) {
     let datas = buffer.datas_mut();
     let Some(data) = datas.first_mut() else {
         return;
@@ -635,100 +676,19 @@ fn deliver(pcm: &mut Pcm, buffer: &mut pw::buffer::Buffer<'_>) {
     let start = offset.min(end);
     let samples = &bytes[start..end];
     let frame_bytes = std::mem::size_of::<f32>() * CHANNELS as usize;
-    let frames = samples.len() / frame_bytes;
-    if frames == 0 {
+    let whole = samples.len() / frame_bytes * frame_bytes;
+    if whole == 0 {
         return;
     }
-    let mut audio: ffi::obs_source_audio = unsafe { std::mem::zeroed() };
-    audio.data[0] = samples.as_ptr();
-    audio.frames = frames as u32;
-    audio.speakers = ffi::SPEAKERS_STEREO;
-    audio.format = ffi::AUDIO_FORMAT_FLOAT;
-    audio.samples_per_sec = RATE;
-    audio.timestamp = unsafe { ffi::os_gettime_ns() };
-    unsafe { ffi::obs_source_output_audio(pcm.source as *mut ffi::obs_source, &audio) };
-}
-
-// ---------------------------------------------------------------------------------------------
-// The libobs source
-
-unsafe extern "C" fn source_get_name(_: *mut c_void) -> *const c_char {
-    c"Aspen application audio".as_ptr()
-}
-
-unsafe extern "C" fn source_create(
-    settings: *mut ffi::obs_data,
-    source: *mut ffi::obs_source,
-) -> *mut c_void {
-    let target = unsafe { Target::from_settings(settings) };
-    let (control, commands) = pw::channel::channel();
-    let (ready, started) = mpsc::channel();
-    let pcm = Pcm {
-        source: source as usize,
-    };
-    let thread = std::thread::Builder::new()
-        .name("aspen-pipewire-audio".into())
-        .spawn(move || run(pcm, target, commands, ready));
-    let outcome = match thread {
-        Ok(thread) => match started.recv_timeout(CONNECT_TIMEOUT) {
-            Ok(Ok(())) => Ok(thread),
-            Ok(Err(error)) => {
-                let _ = thread.join();
-                Err(error)
-            }
-            Err(_) => {
-                let _ = control.send(Command::Quit);
-                Err("PipeWire did not answer".to_string())
-            }
-        },
-        Err(error) => Err(format!("could not start the PipeWire thread: {error}")),
-    };
-    match outcome {
-        Ok(thread) => Box::into_raw(Box::new(Capture {
-            control,
-            thread: Some(thread),
-        }))
-        .cast(),
-        Err(error) => {
-            eprintln!("aspen-obs-capture: application audio unavailable: {error}");
-            *LAST_ERROR.lock().expect("error lock") = Some(error);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-unsafe extern "C" fn source_destroy(data: *mut c_void) {
-    if data.is_null() {
-        return;
-    }
-    let mut capture: Box<Capture> = unsafe { Box::from_raw(data.cast()) };
-    let _ = capture.control.send(Command::Quit);
-    if let Some(thread) = capture.thread.take() {
-        let _ = thread.join();
-    }
-}
-
-unsafe extern "C" fn source_update(data: *mut c_void, settings: *mut ffi::obs_data) {
-    if data.is_null() {
-        return;
-    }
-    let capture: &Capture = unsafe { &*data.cast() };
-    let _ = capture
-        .control
-        .send(Command::Retarget(unsafe { Target::from_settings(settings) }));
-}
-
-/// Registers the source kind with libobs. Once, after libobs has started.
-pub unsafe fn register_source() {
-    let mut info: ffi::obs_source_info = unsafe { std::mem::zeroed() };
-    info.id = SOURCE_ID.as_ptr();
-    info.type_ = ffi::OBS_SOURCE_TYPE_INPUT;
-    info.output_flags = ffi::OBS_SOURCE_AUDIO;
-    info.get_name = Some(source_get_name);
-    info.create = Some(source_create);
-    info.destroy = Some(source_destroy);
-    info.update = Some(source_update);
-    unsafe { ffi::obs_register_source_s(&info, std::mem::size_of::<ffi::obs_source_info>()) };
+    delivery.scratch.clear();
+    delivery.scratch.extend(
+        samples[..whole]
+            .as_chunks::<{ std::mem::size_of::<f32>() }>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes)),
+    );
+    (delivery.on_audio)(&delivery.scratch);
 }
 
 #[cfg(test)]
@@ -821,14 +781,28 @@ mod tests {
     }
 
     #[test]
-    fn the_target_is_written_the_way_the_source_reads_it() {
+    fn the_target_is_written_the_way_the_capture_reads_it() {
+        let target = Target {
+            pid: Some(7),
+            application: "game".into(),
+        };
+        let settings = target.settings();
         assert_eq!(
-            Target {
-                pid: Some(7),
-                application: "game".into()
-            }
-            .settings(),
+            settings,
             serde_json::json!({ "application": "game", "pid": 7 })
         );
+        assert_eq!(
+            Target::from_settings(Some(&settings.to_string())).unwrap(),
+            target
+        );
+        assert_eq!(
+            Target::from_settings(Some(r#"{"application":"game","pid":0}"#)).unwrap(),
+            Target {
+                pid: None,
+                application: "game".into()
+            }
+        );
+        assert_eq!(Target::from_settings(None).unwrap(), Target::default());
+        assert!(Target::from_settings(Some("7")).is_err());
     }
 }

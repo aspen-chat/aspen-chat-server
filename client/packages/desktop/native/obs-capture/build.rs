@@ -1,6 +1,9 @@
-//! Generates the libobs bindings the helper uses and tells the linker where libobs is.
+//! Decides whether this build links libobs, and where it does, generates the bindings the
+//! helper uses and tells the linker where libobs is.
 //!
-//! On Linux `pkg-config` finds libobs. On Windows and macOS OBS Studio ships no development
+//! libobs is linked on Windows and macOS, and on Linux only with the `libobs` feature (the
+//! picture path, for developing it there); the code that needs it is behind `cfg(obs)`. On
+//! Linux `pkg-config` finds libobs. On Windows and macOS OBS Studio ships no development
 //! files, so `LIBOBS_INCLUDE_DIR` (the `libobs` directory of an OBS Studio source checkout
 //! matching the installed version, with an `obsconfig.h` written from its template) and
 //! `LIBOBS_LIB_DIR` (where `obs.lib` is, or on macOS a `libobs.dylib` linking to OBS.app's
@@ -10,9 +13,16 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(obs)");
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-env-changed=LIBOBS_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=LIBOBS_LIB_DIR");
+
+    let linux = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
+    if linux && env::var_os("CARGO_FEATURE_LIBOBS").is_none() {
+        return;
+    }
+    println!("cargo:rustc-cfg=obs");
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")

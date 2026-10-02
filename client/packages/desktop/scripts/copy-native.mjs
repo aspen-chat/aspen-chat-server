@@ -1,4 +1,4 @@
-// Places the libobs capture helper where the main process spawns it from: `native/aspen-obs-capture`.
+// Places the capture helper where the main process spawns it from: `native/aspen-obs-capture`.
 // It is copied beside the destination and renamed over it, because a running shell may have the
 // old helper open and a running executable cannot be overwritten in place. On Linux and macOS the
 // rename succeeds, the running helper keeps the file it opened, and the next one spawned is the
@@ -16,4 +16,4 @@ const destination = join(crate, "..", name);
 const staged = `${destination}.new`;
 copyFileSync(source, staged);
 renameSync(staged, destination);
-console.log(`copied the libobs capture helper to native/${name}`);
+console.log(`copied the capture helper to native/${name}`);

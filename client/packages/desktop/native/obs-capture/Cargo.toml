@@ -3,7 +3,7 @@ name = "aspen_obs_capture"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Helper process for the Aspen desktop shell: captures a game or window with libobs and streams H.264 packets to the shell"
+description = "Helper process for the Aspen desktop shell: captures a game or window with libobs on Windows and macOS, and a game's sound from PipeWire on Linux, and streams it to the voice server"
 publish = false
 
 # Its own workspace: it links libobs, which the rest of the repository must not need in order
@@ -26,6 +26,10 @@ serde_json = "1.0"
 webrtc-srtp = "0.17"
 webrtc-util = "0.17"
 
+[features]
+# The libobs picture path on Linux, for developing it there; Windows and macOS always have it.
+libobs = []
+
 [build-dependencies]
 bindgen = "0.72"
 pkg-config = "0.3"
@@ -34,4 +38,5 @@ pkg-config = "0.3"
 strip = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+opus = "0.4"
 pipewire = "0.10.1"

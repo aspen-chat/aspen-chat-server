@@ -180,8 +180,16 @@ class CaptureHost {
     if (helperPath() === null) {
       return { kinds: [], applicationAudio: null, testMedia };
     }
-    const listed = (await this.#request({ type: "kinds" })) as Omit<CaptureCatalogue, "testMedia">;
-    return { ...listed, testMedia };
+    const listed = (await this.#request({ type: "kinds" })) as Omit<CaptureCatalogue, "testMedia"> & {
+      /** Whether the helper can capture a picture at all (a build with libobs). */
+      pictures: boolean;
+    };
+    // The test pattern is a picture, through libobs's media source.
+    return {
+      kinds: listed.kinds,
+      applicationAudio: listed.applicationAudio,
+      testMedia: listed.pictures ? testMedia : null,
+    };
   }
 
   async start(sender: WebContents, options: StartOptions): Promise<void> {

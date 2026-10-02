@@ -357,7 +357,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   that display capture cannot (`game_capture` hooks Direct3D and OpenGL on Windows). The
   helper `packages/desktop/native/obs-capture` (a Rust crate, its own Cargo workspace, built
   by `pnpm build:native` in `packages/desktop`, which can run while a shell is open on Linux
-  and macOS; it needs libobs development files, which on Linux `pkg-config` finds and on
+  and macOS) links libobs on Windows and macOS (`src/obs.rs`, behind `cfg(obs)`), and on
+  Linux only when built with its `libobs` feature, for developing the picture path there; a
+  Linux build otherwise needs PipeWire's and libopus's development files and no libobs. Where
+  it links libobs it needs libobs's development files, which on Linux `pkg-config` finds and on
   Windows and macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: on macOS the `libobs`
   directory of an OBS Studio source checkout at the installed version, with an `obsconfig.h`
   written from its `.in` (OBS.app's `Contents/PlugIns` and `Contents/Resources/data` as the
@@ -393,11 +396,14 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   browser, marked `contentHint: "motion"`: `VoiceCall.startScreenShare({ audio })` takes an `ExternalAudio`, asks the voice
   server for a `screenAudio` RTP producer, and hands its target to it, dropping any sound the
   browser captured. The helper's `startAudio` request captures that sound alone through its
-  own libobs source `aspen_pipewire_app_audio` (`native/obs-capture/src/pipewire_audio.rs`),
-  which opens a PipeWire capture stream and links one application's output ports to it,
-  following that application by process id while it runs and by name across a restart, so the
-  game keeps playing to its own output while the call hears it. The helper advertises no video
-  kinds there, and lists the applications playing sound as `applicationAudio` in its catalogue.
+  PipeWire capture (`native/obs-capture/src/pipewire_audio.rs`, which the catalogue names
+  `aspen_pipewire_app_audio`): it opens a capture stream and links one application's output
+  ports to it, following that application by process id while it runs and by name across a
+  restart, so the game keeps playing to its own output while the call hears it, and
+  `app_audio.rs` cuts what arrives into 20 ms frames, encodes them as Opus with libopus, and
+  sends them as SRTP. The helper advertises no video kinds there (its catalogue says
+  `pictures: false`, so the shell offers no test pattern either), and lists the applications
+  playing sound as `applicationAudio`.
 - `GameCaptureDialog` (opened from `ShareControl`, the share button the call bar and the
   voice channel header both use) follows the platform. On Windows and macOS it lists the
   windows the capture source can be pointed at, with a checkbox for their sound. On Linux it
