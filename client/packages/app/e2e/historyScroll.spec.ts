@@ -418,6 +418,84 @@ test("a finger moving a fraction of a pixel at a time moves the list as far as i
   }
 });
 
+// A row above the view changes size in a task of its own, a picture or a card taking its room,
+// and the finger moves before the next frame tells the rows' observer: a fling's frames run
+// before the observer is told, too. A move that noted the row it keeps still where that row now
+// stood left the observer nothing to absorb, and the view jumped by the change.
+test("a row above the view growing just before a move does not move what is in view, with the list scrolling itself as on iOS", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  test.setTimeout(120_000);
+  await asIos(page);
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1500);
+
+  const cdp = await page.context().newCDPSession(page);
+  const box = await page.locator("[data-message-list]").first().boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 400) / 2;
+  let finger = (box?.y ?? 100) + 40;
+  await touch(cdp, "touchStart", x, finger);
+  finger += 20;
+  await touch(cdp, "touchMove", x, finger);
+  await frames(page);
+  const before = await sample(page);
+  const step = 10;
+  // In one task: the row just above the view grows, and the finger moves.
+  const grown = await page.evaluate(
+    ({ x, y }) => {
+      const list = document.querySelector<HTMLElement>("[data-message-list]");
+      if (list === null) {
+        return false;
+      }
+      const top = list.getBoundingClientRect().top;
+      const above = [...list.querySelectorAll<HTMLElement>("article[data-message-id]")]
+        .filter((article) => article.getBoundingClientRect().bottom <= top)
+        .pop();
+      if (above === undefined) {
+        return false;
+      }
+      above.style.paddingBottom = "105px";
+      const touch = new Touch({ identifier: 1, target: list, clientX: x, clientY: y });
+      list.dispatchEvent(
+        new TouchEvent("touchmove", {
+          bubbles: true,
+          cancelable: true,
+          touches: [touch],
+          targetTouches: [touch],
+          changedTouches: [touch],
+        }),
+      );
+      return true;
+    },
+    { x, y: finger + step },
+  );
+  expect(grown, "a row above the view to grow").toBe(true);
+  await frames(page);
+  const after = await sample(page);
+  await touch(cdp, "touchEnd", x, finger + step);
+
+  const both = moves(before?.tops ?? {}, after?.tops ?? {});
+  expect(both.length, "messages in view before and after").toBeGreaterThan(0);
+  for (const moved of both) {
+    expect(Math.abs(moved - step), `moved ${String(moved)}px, not ${String(step)}`).toBeLessThan(
+      1.5,
+    );
+  }
+});
+
 for (const { name, ios } of SCROLLERS) {
   test(`flicking back through a long history keeps ahead of the reader${name}`, async ({
     page,

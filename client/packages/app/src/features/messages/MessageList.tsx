@@ -232,13 +232,15 @@ export function MessageList({
    * The row kept still, and where it stands in the content, which does not change with
    * scrolling, noted after every move and change: a linked message while it is shown, so a
    * jump lands on it whatever loads around it, and otherwise the topmost row in view. Every
-   * change of the rows' sizes is measured by how far it has moved (`keepStillNow`, and the
-   * rows' observer).
+   * change of the rows' sizes is measured by how far it has moved (`keepStillNow`, the rows'
+   * observer, and `catchUp` before every move notes it afresh).
    */
   const still = useRef<{
     id: string;
     /** Where the row's top stood in the view, which the box's own clamping cannot move. */
     screenTop: number;
+    /** Where the row's top stood in the content, which only a change of the rows can move. */
+    offsetTop: number;
     height: number;
     linked: boolean;
   } | null>(null);
@@ -259,6 +261,7 @@ export function MessageList({
         : {
             id: row.dataset.messageId ?? "",
             screenTop: row.offsetTop - box.scrollTop,
+            offsetTop: row.offsetTop,
             height: row.offsetHeight,
             linked: shownLink,
           };
@@ -279,6 +282,31 @@ export function MessageList({
     if (row !== null) {
       const grown = noted.linked ? (row.offsetHeight - noted.height) / 2 : 0;
       absorb(row.offsetTop - noted.screenTop + grown - box.scrollTop, why);
+    }
+  }
+
+  /**
+   * Absorbs whatever moved the noted row in the content since it was noted, before a move
+   * notes a row afresh. A change of the rows' sizes is told to the rows' observer only after
+   * the frame's animation callbacks have run, and a fling moves the list in those, as touches
+   * may come before it: a move that noted the row where it now stood would leave the observer
+   * nothing to find, and the change would show as a jump. Scrolling does not move a row in the
+   * content, so what has is a change of the rows alone.
+   */
+  function catchUp() {
+    const box = viewport.current;
+    const noted = still.current;
+    if (box === null || noted === null) {
+      return;
+    }
+    const row = box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
+    if (row !== null) {
+      const grown = noted.linked ? (row.offsetHeight - noted.height) / 2 : 0;
+      const by = row.offsetTop - noted.offsetTop + grown;
+      if (Math.abs(by) >= 0.5) {
+        measureRange();
+        absorb(by, "unseen change");
+      }
     }
   }
 
@@ -502,6 +530,7 @@ export function MessageList({
     if (box === null) {
       return;
     }
+    catchUp();
     noteStill();
     showIndicator();
     noteDistance();
@@ -876,7 +905,12 @@ export function MessageList({
     if (body === null || typeof ResizeObserver === "undefined") {
       return;
     }
+    let height = body.offsetHeight;
     const observer = new ResizeObserver(() => {
+      if (diagnostics !== null && body.offsetHeight !== height) {
+        diagnostics.note(`rows ${String(height)}->${String(body.offsetHeight)}`);
+      }
+      height = body.offsetHeight;
       measure();
       measureRange();
       holdStill("rows");

@@ -1029,7 +1029,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   and where it stands in the content (`still`), which scrolling does not change, and after
   every change, a page's arrival at commit, a picture's arrival told by the picture itself in
   the same task (`useKeepStill`), or any change of the rows' size seen by a `ResizeObserver`
-  before the frame is painted, moves the position by what that row has moved. The row is the
+  before the frame is painted, moves the position by what that row has moved; and every move
+  of the list's own, a finger's or a fling's frame, first takes in whatever moved that row in
+  the content since it was noted (`catchUp`), since those run before the frame's resize
+  observers are told and would otherwise note the row where the change put it. The row is the
   topmost in view, or, while a linked message is shown, that message, held by its middle so a
   jump lands on it and stays centred whatever loads around it or inside it; the reader's first
   scroll drops the link and the hold returns to the topmost row. The list scrolls itself on
@@ -1058,8 +1061,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   The iOS simulator test `testReadingBackQuicklyNeverJumps` reads at a person's pace, with
   flicks and drags that begin as soon as the last ended, against a build made with
   `VITE_SCROLL_DEBUG=1`, in which the list records what it does with its position and a
-  watcher samples a row in view after every painted frame, counting as a jump any frame in
-  which it moved by other than what the list meant (`scrollDiagnostics.ts`, shown over the
+  watcher samples a row in view as every frame is about to be painted (in a resize observer
+  delivered after the list's own, so a change between frames that the list keeps still in the
+  next is not counted), counting as a jump any frame in which it moved by other than what the
+  list meant (`scrollDiagnostics.ts`, shown over the
   list by `ScrollDiagnosticsPanel` with a copy of the record); it is how the pan's override
   was found.
   A window that is not at the
