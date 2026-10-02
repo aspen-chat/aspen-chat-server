@@ -201,8 +201,8 @@ const generalMessages = [
   message(203, me, starterText, 60, { thread }),
   message(202, bob, `Morning all! <:${customEmojiId}>`, 90),
   message(201, me, "Welcome to the family server.", 120),
-  // A share page named like a gif, whose preview carries the gif itself; and a link to a
-  // picture that is gone.
+  // A share page named like a gif, whose preview carries the gif itself; and, by the caller,
+  // so Bob's messages make one run for the blocking tests, a link to a picture that is gone.
   message(200, bob, gifPageLink, 130, {
     linkPreviews: [
       {
@@ -218,7 +218,7 @@ const generalMessages = [
       },
     ],
   }),
-  message(199, bob, missingPictureLink, 140),
+  message(199, me, missingPictureLink, 140),
   // Older history, enough for several pages, so reading back through it can be exercised.
   ...Array.from({ length: 120 }, (_, i) =>
     message(120 - i, i % 2 === 0 ? me : bob, `Older message ${String(120 - i)}`, 180 + i * 10),

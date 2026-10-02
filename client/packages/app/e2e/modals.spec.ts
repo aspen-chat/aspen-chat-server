@@ -57,3 +57,33 @@ test("settings, invites, and new polls close from their X", async ({ page }) => 
     }
   });
 });
+
+test("a modal never scrolls sideways, and settings' planes stand in two columns", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "a phone shows one column, and its modal fills the screen");
+  // As first opened after a load: the planes are measured while the modal is still arriving,
+  // scaled up from a little smaller, and a measure taken at that size once set a height the
+  // planes overflowed into a third column.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect
+    .poll(() =>
+      dialog.evaluate((element) => {
+        const frame = element.closest(".motion-dialog");
+        const planes = element.querySelector(".\\@container")?.firstElementChild;
+        return {
+          overflow: frame === null ? NaN : frame.scrollWidth - frame.clientWidth,
+          columns:
+            planes === null || planes === undefined
+              ? 0
+              : new Set(
+                  Array.from(planes.children, (c) => Math.round(c.getBoundingClientRect().left)),
+                ).size,
+        };
+      }),
+    )
+    .toEqual({ overflow: 0, columns: 2 });
+});

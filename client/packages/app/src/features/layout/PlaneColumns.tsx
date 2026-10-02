@@ -27,7 +27,16 @@ export function PlaneColumns({ children }: { children: ReactNode }) {
         return;
       }
       const gap = Number.parseFloat(style.rowGap) || 0;
-      const heights = Array.from(element.children, (child) => child.getBoundingClientRect().height);
+      // Measured in layout pixels: a modal arrives scaled up from 0.96 (`motion-dialog`), and
+      // a rect read mid-scale is that much short, which would set a height the planes
+      // overflow into a third column, with nothing to measure again, since a transform
+      // changes no border box. The box's own rect over its layout width is the scale.
+      const scale =
+        element.offsetWidth > 0 ? element.getBoundingClientRect().width / element.offsetWidth : 1;
+      const heights = Array.from(
+        element.children,
+        (child) => child.getBoundingClientRect().height / (scale || 1),
+      );
       const total = heights.reduce((sum, h) => sum + h, 0);
       const column = (sum: number, count: number) => sum + gap * Math.max(count - 1, 0);
       // The first `k` planes on the left and the rest on the right, whichever `k` makes the

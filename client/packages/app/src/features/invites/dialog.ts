@@ -6,9 +6,11 @@ export const overlayClass =
  * scrolls within itself when its content is taller than that, as a long form is on a phone;
  * the scroll stays in the dialog rather than passing to the page behind it.
  */
+// Clipped sideways: the heading's close button reaches a few pixels into the end padding for
+// its tap area, which a scroll container would count as overflow and give a scrollbar for.
 const modalFrameClass =
-  "max-h-full w-full overflow-y-auto overscroll-contain rounded-lg border border-line " +
-  "p-4 shadow-xl outline-none sm:p-5 motion-dialog";
+  "max-h-full w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg border " +
+  "border-line p-4 shadow-xl outline-none sm:p-5 motion-dialog";
 export const modalClass = modalFrameClass + " bg-surface-raised max-w-md";
 /** A modal with room for a list of results beside its controls, such as message search. */
 export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";
