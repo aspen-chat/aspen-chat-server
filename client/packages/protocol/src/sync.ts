@@ -141,9 +141,11 @@ export interface InviteLookup {
 export const MESSAGE_PAGE_SIZE = 50;
 /**
  * Messages fetched per page further back or forward through history, which is read ahead of
- * the reader: larger, so a reader moving fast stays inside what is loaded.
+ * the reader. Fifty: a page's rows are committed to the DOM and laid out in one task, and at
+ * fifty that task stays under 50ms on a phone, where a hundred took over 120ms and froze a
+ * finger for as long; the list reads pages well ahead, so the smaller page costs no waiting.
  */
-export const HISTORY_PAGE_SIZE = 100;
+export const HISTORY_PAGE_SIZE = 50;
 /** Messages fetched on each side of a linked message. */
 export const MESSAGE_AROUND_RADIUS = 25;
 /** How long the server keeps events replayable; mirrors the server's `MAX_EVENT_AGE`. */

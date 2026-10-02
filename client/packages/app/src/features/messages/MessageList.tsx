@@ -48,15 +48,18 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 
 /**
- * The loaded window of a channel, oldest at the top, in a viewport that scrolls itself. Its
- * box hides its overflow, so no finger, wheel, or key scrolls it: the list takes those itself
- * and sets the box's scroll position from them, with its own coasting, spring, and indicator
- * (`scrollPhysics.ts` for the arithmetic). A box the browser scrolls for the user is the one
- * thing that cannot be kept still on iOS, which scrolls such a box in a process of its own
- * and places it from where a pan began plus the finger's travel, overriding whatever the
- * page set meanwhile; a box only scripts scroll has no such gesture, so nothing overrides what
- * the list sets, and the same code runs on every platform. Scripts still scroll it, so focus,
+ * The loaded window of a channel, oldest at the top. On iOS and iPadOS the list scrolls
+ * itself (`OWNS_SCROLLING`): its box hides its overflow, so no finger, wheel, or key scrolls
+ * it, and the list takes those itself and sets the box's scroll position from them, with its
+ * own coasting, spring, and indicator (`scrollPhysics.ts` for the arithmetic). A box the
+ * browser scrolls for the user is the one thing that cannot be kept still there: iOS scrolls
+ * such a box in a process of its own and places it from where a pan began plus the finger's
+ * travel, overriding whatever the page set meanwhile; a box only scripts scroll has no such
+ * gesture, so nothing overrides what the list sets. Scripts still scroll it, so focus,
  * find-in-page, assistive technology, and tests bring things into view as they always did.
+ * Everywhere else the browser scrolls the box, on its compositor, with its own indicator,
+ * overscroll, and assistive gestures, and honours a position the list sets at any moment;
+ * what the list does with the position is the same either way.
  *
  * So what is in view never moves when something above it changes: the list notes the topmost
  * message in view and where it stands in the content (`still`), and a page of older messages
@@ -85,24 +88,28 @@ import { useMessages } from "@/i18n/context";
  * open; a linked message among them opens its row. The row stands for its last message, both
  * as an anchor for the view and as what the reader has seen.
  *
- * When to give scrolling back to the browser. The list scrolls itself for one reason: on iOS, a
- * scroll position the page sets while a finger drags or a fling runs is overridden by the pan,
- * which places the view from where it began plus the finger's travel, so no list the browser
- * scrolls for the user can be kept still through a page's arrival. The day the oldest iOS the
- * apps support honours such a position, or applies scroll anchoring atomically with the
- * gesture, the browser's scrolling is better than this: it runs on the compositor and keeps
- * moving while the main thread is busy, draws the platform's own indicator and overscroll,
- * and gives VoiceOver its three-finger scroll, which a box that hides its overflow does not.
+ * When to give scrolling back to the browser on iOS too. The list scrolls itself there for one
+ * reason, the pan's override above, and the browser's scrolling is better otherwise: it runs
+ * on the compositor and keeps moving while the main thread is busy, draws the platform's own
+ * indicator and overscroll, and gives VoiceOver its three-finger scroll, which a box that
+ * hides its overflow does not. The day the oldest iOS the apps support honours a position set
+ * while a finger drags or a fling runs, or applies scroll anchoring atomically with the
+ * gesture, `OWNS_SCROLLING` can go, and the handlers, the physics, and the indicator with it.
  * The proof is `testReadingBackQuicklyNeverJumps` (the iOS UI tests, against a build made
- * with `VITE_SCROLL_DEBUG=1`): with this box made `overflow-y: auto`, the touch, wheel, and
- * key handlers removed, and the diagnostics told of each scroll event's distance as a move it
- * meant, ten runs in a row counting no jump on the simulator of the oldest supported iOS mean
- * the override is gone, and the handlers, the physics, and the indicator can go with it.
- * What stays whatever scrolls the list: holding the view by the noted row through every
- * change (`still`, `holdStill`), pictures telling of their arrival in the same task, memoized
- * rows, and pages rendered as transitions. Nothing else in the client should assume either
- * way; the list's box is the only place that knows.
+ * with `VITE_SCROLL_DEBUG=1`) with `OWNS_SCROLLING` made false: ten runs in a row counting no
+ * jump on the simulator of the oldest supported iOS. What stays whatever scrolls the list:
+ * holding the view by the noted row through every change (`still`, `holdStill`), pictures
+ * telling of their arrival in the same task, memoized rows, and pages rendered as transitions.
+ * Nothing else in the client should assume either way; the list's box is the only place that
+ * knows.
  */
+/**
+ * Whether the list scrolls its box itself rather than the browser: on iOS and iPadOS, the only
+ * platforms with `-webkit-touch-callout`, where a pan overrides any position the page sets
+ * (see above). A platform, not a behaviour, since the override cannot be felt without a
+ * gesture; a test stands in for iOS by claiming the property.
+ */
+const OWNS_SCROLLING = typeof CSS !== "undefined" && CSS.supports("-webkit-touch-callout", "none");
 /**
  * How close to the end of the window the reader is heading for, in screens of the list, the
  * next page is read: far enough that a reader flinging through history meets what is loaded
@@ -175,6 +182,8 @@ export function MessageList({
    * any other is a script's: focus, find-in-page, assistive technology.
    */
   const ownScrollTop = useRef<number | null>(null);
+  /** The box's position at its last scroll event, by which the browser's own scrolls are measured. */
+  const lastScrollTop = useRef(0);
   /** A finger on the list, where it last was, how far it has gone, and whether it drags yet. */
   const drag = useRef<{
     y: number;
@@ -212,7 +221,13 @@ export function MessageList({
    * change of the rows' sizes is measured by how far it has moved (`keepStillNow`, and the
    * rows' observer).
    */
-  const still = useRef<{ id: string; top: number; height: number; linked: boolean } | null>(null);
+  const still = useRef<{
+    id: string;
+    /** Where the row's top stood in the view, which the box's own clamping cannot move. */
+    screenTop: number;
+    height: number;
+    linked: boolean;
+  } | null>(null);
   function noteStill() {
     const box = viewport.current;
     if (box === null) {
@@ -229,15 +244,16 @@ export function MessageList({
         ? null
         : {
             id: row.dataset.messageId ?? "",
-            top: row.offsetTop,
+            screenTop: row.offsetTop - box.scrollTop,
             height: row.offsetHeight,
             linked: shownLink,
           };
   }
   /**
-   * Moves the view by what the noted row has moved in the content since it was noted. A linked
-   * message is held by its middle rather than its top, so it stays centred as what it holds,
-   * a picture of its own, takes its size.
+   * Puts the noted row back where it stood in the view, whatever moved it: content changing
+   * above it, or the box clamping its own position as content shrank. A linked message is
+   * held by its middle rather than its top, so it stays centred as what it holds, a picture of
+   * its own, takes its size.
    */
   function holdStill(why: string) {
     const box = viewport.current;
@@ -248,7 +264,7 @@ export function MessageList({
     const row = box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
     if (row !== null) {
       const grown = noted.linked ? (row.offsetHeight - noted.height) / 2 : 0;
-      absorb(row.offsetTop - noted.top + grown, why);
+      absorb(row.offsetTop - noted.screenTop + grown - box.scrollTop, why);
     }
   }
 
@@ -302,10 +318,11 @@ export function MessageList({
    */
   function keepStillNow() {
     measureRange();
+    // What changed above the view is absorbed, not a move; pinned to the bottom, what changed
+    // below is then followed, which is one.
+    holdStill("row told");
     if (stickToBottom.current && atLatestNow.current && drag.current === null) {
       moveTo(range.current.max, false);
-    } else {
-      holdStill("row told");
     }
     noteStill();
   }
@@ -396,6 +413,7 @@ export function MessageList({
     }
     box.scrollTop = at;
     ownScrollTop.current = box.scrollTop;
+    lastScrollTop.current = box.scrollTop;
   }
 
   /** Shows the content at `next`, and the indicator with it. */
@@ -488,20 +506,29 @@ export function MessageList({
   }
 
   /**
-   * The box scrolled: by the list, which is nothing new, or by a script, as focus,
-   * find-in-page, and assistive technology do, which the list follows.
+   * The box scrolled: by the list, which is nothing new; by the browser for the reader, where
+   * it scrolls the box; or by a script, as focus, find-in-page, and assistive technology do.
+   * The list follows the last two.
    */
   function onScroll() {
     const box = viewport.current;
     if (box === null) {
       return;
     }
+    const by = box.scrollTop - lastScrollTop.current;
+    lastScrollTop.current = box.scrollTop;
     const own = ownScrollTop.current;
     if (own !== null && Math.abs(box.scrollTop - own) < 1) {
       ownScrollTop.current = null;
       return;
     }
-    diagnostics?.note(`scrolled by a script to ${String(Math.round(box.scrollTop))}`);
+    diagnostics?.moved(by);
+    diagnostics?.note(
+      `${OWNS_SCROLLING ? "scrolled by a script" : "scrolled"} to ${String(Math.round(box.scrollTop))}`,
+    );
+    if (!OWNS_SCROLLING && by !== 0) {
+      heading.current = by < 0 ? "older" : "newer";
+    }
     stopMotion();
     over.current = 0;
     afterMove(true);
@@ -720,7 +747,7 @@ export function MessageList({
         return;
       }
       diagnostics?.note(
-        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} still=${still.current?.id.slice(-4) ?? "-"}@${String(Math.round(still.current?.top ?? 0))}`,
+        `commit ${String(shown.window?.ids.length ?? 0)}->${String(latest?.ids.length ?? 0)} first ${shown.window?.ids[0]?.slice(-4) ?? "-"}->${latest?.ids[0]?.slice(-4) ?? "-"} still=${still.current?.id.slice(-4) ?? "-"}@${String(Math.round(still.current?.screenTop ?? 0))}`,
       );
       startTransition(() => {
         setShown({ channelId, window: latest });
@@ -811,10 +838,9 @@ export function MessageList({
     const observer = new ResizeObserver(() => {
       measure();
       measureRange();
+      holdStill("rows");
       if (stickToBottom.current && atLatestNow.current && drag.current === null) {
         moveTo(range.current.max, false);
-      } else {
-        holdStill("rows");
       }
       noteStill();
     });
@@ -1050,16 +1076,19 @@ export function MessageList({
     <div
       ref={viewport}
       data-message-list=""
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
-      onTouchCancel={onTouchCancel}
+      data-owns-scrolling={OWNS_SCROLLING ? "" : undefined}
       onScroll={onScroll}
-      onWheel={onWheel}
-      onKeyDown={onKeyDown}
-      // Hidden overflow: only scripts scroll this box, the list's own among them, and fingers
-      // pan it through the handlers above. The list keeps its own view still (see above).
-      className="relative min-h-0 flex-1 touch-none overflow-hidden [overflow-anchor:none]"
+      {...(OWNS_SCROLLING
+        ? { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, onWheel, onKeyDown }
+        : {})}
+      // Where the list scrolls itself, hidden overflow: only scripts scroll the box, the
+      // list's own among them, and fingers pan it through the handlers. Everywhere else the
+      // browser scrolls it, with its anchoring off, since the list keeps its own view still.
+      className={
+        OWNS_SCROLLING
+          ? "relative min-h-0 flex-1 touch-none overflow-hidden [overflow-anchor:none]"
+          : "relative min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]"
+      }
     >
       <KeepStillContext.Provider value={keepStill}>
         <div ref={content} className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
@@ -1130,19 +1159,21 @@ export function MessageList({
           )}
         </div>
       </KeepStillContext.Provider>
-      <div
-        ref={indicator}
-        aria-hidden="true"
-        // Over the list's own padding, taking no pointer but its thumb's, and that only where
-        // there is a pointer to drag it with.
-        className="pointer-events-none absolute end-0.5 top-1 bottom-1 w-1.5 opacity-0 transition-opacity duration-300 data-moving:opacity-100 pointer-fine:w-2.5 pointer-fine:hover:opacity-100"
-      >
+      {OWNS_SCROLLING && (
         <div
-          ref={thumb}
-          onPointerDown={onThumbPointerDown}
-          className="absolute inset-x-0 top-0 rounded-full bg-ink/35 pointer-fine:pointer-events-auto"
-        />
-      </div>
+          ref={indicator}
+          aria-hidden="true"
+          // Over the list's own padding, taking no pointer but its thumb's, and that only where
+          // there is a pointer to drag it with.
+          className="pointer-events-none absolute end-0.5 top-1 bottom-1 w-1.5 opacity-0 transition-opacity duration-300 data-moving:opacity-100 pointer-fine:w-2.5 pointer-fine:hover:opacity-100"
+        >
+          <div
+            ref={thumb}
+            onPointerDown={onThumbPointerDown}
+            className="absolute inset-x-0 top-0 rounded-full bg-ink/35 pointer-fine:pointer-events-auto"
+          />
+        </div>
+      )}
       {!window.atLatest && <JumpToLatest onJump={jumpToLatest} />}
       {diagnostics !== null && (
         <ScrollDiagnosticsPanel diagnostics={diagnostics} viewport={viewport} />

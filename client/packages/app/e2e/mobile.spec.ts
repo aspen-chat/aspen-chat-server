@@ -71,19 +71,20 @@ async function openChannel(page: Page, name: string) {
   await expect(page.getByRole("heading", { name })).toBeVisible();
 }
 
-/** Scrolls the message list, which scrolls itself, by a wheel's turn of `deltaY` pixels. */
-async function wheel(list: Locator, deltaY: number) {
+/**
+ * Scrolls the message list by `deltaY` pixels, as a script would: its box is scrolled by the
+ * browser here and by the list itself on iOS, and takes a script's scroll either way.
+ */
+async function scrollListBy(list: Locator, deltaY: number) {
   await list.evaluate((element, by) => {
-    element.dispatchEvent(new WheelEvent("wheel", { deltaY: by, bubbles: true }));
+    element.scrollTop += by;
   }, deltaY);
 }
 
 /** Scrolls the message list to `offset` pixels from the top of what it holds. */
-async function wheelTo(list: Locator, offset: number) {
+async function scrollListTo(list: Locator, offset: number) {
   await list.evaluate((element, to) => {
-    element.dispatchEvent(
-      new WheelEvent("wheel", { deltaY: to - element.scrollTop, bubbles: true }),
-    );
+    element.scrollTop = to;
   }, offset);
 }
 
@@ -205,10 +206,10 @@ test.describe("on a phone", () => {
           : article.getBoundingClientRect().top - element.getBoundingClientRect().top;
       }, id);
     // Near the top, where the previous page is read.
-    await wheelTo(scroller, 400);
+    await scrollListTo(scroller, 400);
     await expect(scroller.getByText("Loading…")).toBeVisible();
     // The reader keeps going while the page is on its way.
-    await wheel(scroller, -150);
+    await scrollListBy(scroller, -150);
     const reading = await topmost();
     await expect.poll(() => articles.count()).toBeGreaterThan(before);
     await expect(scroller.getByText("Loading…")).toBeHidden();
@@ -222,7 +223,7 @@ test.describe("on a phone", () => {
     await openChannel(page, "general");
     const scroller = page.locator("[data-message-list]");
     await expect(scroller.locator("article").first()).toBeVisible();
-    await wheel(scroller, -300);
+    await scrollListBy(scroller, -300);
     // At rest before anything loads; the list leaves a moving view to the reader.
     await page.waitForTimeout(400);
     const reading = await scroller.evaluate((element) => {
@@ -467,7 +468,7 @@ test.describe("on a phone", () => {
     await openChannel(page, "general");
     const list = page.locator("[data-message-list]");
     await expect(list.locator("article").first()).toBeVisible();
-    await wheel(list, -200);
+    await scrollListBy(list, -200);
     const lowest = () =>
       list.evaluate((element) => {
         const view = element.getBoundingClientRect();

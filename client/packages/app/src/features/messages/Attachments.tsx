@@ -205,6 +205,8 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
         src={picture.src}
         alt={format(m.imageAlt, { name: picture.name })}
         loading="lazy"
+        // A finger dragging from the picture pans the list; it does not pick the picture up.
+        draggable={false}
         referrerPolicy="no-referrer"
         {...(known ? { width: picture.width ?? 0, height: picture.height ?? 0 } : {})}
         style={known ? keptRoom(picture.width ?? 1, picture.height ?? 1) : undefined}

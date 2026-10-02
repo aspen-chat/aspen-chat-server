@@ -210,6 +210,25 @@ function moves(before: Record<string, number>, after: Record<string, number>): n
     .map((key) => (after[key] ?? 0) - (before[key] ?? 0));
 }
 
+/**
+ * The two ways the list's box is scrolled: by the browser, as everywhere but iOS, and by the
+ * list itself, as on iOS, which Chromium is made to stand in for by claiming the property
+ * `MessageList` knows iOS by. Both must keep the view still the same.
+ */
+const SCROLLERS = [
+  { name: "", ios: false },
+  { name: ", with the list scrolling itself as on iOS", ios: true },
+];
+
+/** Makes the page claim to be iOS, so the list scrolls itself. */
+async function asIos(page: Page) {
+  await page.addInitScript(() => {
+    const supports = CSS.supports.bind(CSS) as (property: string, value: string) => boolean;
+    CSS.supports = ((property: string, value: string) =>
+      property === "-webkit-touch-callout" || supports(property, value)) as typeof CSS.supports;
+  });
+}
+
 async function touch(
   cdp: CDPSession,
   type: "touchStart" | "touchMove" | "touchEnd",
@@ -222,221 +241,232 @@ async function touch(
   });
 }
 
-test("reading slowly back through a long history never waits and never moves by itself", async ({
-  page,
-  browserName,
-  isMobile,
-}) => {
-  test.skip(
-    !isMobile || browserName !== "chromium",
-    "a finger is driven through Chromium's protocol",
-  );
-  test.setTimeout(600_000);
-  await signInToWorld(page, serveHistory);
-  await page
-    .getByRole("grid", { name: "Channels" })
-    .first()
-    .getByText("general", { exact: true })
-    .click();
-  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
-  // The pictures already in view have settled.
-  await page.waitForTimeout(1500);
-
-  const cdp = await page.context().newCDPSession(page);
-  const box = await page
-    .locator("article")
-    .first()
-    .evaluate((article) => {
-      const rect = article.closest("[data-message-list]")?.getBoundingClientRect();
-      return rect === undefined
-        ? null
-        : { x: rect.x + rect.width / 2, top: rect.top, bottom: rect.bottom };
-    });
-  expect(box).not.toBeNull();
-  const x = box?.x ?? 200;
-  const top = (box?.top ?? 100) + 40;
-  const bottom = (box?.bottom ?? 700) - 40;
-
-  const strays: string[] = [];
-  const seams: number[] = [];
-  let reached: Awaited<ReturnType<typeof sample>> = null;
-  let finger = top;
-  await touch(cdp, "touchStart", x, finger);
-  // Past the slop a touch moves before it scrolls.
-  finger += 20;
-  await touch(cdp, "touchMove", x, finger);
-  await frames(page);
-  let last = await sample(page);
-  for (let step = 0; step < STEPS; step++) {
-    if (finger + STEP_PX > bottom) {
-      // The finger rests, lifts, and comes back to the top, as a reader's does; the list must
-      // stay where it was left while it is away. A finger lifted while moving flings instead.
-      await page.waitForTimeout(120);
-      await touch(cdp, "touchEnd", x, finger);
-      const resting = await sample(page);
-      await page.waitForTimeout(400);
-      const rested = await sample(page);
-      if (resting !== null && rested !== null) {
-        const both = moves(resting.tops, rested.tops);
-        const drift = both.filter((d) => Math.abs(d) > 1);
-        if (both.length === 0) {
-          strays.push(`resting before step ${String(step)}: nothing in view stayed in view`);
-        } else if (drift.length > 0) {
-          strays.push(`resting before step ${String(step)}: moved ${drift.join(", ")}px`);
-        }
-      }
-      finger = top;
-      await touch(cdp, "touchStart", x, finger);
-      finger += 20;
-      await touch(cdp, "touchMove", x, finger);
-      await frames(page);
-      last = await sample(page);
-      continue;
+for (const { name, ios } of SCROLLERS) {
+  test(`reading slowly back through a long history never waits and never moves by itself${name}`, async ({
+    page,
+    browserName,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile || browserName !== "chromium",
+      "a finger is driven through Chromium's protocol",
+    );
+    test.setTimeout(600_000);
+    if (ios) {
+      await asIos(page);
     }
-    finger += STEP_PX;
+    await signInToWorld(page, serveHistory);
+    await page
+      .getByRole("grid", { name: "Channels" })
+      .first()
+      .getByText("general", { exact: true })
+      .click();
+    await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+    // The pictures already in view have settled.
+    await page.waitForTimeout(1500);
+
+    const cdp = await page.context().newCDPSession(page);
+    const box = await page
+      .locator("article")
+      .first()
+      .evaluate((article) => {
+        const rect = article.closest("[data-message-list]")?.getBoundingClientRect();
+        return rect === undefined
+          ? null
+          : { x: rect.x + rect.width / 2, top: rect.top, bottom: rect.bottom };
+      });
+    expect(box).not.toBeNull();
+    const x = box?.x ?? 200;
+    const top = (box?.top ?? 100) + 40;
+    const bottom = (box?.bottom ?? 700) - 40;
+
+    const strays: string[] = [];
+    const seams: number[] = [];
+    let reached: Awaited<ReturnType<typeof sample>> = null;
+    let finger = top;
+    await touch(cdp, "touchStart", x, finger);
+    // Past the slop a touch moves before it scrolls.
+    finger += 20;
     await touch(cdp, "touchMove", x, finger);
     await frames(page);
-    const now = await sample(page);
-    if (last !== null && now !== null) {
-      // A view that jumped clean away leaves nothing in both samples to measure by.
-      if (moves(last.tops, now.tops).length === 0) {
-        strays.push(`step ${String(step)}: nothing in view before was in view after`);
+    let last = await sample(page);
+    for (let step = 0; step < STEPS; step++) {
+      if (finger + STEP_PX > bottom) {
+        // The finger rests, lifts, and comes back to the top, as a reader's does; the list must
+        // stay where it was left while it is away. A finger lifted while moving flings instead.
+        await page.waitForTimeout(120);
+        await touch(cdp, "touchEnd", x, finger);
+        const resting = await sample(page);
+        await page.waitForTimeout(400);
+        const rested = await sample(page);
+        if (resting !== null && rested !== null) {
+          const both = moves(resting.tops, rested.tops);
+          const drift = both.filter((d) => Math.abs(d) > 1);
+          if (both.length === 0) {
+            strays.push(`resting before step ${String(step)}: nothing in view stayed in view`);
+          } else if (drift.length > 0) {
+            strays.push(`resting before step ${String(step)}: moved ${drift.join(", ")}px`);
+          }
+        }
+        finger = top;
+        await touch(cdp, "touchStart", x, finger);
+        finger += 20;
+        await touch(cdp, "touchMove", x, finger);
+        await frames(page);
+        last = await sample(page);
+        continue;
       }
-      const wrong = moves(last.tops, now.tops).filter((d) => Math.abs(d - STEP_PX) > 1);
-      if (wrong.length > 0) {
-        const was = last;
-        const grew = Object.keys(now.heights)
-          .filter(
-            (key) =>
-              key in was.heights && Math.abs((now.heights[key] ?? 0) - (was.heights[key] ?? 0)) > 1,
-          )
-          .map(
-            (key) =>
-              `${String(parseInt(key.slice(-12), 16))}:${String(Math.round(was.heights[key] ?? 0))}->${String(Math.round(now.heights[key] ?? 0))}`,
+      finger += STEP_PX;
+      await touch(cdp, "touchMove", x, finger);
+      await frames(page);
+      const now = await sample(page);
+      if (last !== null && now !== null) {
+        // A view that jumped clean away leaves nothing in both samples to measure by.
+        if (moves(last.tops, now.tops).length === 0) {
+          strays.push(`step ${String(step)}: nothing in view before was in view after`);
+        }
+        const wrong = moves(last.tops, now.tops).filter((d) => Math.abs(d - STEP_PX) > 1);
+        if (wrong.length > 0) {
+          const was = last;
+          const grew = Object.keys(now.heights)
+            .filter(
+              (key) =>
+                key in was.heights &&
+                Math.abs((now.heights[key] ?? 0) - (was.heights[key] ?? 0)) > 1,
+            )
+            .map(
+              (key) =>
+                `${String(parseInt(key.slice(-12), 16))}:${String(Math.round(was.heights[key] ?? 0))}->${String(Math.round(now.heights[key] ?? 0))}`,
+            );
+          strays.push(
+            `step ${String(step)}: moved ${[...new Set(wrong.map(Math.round))].join(", ")}px, not ${String(STEP_PX)}; grew ${grew.join(" ")}; articles ${String(was.count)}->${String(now.count)} first ${String(parseInt(was.first.slice(-12), 16))}->${String(parseInt(now.first.slice(-12), 16))} top ${String(Math.round(was.scrollTop))}->${String(Math.round(now.scrollTop))}`,
           );
-        strays.push(
-          `step ${String(step)}: moved ${[...new Set(wrong.map(Math.round))].join(", ")}px, not ${String(STEP_PX)}; grew ${grew.join(" ")}; articles ${String(was.count)}->${String(now.count)} first ${String(parseInt(was.first.slice(-12), 16))}->${String(parseInt(now.first.slice(-12), 16))} top ${String(Math.round(was.scrollTop))}->${String(Math.round(now.scrollTop))}`,
-        );
-      }
-      if (now.seamShows) {
-        seams.push(step);
-      }
-    }
-    last = now;
-    reached = now ?? reached;
-  }
-  await page.waitForTimeout(120);
-  await touch(cdp, "touchEnd", x, finger);
-
-  // The reader got a long way back, or the test would prove little.
-  const oldestSeen = Math.min(
-    ...Object.keys(reached?.tops ?? {}).map((key) => parseInt(key.slice(-12), 16)),
-  );
-  expect.soft(seams, "steps at which the top of what was loaded came into view").toEqual([]);
-  expect.soft(strays, "times the view moved other than with the finger").toEqual([]);
-  expect(oldestSeen).toBeLessThan(COUNT - 80);
-});
-
-test("flicking back through a long history keeps ahead of the reader", async ({
-  page,
-  browserName,
-  isMobile,
-}) => {
-  test.skip(
-    !isMobile || browserName !== "chromium",
-    "a finger is driven through Chromium's protocol",
-  );
-  test.setTimeout(300_000);
-  await signInToWorld(page, serveHistory);
-  await page
-    .getByRole("grid", { name: "Channels" })
-    .first()
-    .getByText("general", { exact: true })
-    .click();
-  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
-  await page.waitForTimeout(1500);
-  // Every frame: whether the top of what is loaded, where a page is awaited, is in view. And
-  // the longest the main thread was held, which a page's render does: a finger is frozen for
-  // as long.
-  await page.evaluate(() => {
-    const record = window as unknown as {
-      seamFrames: number;
-      frames: number;
-      longestTask: number;
-    };
-    record.seamFrames = 0;
-    record.frames = 0;
-    record.longestTask = 0;
-    new PerformanceObserver((entries) => {
-      for (const entry of entries.getEntries()) {
-        record.longestTask = Math.max(record.longestTask, entry.duration);
-      }
-    }).observe({ type: "longtask" });
-    const tick = () => {
-      const scroller = document.querySelector("article")?.closest("[data-message-list]");
-      const seam = scroller?.querySelector('p[aria-live="polite"]');
-      if (scroller instanceof HTMLElement && seam !== null && seam !== undefined) {
-        const view = scroller.getBoundingClientRect();
-        const rect = seam.getBoundingClientRect();
-        record.frames += 1;
-        if (rect.bottom > view.top && rect.top < view.bottom) {
-          record.seamFrames += 1;
+        }
+        if (now.seamShows) {
+          seams.push(step);
         }
       }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-  const cdp = await page.context().newCDPSession(page);
-  const centre = await page.evaluate(() => {
-    const rect = document
-      .querySelector("article")
-      ?.closest("[data-message-list]")
-      ?.getBoundingClientRect();
-    return rect === undefined
-      ? { x: 200, y: 400 }
-      : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  });
-  // A reader flicks back, glances at where they landed, and flicks again.
-  for (let flick = 0; flick < FLICKS; flick++) {
-    // A quick stroke released while moving, which the browser carries on as a fling.
-    await touch(cdp, "touchStart", centre.x, centre.y - 200);
-    for (let move = 1; move <= 8; move++) {
-      await touch(cdp, "touchMove", centre.x, centre.y - 200 + move * 50);
-      await page.waitForTimeout(4);
+      last = now;
+      reached = now ?? reached;
     }
-    await touch(cdp, "touchEnd", centre.x, centre.y + 200);
-    await page.waitForTimeout(500);
-  }
-  const { seamFrames, frames, longestTask } = await page.evaluate(() => {
-    const record = window as unknown as {
-      seamFrames: number;
-      frames: number;
-      longestTask: number;
-    };
-    return {
-      seamFrames: record.seamFrames,
-      frames: record.frames,
-      longestTask: record.longestTask,
-    };
+    await page.waitForTimeout(120);
+    await touch(cdp, "touchEnd", x, finger);
+
+    // The reader got a long way back, or the test would prove little.
+    const oldestSeen = Math.min(
+      ...Object.keys(reached?.tops ?? {}).map((key) => parseInt(key.slice(-12), 16)),
+    );
+    expect.soft(seams, "steps at which the top of what was loaded came into view").toEqual([]);
+    expect.soft(strays, "times the view moved other than with the finger").toEqual([]);
+    expect(oldestSeen).toBeLessThan(COUNT - 80);
   });
-  console.log(`longest task ${String(Math.round(longestTask))}ms`);
-  const oldest = await page.evaluate(() =>
-    Math.min(
-      ...Array.from(document.querySelectorAll<HTMLElement>("article[data-message-id]"), (a) =>
-        parseInt((a.dataset.messageId ?? "").slice(-12), 16),
+}
+
+for (const { name, ios } of SCROLLERS) {
+  test(`flicking back through a long history keeps ahead of the reader${name}`, async ({
+    page,
+    browserName,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile || browserName !== "chromium",
+      "a finger is driven through Chromium's protocol",
+    );
+    test.setTimeout(300_000);
+    if (ios) {
+      await asIos(page);
+    }
+    await signInToWorld(page, serveHistory);
+    await page
+      .getByRole("grid", { name: "Channels" })
+      .first()
+      .getByText("general", { exact: true })
+      .click();
+    await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+    await page.waitForTimeout(1500);
+    // Every frame: whether the top of what is loaded, where a page is awaited, is in view. And
+    // the longest the main thread was held, which a page's render does: a finger is frozen for
+    // as long.
+    await page.evaluate(() => {
+      const record = window as unknown as {
+        seamFrames: number;
+        frames: number;
+        longestTask: number;
+      };
+      record.seamFrames = 0;
+      record.frames = 0;
+      record.longestTask = 0;
+      new PerformanceObserver((entries) => {
+        for (const entry of entries.getEntries()) {
+          record.longestTask = Math.max(record.longestTask, entry.duration);
+        }
+      }).observe({ type: "longtask" });
+      const tick = () => {
+        const scroller = document.querySelector("article")?.closest("[data-message-list]");
+        const seam = scroller?.querySelector('p[aria-live="polite"]');
+        if (scroller instanceof HTMLElement && seam !== null && seam !== undefined) {
+          const view = scroller.getBoundingClientRect();
+          const rect = seam.getBoundingClientRect();
+          record.frames += 1;
+          if (rect.bottom > view.top && rect.top < view.bottom) {
+            record.seamFrames += 1;
+          }
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    const cdp = await page.context().newCDPSession(page);
+    const centre = await page.evaluate(() => {
+      const rect = document
+        .querySelector("article")
+        ?.closest("[data-message-list]")
+        ?.getBoundingClientRect();
+      return rect === undefined
+        ? { x: 200, y: 400 }
+        : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    });
+    // A reader flicks back, glances at where they landed, and flicks again.
+    for (let flick = 0; flick < FLICKS; flick++) {
+      // A quick stroke released while moving, which the browser carries on as a fling.
+      await touch(cdp, "touchStart", centre.x, centre.y - 200);
+      for (let move = 1; move <= 8; move++) {
+        await touch(cdp, "touchMove", centre.x, centre.y - 200 + move * 50);
+        await page.waitForTimeout(4);
+      }
+      await touch(cdp, "touchEnd", centre.x, centre.y + 200);
+      await page.waitForTimeout(500);
+    }
+    const { seamFrames, frames, longestTask } = await page.evaluate(() => {
+      const record = window as unknown as {
+        seamFrames: number;
+        frames: number;
+        longestTask: number;
+      };
+      return {
+        seamFrames: record.seamFrames,
+        frames: record.frames,
+        longestTask: record.longestTask,
+      };
+    });
+    console.log(`longest task ${String(Math.round(longestTask))}ms`);
+    const oldest = await page.evaluate(() =>
+      Math.min(
+        ...Array.from(document.querySelectorAll<HTMLElement>("article[data-message-id]"), (a) =>
+          parseInt((a.dataset.messageId ?? "").slice(-12), 16),
+        ),
       ),
-    ),
-  );
-  expect(oldest, "how far back the flicks reached").toBeLessThan(COUNT - 200);
-  // Flicks in quick succession gather speed, as on a phone, until one crosses a page's worth
-  // of pictures before it has arrived; the reader may then glimpse where it is awaited, for a
-  // moment and seldom.
-  expect(
-    seamFrames / frames,
-    `share of frames in which the top of what was loaded was in view (${String(seamFrames)} of ${String(frames)})`,
-  ).toBeLessThan(SEAM_SHARE);
-});
+    );
+    expect(oldest, "how far back the flicks reached").toBeLessThan(COUNT - 200);
+    // Flicks in quick succession gather speed, as on a phone, until one crosses a page's worth
+    // of pictures before it has arrived; the reader may then glimpse where it is awaited, for a
+    // moment and seldom.
+    expect(
+      seamFrames / frames,
+      `share of frames in which the top of what was loaded was in view (${String(seamFrames)} of ${String(frames)})`,
+    ).toBeLessThan(SEAM_SHARE);
+  });
+}
 
 /**
  * A history a little longer than the window the list keeps, newest first: short lines from one
@@ -560,126 +590,146 @@ test("reading back through a history a little longer than the window keeps what 
   expect(reads, "reads of newer messages while reading back").toEqual([]);
 });
 
-test("a drag that starts on a picture scrolls, and a tap on it opens it", async ({
-  page,
-  browserName,
-  isMobile,
-}) => {
-  test.skip(
-    !isMobile || browserName !== "chromium",
-    "a finger is driven through Chromium's protocol",
-  );
-  // Nothing pans the list but the list itself, so nothing cancels a press under a finger that
-  // drags; the list must, or lifting the finger over a tall picture would open it.
-  await signInToWorld(page, serveHistory);
-  await page
-    .getByRole("grid", { name: "Channels" })
-    .first()
-    .getByText("general", { exact: true })
-    .click();
-  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
-  await page.waitForTimeout(1000);
-  const list = page.locator("[data-message-list]");
-  const view = await list.boundingBox();
-  const pictures = list.getByRole("button", { name: "Open image" });
-  // A picture whose middle is in view; the content moves with the finger, so a drag from
-  // there stays on it.
-  let picture: { x: number; y: number } | null = null;
-  for (let i = (await pictures.count()) - 1; i >= 0 && picture === null; i--) {
-    const box = await pictures.nth(i).boundingBox();
-    if (box === null || view === null) {
-      continue;
+for (const { name, ios } of SCROLLERS) {
+  test(`a drag that starts on a picture scrolls, and a tap on it opens it${name}`, async ({
+    page,
+    browserName,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile || browserName !== "chromium",
+      "a finger is driven through Chromium's protocol",
+    );
+    if (ios) {
+      await asIos(page);
     }
-    const middle = box.y + box.height / 2;
-    if (middle > view.y + 20 && middle < view.y + view.height - 20) {
-      picture = { x: box.x + box.width / 2, y: middle };
+    // Nothing pans the list but the list itself, so nothing cancels a press under a finger that
+    // drags; the list must, or lifting the finger over a tall picture would open it.
+    await signInToWorld(page, serveHistory);
+    await page
+      .getByRole("grid", { name: "Channels" })
+      .first()
+      .getByText("general", { exact: true })
+      .click();
+    await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+    await page.waitForTimeout(1000);
+    const list = page.locator("[data-message-list]");
+    const view = await list.boundingBox();
+    const pictures = list.getByRole("button", { name: "Open image" });
+    // A picture whose middle is in view; the content moves with the finger, so a drag from
+    // there stays on it.
+    let picture: { x: number; y: number } | null = null;
+    for (let i = (await pictures.count()) - 1; i >= 0 && picture === null; i--) {
+      const box = await pictures.nth(i).boundingBox();
+      if (box === null || view === null) {
+        continue;
+      }
+      const middle = box.y + box.height / 2;
+      if (middle > view.y + 20 && middle < view.y + view.height - 20) {
+        picture = { x: box.x + box.width / 2, y: middle };
+      }
     }
-  }
-  expect(picture, "a picture in view").not.toBeNull();
-  const x = picture?.x ?? 0;
-  const y = picture?.y ?? 0;
-  const cdp = await page.context().newCDPSession(page);
-  const before = await sample(page);
-  await touch(cdp, "touchStart", x, y);
-  for (let move = 1; move <= 6; move++) {
-    await touch(cdp, "touchMove", x, y + move * 12);
-    await frames(page);
-  }
-  await page.waitForTimeout(120);
-  await touch(cdp, "touchEnd", x, y + 72);
-  await page.waitForTimeout(300);
-  await expect(page.getByRole("button", { name: "Close gallery" })).toHaveCount(0);
-  const after = await sample(page);
-  const moved = before !== null && after !== null ? moves(before.tops, after.tops) : [];
-  expect(moved.length, "something in view to measure").toBeGreaterThan(0);
-  for (const by of moved) {
-    expect(Math.abs(by - 72)).toBeLessThanOrEqual(1);
-  }
-  // A tap, which moves nothing, opens the picture.
-  await touch(cdp, "touchStart", x, y);
-  await touch(cdp, "touchEnd", x, y);
-  await expect(page.getByRole("button", { name: "Close gallery" })).toBeVisible();
-});
+    expect(picture, "a picture in view").not.toBeNull();
+    const x = picture?.x ?? 0;
+    const y = picture?.y ?? 0;
+    const cdp = await page.context().newCDPSession(page);
+    const before = await sample(page);
+    await touch(cdp, "touchStart", x, y);
+    for (let move = 1; move <= 6; move++) {
+      await touch(cdp, "touchMove", x, y + move * 12);
+      await frames(page);
+    }
+    await page.waitForTimeout(120);
+    await touch(cdp, "touchEnd", x, y + 72);
+    await page.waitForTimeout(300);
+    await expect(page.getByRole("button", { name: "Close gallery" })).toHaveCount(0);
+    const after = await sample(page);
+    const moved = before !== null && after !== null ? moves(before.tops, after.tops) : [];
+    expect(moved.length, "something in view to measure").toBeGreaterThan(0);
+    // The browser's own pan, where it scrolls the list, starts past a slop it does not count.
+    for (const by of moved) {
+      expect(by).toBeLessThanOrEqual(72 + 1);
+      expect(by).toBeGreaterThanOrEqual(72 - 16 - 1);
+    }
+    // A tap, which moves nothing, opens the picture.
+    await touch(cdp, "touchStart", x, y);
+    await touch(cdp, "touchEnd", x, y);
+    await expect(page.getByRole("button", { name: "Close gallery" })).toBeVisible();
+  });
+}
 
-test("a jump to a message lands it in the middle, and a jump to the latest at the bottom", async ({
-  page,
-  isMobile,
-}) => {
-  test.skip(!isMobile, "measured on the phones, Safari's among them, which rounds positions");
-  test.setTimeout(180_000);
-  // Pictures arrive for seconds after either jump, above and below what was jumped to, and
-  // the list must keep what it landed on exactly where it landed.
-  await signInToWorld(page, serveHistory);
-  const misses: string[] = [];
-  for (const n of [COUNT - 130, COUNT - 260, COUNT - 410, COUNT - 55, COUNT - 333]) {
-    await page.goto(`/communities/${community}/channels/${general}/messages/${id(n)}`);
-    const target = page.locator(`article[data-message-id="${id(n)}"]`);
-    await expect(target).toBeVisible({ timeout: 30_000 });
-    // Where it landed, as soon as it has; and where it is once every picture has arrived.
-    await page.waitForTimeout(100);
-    const landed = await target.evaluate((element) => element.getBoundingClientRect().top);
-    await page.waitForTimeout(3000);
-    const settled = await target.evaluate((element) => {
-      const list = element.closest("[data-message-list]");
-      const view = list?.getBoundingClientRect();
-      const rect = element.getBoundingClientRect();
-      return {
-        top: rect.top,
-        centred:
-          view === undefined ? NaN : rect.top + rect.height / 2 - (view.top + view.height / 2),
-      };
-    });
-    if (Math.abs(settled.top - landed) > 1) {
-      misses.push(
-        `message ${String(n)} moved ${String(Math.round(settled.top - landed))}px after landing`,
-      );
+for (const { name, ios } of SCROLLERS) {
+  test(`a jump to a message lands it in the middle, and a jump to the latest at the bottom${name}`, async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(!isMobile, "measured on the phones, Safari's among them, which rounds positions");
+    test.setTimeout(180_000);
+    if (ios) {
+      await asIos(page);
     }
-    if (Math.abs(settled.centred) > 1) {
-      misses.push(
-        `message ${String(n)} sits ${String(Math.round(settled.centred))}px off the middle`,
-      );
+    // Pictures arrive for seconds after either jump, above and below what was jumped to, and
+    // the list must keep what it landed on exactly where it landed.
+    await signInToWorld(page, serveHistory);
+    // The page is reloaded below; the sign-in must have been kept first, which it is a moment
+    // after signing in.
+    await page.waitForFunction(() => localStorage.getItem("aspen.session") !== null);
+    const misses: string[] = [];
+    for (const n of [COUNT - 130, COUNT - 260, COUNT - 410, COUNT - 55, COUNT - 333]) {
+      await page.goto(`/communities/${community}/channels/${general}/messages/${id(n)}`);
+      const target = page.locator(`article[data-message-id="${id(n)}"]`);
+      // Says what the page showed instead, should the message never come.
+      await target.waitFor({ timeout: 60_000 }).catch(async () => {
+        const shown = (await page.locator("body").innerText()).slice(0, 300).replace(/\s+/g, " ");
+        throw new Error(`no message ${String(n)} after the jump; the page shows: ${shown}`);
+      });
+      await expect(target).toBeVisible();
+      // Where it landed, as soon as it has; and where it is once every picture has arrived.
+      await page.waitForTimeout(100);
+      const landed = await target.evaluate((element) => element.getBoundingClientRect().top);
+      await page.waitForTimeout(3000);
+      const settled = await target.evaluate((element) => {
+        const list = element.closest("[data-message-list]");
+        const view = list?.getBoundingClientRect();
+        const rect = element.getBoundingClientRect();
+        return {
+          top: rect.top,
+          centred:
+            view === undefined ? NaN : rect.top + rect.height / 2 - (view.top + view.height / 2),
+        };
+      });
+      if (Math.abs(settled.top - landed) > 1) {
+        misses.push(
+          `message ${String(n)} moved ${String(Math.round(settled.top - landed))}px after landing`,
+        );
+      }
+      if (Math.abs(settled.centred) > 1) {
+        misses.push(
+          `message ${String(n)} sits ${String(Math.round(settled.centred))}px off the middle`,
+        );
+      }
+      await page.getByRole("button", { name: "Jump to latest" }).click();
+      const newest = page.locator(`article[data-message-id="${id(COUNT)}"]`);
+      await expect(newest).toBeVisible({ timeout: 60_000 });
+      await page.waitForTimeout(3000);
+      const gap = await newest.evaluate((element) => {
+        const list = element.closest("[data-message-list]");
+        const view = list?.getBoundingClientRect();
+        const content = list?.firstElementChild;
+        const padding =
+          content === null || content === undefined
+            ? 0
+            : parseFloat(getComputedStyle(content).paddingBottom);
+        return view === undefined
+          ? NaN
+          : view.bottom - padding - element.getBoundingClientRect().bottom;
+      });
+      if (Math.abs(gap) > 1) {
+        misses.push(
+          `after message ${String(n)}, the latest sits ${String(Math.round(gap))}px off the bottom`,
+        );
+      }
     }
-    await page.getByRole("button", { name: "Jump to latest" }).click();
-    const newest = page.locator(`article[data-message-id="${id(COUNT)}"]`);
-    await expect(newest).toBeVisible({ timeout: 30_000 });
-    await page.waitForTimeout(3000);
-    const gap = await newest.evaluate((element) => {
-      const list = element.closest("[data-message-list]");
-      const view = list?.getBoundingClientRect();
-      const content = list?.firstElementChild;
-      const padding =
-        content === null || content === undefined
-          ? 0
-          : parseFloat(getComputedStyle(content).paddingBottom);
-      return view === undefined
-        ? NaN
-        : view.bottom - padding - element.getBoundingClientRect().bottom;
-    });
-    if (Math.abs(gap) > 1) {
-      misses.push(
-        `after message ${String(n)}, the latest sits ${String(Math.round(gap))}px off the bottom`,
-      );
-    }
-  }
-  expect(misses).toEqual([]);
-});
+    expect(misses).toEqual([]);
+  });
+}
