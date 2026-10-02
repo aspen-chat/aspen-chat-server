@@ -14,6 +14,7 @@ use tracing::error;
 
 use crate::api::error::PasswordRequirement;
 use crate::app::context::GlobalServerContext;
+use crate::app::ephemeral_token;
 use crate::app::two_factor::{self, SecondFactor, SecondFactorMethods};
 use crate::app::user::UserPg;
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
@@ -220,7 +221,7 @@ pub async fn try_login(
     let methods = two_factor::methods(conn, u.id).await?;
     if methods.any_factor() {
         let ticket = make_token();
-        two_factor::put_token(
+        ephemeral_token::put_token(
             state,
             TICKET_PREFIX,
             &ticket,
@@ -302,7 +303,7 @@ pub async fn complete_second_factor(
     factor: &SecondFactor,
 ) -> app::Result<SecondFactorOutcome> {
     let Some(waiting) =
-        two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false).await?
+        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false).await?
     else {
         return Ok(SecondFactorOutcome::InvalidTicket);
     };
@@ -322,7 +323,7 @@ pub async fn complete_second_factor(
 /// The user a waiting sign-in belongs to, without using it up.
 pub async fn ticket_user(state: &GlobalServerContext, ticket: &str) -> app::Result<Option<UserId>> {
     Ok(
-        two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false)
+        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false)
             .await?
             .map(|waiting| waiting.user),
     )
@@ -336,7 +337,8 @@ pub async fn finish_ticket(
     ticket: &str,
     expected_user: Option<UserId>,
 ) -> app::Result<Option<Session>> {
-    let Some(waiting) = two_factor::get_token::<Ticket>(state, TICKET_PREFIX, ticket, true).await?
+    let Some(waiting) =
+        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, true).await?
     else {
         return Ok(None);
     };

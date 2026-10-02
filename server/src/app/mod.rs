@@ -28,6 +28,7 @@ pub mod custom_emoji;
 pub mod deployment;
 pub mod deployment_role;
 pub mod dm;
+pub mod ephemeral_token;
 mod error;
 pub mod event_feed;
 pub mod everyone_limit;

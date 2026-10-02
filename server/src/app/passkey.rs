@@ -16,6 +16,7 @@
 
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
+use crate::app::ephemeral_token;
 use crate::app::login::{self, Session};
 use crate::app::two_factor::{self, Caller, PasskeySummary};
 use crate::app::{self, PasskeyId, UserId};
@@ -346,7 +347,7 @@ pub async fn start(
         pending: Some(pending),
         outcome: None,
     };
-    two_factor::put_token(
+    ephemeral_token::put_token(
         state,
         CEREMONY_PREFIX,
         &id,
@@ -376,7 +377,7 @@ fn require_discoverable(options: &mut serde_json::Value) {
 
 /// The options of a ceremony still waiting for its authenticator, for the handoff page.
 pub async fn describe(state: &GlobalServerContext, id: &str) -> app::Result<Description> {
-    let ceremony: Ceremony = two_factor::get_token(state, CEREMONY_PREFIX, id, false)
+    let ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, false)
         .await?
         .filter(|ceremony: &Ceremony| ceremony.pending.is_some())
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
@@ -395,7 +396,7 @@ pub async fn complete(
     credential: serde_json::Value,
 ) -> app::Result<Completion> {
     let webauthn = relying_party_of(state)?;
-    let mut ceremony: Ceremony = two_factor::get_token(state, CEREMONY_PREFIX, id, true)
+    let mut ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, true)
         .await?
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
     let pending = ceremony
@@ -503,7 +504,7 @@ pub async fn complete(
                 .append_pair("ceremony", id)
                 .append_pair("outcome", "done");
             ceremony.outcome = Some(outcome);
-            two_factor::put_token(
+            ephemeral_token::put_token(
                 state,
                 CEREMONY_PREFIX,
                 id,
@@ -527,7 +528,7 @@ pub async fn claim(
     code_verifier: &str,
 ) -> app::Result<CeremonyResult> {
     let not_found = || app::Error::Diesel(diesel::result::Error::NotFound);
-    let ceremony: Ceremony = two_factor::get_token(state, CEREMONY_PREFIX, id, false)
+    let ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, false)
         .await?
         .ok_or_else(not_found)?;
     let (Some(handoff), Some(_)) = (&ceremony.handoff, &ceremony.outcome) else {
@@ -537,7 +538,7 @@ pub async fn claim(
     if !bool::from(answered.as_bytes().ct_eq(handoff.code_challenge.as_bytes())) {
         return Err(app::Error::VerificationFailed);
     }
-    let taken: Ceremony = two_factor::get_token(state, CEREMONY_PREFIX, id, true)
+    let taken: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, true)
         .await?
         .ok_or_else(not_found)?;
     resolve(state, taken.outcome.ok_or_else(not_found)?).await
