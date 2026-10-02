@@ -357,9 +357,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   that display capture cannot (`game_capture` hooks Direct3D and OpenGL on Windows). The
   helper `packages/desktop/native/obs-capture` (a Rust crate, its own Cargo workspace, built
   by `pnpm build:native` in `packages/desktop`, which can run while a shell is open on Linux
-  and macOS) links libobs on Windows and macOS (`src/obs.rs`, behind `cfg(obs)`), and on
-  Linux only when built with its `libobs` feature, for developing the picture path there; a
-  Linux build otherwise needs PipeWire's and libopus's development files and no libobs. On
+  and macOS) links libobs on Windows (`src/obs.rs`, behind `cfg(obs)`), and on Linux and
+  macOS only when built with its `libobs` feature, for developing the picture path there; a
+  Linux build otherwise needs PipeWire's and libopus's development files and no libobs, and a
+  macOS build needs only Xcode's toolchain and `cmake` (libopus is built from source). On
   Windows the libobs is the build's own: `pnpm fetch:libobs` (`scripts/fetch-libobs.mjs`) lays
   the OBS Project's release, pinned by version and SHA-256, out in `native/libobs` (gitignored)
   with its files exactly as the OBS Project signed them, since anti-cheat systems whitelist the
@@ -369,16 +370,15 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `llvm-dlltool`), where the helper's build script finds them; the installer ships that
   directory as the `libobs` resource (`electron-builder.yml`), and the shell starts the helper
   with its libraries on the `PATH` and names its modules and data in every request
-  (`bundledLibobs` in `gameCapture.ts`). CI packages the Windows installer that way. Where
-  it links libobs otherwise it needs libobs's development files, which on Linux `pkg-config`
-  finds and on macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: on macOS the `libobs`
+  (`bundledLibobs` in `gameCapture.ts`). CI packages the Windows installer that way. With
+  the `libobs` feature elsewhere it needs libobs's development files, which on Linux
+  `pkg-config` finds and on macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: the `libobs`
   directory of an OBS Studio source checkout at the installed version, with an `obsconfig.h`
   written from its `.in` (OBS.app's `Contents/PlugIns` and `Contents/Resources/data` as the
   paths), a directory holding a `libobs.dylib` link to OBS.app's
   `Contents/Frameworks/libobs.framework/Versions/A/libobs` of the same architecture as the
-  helper (an Apple Silicon OBS for an arm64 build; the Intel build, a bare `libobs.0.dylib`
-  under Rosetta, links to nothing), the helper carrying that Frameworks directory as its rpath,
-  and `BINDGEN_EXTRA_CLANG_ARGS=-I/opt/homebrew/include` for `simde` (`brew install simde`),
+  helper, the helper carrying that Frameworks directory as its rpath, and
+  `BINDGEN_EXTRA_CLANG_ARGS=-I/opt/homebrew/include` for `simde` (`brew install simde`),
   which the headers include on ARM; the helper then expects OBS at `/Applications/OBS.app` at
   run time) captures one source, encodes
   it as H.264 constrained baseline, and sends it as SRTP straight to the voice server's plain
@@ -394,7 +394,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   helper's RTCP answers: NACKs from a buffer of recent packets, the receiver's bandwidth
   estimate by re-tuning the encoder's bitrate, and keyframe requests by relying on a
   one-second keyframe interval, since libobs cannot be asked for one. The video never passes
-  through the shell or the browser, so it is encoded once. It is a separate executable, not a
+  through the shell or the browser, so it is encoded once. All of that is Windows's: on
+  macOS, as on Linux, the picture is the browser's own screen share (the system picker on
+  macOS 15 and later, which is the same framework libobs's window capture uses, with nothing
+  there a hook could add) and the helper captures only the sound, through ScreenCaptureKit
+  (`native/obs-capture/src/sck_audio.rs`, which the catalogue names `aspen_sck_app_audio`): a
+  stream whose content filter includes the one application, whose audio is then all the
+  stream carries besides the smallest, slowest picture the framework allows, handed to the
+  same libopus path as Linux's. The framework lists running applications with a window, which
+  the catalogue offers as `applicationAudio`, and captures only with the Screen & System
+  Audio Recording permission, granted to Aspen in System Settings; the helper's errors say so.
+  It is a separate executable, not a
   Node addon, because x264's aligned allocations trip Chromium's allocator in every Electron
   process and because native capture code must not be able to take the app down; its request
   protocol is documented at the top of its `main.rs`. `packages/desktop/src/main/gameCapture.ts`

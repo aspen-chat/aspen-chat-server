@@ -1,5 +1,5 @@
-//! Game and window capture through libobs, on the platforms that use it (Windows and macOS,
-//! and Linux when built with the `libobs` feature, for developing the picture path there).
+//! Game and window capture through libobs, on the platforms that use it: Windows, and Linux
+//! or macOS when built with the `libobs` feature, for developing the picture path there.
 //!
 //! libobs is used for one thing: its capture sources, which reach games that ordinary display
 //! capture cannot (`game_capture` hooks Direct3D and OpenGL on Windows). The picture goes
@@ -12,7 +12,7 @@
 //! libobs itself is started once and kept for the life of the process, since it does not
 //! support a second startup.
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use crate::AudioStart;
 use crate::rtp::{Feedback, RtpSender, StreamKind};
 use crate::{AudioOptions, CaptureKind, CaptureTarget, Result, StartOptions};
@@ -907,7 +907,7 @@ unsafe fn create_audio(
 
 /// Starts capturing the application's sound alone, encoded as Opus and sent as SRTP to its
 /// target. One capture at a time, with or without a picture.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn start_audio_capture(options: AudioStart) -> Result<()> {
     ensure_started(
         &plugin_dir(options.plugin_dir.as_ref()),

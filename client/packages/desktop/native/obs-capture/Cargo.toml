@@ -3,7 +3,7 @@ name = "aspen_obs_capture"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Helper process for the Aspen desktop shell: captures a game or window with libobs on Windows and macOS, and a game's sound from PipeWire on Linux, and streams it to the voice server"
+description = "Helper process for the Aspen desktop shell: captures a game or window with libobs on Windows, and a game's sound from PipeWire on Linux or ScreenCaptureKit on macOS, and streams it to the voice server"
 publish = false
 
 # Its own workspace: it links libobs, which the rest of the repository must not need in order
@@ -27,7 +27,7 @@ webrtc-srtp = "0.17"
 webrtc-util = "0.17"
 
 [features]
-# The libobs picture path on Linux, for developing it there; Windows and macOS always have it.
+# The libobs picture path on Linux and macOS, for developing it there; Windows always has it.
 libobs = []
 
 [build-dependencies]
@@ -37,6 +37,18 @@ pkg-config = "0.3"
 [profile.release]
 strip = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 opus = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 pipewire = "0.10.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"

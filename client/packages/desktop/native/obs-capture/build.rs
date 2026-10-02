@@ -1,7 +1,7 @@
 //! Decides whether this build links libobs, and where it does, generates the bindings the
 //! helper uses and tells the linker where libobs is.
 //!
-//! libobs is linked on Windows and macOS, and on Linux only with the `libobs` feature (the
+//! libobs is linked on Windows, and on Linux and macOS only with the `libobs` feature (the
 //! picture path, for developing it there); the code that needs it is behind `cfg(obs)`. On
 //! Linux `pkg-config` finds libobs. On Windows it is the release the build ships, fetched by
 //! `scripts/fetch-libobs.mjs` into `native/libobs` (headers in `include/`, `obs.lib` beside
@@ -20,8 +20,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBOBS_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=LIBOBS_LIB_DIR");
 
-    let linux = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
-    if linux && env::var_os("CARGO_FEATURE_LIBOBS").is_none() {
+    let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    if !windows && env::var_os("CARGO_FEATURE_LIBOBS").is_none() {
         return;
     }
     println!("cargo:rustc-cfg=obs");

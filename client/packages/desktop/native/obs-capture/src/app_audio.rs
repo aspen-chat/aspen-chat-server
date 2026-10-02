@@ -1,15 +1,20 @@
-//! Game audio on Linux, from the PipeWire capture (`pipewire_audio`) to the voice server: the
-//! application's sound, 48 kHz stereo float as the capture delivers it, cut into 20 ms frames,
-//! encoded as Opus with libopus, and sent as SRTP by an `RtpSender` of its own.
+//! Game audio, from the platform's capture of one application's sound (`pipewire_audio` on
+//! Linux, `sck_audio` on macOS) to the voice server: 48 kHz stereo float as the capture
+//! delivers it, cut into 20 ms frames, encoded as Opus with libopus, and sent as SRTP by an
+//! `RtpSender` of its own.
 //!
-//! The capture hands buffers over on PipeWire's real-time thread, where nothing may block, so
-//! they are passed through a bounded channel to a thread of this module's that frames,
-//! encodes, and sends; a buffer that finds the channel full is dropped, which costs a few
-//! milliseconds of sound rather than a late one on the real-time thread.
+//! The capture hands buffers over on a thread of the platform's (PipeWire's real-time thread,
+//! where nothing may block; ScreenCaptureKit's queue), so they are passed through a bounded
+//! channel to a thread of this module's that frames, encodes, and sends; a buffer that finds
+//! the channel full is dropped, which costs a few milliseconds of sound rather than a late one
+//! on the capture's thread.
 
 use crate::AudioOptions;
+#[cfg(target_os = "linux")]
 use crate::pipewire_audio::{Capture, Target};
 use crate::rtp::{Feedback, RtpSender, StreamKind};
+#[cfg(target_os = "macos")]
+use crate::sck_audio::{Capture, Target};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

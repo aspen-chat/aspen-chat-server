@@ -1,16 +1,18 @@
 //! Game and window capture for the Aspen desktop shell.
 //!
-//! On Windows and macOS the capture is libobs's (`obs`): its capture sources reach games that
-//! ordinary display capture cannot, and the picture and the application's sound are encoded
-//! and sent as SRTP straight to the voice server's plain RTP transport. The shell's main
+//! On Windows the capture is libobs's (`obs`): its game hook reaches games that ordinary
+//! display capture cannot, and the picture and the application's sound are encoded and sent
+//! as SRTP straight to the voice server's plain RTP transport. The shell's main
 //! process spawns this helper and tells it where to send; the media never passes through the
 //! shell or the browser.
 //!
-//! On Linux the picture comes from the browser's own screen share instead, since only the
-//! process owning the requesting window can raise the desktop portal that picks what to show,
-//! and the helper captures only the sound (`startAudio`): one application's streams from the
-//! PipeWire graph (`pipewire_audio`), encoded as Opus with libopus (`app_audio`). A Linux build
-//! links no libobs; the `libobs` feature adds the picture path there for developing it.
+//! On Linux and macOS the picture comes from the browser's own screen share instead (on Linux
+//! only the process owning the requesting window can raise the desktop portal that picks what
+//! to show; on macOS the system picker does the same, and libobs's window capture is the same
+//! framework the browser uses), and the helper captures only the sound (`startAudio`): one
+//! application's streams from the PipeWire graph (`pipewire_audio`) or through
+//! ScreenCaptureKit (`sck_audio`), encoded as Opus with libopus (`app_audio`). Those builds
+//! link no libobs; the `libobs` feature adds the picture path for developing it.
 //!
 //! It is a process of its own rather than a Node addon because x264's aligned allocations
 //! trip the allocator every Electron process runs on, and because a crash in native capture
@@ -21,13 +23,15 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod app_audio;
 #[cfg(obs)]
 mod obs;
 #[cfg(target_os = "linux")]
 mod pipewire_audio;
 mod rtp;
+#[cfg(target_os = "macos")]
+mod sck_audio;
 
 use rtp::RtpTarget;
 use serde::{Deserialize, Serialize};
@@ -109,7 +113,7 @@ pub struct StartOptions {
 #[serde(rename_all = "camelCase")]
 pub struct AudioOptions {
     /// The audio source id: a libobs source such as `wasapi_process_output_capture`, or on
-    /// Linux `APPLICATION_AUDIO`.
+    /// Linux and macOS `APPLICATION_AUDIO`.
     pub kind: String,
     /// Its settings as a JSON object.
     #[serde(default)]
@@ -133,18 +137,25 @@ pub struct AudioStart {
 }
 
 /// The audio source that captures one application chosen on its own, rather than the
-/// application behind a captured window: the PipeWire capture on Linux, named as the catalogue
-/// and `startAudio` name it.
+/// application behind a captured window: the PipeWire capture on Linux and the
+/// ScreenCaptureKit one on macOS, named as the catalogue and `startAudio` name it.
 #[cfg(target_os = "linux")]
 const APPLICATION_AUDIO: Option<&str> = Some("aspen_pipewire_app_audio");
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+const APPLICATION_AUDIO: Option<&str> = Some("aspen_sck_app_audio");
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const APPLICATION_AUDIO: Option<&str> = None;
 
-/// The applications playing sound right now; `None` when they cannot be listed (no PipeWire
-/// socket), which leaves the platform without application audio.
-#[cfg(target_os = "linux")]
+/// The applications whose sound can be captured right now (on Linux those playing sound, on
+/// macOS those with a window); `None` when they cannot be listed (no PipeWire socket, no
+/// permission), which leaves the platform without application audio.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn playing_applications() -> Option<Vec<AudioTarget>> {
-    match pipewire_audio::playing_applications() {
+    #[cfg(target_os = "linux")]
+    let listed = pipewire_audio::playing_applications();
+    #[cfg(target_os = "macos")]
+    let listed = sck_audio::running_applications();
+    match listed {
         Ok(targets) => Some(targets),
         Err(error) => {
             eprintln!("aspen-obs-capture: application audio unavailable: {error}");
@@ -153,7 +164,7 @@ fn playing_applications() -> Option<Vec<AudioTarget>> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn playing_applications() -> Option<Vec<AudioTarget>> {
     None
 }
@@ -201,7 +212,7 @@ fn start_capture(options: StartOptions) -> Result<()> {
 
 /// Starts capturing one application's sound alone.
 fn start_audio_capture(options: AudioStart) -> Result<()> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         if Some(options.audio.kind.as_str()) != APPLICATION_AUDIO {
             return Err(format!(
@@ -211,7 +222,7 @@ fn start_audio_capture(options: AudioStart) -> Result<()> {
         }
         app_audio::start(&options.audio)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         obs::start_audio_capture(options)
     }
@@ -219,7 +230,7 @@ fn start_audio_capture(options: AudioStart) -> Result<()> {
 
 /// Stops the capture, if one runs. Safe to call at any time.
 fn stop_capture() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     app_audio::stop();
     #[cfg(obs)]
     obs::stop_capture();
