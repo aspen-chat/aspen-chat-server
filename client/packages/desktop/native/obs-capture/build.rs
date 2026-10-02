@@ -1,8 +1,10 @@
 //! Generates the libobs bindings the helper uses and tells the linker where libobs is.
 //!
-//! On Linux and macOS `pkg-config` finds libobs. On Windows OBS ships no development files, so
-//! `LIBOBS_INCLUDE_DIR` (the `libobs` directory of an OBS Studio source checkout matching the
-//! installed version) and `LIBOBS_LIB_DIR` (where `obs.lib` is) must be set.
+//! On Linux `pkg-config` finds libobs. On Windows and macOS OBS Studio ships no development
+//! files, so `LIBOBS_INCLUDE_DIR` (the `libobs` directory of an OBS Studio source checkout
+//! matching the installed version, with an `obsconfig.h` written from its template) and
+//! `LIBOBS_LIB_DIR` (where `obs.lib` is, or on macOS a `libobs.dylib` linking to OBS.app's
+//! `Contents/Frameworks/libobs.framework/Versions/A/libobs`) must be set.
 
 use std::env;
 use std::path::PathBuf;
@@ -29,6 +31,15 @@ fn main() {
             println!("cargo:rustc-link-search=native={lib}");
         }
         println!("cargo:rustc-link-lib=obs");
+        // On macOS the headers come from a source checkout and the library from OBS Studio's
+        // own bundle (`libobs.framework`, named by its `@rpath` install name, so the helper
+        // carries the bundle's Frameworks directory as its rpath), which is also where its
+        // plugins and data are at run time.
+        if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,/Applications/OBS.app/Contents/Frameworks");
+            plugin_dir = Some("/Applications/OBS.app/Contents/PlugIns".to_string());
+            data_dir = Some("/Applications/OBS.app/Contents/Resources/data".to_string());
+        }
     } else {
         let libobs = pkg_config::Config::new()
             .probe("libobs")

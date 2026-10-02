@@ -253,6 +253,8 @@ pub enum ModerationAction {
     RenameCommunity,
     DeleteCommunity,
     RemoveWriteIn,
+    /// A poll closed before its deadline; the subject is the poll.
+    ClosePoll,
     BanForeignUser,
     LiftForeignUserBan,
 }
@@ -363,6 +365,8 @@ enum Subject {
     Attachment(MessageId, AttachmentId),
     Reaction(MessageId, String, UserId),
     WriteIn(PollId, i32),
+    /// A poll itself, named in the log by the message it is shown in.
+    Poll(PollId),
     Name(String),
 }
 
@@ -395,6 +399,7 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
                 UserId(id(author)?),
             ))
         }
+        ModerationAction::ClosePoll => Some(Subject::Poll(PollId(id(subject)?))),
         ModerationAction::RemoveWriteIn => {
             let (poll, option) = subject.split_once('/')?;
             Some(Subject::WriteIn(PollId(id(poll)?), option.parse().ok()?))
@@ -474,7 +479,7 @@ pub async fn read_moderation_log(
                 message_ids.push(*id);
                 attachment_ids.push(*attachment);
             }
-            Subject::WriteIn(poll, _) => poll_ids.push(*poll),
+            Subject::WriteIn(poll, _) | Subject::Poll(poll) => poll_ids.push(*poll),
             Subject::User(_) | Subject::Name(_) => {}
         }
     }
@@ -599,6 +604,9 @@ pub async fn read_moderation_log(
                     Some(Subject::WriteIn(poll, option)) => {
                         details.message = by_poll.get(&poll).cloned();
                         details.write_in = write_ins.get(&(poll, option)).cloned();
+                    }
+                    Some(Subject::Poll(poll)) => {
+                        details.message = by_poll.get(&poll).cloned();
                     }
                     None => {}
                 }

@@ -84,12 +84,16 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
   // A level below the channel's title, which is the page's first heading on a phone.
   const Question = useOnePane() ? "h2" : "h3";
   const m = useMessages();
+  const me = useMe();
+  const moderate = useChannelCan(poll.channelId, "manageMessages");
   const myWriteIns = useMyWriteIns(poll.id);
   const now = useNow(poll);
   const open = pollOpen(poll, now);
   const total = poll.results.reduce((sum, r) => sum + r.count, 0);
   const canWriteIn =
     open && poll.allowWriteIns && myWriteIns.size === 0 && poll.writeIns.length < MAX_WRITE_INS;
+  // Its creator, and anyone who may manage messages here, may close it before its deadline.
+  const canClose = open && (me?.id === poll.createdBy || moderate);
 
   return (
     <section
@@ -114,9 +118,36 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
             ? format(m.poll.closesIn, { remaining: remainingText(m, poll.closesAt, now) })
             : m.poll.closed}
         </span>
+        {canClose && <ClosePollButton pollId={poll.id} />}
         <CopyIdButton id={poll.id} thing="poll" className="ms-auto -my-1 p-0.5" />
       </p>
     </section>
+  );
+}
+
+/** Closes the poll now, with the votes as they stand; its closing comes as events. */
+function ClosePollButton({ pollId }: { pollId: string }) {
+  const m = useMessages();
+  const sync = useSync();
+  const [closing, setClosing] = useState(false);
+  return (
+    <Tooltip text={m.poll.closeHint}>
+      <Button
+        isDisabled={closing}
+        onPress={() => {
+          setClosing(true);
+          void sync
+            .closePoll(pollId)
+            .catch(() => undefined)
+            .finally(() => {
+              setClosing(false);
+            });
+        }}
+        className="-my-1 rounded px-1.5 py-0.5 text-xs text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        {closing ? m.poll.closing : m.poll.close}
+      </Button>
+    </Tooltip>
   );
 }
 

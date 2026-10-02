@@ -749,6 +749,7 @@ export const en = {
       banMember: "Banned a member",
       liftBan: "Lifted a ban",
       deleteRecentMessages: "Deleted someone's recent messages",
+      closePoll: "Closed a poll early",
       renameChannel: "Renamed a channel",
       deleteChannel: "Deleted a channel",
       renameCommunity: "Renamed a community",
@@ -931,6 +932,9 @@ export const en = {
   playVideo: "Play {title}",
   revealSpoiler: "Spoiler, activate to reveal",
   poll: {
+    close: "Close poll",
+    closing: "Closing…",
+    closeHint: "Closes the poll now, with the votes as they stand.",
     open: "Create a new poll",
     create: "Create a poll",
     heading: "New poll",

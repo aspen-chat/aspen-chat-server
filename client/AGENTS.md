@@ -216,7 +216,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   emoji is chosen in the dialog from the same lazily loaded picker reactions use, and the server
   validates it as a single emoji. The outcome text of the announcement is
   composed on the client from the final tally (`src/features/messages/poll.ts`), so it is
-  localized like everything else.
+  localized like everything else. The card offers Close poll to the poll's creator and to a
+  holder of Manage messages while it is open (`AspenSync.closePoll`), whose closing comes as
+  the poll's update and the announcement, like a deadline's.
   A poll whose creator allowed write-ins lists its `writeIns` after its `options`, and both
   share one index space that votes use: write-in `i` is answer `options.length + i`, and a
   removed one stays as `null` so no index moves (`pollChoices`, `choiceAt`). Each write-in
@@ -355,8 +357,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   that display capture cannot (`game_capture` hooks Direct3D and OpenGL on Windows). The
   helper `packages/desktop/native/obs-capture` (a Rust crate, its own Cargo workspace, built
   by `pnpm build:native` in `packages/desktop`, which can run while a shell is open on Linux
-  and macOS; it needs libobs development files, which on Linux and macOS `pkg-config` finds
-  and on Windows `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name) captures one source, encodes
+  and macOS; it needs libobs development files, which on Linux `pkg-config` finds and on
+  Windows and macOS `LIBOBS_INCLUDE_DIR` and `LIBOBS_LIB_DIR` name: on macOS the `libobs`
+  directory of an OBS Studio source checkout at the installed version, with an `obsconfig.h`
+  written from its `.in` (OBS.app's `Contents/PlugIns` and `Contents/Resources/data` as the
+  paths), a directory holding a `libobs.dylib` link to OBS.app's
+  `Contents/Frameworks/libobs.framework/Versions/A/libobs` of the same architecture as the
+  helper (an Apple Silicon OBS for an arm64 build; the Intel build, a bare `libobs.0.dylib`
+  under Rosetta, links to nothing), the helper carrying that Frameworks directory as its rpath,
+  and `BINDGEN_EXTRA_CLANG_ARGS=-I/opt/homebrew/include` for `simde` (`brew install simde`),
+  which the headers include on ARM; the helper then expects OBS at `/Applications/OBS.app` at
+  run time) captures one source, encodes
   it as H.264 constrained baseline, and sends it as SRTP straight to the voice server's plain
   RTP transport, answering the server's RTCP itself. With it goes the captured window's own
   sound: Windows through `wasapi_process_output_capture` and macOS through `sck_audio_capture`

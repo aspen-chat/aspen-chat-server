@@ -378,6 +378,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(deployment::list_user_dms))
         .routes(routes!(poll::create_poll))
         .routes(routes!(poll::get_poll))
+        .routes(routes!(poll::close_poll))
         .routes(routes!(poll::add_vote, poll::remove_vote))
         .routes(routes!(poll::add_write_in))
         .routes(routes!(poll::remove_write_in))

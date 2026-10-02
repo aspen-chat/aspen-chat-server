@@ -896,35 +896,94 @@ async fn close_due_polls(state: &GlobalServerContext) -> app::Result<()> {
                 .skip_locked()
                 .load(conn.as_mut())
                 .await?;
-            for mut row in due {
-                diesel::update(poll::table)
-                    .filter(poll::id.eq(row.id))
-                    .set(poll::closed_at.eq(now))
-                    .execute(conn.as_mut())
-                    .await?;
-                row.closed_at = Some(now);
-                let announcement = poll_message(&row, MessageKind::PollClosed, now);
-                diesel::insert_into(message::table)
-                    .values(&announcement)
-                    .execute(conn.as_mut())
-                    .await?;
-                publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
-                publish_event(
-                    state,
-                    conn.as_mut(),
-                    EventScope::Channel(*announcement.channel.id()),
-                    &ServerEvent::Message(MessageEvent::Create(message_record(&announcement))),
-                )
-                .await?;
-                app::thread::record_if_reply(
-                    state,
-                    conn.as_mut(),
-                    *announcement.channel.id(),
-                    announcement.timestamp,
-                )
-                .await?;
+            for row in due {
+                close_one(state, conn.as_mut(), row, now).await?;
             }
             Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Closes a poll inside the caller's transaction, which holds its row locked: marks it closed
+/// at `now`, publishes its final tally, and posts the poll-closed message in its channel.
+async fn close_one(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    mut row: Poll,
+    now: DateTime<Utc>,
+) -> app::Result<()> {
+    diesel::update(poll::table)
+        .filter(poll::id.eq(row.id))
+        .set(poll::closed_at.eq(now))
+        .execute(conn)
+        .await?;
+    row.closed_at = Some(now);
+    let announcement = poll_message(&row, MessageKind::PollClosed, now);
+    diesel::insert_into(message::table)
+        .values(&announcement)
+        .execute(conn)
+        .await?;
+    publish_results(state, conn, row, WriteIns::Unchanged).await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Channel(*announcement.channel.id()),
+        &ServerEvent::Message(MessageEvent::Create(message_record(&announcement))),
+    )
+    .await?;
+    app::thread::record_if_reply(
+        state,
+        conn,
+        *announcement.channel.id(),
+        announcement.timestamp,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Closes a poll before its deadline, as the deadline would: its creator may, and so may a
+/// holder of Manage messages in its channel, whose use as a moderator is logged. A poll
+/// already closed is left as it is.
+pub async fn close_poll(
+    state: &GlobalServerContext,
+    caller: UserId,
+    poll_id: PollId,
+) -> app::Result<message_enum::Poll> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let row: Poll = poll::table
+                .select(Poll::as_select())
+                .filter(poll::id.eq(poll_id))
+                .for_update()
+                .first(conn.as_mut())
+                .await?;
+            let access = channel_access(state, conn.as_mut(), caller, row.channel).await?;
+            if row.created_by != caller {
+                if !access.community_has(Permissions::MANAGE_MESSAGES) {
+                    return Err(missing(Permissions::MANAGE_MESSAGES));
+                }
+                if access.moderating(Permissions::MANAGE_MESSAGES) {
+                    app::message::note_moderation(
+                        conn.as_mut(),
+                        caller,
+                        &access,
+                        app::deployment::ModerationAction::ClosePoll,
+                        Some(poll_id.0.to_string()),
+                    )
+                    .await?;
+                }
+            }
+            if row.closed_at.is_none() {
+                close_one(state, conn.as_mut(), row, Utc::now()).await?;
+            }
+            load_polls(conn.as_mut(), &[poll_id])
+                .await?
+                .into_iter()
+                .next()
+                .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))
         }
         .scope_boxed()
     })

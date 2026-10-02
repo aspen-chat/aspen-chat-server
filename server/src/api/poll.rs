@@ -173,6 +173,31 @@ pub async fn get_poll(
     )))
 }
 
+/// Closes a poll before its deadline, as the deadline would: the final tally is published and
+/// the poll-closed message posted. The poll's creator may, and so may a holder of Manage
+/// messages in its channel. A poll already closed is answered as it stands.
+#[utoipa::path(
+    post,
+    path = "/polls/{poll}/close",
+    tag = TAG_POLLS,
+    params(("poll" = PollId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Poll),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: neither the creator nor a holder of Manage messages", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn close_poll(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(poll): Path<PollId>,
+) -> ApiResult<Json<Poll>> {
+    Ok(Json(app::poll::close_poll(&state, user.id, poll).await?))
+}
+
 /// Casts a vote. On a single-choice poll this replaces any earlier vote by the caller.
 #[utoipa::path(
     put,

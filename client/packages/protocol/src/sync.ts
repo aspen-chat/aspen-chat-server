@@ -1956,6 +1956,20 @@ export class AspenSync {
     return result.data;
   }
 
+  /**
+   * Closes a poll before its deadline, as its creator or a holder of Manage messages; the
+   * final tally and the announcement come as events, and the answer is applied meanwhile.
+   */
+  async closePoll(pollId: string): Promise<void> {
+    const result = await this.#client.api.POST("/api/v1/polls/{poll}/close", {
+      params: { path: { poll: pollId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({ serverEvent: "poll", type: "update", ...result.data });
+  }
+
   /** Reads a community's standing bans into the store, for a holder of Ban members. */
   async loadBans(communityId: string): Promise<void> {
     const result = await this.#client.api.GET("/api/v1/communities/{community}/bans", {

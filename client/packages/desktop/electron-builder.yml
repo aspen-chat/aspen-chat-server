@@ -38,6 +38,16 @@ mac:
   target:
     - dmg
   category: public.app-category.social-networking
+  # Signed under the hardened runtime, as notarization requires, with what calls and the
+  # capture helper need allowed (`build/entitlements.mac.plist`), and the reasons macOS shows
+  # when it asks for the microphone, the camera, and the screen.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Aspen uses the microphone in voice calls.
+    NSCameraUsageDescription: Aspen shows your camera to a call when you turn it on.
+    NSScreenCaptureUsageDescription: Aspen shares a screen or window with a call when you choose one.
 win:
   icon: build/icon.ico
   target:

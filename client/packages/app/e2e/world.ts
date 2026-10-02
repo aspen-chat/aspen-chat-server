@@ -19,7 +19,7 @@ export const community = "0190f0a0-0000-7000-8000-000000000010";
 export const helper = "0190f0a0-0000-7000-8000-000000000003";
 const everyoneRole = "0190f0a0-0000-7000-8000-000000000040";
 const deploymentAdministrator = "0190f0a0-0000-7000-8000-000000000042";
-const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
+export const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
 /** The community's one custom emoji, and its picture. */
 export const customEmojiId = "0190f0a0-0000-7000-8000-0000000000e1";
 export const customEmojiName = "partyparrot";
@@ -167,6 +167,20 @@ const message = (
   mentions: { users: [], roles: [], everyone: false },
   ...extra,
 });
+
+/**
+ * The organiser's role as a `role` update event would carry it with `extra` permissions added,
+ * for a test that needs the caller to hold one the world's organiser lacks (Manage messages).
+ */
+export function organiserRoleWith(extra: readonly string[]): Record<string, unknown> {
+  const organiser = roles.find((r) => r.id === organiserRole);
+  return {
+    serverEvent: "role",
+    type: "update",
+    id: organiserRole,
+    permissions: [...(organiser?.permissions ?? []), ...extra],
+  };
+}
 
 /** A share page named like a gif, which is a page; its preview's picture is the gif. */
 export const gifPageLink = "https://tenor.com/view/ghost-12345.gif";
