@@ -11,12 +11,13 @@
  * A call ended because its server was lost or removed is rejoined on its own after a random
  * delay of up to a second, so the participants of a lost call do not all hit the API server at
  * once. A call ended for being idle, or by the user, is not. The browser's media APIs and the
- * mediasoup device sit behind `VoiceMedia`, so the flow runs and is tested without them.
+ * mediasoup device sit behind `VoiceMedia` (`voiceMedia.ts`), so the flow runs and is tested
+ * without them.
  */
 
 import { DEFAULT_DEVICE, type DeviceChoice } from "./preferences";
 import type { components } from "./generated/openapi";
-import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
+import type { ServerMessage } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError } from "./problem";
@@ -27,6 +28,17 @@ import {
   NO_FILES,
   type TransferMode,
 } from "./transfers";
+import { Signal } from "./signalSocket";
+import { type RankedCandidate, rankCandidates, signallingUrl } from "./voiceCandidates";
+import type {
+  ExternalAudio,
+  ExternalShare,
+  RtpTarget,
+  ScreenCapture,
+  TransportParams,
+  VoiceMedia,
+  VoiceTransport,
+} from "./voiceMedia";
 
 type VoiceJoinOffer = components["schemas"]["VoiceJoinOffer"];
 type VoiceServerCandidate = components["schemas"]["VoiceServerCandidate"];
@@ -140,133 +152,11 @@ export interface VoiceCallState {
   readonly endedReason: VoiceSessionEndReason | "kicked" | null;
 }
 
-/** A transport as mediasoup-client models it, narrowed to what the call needs. */
 /** A screen another participant is sharing, or their camera, as a playable video track. */
 export interface RemoteScreen {
   readonly user: string;
   readonly consumerId: string;
   readonly track: MediaStreamTrack;
-}
-
-/** Where and how an external sender delivers SRTP for a producer the voice server made for it. */
-export interface RtpTarget {
-  readonly ip: string;
-  readonly port: number;
-  readonly ssrc: number;
-  readonly payloadType: number;
-  readonly srtpCryptoSuite: string;
-  readonly srtpKeyBase64: string;
-}
-
-/** Where an external share sends: the picture, and the sound when the share carries any. */
-export interface ExternalTargets {
-  readonly video: RtpTarget;
-  readonly audio: RtpTarget | null;
-}
-
-/**
- * A share produced outside the browser, such as the desktop shell's game capture: the call
- * asks the voice server for an RTP producer per stream, then `start` sends to them until
- * `stop`. `audio` says whether the share brings sound of its own, which needs a producer too.
- */
-export interface ExternalShare {
-  readonly audio: boolean;
-  start(targets: ExternalTargets): Promise<void>;
-  stop(): void;
-}
-
-/**
- * Sound for a browser screen share that comes from outside the browser, such as one
- * application's audio captured by the desktop shell: the call asks the voice server for an RTP
- * producer, then `start` sends to it until `stop`. It stands in for any sound the browser
- * captured with the picture.
- */
-export interface ExternalAudio {
-  start(target: RtpTarget): Promise<void>;
-  stop(): void;
-}
-
-/** What `getDisplayMedia` gave: the picture, and the sound that came with it when the browser offered any. */
-export interface ScreenCapture {
-  readonly video: MediaStreamTrack;
-  readonly audio: MediaStreamTrack | null;
-}
-
-export interface VoiceTransport {
-  /** The ICE and DTLS state: `new`, `connecting`, `connected`, `disconnected`, `failed`, or `closed`. */
-  readonly connectionState: string;
-  on(event: "connectionstatechange", handler: (state: string) => void): unknown;
-  on(
-    event: "connect",
-    handler: (
-      params: { dtlsParameters: unknown },
-      callback: () => void,
-      errback: (error: Error) => void,
-    ) => void,
-  ): unknown;
-  on(
-    event: "produce",
-    handler: (
-      params: { kind: string; rtpParameters: unknown; appData: Record<string, unknown> },
-      callback: (result: { id: string }) => void,
-      errback: (error: Error) => void,
-    ) => void,
-  ): unknown;
-  produce(options: {
-    track: MediaStreamTrack;
-    appData: Record<string, unknown>;
-    encodings?: { maxBitrate?: number; maxFramerate?: number }[];
-    codecOptions?: {
-      opusStereo?: boolean;
-      opusDtx?: boolean;
-      opusMaxAverageBitrate?: number;
-      videoGoogleStartBitrate?: number;
-    };
-  }): Promise<{
-    id: string;
-    close(): void;
-    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
-  }>;
-  consume(options: {
-    id: string;
-    producerId: string;
-    kind: "audio" | "video";
-    rtpParameters: unknown;
-  }): Promise<{ id: string; track: MediaStreamTrack; close(): void }>;
-  close(): void;
-}
-
-/** A mediasoup-client device, narrowed to what the call needs. */
-export interface VoiceDevice {
-  load(options: { routerRtpCapabilities: unknown }): Promise<void>;
-  readonly rtpCapabilities: unknown;
-  createSendTransport(params: TransportParams): VoiceTransport;
-  createRecvTransport(params: TransportParams): VoiceTransport;
-}
-
-export interface TransportParams {
-  id: string;
-  iceParameters: unknown;
-  iceCandidates: unknown;
-  dtlsParameters: unknown;
-}
-
-/** What the call needs from the browser: media capture, the mediasoup device, and playback. */
-export interface VoiceMedia {
-  createDevice(): Promise<VoiceDevice>;
-  /** Opens the microphone the choice names, or the system's default. */
-  getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack>;
-  /** Opens a camera, the chosen one when it is present. */
-  getCamera(choice: DeviceChoice): Promise<MediaStreamTrack>;
-  /** Routes everything played to the speaker the choice names, or the system's default. */
-  setOutput(choice: DeviceChoice): Promise<void>;
-  /** Asks the user for a screen, window, or tab to share; rejects when they decline. */
-  getScreen(): Promise<ScreenCapture>;
-  /** Plays a remote track; called once per consumer. */
-  play(consumerId: string, track: MediaStreamTrack): void;
-  stop(consumerId: string): void;
-  /** Scales what a playing consumer is heard at: 1 is as sent, 0 silent, up to 2. */
-  setVolume(consumerId: string, gain: number): void;
 }
 
 export interface VoiceCallOptions {
@@ -288,25 +178,6 @@ export interface VoiceCallOptions {
 }
 
 export type VoiceCallListener = () => void;
-
-/** A candidate with the round trip to it, `Infinity` when it did not answer. */
-export interface RankedCandidate {
-  candidate: VoiceServerCandidate;
-  latencyMs: number;
-}
-
-/** Nearest first; candidates that did not answer come last, in their offered order. */
-export function rankCandidates(ranked: readonly RankedCandidate[]): RankedCandidate[] {
-  return [...ranked].sort((a, b) => a.latencyMs - b.latencyMs);
-}
-
-/** The signalling URL of a candidate: its `/ws` over the WebSocket scheme matching its own. */
-export function signallingUrl(candidate: VoiceServerCandidate): string {
-  const url = new URL(candidate.url);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = `${url.pathname.replace(/\/$/, "")}/ws`;
-  return url.toString();
-}
 
 const IDLE: VoiceCallState = {
   status: "idle",
@@ -368,72 +239,6 @@ function failure(error: unknown): Pick<VoiceCallState, "errorKind" | "error"> {
     errorKind: error instanceof MicrophoneError ? "microphone" : "server",
     error: error instanceof Error ? error.message : String(error),
   };
-}
-
-/** One socket to a voice server with typed frames and waits for particular replies. */
-class Signal {
-  readonly #socket: WebSocket;
-  readonly #waiters: {
-    pred: (f: ServerMessage) => boolean;
-    resolve: (f: ServerMessage) => void;
-  }[] = [];
-  onFrame: (frame: ServerMessage) => void = () => undefined;
-  onClose: () => void = () => undefined;
-  #closedByUs = false;
-
-  constructor(url: string, Socket: typeof globalThis.WebSocket) {
-    this.#socket = new Socket(url);
-    this.#socket.onmessage = (event: MessageEvent) => {
-      let frame: ServerMessage;
-      try {
-        frame = JSON.parse(String(event.data)) as ServerMessage;
-      } catch {
-        return;
-      }
-      for (const waiter of [...this.#waiters]) {
-        if (waiter.pred(frame)) {
-          this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
-          waiter.resolve(frame);
-        }
-      }
-      this.onFrame(frame);
-    };
-    this.#socket.onclose = () => {
-      if (!this.#closedByUs) {
-        this.onClose();
-      }
-    };
-  }
-
-  open(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.#socket.onopen = () => {
-        resolve();
-      };
-      this.#socket.onerror = () => {
-        reject(new Error("the voice server did not accept the connection"));
-      };
-    });
-  }
-
-  /** Sends a frame; one addressed to a socket that is closing is dropped, as the server is gone. */
-  send(frame: ClientMessage): void {
-    if (this.#socket.readyState === this.#socket.OPEN) {
-      this.#socket.send(JSON.stringify(frame));
-    }
-  }
-
-  /** The next frame matching `pred`. */
-  next(pred: (f: ServerMessage) => boolean): Promise<ServerMessage> {
-    return new Promise((resolve) => {
-      this.#waiters.push({ pred, resolve });
-    });
-  }
-
-  close(): void {
-    this.#closedByUs = true;
-    this.#socket.close();
-  }
 }
 
 export class VoiceCall {

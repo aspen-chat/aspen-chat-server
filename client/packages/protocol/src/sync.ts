@@ -37,7 +37,8 @@ import type { Invocation, NotificationLevel } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type UploadTarget, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
-import { VoiceCall, type VoiceMedia } from "./voice";
+import { VoiceCall } from "./voice";
+import type { VoiceMedia } from "./voiceMedia";
 
 type Message = components["schemas"]["Message"];
 type Attachment = components["schemas"]["Attachment"];

@@ -6,7 +6,8 @@
 
 import { Device } from "mediasoup-client";
 import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
-import { CameraError, type ScreenCapture, type VoiceDevice, type VoiceMedia } from "./voice";
+import { CameraError } from "./voice";
+import type { ScreenCapture, VoiceDevice, VoiceMedia } from "./voiceMedia";
 
 /** The device id a choice means right now, among the devices of `kind`; `null` is the default. */
 async function deviceIdFor(choice: DeviceChoice, kind: MediaDeviceKind): Promise<string | null> {

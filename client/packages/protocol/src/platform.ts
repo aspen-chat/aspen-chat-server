@@ -1,7 +1,7 @@
 /** What the sync layer reaches of the page it runs in, when there is one. */
 
 import type { PreferenceStorage } from "./preferences";
-import type { VoiceMedia } from "./voice";
+import type { VoiceMedia } from "./voiceMedia";
 
 /**
  * The browser media, created only when a call first needs it, so the sync layer can be built
