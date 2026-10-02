@@ -79,8 +79,11 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- The relay of whoever publishes this build (spec/push.md), a build setting so that a
+	     publisher's project, or an xcodebuild command line, names it; empty, the build has no
+	     push. -->
 	<key>AspenPushRelay</key>
-	<string></string>
+	<string>$(ASPEN_PUSH_RELAY)</string>
 	<key>AspenKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)org.aspenchat.client.push</string>
 </dict>

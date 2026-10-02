@@ -20,6 +20,13 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<!-- The extension fetches the message a push points to from the deployment, which on the
+	     local network may be plain HTTP, as the app's Info.plist allows. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>AspenKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)org.aspenchat.client.push</string>
 	<key>NSExtension</key>

@@ -27,6 +27,7 @@ final class AppUITests: XCTestCase {
     private func signIn() throws {
         let user = try environment("ASPEN_TEST_USER")
         let password = try environment("ASPEN_TEST_PASSWORD")
+        defer { allowNotifications() }
         let username = web.textFields["Username"]
         guard username.waitForExistence(timeout: 10) else { return }
         type(user, into: username)
@@ -36,6 +37,16 @@ final class AppUITests: XCTestCase {
             username.waitForNonExistence(timeout: 15),
             "still asked to sign in: \(app.debugDescription)"
         )
+    }
+
+    /// Signed in, the app asks once whether it may notify; allowed, the phone registers for
+    /// push as a person's would. The alert is the system's, so it is found on the springboard.
+    private func allowNotifications() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.alerts.buttons["Allow"]
+        if allow.waitForExistence(timeout: 5) {
+            allow.tap()
+        }
     }
 
     /// Types into a field of the web view once it has focus: a first tap in WebKit can land
@@ -75,7 +86,7 @@ final class AppUITests: XCTestCase {
         var strays: [String] = []
         for step in 0..<12 {
             guard let anchor = middleText() else {
-                strays.append("step \(step): nothing to follow in view")
+                strays.append("step \(step): nothing to follow in view (\(lastSearch))")
                 continue
             }
             let before = anchor.element.frame.minY
@@ -148,22 +159,90 @@ final class AppUITests: XCTestCase {
             jumps, "scroll-diagnostics jumps 0", "the list counted jumps: \(jumps)\n\(around)")
     }
 
+    /// Opening a voice channel (`ASPEN_TEST_VOICE_CHANNEL`, "probe-voice") joins its call, with
+    /// the microphone the simulator takes from the Mac: the call bar comes up, and Leave call
+    /// takes it down. A call left over from an earlier run is left first, then joined again.
+    func testJoinsAndLeavesACall() throws {
+        try signIn()
+        let channel = ProcessInfo.processInfo.environment["ASPEN_TEST_VOICE_CHANNEL"] ?? "probe-voice"
+        let row = web.staticTexts.matching(
+            NSPredicate(format: "label == %@ OR label BEGINSWITH %@", channel, channel + ",")
+        ).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no channel \(channel)")
+        // WebKit names a landmark by its label and its role ("Your call, region").
+        let bar = web.otherElements.matching(NSPredicate(format: "label BEGINSWITH %@", "Your call"))
+            .firstMatch
+        let leave = web.buttons["Leave call"].firstMatch
+        let join = web.buttons["Join \(channel)"].firstMatch
+        if bar.exists {
+            leave.tap()
+            XCTAssertTrue(bar.waitForNonExistence(timeout: 20), "the earlier call's bar stayed")
+        }
+        row.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.alerts.buttons["Allow"]
+        if allow.waitForExistence(timeout: 5) {
+            allow.tap()
+        }
+        // A tap on the row joins; where the screen offers the way in instead, it is taken.
+        if !bar.waitForExistence(timeout: 10) && join.exists {
+            join.tap()
+        }
+        XCTAssertTrue(bar.waitForExistence(timeout: 40), "no call bar: \(app.debugDescription)")
+        leave.tap()
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 20), "the call bar stayed")
+    }
+
+    /// A notification of a message, delivered before the test (`xcrun simctl push` with what
+    /// the relay would send; `ASPEN_TEST_NOTIFICATION` is text the notification shows, the
+    /// message's), opens that message in the app when tapped in Notification Center.
+    func testOpensATappedNotification() throws {
+        let text = try environment("ASPEN_TEST_NOTIFICATION")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCUIDevice.shared.press(.home)
+        let top = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
+        top.press(
+            forDuration: 0.1,
+            thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        )
+        let notification = springboard.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        XCTAssertTrue(notification.waitForExistence(timeout: 10), "no notification saying \(text)")
+        notification.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "the app did not open")
+        let shown = web.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+        XCTAssertTrue(shown.waitForExistence(timeout: 30), "the message is not shown: \(app.debugDescription)")
+    }
+
+    /// What the last anchor search saw, for a stray that says nothing was found.
+    private var lastSearch = ""
+
     /// Something in view, between the top and the message box, that only one element shows:
-    /// a line of text, or a picture by its description.
+    /// a line of text, or a picture by its description. Every property read is a query of the
+    /// web view, slow enough to matter, so the elements are walked from the newest, since the
+    /// rows in view sit near the end of the list while every page of older history read so far
+    /// lies before them (what follows the rows are a few overlays, placed anywhere), and a
+    /// row's place is read before anything else about it.
     private func middleText() -> (label: String, element: XCUIElement)? {
         let screen = app.windows.firstMatch.frame
         let band = screen.minY + screen.height * 0.15...screen.minY + screen.height * 0.75
+        var seen = 0
+        var inBand = 0
         for kind in [XCUIElement.ElementType.staticText, .image] {
             let all = web.descendants(matching: kind)
-            for element in all.allElementsBoundByIndex {
+            for element in all.allElementsBoundByIndex.reversed() {
+                seen += 1
+                guard band.contains(element.frame.midY) else { continue }
+                inBand += 1
                 let label = element.label
-                guard label.count > 4, band.contains(element.frame.midY) else { continue }
+                guard label.count > 4 else { continue }
                 let same = all.matching(NSPredicate(format: "label == %@", label))
                 if same.count == 1 {
                     return (label, same.firstMatch)
                 }
             }
         }
+        lastSearch = "window \(screen), \(seen) read, \(inBand) in band"
         return nil
     }
 }

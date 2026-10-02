@@ -176,7 +176,7 @@ each subscription's keys beside the session it registered them with.
 
 - `kind`, and what it needs:
   - `message` (`channel`, `message`): a message the person should be told of. The app fetches
-    it (`GET /api/v1/messages/{message}?include=authors,channels`) and shows who wrote it,
+    it (`GET /api/v1/messages/{message}?include=authors,channels,mentions`) and shows who wrote it,
     where, and what it says, grouped by channel.
   - `read` (`channel`, `message`): the person read the channel up to `message` on another
     device; the app removes that channel's notifications up to it. It shows nothing.
@@ -242,7 +242,7 @@ on Android in the app's private storage.
 For a push, the notification code:
 
 1. finds the account whose `subscription` is the push's `s`, and decrypts `c` with its keys;
-2. for `message`, fetches `GET {origin}/api/v1/messages/{message}?include=authors,channels`
+2. for `message`, fetches `GET {origin}/api/v1/messages/{message}?include=authors,channels,mentions`
    with `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and
    `refreshToken`, and keeps it), and shows who wrote it, where, and what it says (tags as
    names), grouped by channel, with the message id as the notification's identifier;

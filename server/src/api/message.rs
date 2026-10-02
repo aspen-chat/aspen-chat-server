@@ -45,6 +45,10 @@ pub enum MessageInclude {
     /// The users who wrote the messages, as `included.users`. Authors whose accounts have since
     /// been deleted are omitted.
     Authors,
+    /// The users the messages tag by name (`mentions.users`), as `included.users`, so that a
+    /// reader with no other source of names, a phone's notification code say, can show a tag
+    /// as a name.
+    Mentions,
     /// The messages' attachments, as `included.attachments`.
     Attachments,
     /// The polls the messages show or announce, as `included.polls`, with the caller's own
@@ -92,14 +96,20 @@ async fn sideload_messages(
         .collect();
     let (users, attachments, polls, threads, channels, echoes, reactions) = tokio::try_join!(
         async {
-            if include.contains(MessageInclude::Authors) {
-                let authors: Vec<UserId> = messages
+            let authors = include.contains(MessageInclude::Authors);
+            let mentions = include.contains(MessageInclude::Mentions);
+            if authors || mentions {
+                let users: Vec<UserId> = messages
                     .iter()
-                    .map(|m| m.author)
+                    .flat_map(|m| {
+                        let author = authors.then_some(m.author);
+                        let tagged = mentions.then(|| m.mentions.users.iter().copied());
+                        author.into_iter().chain(tagged.into_iter().flatten())
+                    })
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect();
-                app::user::read_users(state, &authors).await.map(Some)
+                app::user::read_users(state, &users).await.map(Some)
             } else {
                 Ok(None)
             }

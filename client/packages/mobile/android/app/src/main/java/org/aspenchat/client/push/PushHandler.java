@@ -88,7 +88,7 @@ public final class PushHandler {
     private void show(String subscription, JSONObject account, String channel, String messageId)
         throws IOException, JSONException {
         String origin = account.getString("origin");
-        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + "?include=authors,channels");
+        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + "?include=authors,channels,mentions");
         if (read == null) {
             return;
         }

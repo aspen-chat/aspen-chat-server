@@ -135,12 +135,17 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   `ios/App/App/AspenFilesPlugin.swift`, where the user picks a folder and the file is made in
   it under the name it was sent with), which `filesBridge.ts` wraps as a `FileSink`, writing
   through the bridge in base64 pieces of about a megabyte; `DocumentSinkTest` checks Android's
-  native side on a device. The iOS app registers its own plugins in `MainViewController`.
+  native side on a device. The iOS app registers its own plugins in `MainViewController`, which `SceneDelegate` makes the window's root: the scene builds the window itself rather than from the storyboard, so a bare `CAPBridgeViewController` there would leave every plugin of the app's unimplemented.
 - The iOS project (`packages/mobile/ios`) is kept, as Android's is. Its UI tests
   (`ios/App/AppUITests`, scheme `App`) drive the app with real taps and finger drags in WebKit
   against the server the web build names, signing in as `ASPEN_TEST_USER`/`ASPEN_TEST_PASSWORD`
   (given to `xcodebuild test` as `TEST_RUNNER_`-prefixed variables; without them they skip):
-  `testReadingBackMovesOnlyWithTheFinger` is Safari's own answer to `historyScroll.spec.ts`.
+  `testReadingBackMovesOnlyWithTheFinger` is Safari's own answer to `historyScroll.spec.ts`;
+  signing in allows the system's notification alert, so the phone registers for push as a
+  person's would; `testJoinsAndLeavesACall` joins a call with the microphone the simulator
+  takes from the Mac; and `testOpensATappedNotification` (given `ASPEN_TEST_NOTIFICATION`,
+  text of a notification delivered first) opens a tapped notification's message, which needs
+  one the service extension replaced, so a device.
   The Administration Dashboard's user directory shows a user of another deployment as
   `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
   `AspenSync.setForeignUserBanned`).
@@ -951,19 +956,26 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   only with a relay in the `aspen_push_relay` string and a `google-services.json` from its
   publisher's Firebase project. On iOS (`packages/mobile/ios/App`), `AspenPushPlugin.swift` is the
   same plugin: `describe` names APNs, the bundle id, the sandbox for a debug build, and the relay
-  `AspenPushRelay` in `Info.plist` names (empty, like Android's string, until a publisher sets
-  it), and the state is a keychain item in the access group `AspenKeychainAccessGroup`
+  `AspenPushRelay` in `Info.plist` names (the build setting `ASPEN_PUSH_RELAY`, given on the
+  `xcodebuild` command line or in a publisher's project; empty, like Android's string, the build
+  has no push), and the state is a keychain item in the access group `AspenKeychainAccessGroup`
   (`$(AppIdentifierPrefix)` and the bundle id with `.push`, in both `Info.plist` files and both
   entitlements files), which the notification service extension `AspenNotificationService`
   shares (`PushState.swift`). The extension (`NotificationService.swift`) decrypts the push's
   ciphertext with the account's keys (`WebPush.swift`, CryptoKit; `ios/scripts/check_webpush.sh`
   runs it against RFC 8291's example with `swiftc`, no target needed), fetches the message
-  with the session (renewed once on `401`, the new token written back), and shows the author,
+  with the session (`include=authors,channels,mentions`, so tags show as names; renewed once
+  on `401`, the new token written back), and shows the author,
   the channel, and the text with tags as names, carrying where the message is for a tap; a
   `read` or `deleted` pointer, and any failure, leaves the placeholder, since the build holds no
   filtering entitlement. The `AppDelegate` posts APNs registration to the Capacitor push plugin.
   `xcrun simctl push <device> org.aspenchat.client payload.json` delivers a push to the
-  simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send them. `pnpm --filter @aspen/mobile test:android` runs the JVM tests
+  simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send
+  them, but shows only the placeholder: the simulator's bridge adds the notification as a
+  request directly, never through the path that launches service extensions, so the extension
+  runs only on a device. `ios/scripts/check_notification.sh state.json payload.json` runs the
+  extension's work on a Mac instead, with its own sources, on a kept state and such a payload,
+  reaching the deployment the state names, and prints what the notification would show. `pnpm --filter @aspen/mobile test:android` runs the JVM tests
   and, on a connected device or emulator, the handler end to end against a stand-in deployment
   (debug builds may use plain HTTP to the device itself for it). It needs JDK 21 and the Android
   SDK; CI does not run it yet.

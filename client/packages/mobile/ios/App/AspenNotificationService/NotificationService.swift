@@ -1,4 +1,8 @@
 import UserNotifications
+import os
+
+/// The extension's log, read with `log stream --predicate 'subsystem == "org.aspenchat.client"'`.
+private let log = Logger(subsystem: "org.aspenchat.client", category: "push")
 
 /// Turns a push into the notification it stands for, within the thirty seconds iOS gives an
 /// extension (`spec/push.md`, What reaches the phone): the push carries only a subscription id
@@ -24,15 +28,40 @@ final class NotificationService: UNNotificationServiceExtension {
         guard let aspen = request.content.userInfo["aspen"] as? [String: Any],
               let subscription = aspen["s"] as? String,
               let ciphertext = aspen["c"] as? String,
-              let message = Data(base64url: ciphertext),
-              let state = PushStateStore.load(),
-              let account = state.accounts.first(where: { $0.subscription == subscription }),
-              let privateKey = Data(base64url: account.keys.privateKey.d),
-              let publicKey = Data(base64url: account.keys.publicKey),
-              let auth = Data(base64url: account.keys.auth),
-              let plaintext = try? WebPush.decrypt(message: message, privateKey: privateKey, publicKey: publicKey, auth: auth),
-              let pointer = try? JSONSerialization.jsonObject(with: plaintext) as? [String: Any]
+              let message = Data(base64url: ciphertext)
         else {
+            log.error("a push without the relay's subscription and ciphertext")
+            contentHandler(content)
+            return
+        }
+        guard let state = PushStateStore.load() else {
+            log.error("no push state is kept for the extension to read")
+            contentHandler(content)
+            return
+        }
+        guard let account = state.accounts.first(where: { $0.subscription == subscription }) else {
+            log.error("no account is kept for subscription \(subscription, privacy: .public)")
+            contentHandler(content)
+            return
+        }
+        guard let privateKey = Data(base64url: account.keys.privateKey.d),
+              let publicKey = Data(base64url: account.keys.publicKey),
+              let auth = Data(base64url: account.keys.auth)
+        else {
+            log.error("the account's keys do not read as base64url")
+            contentHandler(content)
+            return
+        }
+        let plaintext: Data
+        do {
+            plaintext = try WebPush.decrypt(message: message, privateKey: privateKey, publicKey: publicKey, auth: auth)
+        } catch {
+            log.error("the push does not decrypt: \(String(describing: error), privacy: .public)")
+            contentHandler(content)
+            return
+        }
+        guard let pointer = try? JSONSerialization.jsonObject(with: plaintext) as? [String: Any] else {
+            log.error("the pointer is not a JSON object")
             contentHandler(content)
             return
         }
@@ -64,6 +93,8 @@ final class NotificationService: UNNotificationServiceExtension {
                     "community": shown.community ?? NSNull(),
                     "parentChannel": shown.parentChannel ?? NSNull(),
                 ]
+            } else {
+                log.error("the message a push points to could not be fetched; the placeholder stays")
             }
             handler(content)
         }
@@ -87,8 +118,8 @@ struct ShownMessage {
     let parentChannel: String?
 }
 
-/// Reads the message a pointer names, as the app would (`GET /messages/{id}` with the authors
-/// and channels sideloaded), with the account's session, renewed once on `401`.
+/// Reads the message a pointer names, as the app would (`GET /messages/{id}` with the authors,
+/// channels, and tagged people sideloaded), with the account's session, renewed once on `401`.
 final class MessageFetcher {
     private static let timeout: TimeInterval = 12
 
@@ -100,13 +131,14 @@ final class MessageFetcher {
     }()
 
     func fetch(account: PushState.Account, messageId: String, done: @escaping (ShownMessage?) -> Void) {
-        let url = "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels"
+        let url = "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions"
         get(url: url, token: account.sessionToken) { [self] status, data in
             if status == 200, let data {
                 done(Self.shown(from: data))
                 return
             }
             guard status == 401 else {
+                log.error("fetching the message answered \(status, privacy: .public)")
                 done(nil)
                 return
             }
