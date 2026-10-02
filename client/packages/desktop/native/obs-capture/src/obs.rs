@@ -149,10 +149,15 @@ struct Session {
 unsafe impl Send for Session {}
 
 /// How long a game capture may go without a frame from its hook before the window is captured
-/// another way: the game may never present, an anti-cheat may refuse the hook, or the window
-/// may not be a game at all. Games take a few seconds to show their first frame after a hook.
-const HOOK_TIMEOUT: Duration = Duration::from_secs(8);
-const HOOK_POLL: Duration = Duration::from_millis(500);
+/// another way: the game may never present, an anti-cheat may refuse the hook (after which
+/// the source never tries again), or the window may not be a game at all. The source's first
+/// injection is immediate and a hook that takes delivers a frame within the game's next
+/// presents, and at the fastest hook rate (`HOOK_RATE_FASTEST`) an injection that ran but
+/// captured nothing is tried again every 0.4 s, so three seconds covers several attempts.
+const HOOK_TIMEOUT: Duration = Duration::from_secs(3);
+const HOOK_POLL: Duration = Duration::from_millis(250);
+/// `game_capture`'s `hook_rate` that retries a hook every 0.4 s rather than every 4 s.
+const HOOK_RATE_FASTEST: i64 = 3;
 /// `window_capture`'s capture method that goes through Windows.Graphics.Capture.
 const WINDOW_CAPTURE_WGC: i64 = 2;
 
@@ -606,6 +611,11 @@ pub fn start_capture(options: StartOptions) -> Result<()> {
         let scene_name = cstring(&format!("aspen-scene-{serial}"))?;
         let encoder_name = cstring(&format!("aspen-h264-{serial}"))?;
         let output_name = cstring(&format!("aspen-output-{serial}"))?;
+        if options.kind == "game_capture"
+            && !ffi::obs_data_has_user_value(settings, c"hook_rate".as_ptr())
+        {
+            ffi::obs_data_set_int(settings, c"hook_rate".as_ptr(), HOOK_RATE_FASTEST);
+        }
         let source = ffi::obs_source_create(
             kind.as_ptr(),
             source_name.as_ptr(),

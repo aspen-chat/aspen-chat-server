@@ -389,11 +389,13 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   it as H.264 constrained baseline, and sends it as SRTP straight to the voice server's plain
   RTP transport, answering the server's RTCP itself. With it goes the captured window's own
   sound: Windows through `wasapi_process_output_capture` and macOS through `sck_audio_capture`
-  (both beta OBS features), each pointed at the same window as the picture. A game capture
-  whose hook delivers no frame within `HOOK_TIMEOUT` (eight seconds: the game never presented,
-  an anti-cheat refused the hook, or the window is not a game) is replaced in the scene by a
-  window capture of the same window through Windows.Graphics.Capture (`window_capture` with
-  the Windows 10 method, `libobs-winrt`), logged on stderr, the sound unchanged. The audio is
+  (both beta OBS features), each pointed at the same window as the picture. A game capture is
+  made with the fastest hook rate, so a hook that ran but captured nothing is tried again every
+  0.4 s, and one whose hook delivers no frame within `HOOK_TIMEOUT` (three seconds: the game
+  never presented, an anti-cheat refused the hook, after which the source never tries again, or
+  the window is not a game) is replaced in the scene by a window capture of the same window
+  through Windows.Graphics.Capture (`window_capture` with the Windows 10 method,
+  `libobs-winrt`), logged on stderr, the sound unchanged. The audio is
   encoded as Opus by obs-ffmpeg and sent as its own SRTP stream to a second producer
   (`produceRtp` with source `screenAudio`), which the sharer does not consume back. The
   helper's RTCP answers: NACKs from a buffer of recent packets, the receiver's bandwidth
