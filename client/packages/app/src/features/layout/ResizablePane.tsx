@@ -64,7 +64,10 @@ export function ResizablePane({
   const wide = useMediaQuery(MEDIUM_SCREEN);
   const kept = usePreference(sizing.definition);
   const [dragging, setDragging] = useState<number | null>(null);
-  const drag = useRef<{ x: number; width: number; flip: number } | null>(null);
+  /** A drag under way: where it began, the width then, which way widens, and the latest width. */
+  const drag = useRef<{ x: number; width: number; flip: number; latest: number | null } | null>(
+    null,
+  );
   const width = clamp(sizing, dragging ?? kept?.width ?? sizing.fallback);
 
   const keep = (next: number) => {
@@ -84,18 +87,23 @@ export function ResizablePane({
     // Moving the edge outward widens the pane: rightward for a start pane in a left-to-right
     // layout, leftward for an end pane, and the other way round right to left.
     const flip = (edge === "end" ? 1 : -1) * (rtl ? -1 : 1);
-    drag.current = { x: event.clientX, width, flip };
+    drag.current = { x: event.clientX, width, flip, latest: null };
     setDragging(width);
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = drag.current;
     if (start !== null) {
-      setDragging(clamp(sizing, start.width + (event.clientX - start.x) * start.flip));
+      const next = clamp(sizing, start.width + (event.clientX - start.x) * start.flip);
+      start.latest = next;
+      setDragging(next);
     }
   };
   const onPointerUp = () => {
-    if (drag.current !== null && dragging !== null) {
-      keep(dragging);
+    // The width as of the last move, which the render the state would come from may not have
+    // caught up with when the pointer lifts right after it.
+    const start = drag.current;
+    if (start !== null && start.latest !== null) {
+      keep(start.latest);
     }
     drag.current = null;
     setDragging(null);

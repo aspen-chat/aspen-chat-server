@@ -889,7 +889,9 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   each time. Nor is a page read whose arrival would drop messages within `LOAD_UNSURE_SCREENS`
   of the view (`roomFor`): in a channel a little longer than the window, and only a few screens
   tall, reading ahead would otherwise drop the very messages being read. The store keeps the
-  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records.
+  window at most `WINDOW_MAX_MESSAGES` long, evicting the far end's records, except that a
+  window followed live grows to `LIVE_WINDOW_MAX_MESSAGES` (twice that) before its oldest go,
+  since the reader may be on the oldest of a full window when a message arrives.
   On iOS and iPadOS the list scrolls itself (`OWNS_SCROLLING` in `MessageList.tsx`, with the
   arithmetic in `scrollPhysics.ts`): its box hides its overflow, so no finger, wheel, or key
   scrolls it, and the list takes those itself and sets the box's scroll position from them,

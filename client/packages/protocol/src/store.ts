@@ -109,6 +109,13 @@ export type MissingKind = "user" | "icon" | "poll" | "attachment";
  * holds more than this many messages in memory; what was dropped is read again on the way back.
  */
 export const WINDOW_MAX_MESSAGES = 300;
+/**
+ * How many messages a window followed live may grow to before its oldest are dropped: twice
+ * the cap, because the reader may be reading the oldest of a full window when a message
+ * arrives, and dropping them from under the reader would move what they are reading; by the
+ * time this many have arrived, they have long since left.
+ */
+export const LIVE_WINDOW_MAX_MESSAGES = WINDOW_MAX_MESSAGES * 2;
 
 /** Stands for the DMs among `RecordStore.unreadPlaces`, beside community ids. */
 export const UNREAD_DMS = "dms";
@@ -2845,8 +2852,9 @@ export class RecordStore {
     let ids = window.ids.slice();
     ids.splice(at, 0, message.id);
     let hasOlder = window.hasOlder;
-    // A window followed live for long enough would otherwise grow without bound.
-    if (ids.length > WINDOW_MAX_MESSAGES) {
+    // A window followed live for long enough would otherwise grow without bound; the oldest go
+    // only once it is well past the cap (`LIVE_WINDOW_MAX_MESSAGES`), never from under a reader.
+    if (ids.length > LIVE_WINDOW_MAX_MESSAGES) {
       for (const id of ids.slice(0, ids.length - WINDOW_MAX_MESSAGES)) {
         this.#evictMessage(id);
       }

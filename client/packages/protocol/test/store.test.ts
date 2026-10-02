@@ -555,16 +555,26 @@ describe("RecordStore window bounds", () => {
     expect(store.message(message(100).id)).toBeUndefined();
   });
 
-  it("keeps a live window bounded as messages arrive", () => {
+  it("lets a live window grow past the cap, dropping the oldest only once it is twice the cap", () => {
     const store = bootstrapped();
     store.replaceWindow(general.id, page(100, WINDOW_MAX_MESSAGES), {
       hasOlder: false,
       atLatest: true,
     });
+    // A reader may be on the oldest of a full window: one arrival drops nothing.
     store.applyEvent({ serverEvent: "message", type: "create", ...message(900) });
-    const window = store.messages(general.id);
+    let window = store.messages(general.id);
+    expect(window?.ids).toHaveLength(WINDOW_MAX_MESSAGES + 1);
+    expect(window?.ids[0]).toBe(message(100).id);
+    expect(window?.hasOlder).toBe(false);
+    // Twice the cap, and the window is back to the cap, its oldest gone.
+    for (let n = 901; n <= 900 + WINDOW_MAX_MESSAGES; n++) {
+      store.applyEvent({ serverEvent: "message", type: "create", ...message(n) });
+    }
+    // Three hundred and one arrived; the newest three hundred stay.
+    window = store.messages(general.id);
     expect(window?.ids).toHaveLength(WINDOW_MAX_MESSAGES);
-    expect(window?.ids[0]).toBe(message(101).id);
+    expect(window?.ids[0]).toBe(message(901).id);
     expect(window?.hasOlder).toBe(true);
     expect(store.message(message(100).id)).toBeUndefined();
   });

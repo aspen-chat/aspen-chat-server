@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { signInToWorld } from "./world";
+import { settleAnimations, signInToWorld } from "./world";
 
 /**
  * The community's settings and a channel's access settings, as the organiser of the stubbed
@@ -58,6 +58,12 @@ test("a channel's access starts open to everyone and explains what a member can 
   await expect(dialog.getByRole("radio", { name: /^Everyone Every member/ })).toBeChecked();
   await dialog.getByText("Check access").click();
   await dialog.getByRole("combobox", { name: "Member" }).click();
-  await page.getByRole("option").first().click();
-  await expect(dialog.getByRole("row", { name: /View channels/ })).toContainText("Yes");
+  // The list of members rises into place; a press on an option still moving can miss it.
+  const option = page.getByRole("option").first();
+  await expect(option).toBeVisible();
+  await settleAnimations(page);
+  await option.click();
+  await expect(dialog.getByRole("row", { name: /View channels/ })).toContainText("Yes", {
+    timeout: 10_000,
+  });
 });

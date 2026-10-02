@@ -1256,6 +1256,9 @@ export async function signInToWorld(
   await page.getByLabel("Username").fill("kate");
   await page.getByLabel("Password").fill("hunter22");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Signed in once the session is kept, which is a moment after the button: a test that
+  // reloads the page before then lands on the sign-in screen, on a busy machine especially.
+  await page.waitForFunction(() => localStorage.getItem("aspen.session") !== null);
   return publish;
 }
 
