@@ -215,6 +215,40 @@ export const DM_PERMISSIONS: PermissionSet = new Set<Permission>([
   "pinMessages",
 ]);
 
+/** What a deployment moderator may do in a DM they are not in: look, and take things away. */
+export const DM_MODERATION: PermissionSet = new Set<Permission>(["viewChannel", "manageMessages"]);
+/** A one-to-one DM with someone the caller blocked: it can be read, and nothing more. */
+export const DM_BLOCKED: PermissionSet = new Set<Permission>(["viewChannel"]);
+
+/**
+ * What someone may do across a community, given the roles they hold besides everyone's
+ * (`undefined` when no read has said), whether they own it, and whether they moderate the
+ * deployment; `null` when they are not known to be a member. `roles` is read only when they are.
+ */
+export function memberAccess(
+  holds: readonly string[] | undefined,
+  owner: boolean,
+  moderator: boolean,
+  roles: () => readonly Role[],
+): CommunityPermissions | null {
+  if (holds === undefined && !owner && !moderator) {
+    return null;
+  }
+  return resolveCommunity(roles(), holds ?? (owner ? [] : null), owner, moderator);
+}
+
+/**
+ * What the caller may do in a DM: every channel permission as a recipient, unless `readOnly`
+ * (a block, or the system account's notices) leaves it to be read; a deployment moderator who
+ * is not a recipient may look and take things away.
+ */
+export function dmAccess(recipient: boolean, readOnly: boolean, moderator: boolean): PermissionSet {
+  if (readOnly) {
+    return DM_BLOCKED;
+  }
+  return recipient || !moderator ? DM_PERMISSIONS : DM_MODERATION;
+}
+
 /** Why a member may or may not do something in a channel, as `explain` finds it. */
 export type AccessReason =
   | { readonly kind: "owner" }

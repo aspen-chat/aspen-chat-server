@@ -31,12 +31,8 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
-import {
-  REACTION_SUMMARY_USERS,
-  RecordStore,
-  type Invocation,
-  type NotificationLevel,
-} from "./store";
+import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
+import type { Invocation, NotificationLevel } from "./storeTypes";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall, type VoiceMedia } from "./voice";
 

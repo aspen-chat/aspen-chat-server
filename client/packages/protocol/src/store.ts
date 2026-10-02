@@ -12,13 +12,41 @@
  * several topics, and every listener is notified once, after the whole write has been applied.
  */
 
+import { isDm } from "./channels";
 import {
-  DM_PERMISSIONS,
-  resolveCommunity,
+  isUnread,
+  kindNotifies,
+  levelOf,
+  placeMentions,
+  tagsMe,
+  unreadPlaces,
+} from "./notifyRules";
+import {
+  dmAccess,
+  memberAccess,
   type CommunityPermissions,
-  type Permission,
   type PermissionSet,
 } from "./permissions";
+import type {
+  Attachment,
+  BotCommands,
+  ChannelMute,
+  ChannelVoice,
+  EmojiReactions,
+  Icon,
+  Included,
+  Listener,
+  MessageWindow,
+  MissingKind,
+  NotificationLevel,
+  NotificationSetting,
+  Pin,
+  ReactionSummary,
+  Reactions,
+  ReadState,
+  Topic,
+  VoiceParticipantState,
+} from "./storeTypes";
 import type {
   Category,
   CategoryOverride,
@@ -44,67 +72,6 @@ import { identityOf } from "./identity";
 
 type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
 
-export type Attachment = components["schemas"]["Attachment"];
-export type Icon = components["schemas"]["Icon"];
-export type Included = components["schemas"]["Included"];
-export type PollVote = components["schemas"]["PollVote"];
-/**
- * How far the caller has read a channel. `lastRead` is a position among the channel's message
- * ids, whose lexical order is chronological, so the channel is unread while `lastMessage` sorts
- * after it. An empty `lastRead` is before every message.
- */
-export type ReadState = components["schemas"]["ReadState"];
-/** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
-export type ChannelMute = components["schemas"]["ChannelMute"];
-export type NotificationLevel = components["schemas"]["NotificationLevel"];
-export type NotificationSetting = components["schemas"]["NotificationSetting"];
-/** Who a message tags, as far as its author was allowed to; the tags that count. */
-export type Mentions = components["schemas"]["Mentions"];
-/** Someone the caller has blocked, and since when. */
-export type UserBlock = components["schemas"]["UserBlock"];
-/** A pinned message: which, when it was pinned, and its place among the channel's pins. */
-export type Pin = components["schemas"]["Pin"];
-/** A bot and the commands it answers, as a channel offers them. */
-export type BotCommands = components["schemas"]["BotCommands"];
-export type Command = components["schemas"]["Command"];
-export type CommandParameter = components["schemas"]["Parameter"];
-export type ParameterType = components["schemas"]["ParameterType"];
-/** A command as sent: which bot's, its name, and its arguments as the server reads them. */
-export type Invocation = components["schemas"]["Invocation"];
-
-export type Listener = () => void;
-
-/**
- * A subscription key. Topics are strings so that one map holds every listener, and so a topic
- * can be computed from an id without allocating an object per subscription.
- *
- * - `me`, `communities`: the calling user and the communities they belong to
- * - `community:<id>`, `channel:<id>`, `category:<id>`, `user:<id>`, `message:<id>`,
- *   `attachment:<id>`: one record
- * - `channels:<communityId>`, `categories:<communityId>`, `members:<communityId>`: a
- *   community's children, as ids or records
- * - `messages:<channelId>`: the loaded window of a channel's history (a thread's too)
- * - `dms`: the caller's DMs and group DMs, the most recently active first
- * - `people`: everyone the caller shares a community with, as far as the members read so far
- *   show, which is who they may start a DM with
- * - `reactions:<messageId>`: who reacted with what
- * - `poll:<id>`: one poll with its tally, and the calling user's own votes on it
- * - `icon:<id>`: one uploaded icon, which users and communities name by id
- * - `voice:<channelId>`: the call on a voice channel and who is in it
- * - `invites:<communityId>`, `invite:<code>`: a community's invites, once loaded
- * - `roles:<communityId>`: a community's roles, lowest first, and which of them each member
- *   holds
- * - `overrides:<channelId|categoryId>`: one channel's or category's overrides
- * - `access:<communityId>`: what the caller may do across a community
- * - `channelAccess:<channelId>`: what the caller may do in one channel
- * - `pins:<channelId>`: a channel's pinned messages, once loaded
- * - `commands:<channelId>`: the commands of the bots that can see a channel, once loaded
- */
-export type Topic = string;
-
-/** The kinds of record fetched on demand whose absence the store remembers. */
-export type MissingKind = "user" | "icon" | "poll" | "attachment";
-
 /**
  * The most messages a channel's window holds. Extending it past this at one end drops
  * messages, and their records, from the other end, so a long scroll through history never
@@ -119,77 +86,16 @@ export const WINDOW_MAX_MESSAGES = 300;
  */
 export const LIVE_WINDOW_MAX_MESSAGES = WINDOW_MAX_MESSAGES * 2;
 
-/** Stands for the DMs among `RecordStore.unreadPlaces`, beside community ids. */
-export const UNREAD_DMS = "dms";
-
-/**
- * The loaded portion of a channel's history. Message ids are UUIDv7, so their lexical order is
- * chronological and `ids` is kept sorted ascending. `atLatest` means the newest id is the
- * channel's newest message, so messages created from now on belong at the end; a window loaded
- * around an old message, or trimmed at its newer end, is not at the latest, and new messages
- * are not appended to it because they would not be contiguous with it.
- */
-export interface MessageWindow {
-  readonly ids: readonly string[];
-  readonly hasOlder: boolean;
-  readonly atLatest: boolean;
-}
-
-/** Someone in a call, with what the client tracks about them from speaking events. */
-export interface VoiceParticipantState {
-  readonly user: string;
-  readonly session: string;
-  readonly channel: string;
-  readonly joinedAt: string;
-  readonly muted: boolean;
-  readonly sharingScreen: boolean;
-  readonly deafened: boolean;
-  readonly speaking: boolean;
-  /** When they last started speaking, as `now()` reported it; `null` if never seen speaking. */
-  readonly lastSpokeAt: number | null;
-}
-
-/** A voice channel's call, or none. */
-export interface ChannelVoice {
-  readonly session: VoiceSession | null;
-  /** In the order they joined. */
-  readonly participants: readonly VoiceParticipantState[];
-  /**
-   * Who a DM's call is ringing. A ring ends at its `until` with no event, so these include rings
-   * that have run out; readers compare `until` with the clock.
-   */
-  readonly rings: readonly VoiceRing[];
-}
-
 const NO_VOICE: ChannelVoice = { session: null, participants: [], rings: [] };
-
-/**
- * One emoji's reactions to a message, in brief: how many, whether the caller is among them, and
- * the first few to react, earliest first (`REACTION_SUMMARY_USERS` at most).
- */
-export interface EmojiReactions {
-  readonly count: number;
-  readonly me: boolean;
-  readonly users: readonly string[];
-}
-
-/** A message's reactions, `emoji -> summary`, each emoji in the order it was first used. */
-export type Reactions = ReadonlyMap<string, EmojiReactions>;
-
-/** A message read's summary of one emoji's reactions. */
-export type ReactionSummary = components["schemas"]["ReactionSummary"];
 
 /** How many of an emoji's reactors a summary names, as the server's `SUMMARY_USERS`. */
 export const REACTION_SUMMARY_USERS = 4;
 
 const EMPTY_IDS: readonly string[] = [];
 const NO_PERMISSIONS: PermissionSet = new Set();
-const DM_MODERATION: PermissionSet = new Set<Permission>(["viewChannel", "manageMessages"]);
-/** A one-to-one DM with someone the caller blocked: it can be read, and nothing more. */
 /** How many arrivals `arrivedAt`, and departures `departedAt`, remember. */
 const MAX_ARRIVALS = 200;
 
-const DM_BLOCKED: PermissionSet = new Set<Permission>(["viewChannel"]);
 const EMPTY_OVERRIDES: readonly never[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
@@ -531,15 +437,7 @@ export class RecordStore {
       const owner = community.owner === user;
       // Only the caller's moderation is known; anyone else is resolved as a member.
       const moderator = user === this.#myUserId && this.moderator;
-      if (holds === undefined && !owner && !moderator) {
-        return null;
-      }
-      return resolveCommunity(
-        this.roles(communityId),
-        holds ?? (owner ? [] : null),
-        owner,
-        moderator,
-      );
+      return memberAccess(holds, owner, moderator, () => this.roles(communityId));
     };
     if (userId !== undefined && userId !== this.#myUserId) {
       return compute(userId);
@@ -583,13 +481,10 @@ export class RecordStore {
         const recipient =
           this.#myUserId !== null && (parent?.recipients ?? []).includes(this.#myUserId);
         // A block, or notices from the system account, leave a DM to be read and nothing more.
-        if (
+        const readOnly =
           recipient &&
-          (this.blockedDmPeer(channelId) !== null || this.systemDmPeer(channelId) !== null)
-        ) {
-          return DM_BLOCKED;
-        }
-        return recipient || !this.moderator ? DM_PERMISSIONS : DM_MODERATION;
+          (this.blockedDmPeer(channelId) !== null || this.systemDmPeer(channelId) !== null);
+        return dmAccess(recipient, readOnly, this.moderator);
       }
       const access = this.access(channel.community);
       return access === null ? NO_PERMISSIONS : this.permissionsIn(channelId, access);
@@ -702,8 +597,7 @@ export class RecordStore {
 
   /** Topic `read:<channelId>`: whether the channel holds a message by someone else not yet read. */
   unread(channelId: string): boolean {
-    const state = this.#readStates.get(channelId);
-    return state?.lastMessage != null && state.lastMessage > state.lastRead;
+    return isUnread(this.#readStates.get(channelId));
   }
 
   /**
@@ -719,16 +613,7 @@ export class RecordStore {
    * their DMs with `UNREAD_DMS`.
    */
   placeMentions(place: string): number {
-    let total = 0;
-    for (const state of this.#readStates.values()) {
-      const channel = this.#channels.get(state.channel);
-      const home =
-        channel === undefined ? undefined : isDm(channel) ? UNREAD_DMS : channel.community;
-      if (home === place) {
-        total += state.mentions;
-      }
-    }
-    return total;
+    return placeMentions(place, this.#readStates, this.#channels);
   }
 
   /**
@@ -748,10 +633,7 @@ export class RecordStore {
     const own = this.#channelLevels.get(place?.id ?? channelId) ?? null;
     const community =
       place?.community == null ? undefined : this.#communityLevels.get(place.community);
-    const fallback: NotificationLevel =
-      place?.ty === "dm" || place?.ty === "groupDm" ? "all" : "tags";
-    const inherited = community ?? fallback;
-    return { level: own ?? inherited, own, inherited };
+    return levelOf(place, own, community);
   }
 
   /** Topic `notifications`: the caller's setting for a community, if they made one. */
@@ -767,15 +649,7 @@ export class RecordStore {
     if (message.author === this.#myUserId || this.silenced(message.author)) {
       return false;
     }
-    // An echo and a poll's result say nothing of their own, a call's record follows the ring
-    // that already told of the call, and a command is for its bot, whose answer is what tells.
-    if (
-      message.kind === "threadEcho" ||
-      message.kind === "pollClosed" ||
-      message.kind === "call" ||
-      message.kind === "missedCall" ||
-      message.kind === "command"
-    ) {
+    if (!kindNotifies(message)) {
       return false;
     }
     const channel = this.#channels.get(message.channelId);
@@ -966,20 +840,9 @@ export class RecordStore {
    * unread. A muted channel counts for neither.
    */
   unreadPlaces(): ReadonlySet<string> {
-    return this.#memoized("unread", () => {
-      const places = new Set<string>();
-      for (const state of this.#readStates.values()) {
-        const channel = this.#channels.get(state.channel);
-        if (
-          channel !== undefined &&
-          !this.#mutes.has(state.channel) &&
-          this.unread(state.channel)
-        ) {
-          places.add(channel.community ?? UNREAD_DMS);
-        }
-      }
-      return places;
-    });
+    return this.#memoized("unread", () =>
+      unreadPlaces(this.#readStates, this.#channels, this.#mutes),
+    );
   }
 
   /** The tracked channels whose newest message by someone else is `messageId`. */
@@ -2650,16 +2513,12 @@ export class RecordStore {
    */
   mentionsMe(message: Message): boolean {
     const me = this.#myUserId;
-    const tags = message.mentions;
     if (me === null) {
       return false;
     }
-    if (tags.everyone || tags.users.includes(me)) {
-      return true;
-    }
     const community = this.#channels.get(message.channelId)?.community;
     const held = community == null ? undefined : this.#memberRoles.get(`${community}/${me}`);
-    return held !== undefined && tags.roles.some((role) => held.includes(role));
+    return tagsMe(message.mentions, me, held);
   }
 
   #removeChannel(id: string): void {
@@ -3044,30 +2903,6 @@ export class RecordStore {
       this.#addMember(communityId, userId);
     }
   }
-}
-
-/** Splits a community's channels into those under each category and the top-level rest. */
-/** Whether a channel is a DM or group DM. */
-export function isDm(channel: Channel): boolean {
-  return channel.ty === "dm" || channel.ty === "groupDm";
-}
-
-export function groupChannels(
-  channels: readonly Channel[],
-  categories: readonly Category[],
-): { topLevel: Channel[]; byCategory: Map<string, Channel[]> } {
-  const byCategory = new Map<string, Channel[]>(categories.map((c) => [c.id, []]));
-  const topLevel: Channel[] = [];
-  for (const channel of channels) {
-    const group =
-      channel.parentCategory == null ? undefined : byCategory.get(channel.parentCategory);
-    if (group === undefined) {
-      topLevel.push(channel);
-    } else {
-      group.push(channel);
-    }
-  }
-  return { topLevel, byCategory };
 }
 
 export type { UserCommunity };
