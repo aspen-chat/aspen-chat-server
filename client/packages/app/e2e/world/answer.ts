@@ -11,7 +11,7 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-/** Answers every API request the app makes about the world above. */
+/** Answers every API request the app makes about the world in fixtures.ts and its sub-worlds. */
 export async function answer(
   route: Route,
   poll: ReturnType<typeof lunch>,
