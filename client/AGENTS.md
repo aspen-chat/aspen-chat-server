@@ -308,7 +308,9 @@ commit, as with comments.
   since the reader may be on the oldest of a full window when a message arrives. The Jump to
   latest pill is offered while the window lacks the newest messages, and while the view is at
   least a screen above the newest it holds (`farBack`), so a reader a few screens up in a
-  channel followed live has it too; within a screen of the bottom it goes.
+  channel followed live has it too; within a screen of the bottom it goes. A window that is not at the
+  latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
+  which reloads the newest page.
 - The UI thread is the only thread. Anything that awaits (network, storage) must not block
   rendering; keep async work in effects or event handlers and surface pending state in the UI.
 

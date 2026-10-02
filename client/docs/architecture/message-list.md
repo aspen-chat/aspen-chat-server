@@ -59,6 +59,3 @@ next is not counted), counting as a jump any frame in which it moved by other th
 list meant (`scrollDiagnostics.ts`, shown over the
 list by `ScrollDiagnosticsPanel` with a copy of the record); it is how the pan's override
 was found.
-A window that is not at the
-latest, whether loaded around a link or trimmed at its newer end, shows the jump control,
-which reloads the newest page.

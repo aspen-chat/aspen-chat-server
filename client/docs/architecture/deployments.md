@@ -50,7 +50,7 @@
   calls are `FileTransfers` (`packages/protocol/src/transfers.ts`), which `VoiceCall` feeds its
   signalling frames and whose state it carries as `files`; its peer connections are injected
   (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. The
-  root AGENTS.md's File transfers describes the flow. In the mobile apps a receiver chooses
+  repository's `docs/architecture/file-transfers.md` describes the flow. In the mobile apps a receiver chooses
   where a file goes through `AspenFilesPlugin` (Android's `android/.../files/`, iOS's
   `ios/App/App/AspenFilesPlugin.swift`, where the user picks a folder and the file is made in
   it under the name it was sent with), which `filesBridge.ts` wraps as a `FileSink`, writing
