@@ -84,6 +84,24 @@ import { useMessages } from "@/i18n/context";
  * Consecutive messages by people the reader blocked are collapsed into one row, which they may
  * open; a linked message among them opens its row. The row stands for its last message, both
  * as an anchor for the view and as what the reader has seen.
+ *
+ * When to give scrolling back to the browser. The list scrolls itself for one reason: on iOS, a
+ * scroll position the page sets while a finger drags or a fling runs is overridden by the pan,
+ * which places the view from where it began plus the finger's travel, so no list the browser
+ * scrolls for the user can be kept still through a page's arrival. The day the oldest iOS the
+ * apps support honours such a position, or applies scroll anchoring atomically with the
+ * gesture, the browser's scrolling is better than this: it runs on the compositor and keeps
+ * moving while the main thread is busy, draws the platform's own indicator and overscroll,
+ * and gives VoiceOver its three-finger scroll, which a box that hides its overflow does not.
+ * The proof is `testReadingBackQuicklyNeverJumps` (the iOS UI tests, against a build made
+ * with `VITE_SCROLL_DEBUG=1`): with this box made `overflow-y: auto`, the touch, wheel, and
+ * key handlers removed, and the diagnostics told of each scroll event's distance as a move it
+ * meant, ten runs in a row counting no jump on the simulator of the oldest supported iOS mean
+ * the override is gone, and the handlers, the physics, and the indicator can go with it.
+ * What stays whatever scrolls the list: holding the view by the noted row through every
+ * change (`still`, `holdStill`), pictures telling of their arrival in the same task, memoized
+ * rows, and pages rendered as transitions. Nothing else in the client should assume either
+ * way; the list's box is the only place that knows.
  */
 /**
  * How close to the end of the window the reader is heading for, in screens of the list, the
@@ -187,18 +205,51 @@ export function MessageList({
    * the stroke that started it.
    */
   const heading = useRef<"older" | "newer" | null>(null);
-  /** Sets every row's remembered height to its current one, so a change already absorbed is not seen again. */
-  const syncRowHeights = useRef<() => void>(() => undefined);
   /**
-   * The topmost row in view and where it stands in the content, which does not change with
-   * scrolling, noted after every move and change: a row that tells of a change of its height
-   * is measured against it (`keepStill`).
+   * The row kept still, and where it stands in the content, which does not change with
+   * scrolling, noted after every move and change: a linked message while it is shown, so a
+   * jump lands on it whatever loads around it, and otherwise the topmost row in view. Every
+   * change of the rows' sizes is measured by how far it has moved (`keepStillNow`, and the
+   * rows' observer).
    */
-  const still = useRef<{ id: string; top: number } | null>(null);
+  const still = useRef<{ id: string; top: number; height: number; linked: boolean } | null>(null);
   function noteStill() {
     const box = viewport.current;
-    const row = box === null ? null : rowsInView(box).first;
-    still.current = row === null ? null : { id: row.dataset.messageId ?? "", top: row.offsetTop };
+    if (box === null) {
+      still.current = null;
+      return;
+    }
+    const linked = highlightNow.current;
+    const shownLink = linked !== undefined && highlightShown.current === linked;
+    const row = shownLink
+      ? box.querySelector<HTMLElement>(`[data-message-id="${linked}"]`)
+      : rowsInView(box).first;
+    still.current =
+      row === null
+        ? null
+        : {
+            id: row.dataset.messageId ?? "",
+            top: row.offsetTop,
+            height: row.offsetHeight,
+            linked: shownLink,
+          };
+  }
+  /**
+   * Moves the view by what the noted row has moved in the content since it was noted. A linked
+   * message is held by its middle rather than its top, so it stays centred as what it holds,
+   * a picture of its own, takes its size.
+   */
+  function holdStill(why: string) {
+    const box = viewport.current;
+    const noted = still.current;
+    if (box === null || noted === null) {
+      return;
+    }
+    const row = box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
+    if (row !== null) {
+      const grown = noted.linked ? (row.offsetHeight - noted.height) / 2 : 0;
+      absorb(row.offsetTop - noted.top + grown, why);
+    }
   }
 
   /**
@@ -246,26 +297,16 @@ export function MessageList({
   /**
    * A row's height just changed in the DOM: keeps the view still through it now, in the same
    * task, by what the noted row has moved in the content; pinned to the bottom, the list stays
-   * there. The rows' observer then has nothing left to see of the change. Rows get one function
-   * for the list's life, which runs this render's.
+   * there. The rows' observer then finds nothing left to do. Rows get one function for the
+   * list's life, which runs this render's.
    */
   function keepStillNow() {
-    const box = viewport.current;
-    if (box === null) {
-      return;
-    }
     measureRange();
     if (stickToBottom.current && atLatestNow.current && drag.current === null) {
       moveTo(range.current.max, false);
     } else {
-      const noted = still.current;
-      const row =
-        noted === null ? null : box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
-      if (noted !== null && row !== null) {
-        absorb(row.offsetTop - noted.top, "row told");
-      }
+      holdStill("row told");
     }
-    syncRowHeights.current();
     noteStill();
   }
   const keepStillLatest = useRef(keepStillNow);
@@ -322,9 +363,11 @@ export function MessageList({
   const hasOlder = window?.hasOlder ?? false;
   const atLatest = window?.atLatest ?? true;
   const atLatestNow = useRef(atLatest);
+  const highlightNow = useRef(highlightId);
   // What this render knows, for the handlers and observers that outlive it.
   useLayoutEffect(() => {
     atLatestNow.current = atLatest;
+    highlightNow.current = highlightId;
     keepStillLatest.current = keepStillNow;
   });
 
@@ -342,14 +385,17 @@ export function MessageList({
     return (viewport.current?.scrollTop ?? 0) + over.current;
   }
 
-  /** Scrolls the box to `at`, which is the list's own doing. */
+  /**
+   * Scrolls the box to `at`, which is the list's own doing: the position it then has, which
+   * the box may have rounded or clamped, is what its scroll event will say.
+   */
   function scrollBoxTo(at: number) {
     const box = viewport.current;
     if (box === null || box.scrollTop === at) {
       return;
     }
-    ownScrollTop.current = at;
     box.scrollTop = at;
+    ownScrollTop.current = box.scrollTop;
   }
 
   /** Shows the content at `next`, and the indicator with it. */
@@ -717,27 +763,21 @@ export function MessageList({
         target.scrollIntoView({ block: "center" });
         ownScrollTop.current = box.scrollTop;
         afterMove(false);
-        syncRowHeights.current();
         return;
       }
     }
     // A linked message not yet in the window keeps the view for it; otherwise the view holds
-    // through the change, at the bottom or by the noted message.
-    if (highlightId !== undefined) {
+    // through the change, at the bottom or by the noted message, a linked message shown
+    // included: the pages read around it arrive just after it is centred.
+    if (highlightId !== undefined && highlightShown.current !== highlightId) {
       return;
     }
     if (stickToBottom.current && atLatest) {
       stopMotion();
       moveTo(range.current.max, false);
     } else {
-      const noted = still.current;
-      const row =
-        noted === null ? null : box.querySelector<HTMLElement>(`[data-message-id="${noted.id}"]`);
-      if (noted !== null && row !== null) {
-        absorb(row.offsetTop - noted.top, "page");
-      }
+      holdStill("page");
     }
-    syncRowHeights.current();
     noteStill();
   }
 
@@ -761,74 +801,28 @@ export function MessageList({
   );
 
   // Rows change size without the window changing: pictures and link cards load, reactions come
-  // and go, a deleted message's space closes. One wholly above the view adds the change to the
-  // offset, so nothing in view moves; pinned to the bottom, the list stays there. Each row's
-  // size is followed from when it appears, so a change is known however the layout that
-  // brought it is reached, and before the frame is painted.
+  // and go, a deleted message's space closes. The view holds by the noted row, before the frame
+  // is painted; pinned to the bottom, the list stays there.
   useEffect(() => {
-    const box = viewport.current;
     const body = rows.current;
-    if (
-      box === null ||
-      body === null ||
-      typeof ResizeObserver === "undefined" ||
-      typeof MutationObserver === "undefined"
-    ) {
+    if (body === null || typeof ResizeObserver === "undefined") {
       return;
     }
-    const heights = new WeakMap<Element, number>();
-    syncRowHeights.current = () => {
-      for (const child of body.children) {
-        heights.set(child, child.getBoundingClientRect().height);
-      }
-    };
-    const observer = new ResizeObserver((entries) => {
-      const viewTop = box.getBoundingClientRect().top;
-      let above = 0;
-      for (const entry of entries) {
-        const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
-        const was = heights.get(entry.target);
-        heights.set(entry.target, height);
-        if (was === undefined || height === was) {
-          continue;
-        }
-        // Where the row's bottom was before the change, which moved it by as much.
-        const bottomBefore = entry.target.getBoundingClientRect().bottom - (height - was);
-        if (bottomBefore <= viewTop + 1) {
-          above += height - was;
-        }
-      }
+    const observer = new ResizeObserver(() => {
       measure();
       measureRange();
       if (stickToBottom.current && atLatestNow.current && drag.current === null) {
         moveTo(range.current.max, false);
-        return;
-      }
-      if (above !== 0) {
-        absorb(above, "rows above");
+      } else {
+        holdStill("rows");
       }
       noteStill();
     });
-    const watch = (node: Node) => {
-      if (node instanceof Element) {
-        observer.observe(node);
-      }
-    };
-    for (const child of body.children) {
-      watch(child);
-    }
-    const arrivals = new MutationObserver((records) => {
-      for (const record of records) {
-        record.addedNodes.forEach(watch);
-      }
-    });
-    arrivals.observe(body, { childList: true });
+    observer.observe(body);
     return () => {
-      arrivals.disconnect();
       observer.disconnect();
-      syncRowHeights.current = () => undefined;
     };
-    // The observers read the rest through refs; made once there is a list.
+    // Reads the rest through refs; made once there is a list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
@@ -952,6 +946,7 @@ export function MessageList({
     stopMotion();
     // The list goes to the end of what it holds while the newest are on their way; the next
     // page after it is not read, since the newest replace the window.
+    measureRange();
     moveTo(range.current.max, false);
     if (highlightId !== undefined) {
       void navigate({ ...channelLink(home, channelId), replace: true });

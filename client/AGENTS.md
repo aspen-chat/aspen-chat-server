@@ -903,11 +903,19 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   technology, and Playwright bring things into view as they always did. Once a finger has
   moved `DRAG_SLOP_PX` it is dragging, and the rows take no pointer until it lifts, so lifting
   it over a picture or a button is not a press, as it would not be under a pan the browser
-  made. What is in view never moves when something above it changes: a page's arrival is measured by the topmost message
-  in view, noted and rendered in one task (`flushSync`), and its height added to the position
-  in the same layout; a row's growth, as a picture loads or a deleted message's space closes,
-  is seen by a `ResizeObserver` on every row, which follows each row's size from when it
-  appears, and added the same way before the frame is painted. A page renders as a transition,
+  made. What is in view never moves when something changes around it: the list notes a row
+  and where it stands in the content (`still`), which scrolling does not change, and after
+  every change, a page's arrival at commit, a picture's arrival told by the picture itself in
+  the same task (`useKeepStill`), or any change of the rows' size seen by a `ResizeObserver`
+  before the frame is painted, moves the position by what that row has moved. The row is the
+  topmost in view, or, while a linked message is shown, that message, held by its middle so a
+  jump lands on it and stays centred whatever loads around it or inside it; the reader's first
+  scroll drops the link and the hold returns to the topmost row. The list scrolls itself for
+  that one reason, and the browser's scrolling is the better one otherwise (it runs on the
+  compositor, keeps moving while the main thread is busy, draws the platform's indicator and
+  overscroll, and gives VoiceOver its three-finger scroll, which a box that hides its overflow
+  does not): the conditions for giving scrolling back, and the experiment that proves them,
+  are in `MessageList.tsx`'s header, and nothing outside the list may assume either way. A page renders as a transition,
   in slices between which the finger is heard, and `MessageItem` is memoized, so a change to the
   list renders only the rows it changes: an unmemoized row made every change to the list, a
   loading line's included, render every row through its Markdown again, synchronously, for

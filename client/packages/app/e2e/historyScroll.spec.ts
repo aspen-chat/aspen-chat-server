@@ -1,5 +1,5 @@
 import { expect, test, type CDPSession, type Page } from "@playwright/test";
-import { bob, general, me, signInToWorld } from "./world";
+import { bob, community, general, me, signInToWorld } from "./world";
 
 /**
  * Reading back through a long history on a phone, against the stubbed world, with #general
@@ -99,8 +99,14 @@ async function serveHistory(page: Page, messages: typeof history = history) {
     const limit = Number(url.searchParams.get("limit") ?? "50");
     const before = url.searchParams.get("before");
     const after = url.searchParams.get("after");
+    const around = url.searchParams.get("around");
     let slice: typeof history;
-    if (before !== null) {
+    if (around !== null) {
+      // The message and up to `limit` on each side of it, newest first like the rest.
+      await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+      const at = messages.findIndex((m) => m.record.id === around);
+      slice = at === -1 ? [] : messages.slice(Math.max(0, at - limit), at + limit + 1);
+    } else if (before !== null) {
       await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
       const start = messages.findIndex((m) => (m.record.id as string) < before);
       slice = start === -1 ? [] : messages.slice(start, start + limit);
@@ -613,4 +619,67 @@ test("a drag that starts on a picture scrolls, and a tap on it opens it", async 
   await touch(cdp, "touchStart", x, y);
   await touch(cdp, "touchEnd", x, y);
   await expect(page.getByRole("button", { name: "Close gallery" })).toBeVisible();
+});
+
+test("a jump to a message lands it in the middle, and a jump to the latest at the bottom", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "measured on the phones, Safari's among them, which rounds positions");
+  test.setTimeout(180_000);
+  // Pictures arrive for seconds after either jump, above and below what was jumped to, and
+  // the list must keep what it landed on exactly where it landed.
+  await signInToWorld(page, serveHistory);
+  const misses: string[] = [];
+  for (const n of [COUNT - 130, COUNT - 260, COUNT - 410, COUNT - 55, COUNT - 333]) {
+    await page.goto(`/communities/${community}/channels/${general}/messages/${id(n)}`);
+    const target = page.locator(`article[data-message-id="${id(n)}"]`);
+    await expect(target).toBeVisible({ timeout: 30_000 });
+    // Where it landed, as soon as it has; and where it is once every picture has arrived.
+    await page.waitForTimeout(100);
+    const landed = await target.evaluate((element) => element.getBoundingClientRect().top);
+    await page.waitForTimeout(3000);
+    const settled = await target.evaluate((element) => {
+      const list = element.closest("[data-message-list]");
+      const view = list?.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        centred:
+          view === undefined ? NaN : rect.top + rect.height / 2 - (view.top + view.height / 2),
+      };
+    });
+    if (Math.abs(settled.top - landed) > 1) {
+      misses.push(
+        `message ${String(n)} moved ${String(Math.round(settled.top - landed))}px after landing`,
+      );
+    }
+    if (Math.abs(settled.centred) > 1) {
+      misses.push(
+        `message ${String(n)} sits ${String(Math.round(settled.centred))}px off the middle`,
+      );
+    }
+    await page.getByRole("button", { name: "Jump to latest" }).click();
+    const newest = page.locator(`article[data-message-id="${id(COUNT)}"]`);
+    await expect(newest).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(3000);
+    const gap = await newest.evaluate((element) => {
+      const list = element.closest("[data-message-list]");
+      const view = list?.getBoundingClientRect();
+      const content = list?.firstElementChild;
+      const padding =
+        content === null || content === undefined
+          ? 0
+          : parseFloat(getComputedStyle(content).paddingBottom);
+      return view === undefined
+        ? NaN
+        : view.bottom - padding - element.getBoundingClientRect().bottom;
+    });
+    if (Math.abs(gap) > 1) {
+      misses.push(
+        `after message ${String(n)}, the latest sits ${String(Math.round(gap))}px off the bottom`,
+      );
+    }
+  }
+  expect(misses).toEqual([]);
 });

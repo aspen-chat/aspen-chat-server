@@ -31,6 +31,9 @@ export function ScrollDiagnosticsPanel({
     if (box === null) {
       return;
     }
+    // For a script driving the page, which cannot press the button.
+    (globalThis as { aspenScrollDiagnostics?: ScrollDiagnostics }).aspenScrollDiagnostics =
+      diagnostics;
     return diagnostics.watch(box);
   }, [diagnostics, viewport]);
   return (
