@@ -18,7 +18,7 @@ import {
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
-import { Directory, type Column } from "@/features/admin/Directories";
+import { Directory, type Column } from "@/features/admin/Directory";
 import { Cell, Status, Table } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
 import { useAdminRead, type AdminRead } from "@/features/admin/useAdminRead";
