@@ -22,11 +22,14 @@ export function CopyIdButton({
   id,
   thing,
   className = "",
+  onCopied,
 }: {
   id: string;
   thing: IdThing;
   /** Sizes it to sit among the controls beside it. */
   className?: string;
+  /** Called once the id is copied, for a popover offering it to close. */
+  onCopied?: () => void;
 }) {
   const m = useMessages();
   const on = useIdWizard();
@@ -55,7 +58,12 @@ export function CopyIdButton({
         aria-label={label}
         onPress={() => {
           if (button.current !== null) {
-            void copyText(id, button.current).then(setCopied);
+            void copyText(id, button.current).then((ok) => {
+              setCopied(ok);
+              if (ok) {
+                onCopied?.();
+              }
+            });
           }
         }}
         className={

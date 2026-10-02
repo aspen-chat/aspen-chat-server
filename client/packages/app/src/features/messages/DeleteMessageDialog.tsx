@@ -2,7 +2,14 @@ import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { ApiProblemError } from "@aspen/protocol";
 import { TrashIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
+import {
+  Button,
+  Dialog,
+  DialogTrigger,
+  Modal,
+  ModalOverlay,
+  type ModalOverlayProps,
+} from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
@@ -30,14 +37,27 @@ export function DeleteMessageDialog({
           <TrashIcon size={ACTION_ICON} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog role="alertdialog" className={dialogClass}>
-            {({ close }) => <Confirm messageId={messageId} close={close} />}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <DeleteMessageModal messageId={messageId} />
     </DialogTrigger>
+  );
+}
+
+/**
+ * The confirmation that deletes the message: opened by the trigger around it, or, given
+ * `isOpen`, by whatever holds it (a touch screen's message actions, which close as it opens).
+ */
+export function DeleteMessageModal({
+  messageId,
+  ...overlay
+}: { messageId: string } & Omit<ModalOverlayProps, "children" | "className">) {
+  return (
+    <ModalOverlay {...overlay} className={overlayClass} isDismissable>
+      <Modal className={modalClass}>
+        <Dialog role="alertdialog" className={dialogClass}>
+          {({ close }) => <Confirm messageId={messageId} close={close} />}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 

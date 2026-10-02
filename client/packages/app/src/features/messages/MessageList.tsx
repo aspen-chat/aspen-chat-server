@@ -1133,6 +1133,7 @@ export function MessageList({
                   channelId={channelId}
                   parentId={parentId}
                   highlighted={id === highlightId}
+                  latest={atLatest && id === lastId}
                 />
               );
               if (part.kind === "message") {

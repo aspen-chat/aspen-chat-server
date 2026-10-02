@@ -867,6 +867,15 @@ async function answer(
       new RegExp(`^/messages/${reactedId}/reactions/[^/]+$`),
       () => (path.endsWith("👍") ? [users[0], users[1]] : [users[1]]),
     ],
+    // Reacting answers with the reaction, which the app applies as its event.
+    [
+      "PUT",
+      /^\/messages\/[^/]+\/reactions\/[^/]+\/@me$/,
+      () => {
+        const [, , messageId = "", , emoji = ""] = path.split("/");
+        return reply({ emoji: decodeURIComponent(emoji), messageId, userId: me }, 201);
+      },
+    ],
     // Folding a category answers as the server does, and tells the caller's devices by event.
     [
       "PUT",
@@ -1296,9 +1305,9 @@ export async function submit(page: Page): Promise<void> {
 /**
  * Holds a finger on `target` for longer than a long press takes, without moving it: a real
  * touch through Chromium's protocol, and elsewhere, which Playwright gives no held touch for,
- * the pointer events a touch raises, dispatched to the element.
+ * the pointer events a touch raises, dispatched to the element. Answers where it pressed.
  */
-export async function longPress(page: Page, target: Locator) {
+export async function longPress(page: Page, target: Locator): Promise<{ x: number; y: number }> {
   // Still before it is pressed, as Playwright's own tap waits for: a press on an element
   // that moves (a list settling to its bottom as its history loads) is cancelled by the
   // scroll, as a finger's would be.
@@ -1330,7 +1339,7 @@ export async function longPress(page: Page, target: Locator) {
     await page.waitForTimeout(700);
     await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await client.detach();
-    return;
+    return point;
   }
   const pointer = {
     pointerType: "touch",
@@ -1345,4 +1354,5 @@ export async function longPress(page: Page, target: Locator) {
   await target.dispatchEvent("pointerdown", { ...pointer, button: 0, buttons: 1 });
   await page.waitForTimeout(700);
   await target.dispatchEvent("pointerup", { ...pointer, button: 0, buttons: 0 });
+  return point;
 }

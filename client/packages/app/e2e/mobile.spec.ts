@@ -5,6 +5,7 @@ import {
   longPress,
   ownText,
   pollQuestion,
+  settleAnimations,
   signInToWorld,
   starterText,
 } from "./world";
@@ -161,46 +162,85 @@ test.describe("on a phone", () => {
     }
   });
 
-  test("a long press on a message opens its actions under it, and a tap does not", async ({
+  test("a long press opens a message's actions beside the finger, and each action closes them", async ({
     page,
+    context,
+    browserName,
   }) => {
+    // Chromium asks leave to write the clipboard; the others have no such permission to give.
+    if (browserName === "chromium") {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    }
     await openChannel(page, "general");
     const own = messageWith(page, ownText);
     const starter = messageWith(page, starterText);
+    const popover = page.getByRole("dialog", { name: "Message actions" });
+    const composer = page.getByRole("textbox", { name: "Message" });
     // A tap focuses the message, as a tap on a link needs, and offers nothing.
     await own.locator(".message-body").tap();
-    await expect(page.getByRole("dialog", { name: "Message actions" })).toHaveCount(0);
+    await expect(popover).toHaveCount(0);
     await expect(actionsOf(own)).toHaveCount(0);
-    // A long press opens the actions in a popover below the message, each at finger size.
-    await longPress(page, own.locator(".message-body"));
-    const popover = page.getByRole("dialog", { name: "Message actions" });
+    // A long press opens the actions in a popover beside the finger, each at finger size.
+    const press = await longPress(page, own.locator(".message-body"));
     await expect(popover).toBeVisible();
-    const messageBox = await own.boundingBox();
-    const popoverBox = await popover.boundingBox();
-    const composerBox = await page.getByRole("textbox", { name: "Message" }).boundingBox();
-    const popoverBottom = (popoverBox?.y ?? 0) + (popoverBox?.height ?? 0);
-    const messageBottom = (messageBox?.y ?? 0) + (messageBox?.height ?? 0);
-    const underMessage = (popoverBox?.y ?? 0) >= messageBottom - 1;
-    const aboveMessage = popoverBottom <= (messageBox?.y ?? 0) + 1;
-    expect(underMessage || aboveMessage).toBe(true);
-    // Never over the message box, whichever side it takes.
-    expect(popoverBottom).toBeLessThanOrEqual((composerBox?.y ?? 0) + 1);
+    const near = async () => {
+      const box = await popover.boundingBox();
+      const composerBox = await composer.boundingBox();
+      expect(box).not.toBeNull();
+      const top = box?.y ?? 0;
+      const bottom = top + (box?.height ?? 0);
+      expect(Math.min(Math.abs(top - press.y), Math.abs(bottom - press.y))).toBeLessThan(100);
+      // Never over the message box.
+      expect(bottom).toBeLessThanOrEqual((composerBox?.y ?? 0) + 1);
+      return { top, bottom };
+    };
+    await near();
     for (const name of ["Add a reaction", "Edit message", "Delete message", "Copy text"]) {
       const action = popover.getByRole("button", { name });
       await expect(action).toBeVisible();
       expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(40);
     }
-    // A tap elsewhere closes it (the tap lands on the popover's underlay, so it is sent by
-    // position); a long press on another message opens that one's.
-    const heading = await page.getByRole("heading", { name: "general" }).boundingBox();
-    await page.touchscreen.tap(
-      (heading?.x ?? 0) + (heading?.width ?? 0) / 2,
-      (heading?.y ?? 0) + (heading?.height ?? 0) / 2,
-    );
+    // Copying the text closes the actions and says so in a toast.
+    await popover.getByRole("button", { name: "Copy text" }).tap();
+    await expect(popover).toHaveCount(0);
+    await expect(page.getByText("Copied text")).toBeVisible();
+    // Adding a reaction closes the actions and opens the picker in their place, which stays.
+    await longPress(page, own.locator(".message-body"));
+    await popover.getByRole("button", { name: "Add a reaction" }).tap();
+    await expect(popover).toHaveCount(0);
+    const picker = page.locator(".emoji-picker");
+    await expect(picker).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(picker).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    // A tap elsewhere closes them (the tap lands on the popover's underlay, so it is sent by
+    // position, to a corner of the list the popover is not over); a long press on another
+    // message opens that one's.
+    await longPress(page, own.locator(".message-body"));
+    await expect(popover).toBeVisible();
+    await settleAnimations(page);
+    const list = await page.locator("[data-message-list]").boundingBox();
+    const open = await popover.boundingBox();
+    const listTop = (list?.y ?? 0) + 6;
+    const listBottom = (list?.y ?? 0) + (list?.height ?? 0) - 6;
+    const overTop = open !== null && open.y < listTop + 6;
+    await page.touchscreen.tap((list?.x ?? 0) + 6, overTop ? listBottom : listTop);
     await expect(popover).toHaveCount(0);
     await longPress(page, starter.locator(".message-body"));
     await expect(popover).toBeVisible();
     await expect(popover.getByRole("button", { name: "Reply in thread" })).toBeVisible();
+    // The actions take focus once the press ends, so a screen reader is in them; Escape then
+    // closes them.
+    await expect(popover).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(popover).toHaveCount(0);
+    // On the newest message, which sits on the message box, they open above the finger.
+    const newest = page.locator("article[data-message-id]").last();
+    const pressed = await longPress(page, newest.locator(".message-body"));
+    await expect(popover).toBeVisible();
+    const box = await popover.boundingBox();
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(pressed.y);
   });
 
   test("a link in a message opens on the first tap", async ({ page }) => {

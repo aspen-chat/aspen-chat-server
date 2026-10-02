@@ -87,6 +87,29 @@ test("the message's own actions open the list of reactions", async ({ page, isMo
   await expect(page.getByRole("dialog", { name: "Reactions" })).toBeVisible();
 });
 
+test("a pick from the picker adds the reaction and closes the picker", async ({
+  page,
+  isMobile,
+}) => {
+  const picker = page.locator(".emoji-picker");
+  if (isMobile) {
+    await longPress(page, message(page).locator(".message-body"));
+    await page
+      .getByRole("dialog", { name: "Message actions" })
+      .getByRole("button", { name: "Add a reaction" })
+      .tap();
+  } else {
+    await message(page).hover();
+    await message(page)
+      .getByRole("group", { name: "Message actions" })
+      .getByRole("button", { name: "Add a reaction" })
+      .click();
+  }
+  await expect(picker).toBeVisible();
+  await picker.locator(".epr-emoji-category-content > button").first().click();
+  await expect(picker).toHaveCount(0);
+});
+
 test("a right click on a chip shows who reacted with it", async ({ page, isMobile }) => {
   test.skip(isMobile, "a phone presses long instead");
   await chips(page).getByRole("button", { name: "React with 🎉" }).click({ button: "right" });

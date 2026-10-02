@@ -24,11 +24,16 @@ import { MessageBody } from "@/features/messages/MessageBody";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
-import { ReactionChips } from "@/features/messages/Reactions";
+import {
+  ReactionChips,
+  ReactionPickerPopover,
+  ReactionsDialog,
+} from "@/features/messages/Reactions";
+import { DeleteMessageModal } from "@/features/messages/DeleteMessageDialog";
 import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { feelPress } from "@/features/messages/haptics";
-import { MessageActions } from "@/features/messages/MessageActions";
+import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -39,6 +44,21 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 
 /** How long a finger is held on a message before its actions are offered under it. */
 const LONG_PRESS_MS = 450;
+/** How far from the finger's point the popovers open, clear of the finger. */
+const PRESS_OFFSET_PX = 12;
+
+/** What a long press has open: the actions, or what one of them opened in their place. */
+type Sheet = "actions" | MessageSheet;
+
+/** Where the finger pressed, within the row, and what follows from it. */
+interface Press {
+  x: number;
+  y: number;
+  /** Whether the popovers open above the point rather than below it. */
+  above: boolean;
+  /** The list they keep within. */
+  list: HTMLElement | null;
+}
 /** The popover the actions open in under a long-pressed message. */
 const actionsPopoverClass =
   "max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-1 shadow-lg";
@@ -66,6 +86,7 @@ export const MessageItem = memo(function MessageItem({
   parentId,
   highlighted,
   threadable = true,
+  latest = false,
 }: {
   id: string;
   home: ChannelHome;
@@ -74,6 +95,8 @@ export const MessageItem = memo(function MessageItem({
   highlighted: boolean;
   /** Whether the message may start or show a thread here; not for a thread's own header. */
   threadable?: boolean;
+  /** Whether it is the newest message, on which the actions never open downward. */
+  latest?: boolean;
 }) {
   const timeFormat = useDateFormat(TIME);
   const m = useMessages();
@@ -87,19 +110,41 @@ export const MessageItem = memo(function MessageItem({
   const [editing, setEditing] = useState(false);
   // A touch screen offers the actions under a long press; a pointer, at the corner.
   const touchOnly = useMediaQuery(TOUCH_ONLY);
-  const [actionsOpen, setActionsOpen] = useState(false);
+  // What the press has open: the actions, or what one of them opened in their place.
+  const [sheet, setSheet] = useState<Sheet | null>(null);
   const row = useRef<HTMLElement>(null);
-  // The list the popover keeps within, found as the press opens it.
-  const [listBox, setListBox] = useState<HTMLElement | null>(null);
+  // Where the finger pressed, which the popovers open beside, so that on a long message they
+  // come where the finger is rather than under the whole of it; and which way they open.
+  const [press, setPress] = useState<Press | null>(null);
+  const anchor = useRef<HTMLSpanElement>(null);
   const { longPressProps } = useLongPress({
     isDisabled: !touchOnly || editing,
     threshold: LONG_PRESS_MS,
     accessibilityDescription: m.longPressForActions,
-    onLongPress: () => {
+    onLongPress: (e) => {
       feelPress();
-      setListBox(row.current?.closest<HTMLElement>("[data-message-list]") ?? null);
-      setActionsOpen(true);
+      const list = row.current?.closest<HTMLElement>("[data-message-list]") ?? null;
+      const rowTop = row.current?.getBoundingClientRect().top ?? 0;
+      const listRect = list?.getBoundingClientRect();
+      // Above the finger in the lower half of the list, where below would be cramped or over
+      // the message box, and always on the newest message, which sits on the message box.
+      const above =
+        latest || (listRect !== undefined && rowTop + e.y > listRect.top + listRect.height / 2);
+      setPress({ x: e.x, y: e.y, above, list });
+      setSheet("actions");
     },
+  });
+  const sheetProps = (which: Sheet) => ({
+    isOpen: sheet === which,
+    onOpenChange: (open: boolean) => {
+      setSheet(open ? which : null);
+    },
+  });
+  const popoverProps = (which: Sheet) => ({
+    ...sheetProps(which),
+    placement: press?.above ? ("top" as const) : ("bottom" as const),
+    offset: PRESS_OFFSET_PX,
+    ...(press?.list == null ? {} : { boundaryElement: press.list }),
   });
   // A message that came while the reader was here rises into place; history arrives still.
   const [arriving] = useState(() => {
@@ -200,6 +245,15 @@ export const MessageItem = memo(function MessageItem({
           : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
       }
     >
+      {touchOnly && press !== null && (
+        // The point the finger pressed, which the popovers open beside.
+        <span
+          ref={anchor}
+          aria-hidden="true"
+          className="pointer-events-none absolute h-0 w-0"
+          style={{ left: press.x, top: press.y }}
+        />
+      )}
       {author === undefined ? (
         authorLoading ? (
           <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
@@ -286,43 +340,47 @@ export const MessageItem = memo(function MessageItem({
               />
             </span>
           )}
-          {touchOnly && (
-            // Kept within the list, so under a message at the list's bottom the popover flips
-            // above the message rather than covering the message box.
-            <Popover
-              triggerRef={row}
-              isOpen={actionsOpen}
-              onOpenChange={setActionsOpen}
-              placement="bottom start"
-              offset={4}
-              {...(listBox === null ? {} : { boundaryElement: listBox })}
-              className={"motion-settle " + actionsPopoverClass}
-            >
-              <Dialog aria-label={m.messageActionsLabel} className="outline-none">
-                <div
-                  role="group"
-                  aria-label={m.messageActionsLabel}
-                  className="flex flex-wrap gap-1"
-                >
-                  <MessageActions
-                    messageId={id}
-                    channelId={channelId}
-                    text={message.content}
-                    permissions={permissions}
-                    canThread={canThread}
-                    editable={editable}
-                    deletable={deletable}
-                    onOpenThread={openThread}
-                    onEdit={() => {
-                      setEditing(true);
-                    }}
-                    onDone={() => {
-                      setActionsOpen(false);
-                    }}
-                  />
-                </div>
-              </Dialog>
-            </Popover>
+          {touchOnly && press !== null && (
+            <>
+              <Popover
+                triggerRef={anchor}
+                {...popoverProps("actions")}
+                className={"motion-settle " + actionsPopoverClass}
+              >
+                <Dialog aria-label={m.messageActionsLabel} className="outline-none">
+                  <div
+                    role="group"
+                    aria-label={m.messageActionsLabel}
+                    className="flex flex-wrap gap-1"
+                  >
+                    <MessageActions
+                      messageId={id}
+                      channelId={channelId}
+                      text={message.content}
+                      permissions={permissions}
+                      canThread={canThread}
+                      editable={editable}
+                      deletable={deletable}
+                      onOpenThread={openThread}
+                      onEdit={() => {
+                        setEditing(true);
+                      }}
+                      open={setSheet}
+                      onDone={() => {
+                        setSheet(null);
+                      }}
+                    />
+                  </div>
+                </Dialog>
+              </Popover>
+              <ReactionPickerPopover
+                messageId={id}
+                triggerRef={anchor}
+                {...popoverProps("react")}
+              />
+              <ReactionsDialog messageId={id} {...sheetProps("reactions")} />
+              <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
+            </>
           )}
         </div>
         {editing ? (

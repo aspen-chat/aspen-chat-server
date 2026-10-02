@@ -15,6 +15,7 @@ import {
   Modal,
   ModalOverlay,
   Popover,
+  type PopoverProps,
   Tab,
   TabList,
   TabPanel,
@@ -278,7 +279,7 @@ export function ViewReactionsButton({
  * reacted with the chosen one, earliest first, read a page at a time. The emoji run down the
  * side on a wide screen and across the top on a narrow one.
  */
-function ReactionsDialog({
+export function ReactionsDialog({
   messageId,
   isOpen,
   onOpenChange,
@@ -476,8 +477,6 @@ export function ReactionPicker({
   iconSize?: number;
 }) {
   const m = useMessages();
-  const sync = useSync();
-  const [error, setError] = useState<string | null>(null);
   return (
     <DialogTrigger>
       <Tooltip text={m.addReaction}>
@@ -485,12 +484,31 @@ export function ReactionPicker({
           <SmileyIcon size={iconSize} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <Popover
-        placement="bottom end"
-        className="rounded-lg border border-line bg-surface-raised shadow-lg"
-      >
+      <ReactionPickerPopover messageId={messageId} placement="bottom end" />
+    </DialogTrigger>
+  );
+}
+
+/**
+ * The emoji picker that adds a reaction to the message, in a popover: opened by the trigger
+ * around it, or, given `isOpen` and a `triggerRef`, by whatever holds it (a touch screen's
+ * message actions, which close as it opens). A pick closes it.
+ */
+export function ReactionPickerPopover({
+  messageId,
+  ...popover
+}: { messageId: string } & Omit<PopoverProps, "children" | "className">) {
+  const m = useMessages();
+  const sync = useSync();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <Popover {...popover} className="rounded-lg border border-line bg-surface-raised shadow-lg">
         <Dialog aria-label={m.addReaction} className="outline-none">
           {({ close }) => (
+            // A pick closes the popover: through the trigger's state around it, or, opened by
+            // what holds it, through its own `onOpenChange`, which the dialog's `close` does
+            // not reach.
             <div className="flex flex-col">
               <Suspense
                 fallback={
@@ -502,9 +520,15 @@ export function ReactionPicker({
                 <EmojiPicker
                   onPick={(emoji) => {
                     setError(null);
-                    sync.addReaction(messageId, emoji).then(close, (e: unknown) => {
-                      setError(e instanceof ApiProblemError ? e.message : String(e));
-                    });
+                    sync.addReaction(messageId, emoji).then(
+                      () => {
+                        close();
+                        popover.onOpenChange?.(false);
+                      },
+                      (e: unknown) => {
+                        setError(e instanceof ApiProblemError ? e.message : String(e));
+                      },
+                    );
                   }}
                 />
               </Suspense>
@@ -517,6 +541,6 @@ export function ReactionPicker({
           )}
         </Dialog>
       </Popover>
-    </DialogTrigger>
+    </>
   );
 }

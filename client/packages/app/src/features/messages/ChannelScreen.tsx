@@ -16,6 +16,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { DmCall } from "@/features/dms/DmCall";
 import { ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
+import { Toasts } from "@/features/layout/Toasts";
 
 /**
  * A channel's screen, in a community or among the caller's DMs: a text channel's or DM's
@@ -121,7 +122,10 @@ export function ChannelScreen() {
             {loadError}
           </p>
         )}
-        <MessageList channelId={channelId} highlightId={messageId} home={home} />
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <MessageList channelId={channelId} highlightId={messageId} home={home} />
+          <Toasts />
+        </div>
         <ChannelComposer key={channel.id} channel={channel} />
       </main>
       {threadId !== undefined && (

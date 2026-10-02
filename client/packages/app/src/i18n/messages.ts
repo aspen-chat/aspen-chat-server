@@ -828,6 +828,7 @@ export const en = {
   longPressForActions: "Press and hold for the message's actions",
   copyMessageText: "Copy text",
   copiedMessageText: "Copied text",
+  toastsLabel: "Notifications",
   react: "React",
   addReaction: "Add a reaction",
   reactionsLabel: "Reactions",

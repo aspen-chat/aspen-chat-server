@@ -1,9 +1,18 @@
 import type { Permission } from "@aspen/protocol";
-import { ChatsCircleIcon, CheckIcon, CopyIcon, PencilSimpleIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import {
+  ChatsCircleIcon,
+  CopyIcon,
+  PencilSimpleIcon,
+  SmileyIcon,
+  TrashIcon,
+  UsersIcon,
+} from "@phosphor-icons/react";
+import { useRef, type ReactNode } from "react";
 import { Button } from "react-aria-components";
+import { useReactions } from "@/api/hooks";
 import { copyText } from "@/features/layout/clipboard";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { toast } from "@/features/layout/toast";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
@@ -11,18 +20,21 @@ import { PinButton } from "@/features/messages/PinButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { useMessages } from "@/i18n/context";
 
-/** How long the copy button says the text was copied. */
-const COPIED_MS = 1500;
 /** One action's button: square, with its icon, at finger size on a touch screen. */
 export const actionClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-3";
 
+/** What a message's actions open beyond themselves, each a sheet of its own on a touch screen. */
+export type MessageSheet = "react" | "reactions" | "delete";
+
 /**
  * What can be done to a message, as a row of icon buttons: react, pin, see who reacted, reply
  * in a thread, edit, delete, copy its text, and copy its id. A computer shows the row at the
- * message's corner while the pointer is over it or focus is in it; a touch screen shows it in
- * a popover under the message that a long press opens (`MessageItem`). Each is offered only
+ * message's corner while the pointer is over it or focus is in it, and the picker and the
+ * dialogs open from their buttons. A touch screen shows it in a popover under a long press
+ * (`MessageItem`), which every action closes: the ones that open something hand that to
+ * `open`, since what opens from inside the popover would go with it. Each is offered only
  * where the permissions allow it.
  */
 export function MessageActions({
@@ -35,6 +47,7 @@ export function MessageActions({
   deletable,
   onOpenThread,
   onEdit,
+  open,
   onDone,
 }: {
   messageId: string;
@@ -47,97 +60,149 @@ export function MessageActions({
   deletable: boolean;
   onOpenThread: () => void;
   onEdit: () => void;
+  /** Opens a sheet outside the row; given, the row's own picker and dialogs are not used. */
+  open?: (sheet: MessageSheet) => void;
   /** Called after an action that is done at once, so a popover offering the row can close. */
   onDone?: () => void;
 }) {
   const m = useMessages();
+  const hasReactions = useReactions(messageId).size > 0;
   return (
     <>
-      {permissions.has("addReactions") && (
-        <ReactionPicker
+      {permissions.has("addReactions") &&
+        (open === undefined ? (
+          <ReactionPicker
+            messageId={messageId}
+            triggerClassName={actionClass}
+            iconSize={ACTION_ICON}
+          />
+        ) : (
+          <Action
+            label={m.addReaction}
+            onPress={() => {
+              open("react");
+            }}
+          >
+            <SmileyIcon size={ACTION_ICON} aria-hidden="true" />
+          </Action>
+        ))}
+      {permissions.has("pinMessages") && (
+        <PinButton
           messageId={messageId}
-          triggerClassName={actionClass}
-          iconSize={ACTION_ICON}
+          channelId={channelId}
+          className={actionClass}
+          {...(onDone === undefined ? {} : { onPressed: onDone })}
         />
       )}
-      {permissions.has("pinMessages") && (
-        <PinButton messageId={messageId} channelId={channelId} className={actionClass} />
-      )}
-      <ViewReactionsButton messageId={messageId} triggerClassName={actionClass} />
-      {canThread && (
-        <Tooltip text={m.threads.replyInThread}>
-          <Button
+      {open === undefined ? (
+        <ViewReactionsButton messageId={messageId} triggerClassName={actionClass} />
+      ) : (
+        hasReactions && (
+          <Action
+            label={m.viewReactions}
             onPress={() => {
-              onDone?.();
-              onOpenThread();
+              open("reactions");
             }}
-            aria-label={m.threads.replyInThread}
-            className={actionClass}
           >
-            <ChatsCircleIcon size={ACTION_ICON} aria-hidden="true" />
-          </Button>
-        </Tooltip>
+            <UsersIcon size={ACTION_ICON} aria-hidden="true" />
+          </Action>
+        )
+      )}
+      {canThread && (
+        <Action
+          label={m.threads.replyInThread}
+          onPress={() => {
+            onDone?.();
+            onOpenThread();
+          }}
+        >
+          <ChatsCircleIcon size={ACTION_ICON} aria-hidden="true" />
+        </Action>
       )}
       {editable && (
-        <Tooltip text={m.editMessage}>
-          <Button
+        <Action
+          label={m.editMessage}
+          onPress={() => {
+            onDone?.();
+            onEdit();
+          }}
+        >
+          <PencilSimpleIcon size={ACTION_ICON} aria-hidden="true" />
+        </Action>
+      )}
+      {deletable &&
+        (open === undefined ? (
+          <DeleteMessageDialog
+            messageId={messageId}
+            triggerClassName={actionClass + " text-danger"}
+          />
+        ) : (
+          <Action
+            label={m.deleteMessage}
+            className={actionClass + " text-danger"}
             onPress={() => {
-              onDone?.();
-              onEdit();
+              open("delete");
             }}
-            aria-label={m.editMessage}
-            className={actionClass}
           >
-            <PencilSimpleIcon size={ACTION_ICON} aria-hidden="true" />
-          </Button>
-        </Tooltip>
+            <TrashIcon size={ACTION_ICON} aria-hidden="true" />
+          </Action>
+        ))}
+      {text !== null && text !== "" && (
+        <CopyTextButton text={text} {...(onDone === undefined ? {} : { onDone })} />
       )}
-      {deletable && (
-        <DeleteMessageDialog
-          messageId={messageId}
-          triggerClassName={actionClass + " text-danger"}
-        />
-      )}
-      {text !== null && text !== "" && <CopyTextButton text={text} />}
-      <CopyIdButton id={messageId} thing="message" className={actionClass} />
+      <CopyIdButton
+        id={messageId}
+        thing="message"
+        className={actionClass}
+        {...(onDone === undefined ? {} : { onCopied: onDone })}
+      />
     </>
   );
 }
 
-/** Copies the message's text, and says so for a moment. */
-function CopyTextButton({ text }: { text: string }) {
-  const m = useMessages();
-  const button = useRef<HTMLButtonElement>(null);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      setCopied(false);
-    }, COPIED_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [copied]);
-  const label = copied ? m.copiedMessageText : m.copyMessageText;
+/** One action: an icon button named by its tooltip. */
+function Action({
+  label,
+  onPress,
+  className = actionClass,
+  children,
+}: {
+  label: string;
+  onPress: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <Tooltip text={label}>
+      <Button onPress={onPress} aria-label={label} className={className}>
+        {children}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** Copies the message's text, and says so in a toast. */
+function CopyTextButton({ text, onDone }: { text: string; onDone?: () => void }) {
+  const m = useMessages();
+  const button = useRef<HTMLButtonElement>(null);
+  return (
+    <Tooltip text={m.copyMessageText}>
       <Button
         ref={button}
-        aria-label={label}
+        aria-label={m.copyMessageText}
         onPress={() => {
           if (button.current !== null) {
-            void copyText(text, button.current).then(setCopied);
+            void copyText(text, button.current).then((ok) => {
+              if (ok) {
+                toast(m.copiedMessageText);
+                onDone?.();
+              }
+            });
           }
         }}
         className={actionClass}
       >
-        {copied ? (
-          <CheckIcon size={ACTION_ICON} aria-hidden="true" />
-        ) : (
-          <CopyIcon size={ACTION_ICON} aria-hidden="true" />
-        )}
+        <CopyIcon size={ACTION_ICON} aria-hidden="true" />
       </Button>
     </Tooltip>
   );

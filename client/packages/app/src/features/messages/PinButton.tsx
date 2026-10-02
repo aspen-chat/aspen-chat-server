@@ -10,10 +10,13 @@ export function PinButton({
   messageId,
   channelId,
   className,
+  onPressed,
 }: {
   messageId: string;
   channelId: string;
   className: string;
+  /** Called as it is pressed, for a popover offering it to close. */
+  onPressed?: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -27,6 +30,7 @@ export function PinButton({
         isDisabled={pins === undefined}
         onPress={() => {
           void sync.setPinned(messageId, !pinned).catch(() => undefined);
+          onPressed?.();
         }}
         className={className}
       >

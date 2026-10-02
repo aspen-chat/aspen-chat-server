@@ -15,6 +15,7 @@ import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { Toasts } from "@/features/layout/Toasts";
 
 /**
  * A thread beside its channel: the message that started it, its replies, and a composer whose
@@ -125,7 +126,12 @@ export function ThreadPanel({
                 starter != null && <Starter id={starter} home={home} channelId={parentId} />
               )}
             </div>
-            <MessageList channelId={threadId} home={home} highlightId={undefined} />
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <MessageList channelId={threadId} home={home} highlightId={undefined} />
+              {/* Toasts show over the channel's messages beside the panel; on a one-pane
+                  screen the panel is the whole screen and shows its own. */}
+              {onePane && <Toasts />}
+            </div>
             <Composer
               key={threadId}
               channelId={threadId}

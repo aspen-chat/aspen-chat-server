@@ -776,6 +776,10 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   palette). Nothing may read `prefers-color-scheme` itself, since that ignores the user's choice.
 - Icon-only controls get a `Tooltip` (`src/features/layout/Tooltip.tsx`) whose text is also their
   `aria-label`, so the tooltip and the accessible name never disagree.
+- Something done and done with, where nothing on the page will say so (text copied), is said in
+  a toast: `toast(text)` (`src/features/layout/toast.ts`, React Aria's toast queue) from
+  anywhere, shown by `Toasts` for a few seconds, dropping in over the top of the channel's
+  messages (`ChannelScreen`, and the thread panel's own where it is the whole screen).
 - Icons come from `@phosphor-icons/react` (MIT, imported by their `…Icon` names, tree-shaken).
   Prefer an icon to an emoji glyph in controls. Emoji reactions use `emoji-picker-react` with
   native glyphs, loaded lazily by `src/features/messages/Reactions.tsx`; it fetches nothing.
@@ -796,11 +800,18 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
   also revealed by focus, or offered another way on a touch screen: a message's actions
   (`MessageActions`, icons at `ACTION_ICON`) sit at its corner on hover or focus where there is
   a pointer, and on a touch-only device (`TOUCH_ONLY`) a long press on the message opens them in
-  a popover under it (`useLongPress` from `react-aria`, the one hook taken from it, since the
-  components package has no long press), settling into place with `motion-settle` and a tap
-  felt in the hand in the apps (`haptics.ts`, `@capacitor/haptics`); the press owns the
-  message there, so the browser's text selection is off on it and Copy text is among the
-  actions. Otherwise a control is shown outright with `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
+  a popover beside the finger (`useLongPress` from `react-aria`, the one hook taken from it,
+  since the components package has no long press; the popover is anchored to the point
+  pressed, so on a long message it comes where the finger is, below it, or above it in the
+  lower half of the list and always on the newest message, which sits on the message box),
+  settling into place with `motion-settle` and a tap felt in the hand in the apps
+  (`haptics.ts`, `@capacitor/haptics`); the press owns the message there, so the browser's
+  text selection is off on it and Copy text is among the actions. Every action closes the
+  popover: the ones that open something (the reaction picker, who reacted, delete) open it
+  as a sheet of `MessageItem`'s own, anchored to the same point, since a popover or dialog
+  inside the actions would go with them (`MessageSheet`, `ReactionPickerPopover`,
+  `ReactionsDialog`, `DeleteMessageModal`). Otherwise a control is shown outright with
+  `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
   widens what a finger can hit to 44px on a touch screen without moving anything; controls side
   by side are drawn larger with `pointer-coarse:` instead, so their areas do not overlap. The app
   pads itself by the safe-area insets, since the page is laid out under a notch
