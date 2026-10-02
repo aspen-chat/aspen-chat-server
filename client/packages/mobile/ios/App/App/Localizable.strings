@@ -1,0 +1,6 @@
+/* The placeholder a push shows until the extension replaces it, or when it cannot. */
+"notification.placeholder" = "New activity in Aspen";
+"notification.someone" = "Someone";
+"notification.poll" = "Posted a poll";
+"notification.message" = "Sent a message";
+"notification.attachment" = "Sent an attachment";

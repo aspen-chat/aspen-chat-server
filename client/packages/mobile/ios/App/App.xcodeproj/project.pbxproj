@@ -19,6 +19,15 @@
 		A5E000000000000000000001 /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000011 /* MainViewController.swift */; };
 		A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000012 /* AspenFilesPlugin.swift */; };
 		A5E000000000000000000003 /* AppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000013 /* AppUITests.swift */; };
+		A5E000000000000000000121 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
+		A5E000000000000000000122 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
+		A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000103 /* AspenPushPlugin.swift */; };
+		A5E000000000000000000124 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
+		A5E000000000000000000125 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
+		A5E000000000000000000126 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000104 /* NotificationService.swift */; };
+		A5E000000000000000000127 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000108 /* Localizable.strings */; };
+		A5E000000000000000000128 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000109 /* Localizable.strings */; };
+		A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000110 /* AspenNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +37,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 504EC3031FED79650016851F;
 			remoteInfo = App;
+		};
+		A5E000000000000000000153 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5E000000000000000000151;
+			remoteInfo = AspenNotificationService;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -47,6 +63,16 @@
 		A5E000000000000000000012 /* AspenFilesPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenFilesPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000013 /* AppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUITests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000014 /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5E000000000000000000101 /* WebPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPush.swift; sourceTree = "<group>"; };
+		A5E000000000000000000102 /* PushState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushState.swift; sourceTree = "<group>"; };
+		A5E000000000000000000103 /* AspenPushPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenPushPlugin.swift; sourceTree = "<group>"; };
+		A5E000000000000000000104 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		A5E000000000000000000105 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A5E000000000000000000106 /* AspenNotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AspenNotificationService.entitlements; sourceTree = "<group>"; };
+		A5E000000000000000000107 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		A5E000000000000000000108 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000109 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000110 /* AspenNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AspenNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +91,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5E000000000000000000142 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -73,6 +106,8 @@
 			children = (
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
+				A5E000000000000000000131 /* AspenPush */,
+				A5E000000000000000000132 /* AspenNotificationService */,
 				A5E000000000000000000021 /* AppUITests */,
 				504EC3051FED79650016851F /* Products */,
 			);
@@ -83,6 +118,7 @@
 			children = (
 				504EC3041FED79650016851F /* App.app */,
 				A5E000000000000000000014 /* AppUITests.xctest */,
+				A5E000000000000000000110 /* AspenNotificationService.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,6 +131,9 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A5E000000000000000000011 /* MainViewController.swift */,
 				A5E000000000000000000012 /* AspenFilesPlugin.swift */,
+				A5E000000000000000000103 /* AspenPushPlugin.swift */,
+				A5E000000000000000000107 /* App.entitlements */,
+				A5E000000000000000000108 /* Localizable.strings */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -113,6 +152,26 @@
 			path = AppUITests;
 			sourceTree = "<group>";
 		};
+		A5E000000000000000000131 /* AspenPush */ = {
+			isa = PBXGroup;
+			children = (
+				A5E000000000000000000101 /* WebPush.swift */,
+				A5E000000000000000000102 /* PushState.swift */,
+			);
+			path = AspenPush;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000132 /* AspenNotificationService */ = {
+			isa = PBXGroup;
+			children = (
+				A5E000000000000000000104 /* NotificationService.swift */,
+				A5E000000000000000000105 /* Info.plist */,
+				A5E000000000000000000106 /* AspenNotificationService.entitlements */,
+				A5E000000000000000000109 /* Localizable.strings */,
+			);
+			path = AspenNotificationService;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -123,10 +182,12 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				A5E000000000000000000144 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A5E000000000000000000152 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -153,6 +214,23 @@
 			productName = AppUITests;
 			productReference = A5E000000000000000000014 /* AppUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		A5E000000000000000000151 /* AspenNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5E000000000000000000161 /* Build configuration list for PBXNativeTarget "AspenNotificationService" */;
+			buildPhases = (
+				A5E000000000000000000141 /* Sources */,
+				A5E000000000000000000142 /* Frameworks */,
+				A5E000000000000000000143 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AspenNotificationService;
+			productName = AspenNotificationService;
+			productReference = A5E000000000000000000110 /* AspenNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -191,10 +269,25 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				A5E000000000000000000151 /* AspenNotificationService */,
 				A5E000000000000000000031 /* AppUITests */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A5E000000000000000000144 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		504EC3021FED79650016851F /* Resources */ = {
@@ -207,6 +300,7 @@
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
+				A5E000000000000000000127 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,6 +308,14 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E000000000000000000143 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E000000000000000000128 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -228,6 +330,9 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A5E000000000000000000001 /* MainViewController.swift in Sources */,
 				A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */,
+				A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */,
+				A5E000000000000000000121 /* WebPush.swift in Sources */,
+				A5E000000000000000000122 /* PushState.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -239,6 +344,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5E000000000000000000141 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E000000000000000000126 /* NotificationService.swift in Sources */,
+				A5E000000000000000000124 /* WebPush.swift in Sources */,
+				A5E000000000000000000125 /* PushState.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -246,6 +361,11 @@
 			isa = PBXTargetDependency;
 			target = 504EC3031FED79650016851F /* App */;
 			targetProxy = A5E000000000000000000062 /* PBXContainerItemProxy */;
+		};
+		A5E000000000000000000152 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5E000000000000000000151 /* AspenNotificationService */;
+			targetProxy = A5E000000000000000000153 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -383,6 +503,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = L2GS25U79G;
 				CURRENT_PROJECT_VERSION = 1;
@@ -406,6 +527,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = L2GS25U79G;
 				CURRENT_PROJECT_VERSION = 1;
@@ -458,6 +580,53 @@
 			};
 			name = Release;
 		};
+		A5E000000000000000000162 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AspenNotificationService/AspenNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				INFOPLIST_FILE = AspenNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.aspenchat.client.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A5E000000000000000000163 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AspenNotificationService/AspenNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				INFOPLIST_FILE = AspenNotificationService/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.aspenchat.client.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -484,6 +653,15 @@
 			buildConfigurations = (
 				A5E000000000000000000071 /* Debug */,
 				A5E000000000000000000072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5E000000000000000000161 /* Build configuration list for PBXNativeTarget "AspenNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5E000000000000000000162 /* Debug */,
+				A5E000000000000000000163 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
