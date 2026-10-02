@@ -1,12 +1,12 @@
 use crate::api::message_enum::server_event::{ReactEvent, ServerEvent};
 use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
-use crate::app::{EventScope, MessageId, UserId, publish_event};
+use crate::app::{CustomEmojiId, EventScope, MessageId, UserId, publish_event};
 use crate::database::schema::react;
 use crate::t;
 use diesel::{
-    BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, QueryableByName,
-    Selectable,
+    BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl, QueryDsl, Queryable,
+    QueryableByName, Selectable,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -17,6 +17,8 @@ use diesel_async::{AsyncConnection, RunQueryDsl};
 pub struct React {
     pub emoji: String,
     pub author: UserId,
+    /// The custom emoji, when `emoji` is one's reference (`app::custom_emoji::reference`).
+    pub custom_emoji: Option<CustomEmojiId>,
     pub message: MessageId,
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -33,25 +35,59 @@ pub fn validate_emoji(s: &str) -> Result<&'static str, app::Error> {
     canonical_emoji(s).ok_or_else(|| app::Error::Validation(t!("reactMustBeSingleEmoji")))
 }
 
+/// What a reaction is stored and compared as: a single emoji in its canonical form, or a
+/// custom emoji's reference as `app::custom_emoji::reference` writes it; `None` for anything
+/// else, which is never stored.
+pub fn stored_key(s: &str) -> Option<String> {
+    canonical_emoji(s)
+        .map(str::to_string)
+        .or_else(|| app::custom_emoji::referenced(s).map(app::custom_emoji::reference))
+}
+
 pub async fn create_react(
     state: &GlobalServerContext,
     author: UserId,
     message_id: MessageId,
     emoji: String,
 ) -> app::error::Result<React> {
-    let emoji = validate_emoji(&emoji)?.to_string();
+    let custom = app::custom_emoji::referenced(&emoji);
+    let emoji = match custom {
+        Some(id) => app::custom_emoji::reference(id),
+        None => validate_emoji(&emoji)?.to_string(),
+    };
     let mut conn = state.connection_pool.get().await?;
-    let channel: crate::app::ChannelId = crate::database::schema::message::table
-        .select(crate::database::schema::message::channel)
-        .filter(crate::database::schema::message::id.eq(message_id))
-        .first(conn.as_mut())
-        .await?;
+    let (channel, community): (crate::app::ChannelId, Option<crate::app::CommunityId>) =
+        crate::database::schema::message::table
+            .inner_join(crate::database::schema::channel::table.on(
+                crate::database::schema::channel::id.eq(crate::database::schema::message::channel),
+            ))
+            .select((
+                crate::database::schema::message::channel,
+                crate::database::schema::channel::community,
+            ))
+            .filter(crate::database::schema::message::id.eq(message_id))
+            .first(conn.as_mut())
+            .await?;
     crate::app::permissions::channel_access(state, conn.as_mut(), author, channel)
         .await?
         .require(crate::app::permissions::Permissions::ADD_REACTIONS)?;
+    // A custom emoji reacts only in the community that defines it; a DM has none.
+    if let Some(id) = custom {
+        let Some(community) = community else {
+            return Err(app::Error::Validation(t!("customEmojiNotHere")));
+        };
+        if app::custom_emoji::resolve_in_community(conn.as_mut(), community, &emoji)
+            .await?
+            .is_none()
+        {
+            return Err(app::Error::Validation(t!("customEmojiUnknown")));
+        }
+        debug_assert_eq!(app::custom_emoji::referenced(&emoji), Some(id));
+    }
     let react = React {
         emoji: emoji.clone(),
         author,
+        custom_emoji: custom,
         message: message_id,
         timestamp: chrono::Utc::now(),
     };
@@ -122,8 +158,9 @@ pub async fn delete_react(
     message_id: MessageId,
     emoji: String,
 ) -> app::error::Result<()> {
-    // Anything that is not an emoji was never stored, so there is nothing to remove.
-    let Some(emoji) = canonical_emoji(&emoji).map(str::to_string) else {
+    // Anything that is not an emoji or a custom emoji's reference was never stored, so there
+    // is nothing to remove.
+    let Some(emoji) = stored_key(&emoji) else {
         return Ok(());
     };
     let mut conn = state.connection_pool.get().await?;

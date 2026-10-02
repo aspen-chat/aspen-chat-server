@@ -25,6 +25,7 @@ import type {
   Channel,
   ChannelOverride,
   Community,
+  CustomEmoji,
   DeploymentPermission,
   Invite,
   Message,
@@ -257,6 +258,8 @@ export class RecordStore {
   /** `user -> community ids`, the reverse of `#members`, for invalidating member lists. */
   readonly #memberOf = new Map<string, Set<string>>();
   readonly #reactions = new Map<string, Reactions>();
+  /** Every community's own emoji, by id. */
+  readonly #customEmoji = new Map<string, CustomEmoji>();
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
@@ -452,6 +455,20 @@ export class RecordStore {
         .filter((r) => r.community === communityId)
         .sort((a, b) => a.position - b.position),
     );
+  }
+
+  /** Topic `emoji:<communityId>`: the community's own emoji, by name. */
+  customEmoji(communityId: string): readonly CustomEmoji[] {
+    return this.#memoized(`emoji:${communityId}`, () =>
+      Array.from(this.#customEmoji.values())
+        .filter((e) => e.community === communityId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    );
+  }
+
+  /** One custom emoji by id, under its community's `emoji:<communityId>` topic. */
+  customEmojiById(id: string): CustomEmoji | undefined {
+    return this.#customEmoji.get(id);
   }
 
   /**
@@ -1275,6 +1292,9 @@ export class RecordStore {
           included.categoryOverrides ?? [],
         );
       }
+      if (included.customEmoji !== undefined) {
+        this.#replaceCustomEmoji(included.customEmoji);
+      }
       for (const session of included.voiceSessions ?? []) {
         this.#putVoiceSession(session);
       }
@@ -1709,6 +1729,7 @@ export class RecordStore {
       this.#collapsed.clear();
       this.#blocked.clear();
       this.#roles.clear();
+      this.#customEmoji.clear();
       this.#pins.clear();
       this.#forgetCommands();
       this.#channelOverrides.clear();
@@ -1761,6 +1782,18 @@ export class RecordStore {
             }
           } else {
             this.#removeCommunity(event.id);
+          }
+          break;
+        case "customEmoji":
+          if (event.type === "create") {
+            this.#putCustomEmoji(created(event));
+          } else if (event.type === "update") {
+            const emoji = this.#customEmoji.get(event.id);
+            if (emoji !== undefined) {
+              this.#putCustomEmoji(mergePatch(emoji, event));
+            }
+          } else {
+            this.#removeCustomEmoji(event.id);
           }
           break;
         case "role":
@@ -2216,6 +2249,49 @@ export class RecordStore {
     }
     if (this.#communities.delete(id)) {
       this.#touch(`community:${id}`);
+    }
+  }
+
+  #putCustomEmoji(emoji: CustomEmoji): void {
+    this.#customEmoji.set(emoji.id, emoji);
+    this.#touch(`emoji:${emoji.community}`);
+  }
+
+  /**
+   * Removes an emoji, and the reactions made with it, which the server's cascade took and
+   * announced no further; a message's text still naming it renders as unknown.
+   */
+  #removeCustomEmoji(id: string): void {
+    const emoji = this.#customEmoji.get(id);
+    if (emoji === undefined) {
+      return;
+    }
+    this.#customEmoji.delete(id);
+    this.#touch(`emoji:${emoji.community}`);
+    const key = `<:${id}>`;
+    for (const [messageId, reactions] of Array.from(this.#reactions)) {
+      if (reactions.has(key)) {
+        const next = new Map(reactions);
+        next.delete(key);
+        this.#reactions.set(messageId, next);
+        this.#touch(`reactions:${messageId}`);
+      }
+    }
+  }
+
+  /** A read's whole list of its communities' emoji replaces what was held for them. */
+  #replaceCustomEmoji(emoji: readonly CustomEmoji[]): void {
+    const communities = new Set(emoji.map((e) => e.community));
+    for (const held of Array.from(this.#customEmoji.values())) {
+      if (communities.has(held.community)) {
+        this.#customEmoji.delete(held.id);
+      }
+    }
+    for (const e of emoji) {
+      this.#customEmoji.set(e.id, e);
+    }
+    for (const community of communities) {
+      this.#touch(`emoji:${community}`);
     }
   }
 

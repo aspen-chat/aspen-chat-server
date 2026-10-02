@@ -444,9 +444,12 @@ test.describe("on a phone", () => {
     return picker.evaluate((element) => {
       const box = element.getBoundingClientRect();
       const list = element.querySelector<HTMLElement>(".epr-body");
-      const firstRow = Array.from(
-        element.querySelectorAll<HTMLElement>(".epr-emoji-category-content > *"),
-      )
+      // The first row of the fullest category: the community's own section comes first and
+      // may hold a single emoji, which says nothing about how many fit across.
+      const categories = Array.from(
+        element.querySelectorAll<HTMLElement>(".epr-emoji-category-content"),
+      ).sort((a, b) => b.childElementCount - a.childElementCount);
+      const firstRow = Array.from(categories[0]?.children ?? [])
         .map((emoji) => emoji.getBoundingClientRect())
         .filter((rect, _, all) => rect.width > 0 && rect.top === all[0]?.top);
       const inner = list?.getBoundingClientRect();

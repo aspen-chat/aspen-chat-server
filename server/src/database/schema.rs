@@ -165,6 +165,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    custom_emoji (id) {
+        id -> Uuid,
+        community -> Uuid,
+        name -> Text,
+        icon -> Uuid,
+        created_by -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     deployment_role (id) {
         id -> Uuid,
         name -> Text,
@@ -435,6 +446,7 @@ diesel::table! {
         author -> Uuid,
         message -> Uuid,
         timestamp -> Timestamptz,
+        custom_emoji -> Nullable<Uuid>,
     }
 }
 
@@ -633,6 +645,9 @@ diesel::joinable!(community_role -> community (community));
 diesel::joinable!(community_role -> user (bot));
 diesel::joinable!(community_user -> community (community));
 diesel::joinable!(community_user -> user (user));
+diesel::joinable!(custom_emoji -> community (community));
+diesel::joinable!(custom_emoji -> icon (icon));
+diesel::joinable!(custom_emoji -> user (created_by));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
@@ -668,6 +683,7 @@ diesel::joinable!(poll_vote -> user (user));
 diesel::joinable!(push_subscription -> push_key (push_key));
 diesel::joinable!(push_subscription -> refresh_token (refresh_token));
 diesel::joinable!(push_subscription -> user (user));
+diesel::joinable!(react -> custom_emoji (custom_emoji));
 diesel::joinable!(react -> message (message));
 diesel::joinable!(react -> user (author));
 diesel::joinable!(read_state -> channel (channel));
@@ -706,6 +722,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_member_role,
     community_role,
     community_user,
+    custom_emoji,
     deployment_role,
     dm_recipient,
     federated_deployment,

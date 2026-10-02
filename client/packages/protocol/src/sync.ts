@@ -14,7 +14,7 @@
  */
 
 import { EventStream, type EventStreamOptions } from "./events";
-import type { ServerEvent } from "./generated/events";
+import type { CustomEmoji, ServerEvent } from "./generated/events";
 import type { components, paths } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
@@ -1956,6 +1956,51 @@ export class AspenSync {
     return result.data;
   }
 
+  /**
+   * Adds a custom emoji to a community: uploads its picture as an icon, then names it. The
+   * answer is applied when its event has not come first.
+   */
+  async createCustomEmoji(
+    communityId: string,
+    name: string,
+    picture: Blob,
+    mimeType: string,
+  ): Promise<CustomEmoji> {
+    const icon = await this.uploadIcon(picture, mimeType);
+    const result = await this.#client.api.POST("/api/v1/communities/{community}/emoji", {
+      params: { path: { community: communityId } },
+      body: { name, icon: icon.id },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (this.store.customEmojiById(result.data.id) === undefined) {
+      this.store.applyEvent({ serverEvent: "customEmoji", type: "create", ...result.data });
+    }
+    return result.data;
+  }
+
+  /** Renames a custom emoji; its update event changes the cache. */
+  async renameCustomEmoji(emojiId: string, name: string): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/emoji/{emoji}", {
+      params: { path: { emoji: emojiId } },
+      body: { name },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Removes a custom emoji; its deletion event changes the cache. */
+  async deleteCustomEmoji(emojiId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/emoji/{emoji}", {
+      params: { path: { emoji: emojiId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /** Renames a role or sets its permissions; its update event changes the cache. */
   async updateRole(
     roleId: string,
@@ -2376,6 +2421,7 @@ export class AspenSync {
             "collapses",
             "roles",
             "notifications",
+            "emoji",
           ],
         },
       },
@@ -2452,6 +2498,7 @@ export class AspenSync {
                 "collapses",
                 "roles",
                 "notifications",
+                "emoji",
               ],
             },
           },

@@ -17,8 +17,8 @@ use crate::api::attachment::Attachment;
 use crate::api::category_collapse::CategoryCollapse;
 use crate::api::channel_mute::ChannelMute;
 use crate::api::message_enum::{
-    Category, CategoryOverride, Channel, ChannelOverride, Community, Message, Poll, Role, User,
-    UserCommunity, VoiceParticipant, VoiceRing, VoiceSession,
+    Category, CategoryOverride, Channel, ChannelOverride, Community, CustomEmoji, Message, Poll,
+    Role, User, UserCommunity, VoiceParticipant, VoiceRing, VoiceSession,
 };
 use crate::api::notification_setting::NotificationSetting;
 use crate::api::poll::{OwnWriteIn, PollVote};
@@ -148,6 +148,10 @@ pub struct Included {
     /// The communities' roles, lowest first within each, with their channel and category
     /// overrides as `channelOverrides` and `categoryOverrides`. Present together whenever
     /// roles were requested.
+    /// The communities' own emoji, present whenever `emoji` was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub custom_emoji: Option<Vec<CustomEmoji>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub roles: Option<Vec<Role>>,

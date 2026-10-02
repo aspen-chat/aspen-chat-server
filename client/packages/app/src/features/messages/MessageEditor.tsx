@@ -3,6 +3,8 @@ import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { decodeTags } from "@/features/mentions/tags";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useMessages } from "@/i18n/context";
@@ -30,19 +32,22 @@ export function MessageEditor({
     const store = sync.store;
     const community = store.channel(channelId)?.community;
     const roles = community == null ? [] : store.roles(community);
-    return decodeTags(
+    const custom = community == null ? [] : store.customEmoji(community);
+    const tags = decodeTags(
       initial,
       (id) => store.user(id)?.name,
       (id) => roles.find((role) => role.id === id)?.name,
     );
+    return { ...tags, text: decodeCustomEmoji(tags.text, custom) };
   });
   const [draft, setDraft] = useState(decoded.text);
   const tagging = useTagging({ channelId, draft, setDraft, initialPicks: decoded.picks });
+  const emoji = useEmojiCompletion({ channelId, draft, setDraft });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
-    const content = tagging.encode(draft.trim());
+    const content = emoji.encode(tagging.encode(draft.trim()));
     if (content.length === 0 || saving) {
       return;
     }
@@ -62,7 +67,7 @@ export function MessageEditor({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (tagging.onKeyDown(event)) {
+    if (tagging.onKeyDown(event) || emoji.onKeyDown(event)) {
       return;
     }
     if (event.key === "Escape") {
@@ -89,11 +94,30 @@ export function MessageEditor({
         className="relative"
       >
         <p role="status" className="sr-only">
-          {tagging.announcement}
+          {emoji.open ? emoji.announcement : tagging.announcement}
         </p>
         {tagging.list}
+        {emoji.list}
         <TextArea
           {...tagging.boxProps}
+          {...(emoji.open
+            ? {
+                "aria-controls": emoji.listId,
+                "aria-activedescendant": `${emoji.listId}-${String(emoji.current)}`,
+              }
+            : {})}
+          onSelect={(event) => {
+            tagging.boxProps.onSelect(event);
+            emoji.follow(event);
+          }}
+          onKeyUp={(event) => {
+            tagging.boxProps.onKeyUp(event);
+            emoji.follow(event);
+          }}
+          onClick={(event) => {
+            tagging.boxProps.onClick(event);
+            emoji.follow(event);
+          }}
           rows={1}
           onKeyDown={onKeyDown}
           className="max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"

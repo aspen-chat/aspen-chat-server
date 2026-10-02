@@ -144,6 +144,9 @@ for (const { palette, scheme } of combinations) {
       await expectAccessible(page, "roles");
       await dialog.getByRole("tab", { name: "Members" }).click();
       await expectAccessible(page, "members");
+      await dialog.getByRole("tab", { name: "Emoji" }).click();
+      await expect(dialog.getByRole("heading", { name: "Add an emoji" })).toBeVisible();
+      await expectAccessible(page, "emoji");
     });
 
     test("the administration dashboard and a bot's page", async ({ page }) => {

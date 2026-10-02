@@ -1,5 +1,5 @@
 import type { Mentions } from "@aspen/protocol";
-import { isValidElement, type ReactNode } from "react";
+import { type ReactNode, isValidElement, useContext } from "react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,7 +8,9 @@ import { CodeBlock } from "@/features/messages/CodeBlock";
 import { openInviteLink, useDomain } from "@/features/messages/links";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
+import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { MentionContext } from "@/features/messages/mentionContext";
+import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
 import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
@@ -55,6 +57,10 @@ const components: Components = {
       return <Spoiler>{children}</Spoiler>;
     }
     const attributes = props as Record<string, unknown>;
+    const emoji = attributes["data-emoji"];
+    if (typeof emoji === "string") {
+      return <CustomEmojiInMessage id={emoji} />;
+    }
     const kind = attributes["data-mention"];
     const id = attributes["data-id"];
     if (kind === "user" || kind === "role" || kind === "everyone") {
@@ -115,7 +121,13 @@ export function Markdown({
     <div className="message-body">
       <MentionContext.Provider value={{ mentions, communityId }}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkSpoilers, remarkMentions, remarkBareLinks]}
+          remarkPlugins={[
+            remarkGfm,
+            remarkSpoilers,
+            remarkMentions,
+            remarkCustomEmoji,
+            remarkBareLinks,
+          ]}
           components={components}
           skipHtml
         >
@@ -127,3 +139,9 @@ export function Markdown({
 }
 
 const NO_MENTIONS: Mentions = { users: [], roles: [], everyone: false };
+
+/** A custom emoji in a body, resolved in the message's community. */
+function CustomEmojiInMessage({ id }: { id: string }) {
+  const context = useContext(MentionContext);
+  return <CustomEmojiGlyph id={id} communityId={context?.communityId ?? null} />;
+}

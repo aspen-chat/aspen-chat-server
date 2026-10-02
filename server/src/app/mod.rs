@@ -22,6 +22,7 @@ pub mod category_collapse;
 pub mod channel;
 pub mod channel_mute;
 pub mod community;
+pub mod custom_emoji;
 pub mod deployment;
 pub mod dm;
 mod error;
@@ -220,6 +221,7 @@ id_type!(CategoryId);
 id_type!(AttachmentId);
 
 id_type!(IconId);
+id_type!(CustomEmojiId);
 
 id_type!(LinkPreviewImageId);
 

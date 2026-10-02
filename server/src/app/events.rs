@@ -138,6 +138,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::Category(_)
         | ServerEvent::Invite(_)
         | ServerEvent::Role(_)
+        | ServerEvent::CustomEmoji(_)
         | ServerEvent::ChannelOverride(_)
         | ServerEvent::CategoryOverride(_) => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,

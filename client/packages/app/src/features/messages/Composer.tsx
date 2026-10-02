@@ -18,6 +18,7 @@ import {
   TextArea,
   TextField,
 } from "react-aria-components";
+import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
 import {
@@ -119,6 +120,7 @@ export function Composer({
     off: commands.active,
     initialPicks: saved?.picks ?? [],
   });
+  const emoji = useEmojiCompletion({ channelId, draft, setDraft, off: commands.active });
 
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
   // (another channel, a notification opened) or the page is hidden or left.
@@ -247,7 +249,7 @@ export function Composer({
       if (prepared.kind === "command") {
         await sync.invokeCommand(channelId, prepared.invocation);
       } else {
-        await sync.sendMessage(channelId, tagging.encode(text), readyIds, {
+        await sync.sendMessage(channelId, emoji.encode(tagging.encode(text)), readyIds, {
           echoToParent: echoTarget !== undefined && echo,
         });
       }
@@ -267,7 +269,7 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (commands.onKeyDown(event) || tagging.onKeyDown(event)) {
+    if (commands.onKeyDown(event) || tagging.onKeyDown(event) || emoji.onKeyDown(event)) {
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !touchOnly) {
@@ -426,23 +428,37 @@ export function Composer({
           className="relative flex-1"
         >
           <p role="status" className="sr-only">
-            {commands.active ? commands.announcement : tagging.announcement}
+            {commands.active
+              ? commands.announcement
+              : emoji.open
+                ? emoji.announcement
+                : tagging.announcement}
           </p>
           {tagging.list}
+          {emoji.list}
           {commands.list}
           <TextArea
             {...tagging.boxProps}
+            {...(emoji.open
+              ? {
+                  "aria-controls": emoji.listId,
+                  "aria-activedescendant": `${emoji.listId}-${String(emoji.current)}`,
+                }
+              : {})}
             {...(commands.active ? commands.aria : {})}
             onSelect={(event) => {
               tagging.boxProps.onSelect(event);
+              emoji.follow(event);
               commands.follow(event);
             }}
             onKeyUp={(event) => {
               tagging.boxProps.onKeyUp(event);
+              emoji.follow(event);
               commands.follow(event);
             }}
             onClick={(event) => {
               tagging.boxProps.onClick(event);
+              emoji.follow(event);
               commands.follow(event);
             }}
             aria-placeholder={placeholder}

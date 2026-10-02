@@ -20,6 +20,13 @@ export const helper = "0190f0a0-0000-7000-8000-000000000003";
 const everyoneRole = "0190f0a0-0000-7000-8000-000000000040";
 const deploymentAdministrator = "0190f0a0-0000-7000-8000-000000000042";
 const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
+/** The community's one custom emoji, and its picture. */
+export const customEmojiId = "0190f0a0-0000-7000-8000-0000000000e1";
+export const customEmojiName = "partyparrot";
+const customEmojiIcon = "0190f0a0-0000-7000-8000-0000000000e2";
+/** A one-pixel PNG, which stands for every emoji's picture. */
+const PIXEL_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 const channelPermissions = [
   "viewChannel",
   "sendMessages",
@@ -59,6 +66,7 @@ const roles = [
       "pinMessages",
       "manageCalls",
       "addBots",
+      "manageCustomEmoji",
       ...channelPermissions,
     ],
     everyone: false,
@@ -76,6 +84,11 @@ export const ideas = "0190f0a0-0000-7000-8000-000000000018";
 export const archive = "0190f0a0-0000-7000-8000-000000000019";
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+/** An id for a record the world makes during a test, each one new. */
+let made = 0;
+const freshId = () => `0190f0a0-0000-7000-8000-00000000f${(made++).toString(16).padStart(3, "0")}`;
+/** An icon record whose picture is the one-pixel PNG. */
+const iconRecord = (id: string) => ({ id, mimeType: "image/png", downloadUrl: PIXEL_PNG });
 
 const user = (id: string, name: string, displayName: string | null) => ({
   id,
@@ -181,7 +194,7 @@ const generalMessages = [
   message(205, bob, "", 20, { kind: "threadEcho", echoOf: messageId(211) }),
   message(204, bob, "Sounds good. See everyone at ten, and bring a jumper in case it rains.", 40),
   message(203, me, starterText, 60, { thread }),
-  message(202, bob, "Morning all!", 90),
+  message(202, bob, `Morning all! <:${customEmojiId}>`, 90),
   message(201, me, "Welcome to the family server.", 120),
   // Older history, enough for several pages, so reading back through it can be exercised.
   ...Array.from({ length: 120 }, (_, i) =>
@@ -820,8 +833,80 @@ async function answer(
           voiceSessions: [],
           voiceParticipants: [],
           readStates: communityReadStates,
+          customEmoji: [
+            {
+              id: customEmojiId,
+              community,
+              name: customEmojiName,
+              icon: customEmojiIcon,
+              createdBy: bob,
+            },
+          ],
         },
       }),
+    ],
+    // Icons: the emoji's picture, and the two-phase upload of a new one, whose bytes go to a
+    // path under the API the world answers too.
+    ["GET", /^\/icons\/[^/]+$/, () => iconRecord(path.split("/")[2] ?? "")],
+    [
+      "POST",
+      /^\/icons$/,
+      () =>
+        reply(
+          {
+            id: freshId(),
+            uploadUrl: `${url.origin}/api/v1/uploads/icon`,
+            expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          },
+          201,
+        ),
+    ],
+    ["PUT", /^\/uploads\/icon$/, () => reply({}, 200)],
+    ["POST", /^\/icons\/[^/]+\/confirm$/, () => iconRecord(path.split("/")[2] ?? "")],
+    // The community's emoji: adding, renaming, and removing answer as the server does, and
+    // tell everyone by event.
+    [
+      "POST",
+      new RegExp(`^/communities/${community}/emoji$`),
+      () => {
+        const request = route.request().postDataJSON() as { name: string; icon: string };
+        const record = {
+          id: freshId(),
+          community,
+          name: request.name,
+          icon: request.icon,
+          createdBy: me,
+        };
+        publish({ serverEvent: "customEmoji", type: "create", ...record });
+        return reply(record, 201);
+      },
+    ],
+    [
+      "PATCH",
+      /^\/emoji\/[^/]+$/,
+      () => {
+        const id = path.split("/")[2] ?? "";
+        const request = route.request().postDataJSON() as { name?: string };
+        publish({ serverEvent: "customEmoji", type: "update", id, name: request.name });
+        return reply(
+          {
+            id,
+            community,
+            name: request.name ?? customEmojiName,
+            icon: customEmojiIcon,
+            createdBy: bob,
+          },
+          200,
+        );
+      },
+    ],
+    [
+      "DELETE",
+      /^\/emoji\/[^/]+$/,
+      () => {
+        publish({ serverEvent: "customEmoji", type: "delete", id: path.split("/")[2] ?? "" });
+        return reply(null, 204);
+      },
     ],
     [
       "GET",

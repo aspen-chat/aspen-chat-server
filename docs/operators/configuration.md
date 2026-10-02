@@ -87,6 +87,7 @@ Passkeys are offered only when this section is present.
 | Setting | Default | |
 | --- | --- | --- |
 | `everyone_mention_limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the system account and may turn it back on. `0` never turns it off. |
+| `custom_emoji_limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
 
 ## `[system_account]`
 

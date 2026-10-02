@@ -29,6 +29,7 @@ import {
 import { Avatar } from "@/features/communities/Avatar";
 import { IconPicker } from "@/features/media/IconPicker";
 import { MemberPicker } from "@/features/community-settings/MemberPicker";
+import { EmojiPanel } from "@/features/community-settings/EmojiPanel";
 import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
 import {
@@ -97,6 +98,9 @@ export function CommunitySettingsDialog({
                 <Tab id="members" className={tabClass}>
                   {m.communitySettings.membersTab}
                 </Tab>
+                <Tab id="emoji" className={tabClass}>
+                  {m.communitySettings.emojiTab}
+                </Tab>
               </TabList>
               <TabPanel id="overview" className="outline-none">
                 <Overview community={community} />
@@ -108,6 +112,9 @@ export function CommunitySettingsDialog({
               )}
               <TabPanel id="members" className="outline-none">
                 <MembersPanel communityId={community.id} />
+              </TabPanel>
+              <TabPanel id="emoji" className="outline-none">
+                <EmojiPanel communityId={community.id} />
               </TabPanel>
             </Tabs>
           </Dialog>

@@ -6,8 +6,8 @@ use crate::api::{ChannelType, MessageKind};
 use crate::app::deployment::DeploymentPermission;
 use crate::app::permissions::Permission;
 use crate::app::{
-    AttachmentId, CategoryId, ChannelId, CommunityId, IconId, MessageId, PollId, RoleId, UserId,
-    VoiceServerId, VoiceSessionId,
+    AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId, MessageId, PollId,
+    RoleId, UserId, VoiceServerId, VoiceSessionId,
 };
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -286,6 +286,24 @@ enum MessageEnumSource {
     },
     // A role in a community (`app::permissions`). Roles rank by `position`; the everyone role,
     // every member's, is at 0.
+    /// A community's own emoji: a named picture used in its messages as `<:id>` and as a
+    /// reaction. Changed only by holders of Manage custom emoji; a rename is announced as its
+    /// `update`, and deleting it takes its reactions with it.
+    CustomEmoji {
+        #[message_gen(id)]
+        id: CustomEmojiId,
+        #[message_gen(parent)]
+        community: CommunityId,
+        // What the UI calls it, unique within the community ignoring case: 2 to 32 characters
+        // of any script, without whitespace or colons.
+        name: String,
+        // The picture, an icon uploaded first (PNG, JPEG, WebP, or GIF, at most 256 KiB and
+        // 128 by 128).
+        #[message_gen(permanent)]
+        icon: IconId,
+        #[message_gen(server_authoritative)]
+        created_by: Option<UserId>,
+    },
     Role {
         #[message_gen(id)]
         id: RoleId,

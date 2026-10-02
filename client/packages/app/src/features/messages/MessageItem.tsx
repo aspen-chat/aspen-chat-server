@@ -328,6 +328,7 @@ export const MessageItem = memo(function MessageItem({
               <MessageActions
                 messageId={id}
                 channelId={channelId}
+                communityId={home.community}
                 text={message.content}
                 permissions={permissions}
                 canThread={canThread}
@@ -356,6 +357,7 @@ export const MessageItem = memo(function MessageItem({
                     <MessageActions
                       messageId={id}
                       channelId={channelId}
+                      communityId={home.community}
                       text={message.content}
                       permissions={permissions}
                       canThread={canThread}
@@ -375,10 +377,15 @@ export const MessageItem = memo(function MessageItem({
               </Popover>
               <ReactionPickerPopover
                 messageId={id}
+                communityId={home.community}
                 triggerRef={anchor}
                 {...popoverProps("react")}
               />
-              <ReactionsDialog messageId={id} {...sheetProps("reactions")} />
+              <ReactionsDialog
+                messageId={id}
+                communityId={home.community}
+                {...sheetProps("reactions")}
+              />
               <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
             </>
           )}
@@ -407,7 +414,11 @@ export const MessageItem = memo(function MessageItem({
               }
             : {})}
         />
-        <ReactionChips messageId={id} canReact={permissions.has("addReactions")} />
+        <ReactionChips
+          messageId={id}
+          canReact={permissions.has("addReactions")}
+          communityId={home.community}
+        />
         {canThread && message.thread != null && (
           <ThreadSummary threadId={message.thread} home={home} channelId={channelId} />
         )}

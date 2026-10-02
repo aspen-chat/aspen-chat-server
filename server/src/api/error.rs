@@ -66,6 +66,8 @@ pub enum ProblemCode {
     PasskeysUnavailable,
     /// Registration: the requested username is already in use.
     UsernameTaken,
+    /// A custom emoji of that name is in the community already.
+    CustomEmojiNameTaken,
     /// Invite creation: the requested custom code is already in use.
     InviteCodeTaken,
     /// Registration: this server takes new accounts only with an invite, and none was given.
@@ -126,6 +128,7 @@ impl ProblemCode {
             ProblemCode::Conflict
             | ProblemCode::PollClosed
             | ProblemCode::UsernameTaken
+            | ProblemCode::CustomEmojiNameTaken
             | ProblemCode::InviteCodeTaken
             | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
@@ -159,6 +162,7 @@ impl ProblemCode {
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
+            ProblemCode::CustomEmojiNameTaken => t!("customEmojiNameTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
             ProblemCode::RegistrationInviteRequired => t!("problemRegistrationInviteRequired"),
             ProblemCode::RegistrationInviteInvalid => t!("problemRegistrationInviteInvalid"),

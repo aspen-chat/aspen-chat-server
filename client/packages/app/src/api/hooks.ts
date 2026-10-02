@@ -6,30 +6,31 @@
 import type {
   AspenSync,
   Attachment,
+  BotCommands,
   Category,
   CategoryOverride,
-  ChannelOverride,
-  CommunityPermissions,
-  DeploymentPermission,
-  Permission,
-  PermissionSet,
-  Pin,
-  BotCommands,
-  Role,
-  ChannelMute,
-  NotificationLevel,
-  ChannelVoice,
-  PreferenceDefinition,
   Channel,
+  ChannelMute,
+  ChannelOverride,
+  ChannelVoice,
   Community,
+  CommunityPermissions,
+  CustomEmoji,
+  DeploymentPermission,
   Icon,
   Invite,
   Message,
   MessageWindow,
+  NotificationLevel,
+  Permission,
+  PermissionSet,
+  Pin,
   Poll,
+  PreferenceDefinition,
   Reactions,
   ReadState,
   RecordStore,
+  Role,
   SyncStatus,
   Topic,
   User,
@@ -190,6 +191,49 @@ export function useAttachment(id: string): Attachment | undefined {
 }
 
 /** An icon record by id, fetched on demand when the cache lacks it. `undefined` id reads nothing. */
+/**
+ * Several icons at once, by id, those the cache lacks fetched; the map is the same object
+ * while none of them changes.
+ */
+export function useIcons(ids: readonly string[]): ReadonlyMap<string, Icon> {
+  const store = useStore();
+  const sync = useSync();
+  const cache = useRef<{ signature: string; icons: ReadonlyMap<string, Icon> }>({
+    signature: "",
+    icons: new Map(),
+  });
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const unsubscribes = ids.map((id) => store.subscribe(`icon:${id}`, listener));
+      return () => {
+        for (const unsubscribe of unsubscribes) {
+          unsubscribe();
+        }
+      };
+    },
+    [store, ids],
+  );
+  const icons = useSyncExternalStore(subscribe, () => {
+    const found = ids.flatMap((id) => {
+      const icon = store.icon(id);
+      return icon === undefined ? [] : [[id, icon] as const];
+    });
+    const signature = found.map(([id, icon]) => `${id}=${icon.downloadUrl}`).join("|");
+    if (signature !== cache.current.signature) {
+      cache.current = { signature, icons: new Map(found) };
+    }
+    return cache.current.icons;
+  });
+  useEffect(() => {
+    for (const id of ids) {
+      if (!icons.has(id)) {
+        sync.ensureIcon(id);
+      }
+    }
+  }, [sync, ids, icons]);
+  return icons;
+}
+
 export function useIcon(id: string | undefined): Icon | undefined {
   const sync = useSync();
   const icon = useTopic(`icon:${id ?? ""}`, (s) => (id === undefined ? undefined : s.icon(id)));
@@ -465,6 +509,11 @@ export function useReactions(messageId: string): Reactions {
 /** A community's roles, lowest first. */
 export function useRoles(communityId: string): readonly Role[] {
   return useTopic(`roles:${communityId}`, (s) => s.roles(communityId));
+}
+
+/** A community's own emoji, by name. */
+export function useCustomEmoji(communityId: string): readonly CustomEmoji[] {
+  return useTopic(`emoji:${communityId}`, (s) => s.customEmoji(communityId));
 }
 
 /** The roles a member holds besides everyone's, or `undefined` while unknown. */

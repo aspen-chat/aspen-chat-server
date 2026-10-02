@@ -18,7 +18,10 @@ export const PERMISSION_GROUPS = [
       "addBots",
     ],
   },
-  { key: "moderation", permissions: ["manageMessages", "pinMessages", "manageCalls"] },
+  {
+    key: "moderation",
+    permissions: ["manageMessages", "pinMessages", "manageCalls", "manageCustomEmoji"],
+  },
   {
     key: "text",
     permissions: [

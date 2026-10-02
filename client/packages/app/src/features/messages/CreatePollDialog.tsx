@@ -350,6 +350,7 @@ function OptionEmojiPicker({
                 }
               >
                 <EmojiPicker
+                  communityId={null}
                   onPick={(picked) => {
                     onChange(picked === emoji ? null : picked);
                     close();

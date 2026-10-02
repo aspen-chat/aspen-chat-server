@@ -107,7 +107,8 @@
                     "position": 1,
                     "permissions": [
                         "manageCalls",
-                        "addBots"
+                        "addBots",
+                        "manageCustomEmoji"
                     ],
                     "everyone": false
                 }
@@ -125,6 +126,7 @@
                 "pinMessages",
                 "manageCalls",
                 "addBots",
+                "manageCustomEmoji",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -146,6 +148,7 @@
                 "pinMessages",
                 "manageCalls",
                 "addBots",
+                "manageCustomEmoji",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -205,6 +208,7 @@
                         "pinMessages",
                         "manageCalls",
                         "addBots",
+                        "manageCustomEmoji",
                         "viewChannel",
                         "sendMessages",
                         "attachFiles",
@@ -341,6 +345,7 @@
                 "pinMessages",
                 "manageCalls",
                 "addBots",
+                "manageCustomEmoji",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -370,6 +375,7 @@
                 "pinMessages",
                 "manageCalls",
                 "addBots",
+                "manageCustomEmoji",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",

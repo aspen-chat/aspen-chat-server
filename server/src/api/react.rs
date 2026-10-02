@@ -127,11 +127,11 @@ pub async fn add_reaction(
     SessionUser { user, .. }: SessionUser,
     Path((message, emoji)): Path<(MessageId, String)>,
 ) -> ApiResult<(StatusCode, Json<React>)> {
-    // The reaction as stored, its emoji in canonical form; anything that is not an emoji is
-    // refused by `create_react` before the record is used.
+    // The reaction as stored, its emoji in canonical form (or a custom emoji's reference);
+    // anything else is refused by `create_react` before the record is used.
     let record = React {
         message_id: message,
-        emoji: app::react::canonical_emoji(&emoji).map_or_else(|| emoji.clone(), str::to_string),
+        emoji: app::react::stored_key(&emoji).unwrap_or_else(|| emoji.clone()),
         user_id: user.id,
     };
     match app::react::create_react(&state, user.id, message, emoji).await {

@@ -40,6 +40,7 @@ export type MessageSheet = "react" | "reactions" | "delete";
 export function MessageActions({
   messageId,
   channelId,
+  communityId,
   text,
   permissions,
   canThread,
@@ -52,6 +53,8 @@ export function MessageActions({
 }: {
   messageId: string;
   channelId: string;
+  /** The community the message is in, whose own emoji reactions may be; none in a DM. */
+  communityId: string | null;
   /** The message's text, which Copy text copies; none for a message without any. */
   text: string | null;
   permissions: ReadonlySet<Permission>;
@@ -73,6 +76,7 @@ export function MessageActions({
         (open === undefined ? (
           <ReactionPicker
             messageId={messageId}
+            communityId={communityId}
             triggerClassName={actionClass}
             iconSize={ACTION_ICON}
           />
@@ -95,7 +99,11 @@ export function MessageActions({
         />
       )}
       {open === undefined ? (
-        <ViewReactionsButton messageId={messageId} triggerClassName={actionClass} />
+        <ViewReactionsButton
+          messageId={messageId}
+          communityId={communityId}
+          triggerClassName={actionClass}
+        />
       ) : (
         hasReactions && (
           <Action

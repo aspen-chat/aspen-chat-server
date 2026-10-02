@@ -24,6 +24,7 @@ import {
 } from "react-aria-components";
 import {
   useChannelCan,
+  useCustomEmoji,
   useMe,
   useMessage,
   useReactions,
@@ -41,6 +42,8 @@ import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
+import { emojiIdOf } from "@/features/emoji/customEmoji";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
@@ -80,10 +83,13 @@ function byPopularity(reactions: Reactions): Entry[] {
 export function ReactionChips({
   messageId,
   canReact,
+  communityId,
 }: {
   messageId: string;
   /** Whether the caller may add reactions here; without it they may only take theirs back. */
   canReact: boolean;
+  /** The community whose own emoji the reactions may be; none in a DM. */
+  communityId: string | null;
 }) {
   const m = useMessages();
   const reactions = useReactions(messageId);
@@ -104,6 +110,7 @@ export function ReactionChips({
         <li key={emoji}>
           <ReactionChip
             messageId={messageId}
+            communityId={communityId}
             emoji={emoji}
             reactions={r}
             canReact={canReact}
@@ -135,12 +142,14 @@ export function ReactionChips({
         <li>
           <ReactionPicker
             messageId={messageId}
+            communityId={communityId}
             triggerClassName={plainChipClass + " text-ink-muted"}
           />
         </li>
       )}
       <ReactionsDialog
         messageId={messageId}
+        communityId={communityId}
         isOpen={listOpen}
         onOpenChange={setListOpen}
         {...(listEmoji === null ? {} : { initialEmoji: listEmoji })}
@@ -157,6 +166,7 @@ export function ReactionChips({
  */
 function ReactionChip({
   messageId,
+  communityId,
   emoji,
   reactions,
   canReact,
@@ -164,6 +174,7 @@ function ReactionChip({
   onShowWho,
 }: {
   messageId: string;
+  communityId: string | null;
   emoji: string;
   reactions: EmojiReactions;
   canReact: boolean;
@@ -182,10 +193,11 @@ function ReactionChip({
   const users = useUsers(reactions.users);
   const names = users.map((user) => (user === undefined ? m.unknownUser : displayNameOf(user)));
   const more = reactions.count - names.length;
+  const named = useEmojiName(communityId, emoji);
   const who =
     more > 0
-      ? format(m.reactedByMore, { names: names.join(", "), count: String(more), emoji })
-      : format(m.reactedBy, { names: names.join(", "), emoji });
+      ? format(m.reactedByMore, { names: names.join(", "), count: String(more), emoji: named })
+      : format(m.reactedBy, { names: names.join(", "), emoji: named });
   return (
     <span
       className="block select-none [-webkit-touch-callout:none]"
@@ -210,7 +222,7 @@ function ReactionChip({
         <ToggleButton
           isSelected={reactions.me}
           isDisabled={!reactions.me && !canReact}
-          aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji })}
+          aria-label={format(reactions.me ? m.youReactedWith : m.reactWith, { emoji: named })}
           onChange={(selected) => {
             if (pressedLong.current) {
               pressedLong.current = false;
@@ -229,7 +241,7 @@ function ReactionChip({
               : plainChipClass)
           }
         >
-          <span className="text-[1.5em] leading-none">{emoji}</span>
+          <EmojiKey emoji={emoji} communityId={communityId} />
           <span
             key={grown}
             className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}
@@ -245,9 +257,11 @@ function ReactionChip({
 /** The "View reactions" control in a message's toolbar, while the message has any. */
 export function ViewReactionsButton({
   messageId,
+  communityId,
   triggerClassName,
 }: {
   messageId: string;
+  communityId: string | null;
   triggerClassName: string;
 }) {
   const m = useMessages();
@@ -269,7 +283,12 @@ export function ViewReactionsButton({
           <UsersIcon size={ACTION_ICON} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ReactionsDialog messageId={messageId} isOpen={open} onOpenChange={setOpen} />
+      <ReactionsDialog
+        messageId={messageId}
+        communityId={communityId}
+        isOpen={open}
+        onOpenChange={setOpen}
+      />
     </>
   );
 }
@@ -281,11 +300,14 @@ export function ViewReactionsButton({
  */
 export function ReactionsDialog({
   messageId,
+  communityId,
   isOpen,
   onOpenChange,
   initialEmoji,
 }: {
   messageId: string;
+  /** The community whose own emoji the reactions may be; none in a DM. */
+  communityId: string | null;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   /** The emoji whose people it opens on; the most popular without one. */
@@ -319,14 +341,7 @@ export function ReactionsDialog({
                 className="flex shrink-0 gap-1 overflow-x-auto md:max-h-96 md:w-28 md:flex-col md:overflow-x-visible md:overflow-y-auto"
               >
                 {({ emoji, reactions: r }) => (
-                  <Tab
-                    id={emoji}
-                    aria-label={format(m.reactionCount, { emoji, count: String(r.count) })}
-                    className="flex shrink-0 cursor-default items-center justify-between gap-2 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
-                  >
-                    <span>{emoji}</span>
-                    <span className="tabular-nums">{r.count}</span>
-                  </Tab>
+                  <ReactionTab emoji={emoji} communityId={communityId} count={r.count} />
                 )}
               </TabList>
               {entries.map(({ emoji }) => (
@@ -340,6 +355,54 @@ export function ReactionsDialog({
       </Modal>
     </ModalOverlay>
   );
+}
+
+/** One emoji's tab in the reactions dialog: the emoji and how many reacted with it. */
+function ReactionTab({
+  emoji,
+  communityId,
+  count,
+}: {
+  emoji: string;
+  communityId: string | null;
+  count: number;
+}) {
+  const m = useMessages();
+  const named = useEmojiName(communityId, emoji);
+  return (
+    <Tab
+      id={emoji}
+      aria-label={format(m.reactionCount, { emoji: named, count: String(count) })}
+      className="flex shrink-0 cursor-default items-center justify-between gap-2 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
+    >
+      <span>
+        <EmojiKey emoji={emoji} communityId={communityId} />
+      </span>
+      <span className="tabular-nums">{count}</span>
+    </Tab>
+  );
+}
+
+/** A reaction's emoji as drawn: the glyph, or a custom emoji's picture. */
+function EmojiKey({ emoji, communityId }: { emoji: string; communityId: string | null }) {
+  const id = emojiIdOf(emoji);
+  return id === null ? (
+    <span className="text-[1.5em] leading-none">{emoji}</span>
+  ) : (
+    <CustomEmojiGlyph id={id} communityId={communityId} size="large" />
+  );
+}
+
+/** A reaction's emoji as spoken: the glyph, or a custom emoji's `:name:`. */
+function useEmojiName(communityId: string | null, emoji: string): string {
+  const m = useMessages();
+  const custom = useCustomEmoji(communityId ?? "");
+  const id = emojiIdOf(emoji);
+  if (id === null) {
+    return emoji;
+  }
+  const name = custom.find((e) => e.id === id)?.name;
+  return name === undefined ? m.emoji.unknown : `:${name}:`;
 }
 
 /** Everyone who reacted with one emoji, earliest first, read a page at a time. */
@@ -468,10 +531,13 @@ function Reactor({
 /** The "React" control in a message's hover toolbar and the picker it opens. */
 export function ReactionPicker({
   messageId,
+  communityId,
   triggerClassName,
   iconSize = 16,
 }: {
   messageId: string;
+  /** The community whose own emoji the picker offers too; none in a DM. */
+  communityId: string | null;
   triggerClassName: string;
   /** The trigger's icon size: a chip's beside the reactions, an action's in the actions. */
   iconSize?: number;
@@ -484,7 +550,11 @@ export function ReactionPicker({
           <SmileyIcon size={iconSize} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ReactionPickerPopover messageId={messageId} placement="bottom end" />
+      <ReactionPickerPopover
+        messageId={messageId}
+        communityId={communityId}
+        placement="bottom end"
+      />
     </DialogTrigger>
   );
 }
@@ -496,8 +566,12 @@ export function ReactionPicker({
  */
 export function ReactionPickerPopover({
   messageId,
+  communityId,
   ...popover
-}: { messageId: string } & Omit<PopoverProps, "children" | "className">) {
+}: { messageId: string; communityId: string | null } & Omit<
+  PopoverProps,
+  "children" | "className"
+>) {
   const m = useMessages();
   const sync = useSync();
   const [error, setError] = useState<string | null>(null);
@@ -518,6 +592,7 @@ export function ReactionPickerPopover({
                 }
               >
                 <EmojiPicker
+                  communityId={communityId}
                   onPick={(emoji) => {
                     setError(null);
                     sync.addReaction(messageId, emoji).then(

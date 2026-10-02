@@ -48,6 +48,8 @@ pub enum CommunityInclude {
     ReadStates,
     /// The caller's mutes of the communities' channels, as `included.channelMutes`.
     Mutes,
+    /// The communities' own emoji, as `included.customEmoji`.
+    Emoji,
     /// The communities' categories the caller has collapsed, as `included.categoryCollapses`.
     Collapses,
     /// The caller's notification settings for the communities and their channels, as
@@ -84,92 +86,111 @@ pub async fn sideload_communities(
     communities: &[CommunityId],
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
-    let (channels, categories, members, voice, read_states, mutes, notifications, collapses, roles) =
-        tokio::try_join!(
-            async {
-                if include.contains(CommunityInclude::Channels) {
-                    app::community::read_communities_channels(state, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Categories) {
-                    app::category::read_communities_categories(state, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Members) {
-                    app::community::read_community_members(state, caller, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Voice) {
-                    app::voice::read_communities_voice(state, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::ReadStates) {
-                    app::read_state::read_communities_read_states(state, caller, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Mutes) {
-                    app::channel_mute::read_mutes(state, caller, &[], communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Notifications) {
-                    app::notification_setting::read_settings(state, caller, &[], communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Collapses) {
-                    app::category_collapse::read_collapsed(state, caller, communities)
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
-                }
-            },
-            async {
-                if include.contains(CommunityInclude::Roles) {
-                    let (roles, overrides) = tokio::try_join!(
-                        app::role::read_communities_roles(state, communities),
-                        app::role::read_communities_overrides(state, communities),
-                    )?;
-                    Ok(Some((roles, overrides)))
-                } else {
-                    Ok(None)
-                }
-            },
-        )?;
+    let (
+        channels,
+        categories,
+        members,
+        voice,
+        read_states,
+        mutes,
+        notifications,
+        collapses,
+        roles,
+        emoji,
+    ) = tokio::try_join!(
+        async {
+            if include.contains(CommunityInclude::Channels) {
+                app::community::read_communities_channels(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Categories) {
+                app::category::read_communities_categories(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Members) {
+                app::community::read_community_members(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Voice) {
+                app::voice::read_communities_voice(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::ReadStates) {
+                app::read_state::read_communities_read_states(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Mutes) {
+                app::channel_mute::read_mutes(state, caller, &[], communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Notifications) {
+                app::notification_setting::read_settings(state, caller, &[], communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Collapses) {
+                app::category_collapse::read_collapsed(state, caller, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Roles) {
+                let (roles, overrides) = tokio::try_join!(
+                    app::role::read_communities_roles(state, communities),
+                    app::role::read_communities_overrides(state, communities),
+                )?;
+                Ok(Some((roles, overrides)))
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(CommunityInclude::Emoji) {
+                app::custom_emoji::read_communities_emoji(state, communities)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
     // What lists channels, or things in them, shows only the channels the caller may view.
     let hides = [
         CommunityInclude::Channels,
@@ -251,6 +272,9 @@ pub async fn sideload_communities(
         included.roles = Some(roles);
         included.channel_overrides = Some(channel_overrides);
         included.category_overrides = Some(category_overrides);
+    }
+    if let Some(emoji) = emoji {
+        included.custom_emoji = Some(emoji);
     }
     if let Some((sessions, participants)) = voice {
         included.voice_sessions = Some(sessions);

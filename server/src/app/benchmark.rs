@@ -479,8 +479,9 @@ async fn purge_rows(
         tables.insert(fk.child.clone());
         tables.insert(fk.parent.clone());
     }
-    // Icons are named by `user.icon` and `community.icon` without a foreign key; they are
-    // purged with the users and communities that used them.
+    // Icons are named by `user.icon` and `community.icon` without a foreign key, and by
+    // `custom_emoji.icon` with one; they are purged with the users and communities that used
+    // them.
     tables.insert("icon".to_string());
     for table in &tables {
         let key = key_of(table)?;
@@ -559,11 +560,15 @@ async fn purge_rows(
              SELECT icon FROM "user" WHERE id IN (SELECT * FROM "purge_user") AND icon IS NOT NULL
              UNION
              SELECT icon FROM community WHERE id IN (SELECT * FROM "purge_community") AND icon IS NOT NULL
+             UNION
+             SELECT icon FROM custom_emoji WHERE community IN (SELECT * FROM "purge_community")
            ) used
            WHERE icon NOT IN (
              SELECT icon FROM "user" WHERE icon IS NOT NULL AND id NOT IN (SELECT * FROM "purge_user")
              UNION
-             SELECT icon FROM community WHERE icon IS NOT NULL AND id NOT IN (SELECT * FROM "purge_community"))
+             SELECT icon FROM community WHERE icon IS NOT NULL AND id NOT IN (SELECT * FROM "purge_community")
+             UNION
+             SELECT icon FROM custom_emoji WHERE community NOT IN (SELECT * FROM "purge_community"))
            EXCEPT SELECT * FROM "purge_icon""#,
     )
     .execute(conn)

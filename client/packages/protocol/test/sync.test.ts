@@ -90,7 +90,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
       ),
     "/api/v1/users/@me/communities": (url) => {
       expect(url.searchParams.get("include")).toBe(
-        "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications",
+        "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications,emoji",
       );
       return json({
         data: [aspen],
@@ -518,7 +518,7 @@ describe("AspenSync", () => {
           json({ community: cedar.id, user: me.id, sortIndex: 0 }, 201),
         [`/api/v1/communities/${cedar.id}`]: (url) => {
           expect(url.searchParams.get("include")).toBe(
-            "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications",
+            "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications,emoji",
           );
           return json({
             data: cedar,

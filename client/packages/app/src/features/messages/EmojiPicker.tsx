@@ -1,4 +1,7 @@
 import Picker, { EmojiStyle, SkinTonePickerLocation, Theme } from "emoji-picker-react";
+import { useMemo } from "react";
+import { useCustomEmoji, useIcons } from "@/api/hooks";
+import { referenceOf } from "@/features/emoji/customEmoji";
 import { useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
 
@@ -22,14 +25,36 @@ const FITS_WIDE = `(min-width: ${String(WIDE + 16)}px)`;
  * render and assumes 40px until then, so any other size would lay the first rows out at the
  * wrong spacing, past the edge, for as long as that takes.
  */
-export default function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+export default function EmojiPicker({
+  onPick,
+  communityId,
+}: {
+  /** Called with the emoji, or a custom emoji's reference, as a message or reaction names it. */
+  onPick: (emoji: string) => void;
+  /** The community whose own emoji the picker offers too; none in a DM. */
+  communityId: string | null;
+}) {
   const m = useMessages();
   const wide = useMediaQuery(FITS_WIDE);
+  const custom = useCustomEmoji(communityId ?? "");
+  const iconIds = useMemo(() => custom.map((e) => e.icon), [custom]);
+  const icons = useIcons(iconIds);
+  // The library takes each custom emoji with its picture's address; one whose picture has not
+  // arrived is left out until it has.
+  const customEmojis = useMemo(
+    () =>
+      custom.flatMap((e) => {
+        const url = icons.get(e.icon)?.downloadUrl;
+        return url === undefined ? [] : [{ id: e.id, names: [e.name], imgUrl: url }];
+      }),
+    [custom, icons],
+  );
   return (
     <Picker
       onEmojiClick={(picked) => {
-        onPick(picked.emoji);
+        onPick(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
       }}
+      customEmojis={customEmojis}
       emojiStyle={EmojiStyle.NATIVE}
       theme={Theme.AUTO}
       lazyLoadEmojis

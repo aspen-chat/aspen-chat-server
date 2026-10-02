@@ -406,6 +406,9 @@ pub struct CommunitiesConfig {
     /// 0 never turns it off.
     #[default = 200]
     pub everyone_mention_limit: u32,
+    /// The most custom emoji one community may hold (`app::custom_emoji`).
+    #[default = 1000]
+    pub custom_emoji_limit: u32,
 }
 
 /// The deployment's own account, which sends people notices from the deployment itself
