@@ -8,9 +8,10 @@
 
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_AUTH};
+use crate::api::{API_PREFIX, TAG_AUTH};
 use crate::app;
 use crate::app::UserId;
+use crate::app::context::GlobalServerContext;
 use crate::app::login::{LoginOutcome, SecondFactorOutcome, TokenRefreshOutcome};
 use crate::app::passkey::{CeremonyResult, Completion, Purpose};
 use crate::app::two_factor::{Caller, PasskeySummary, Proof, SecondFactor};

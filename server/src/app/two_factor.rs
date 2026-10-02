@@ -13,7 +13,7 @@
 //! bounds guessing however many sign-in attempts an attacker who knows the password starts.
 
 use crate::CHACHA_RNG;
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, UserId};
 use crate::aspen_config::AuthConfig;
 use crate::database::schema::{passkey, recovery_code, refresh_token, totp_secret, user};

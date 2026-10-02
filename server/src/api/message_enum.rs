@@ -2,8 +2,9 @@ use crate::api::link_preview::LinkPreview;
 use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
 use crate::api::user::{CustomStatus, UserOnlineStatus};
 use crate::api::voice::VoiceSessionEndReason;
-use crate::api::{ChannelType, MessageKind};
+use crate::app::channel::ChannelType;
 use crate::app::deployment::DeploymentPermission;
+use crate::app::message::MessageKind;
 use crate::app::permissions::Permission;
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId, MessageId, PollId,

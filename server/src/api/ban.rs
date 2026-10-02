@@ -2,13 +2,14 @@
 //! members. Banning may also delete the person's recent messages, which takes Manage messages
 //! besides.
 
+use crate::api::TAG_BANS;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path};
 use crate::api::message_enum::CommunityBan;
-use crate::api::{GlobalServerContext, TAG_BANS};
 use crate::app;
 use crate::app::ban::BanRequest;
+use crate::app::context::GlobalServerContext;
 use crate::app::{CommunityId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;

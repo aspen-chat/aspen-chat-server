@@ -12,8 +12,8 @@
 //! - `accountDeleted`, from a home to the deployments its user used: the account is gone, and
 //!   each retires its user from there (`app::user::retire`).
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Statement, receive};
 use crate::app::federation::{Direction, Domain, FederationList, Subject, admits, jws, own_domain};

@@ -9,7 +9,7 @@
 //! dashboard sees every server without reaching them. Voice servers already report their load
 //! to the API servers (`app::voice`), and their health is read from those reports.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, VoiceServerId};
 use crate::database::schema::voice_server;
 use async_nats::jetstream::kv::{Config as KvConfig, Store};

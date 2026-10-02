@@ -17,7 +17,7 @@
 //! used (attachments, icons, link preview images) are deleted after the transaction commits.
 
 use crate::CHACHA_RNG;
-use crate::api::ChannelType;
+use crate::app::channel::ChannelType;
 use crate::app::{self, media_store::MediaStore};
 use crate::database::schema::{
     benchmark_community, benchmark_run, benchmark_user, channel, community, community_user,

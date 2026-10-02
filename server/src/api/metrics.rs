@@ -1,5 +1,6 @@
 //! Request metrics (`aspen_metrics::api`), recorded by a route layer on every API route.
 
+use crate::app::context::GlobalServerContext;
 use crate::app::rate_limit::route_key;
 use axum::extract::{MatchedPath, Request};
 use axum::middleware::Next;
@@ -28,4 +29,29 @@ pub async fn observe(request: Request, next: Next) -> Response {
         .increment(1);
     }
     response
+}
+
+/// Refreshes the gauges that are sampled rather than kept current.
+pub(crate) fn spawn_samplers(context: GlobalServerContext) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(aspen_metrics::SAMPLE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let status = context.connection_pool.status();
+            for (state, value) in [
+                ("size", status.size),
+                ("available", status.available),
+                ("waiting", status.waiting),
+                ("max", status.max_size),
+            ] {
+                ::metrics::gauge!(aspen_metrics::api::DB_POOL, "state" => state).set(value as f64);
+            }
+            let suspended = context.rate_limiter.suspension().current().is_some();
+            ::metrics::gauge!(aspen_metrics::api::RATE_LIMITS_SUSPENDED).set(if suspended {
+                1.0
+            } else {
+                0.0
+            });
+        }
+    });
 }

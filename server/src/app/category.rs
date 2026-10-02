@@ -1,9 +1,10 @@
+use crate::api::message_enum;
 use crate::api::message_enum::request::CategoryUpdateRequest;
 use crate::api::message_enum::server_event::{CategoryEvent, ServerEvent};
-use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{
     CategoryId, CommunityId, EventScope, Loadable, MaybeLoaded, UserId, publish_event,

@@ -13,9 +13,10 @@ use rand::RngExt;
 use tracing::error;
 
 use crate::api::error::PasswordRequirement;
+use crate::app::context::GlobalServerContext;
 use crate::app::two_factor::{self, SecondFactor, SecondFactorMethods};
+use crate::app::user::UserPg;
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
-use crate::{api::GlobalServerContext, app::user::UserPg};
 use diesel::OptionalExtension;
 use serde::{Deserialize, Serialize};
 

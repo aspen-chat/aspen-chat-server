@@ -31,11 +31,9 @@
 //! and `publish_event` refuses a scope of the wrong kind.
 
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::Permission;
-use crate::app::{
-    self, CategoryId, ChannelId, CommunityId, GlobalServerContext, MessageId, UserId,
-    VoiceSessionId,
-};
+use crate::app::{self, CategoryId, ChannelId, CommunityId, MessageId, UserId, VoiceSessionId};
 use crate::database::schema::{
     category, channel, community_user, dm_recipient, invite, message, voice_session,
 };

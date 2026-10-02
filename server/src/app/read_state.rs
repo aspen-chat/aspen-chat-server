@@ -16,11 +16,10 @@
 //! directly, through a role they hold now, or as everyone. The same messages are left out as
 //! for being unread.
 
-use crate::api::ChannelType;
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::{
-    self, ChannelId, CommunityId, EventScope, GlobalServerContext, MessageId, UserId, publish_event,
-};
+use crate::app::channel::ChannelType;
+use crate::app::context::GlobalServerContext;
+use crate::app::{self, ChannelId, CommunityId, EventScope, MessageId, UserId, publish_event};
 use crate::database::schema::{channel, message};
 use crate::t;
 use chrono::{DateTime, Utc};

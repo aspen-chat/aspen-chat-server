@@ -3,9 +3,10 @@ use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, NoContent, Path};
 use crate::api::message_enum::Pin;
 use crate::api::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_CHANNELS, message_enum};
+use crate::api::{API_PREFIX, TAG_CHANNELS, message_enum};
 use crate::app;
 use crate::app::ChannelId;
+use crate::app::context::GlobalServerContext;
 use axum::extract::State;
 
 /// A community channel's wire record; a DM's carries its recipients too (`app::channel::record`).

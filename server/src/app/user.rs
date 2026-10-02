@@ -1,9 +1,10 @@
 use crate::api::error::PasswordRequirement;
+use crate::api::message_enum;
 use crate::api::message_enum::request::{UserCreateRequest, UserUpdateRequest};
 use crate::api::message_enum::server_event::UserEvent;
 use crate::api::user::UserOnlineStatus;
-use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::icon::Icon;
 use crate::app::login::{PASSWORD_MIN_LENGTH, hash_password};
 use crate::app::react::validate_emoji;

@@ -3,10 +3,10 @@
 //! remove them, up to `[communities] custom_emoji_limit` per community. The picture is an icon
 //! uploaded first (`app::icon`), which goes with the emoji.
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::{CustomEmojiEvent, ServerEvent};
 use crate::api::message_enum::{self, request::CustomEmojiUpdateRequest};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::events::{EventScope, publish_event};
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, CustomEmojiId, IconId, UserId};

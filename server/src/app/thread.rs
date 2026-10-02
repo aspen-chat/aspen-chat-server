@@ -10,12 +10,12 @@
 //! the echo and deleting the reply deletes its echo.
 
 use crate::api::message_enum::server_event::{ChannelEvent, MessageEvent, ServerEvent};
-use crate::api::{ChannelType, MessageKind};
+use crate::app::channel::ChannelType;
 use crate::app::channel::{Channel, record};
+use crate::app::context::GlobalServerContext;
 use crate::app::message::Message;
-use crate::app::{
-    self, ChannelId, EventScope, GlobalServerContext, MaybeLoaded, MessageId, UserId, publish_event,
-};
+use crate::app::message::MessageKind;
+use crate::app::{self, ChannelId, EventScope, MaybeLoaded, MessageId, UserId, publish_event};
 use crate::database::schema::{channel, message};
 use crate::t;
 use chrono::{DateTime, Utc};

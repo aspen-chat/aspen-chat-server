@@ -8,12 +8,13 @@
 //! the count, whether the caller reacted, and the first few to react. Everyone who reacted with
 //! an emoji is `GET /messages/{message}/reactions/{emoji}`, earliest first, a page at a time.
 
+use crate::api::TAG_REACTIONS;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path, Query};
 use crate::api::message_enum::{React, User};
-use crate::api::{GlobalServerContext, TAG_REACTIONS};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::{MessageId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;

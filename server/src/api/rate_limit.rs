@@ -1,9 +1,10 @@
 //! The HTTP side of rate limiting (`app::rate_limit`): which route a request is for, which
 //! address it comes from, and the `429` answer.
 
+use crate::api::API_PREFIX;
 use crate::api::error::{ApiError, ApiResult, ProblemCode};
-use crate::api::{API_PREFIX, GlobalServerContext};
 use crate::app::UserId;
+use crate::app::context::GlobalServerContext;
 use crate::app::rate_limit::{
     Access, Decision, Identity, RateLimiter, Route, SIGN_IN_ROUTE, Stage,
 };

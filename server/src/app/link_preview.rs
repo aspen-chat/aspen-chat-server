@@ -38,9 +38,9 @@
 //! preview row owns a fresh S3 object, which keeps the delete lifecycle
 //! trivial (no ref-counting, no orphan sweeps).
 
-use crate::api::GlobalServerContext;
 use crate::api::link_preview::{LinkPreview, VideoEmbed, image_storage_key};
 use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
+use crate::app::context::GlobalServerContext;
 use crate::app::media_store::MediaStore;
 use crate::app::{self, LinkPreviewImageId, MessageId};
 use crate::database::schema::message_link_preview;

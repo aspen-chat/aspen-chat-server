@@ -4,11 +4,10 @@
 //! Every change is published to the user's own subject as `channelMuteChanged`, so their other
 //! devices follow; a mute that runs out ends on each device by its own clock, with no event.
 
-use crate::api::ChannelType;
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::{
-    self, ChannelId, CommunityId, EventScope, GlobalServerContext, UserId, publish_event,
-};
+use crate::app::channel::ChannelType;
+use crate::app::context::GlobalServerContext;
+use crate::app::{self, ChannelId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{channel, channel_mute};
 use crate::t;
 use chrono::{DateTime, Utc};

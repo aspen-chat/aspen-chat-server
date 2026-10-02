@@ -9,9 +9,9 @@
 //! is the home's: it is written from each assertion, read-only here, and the avatar is copied
 //! into this deployment's storage, fetched from the home itself ([`HOME_ICON_PATH`]).
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Statement, invalid, receive, refused};
 use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};

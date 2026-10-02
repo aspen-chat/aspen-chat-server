@@ -4,8 +4,8 @@
 //! its lifetime, has not been seen before, and comes from a deployment this one federates with
 //! in the direction concerned and shares a protocol version with.
 
-use crate::api::GlobalServerContext;
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::protocol::Protocol;
 use crate::app::federation::{
     ContactOutcome, Direction, Domain, FederatedDeployment, FederationList, Subject, admits,

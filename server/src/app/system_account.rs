@@ -9,7 +9,7 @@
 //! reads them and cannot answer (`ChannelAccess::from_system`), block it, or bring it into
 //! another DM.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::user::UserPg;
 use crate::app::{self, ChannelId, UserId};
 use crate::database::schema::{channel, user};

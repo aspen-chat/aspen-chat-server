@@ -1,6 +1,7 @@
+use crate::api::message_enum;
 use crate::api::message_enum::server_event::{ReactEvent, ServerEvent};
-use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::{CustomEmojiId, EventScope, MessageId, UserId, publish_event};
 use crate::database::schema::react;
 use crate::t;

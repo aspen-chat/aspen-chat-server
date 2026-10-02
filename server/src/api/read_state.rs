@@ -1,10 +1,11 @@
 //! Read positions: how far the caller has read each channel (`app::read_state`). Community and
 //! DM list reads sideload them with `include=readStates`; these endpoints read one and move it.
 
+use crate::api::TAG_CHANNELS;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path};
-use crate::api::{GlobalServerContext, TAG_CHANNELS};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, MessageId};
 use axum::extract::State;
 use schemars::JsonSchema;

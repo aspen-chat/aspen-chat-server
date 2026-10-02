@@ -13,7 +13,8 @@
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_ATTACHMENTS};
+use crate::api::{API_PREFIX, TAG_ATTACHMENTS};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId};
 use axum::extract::State;
 use chrono::{DateTime, Utc};

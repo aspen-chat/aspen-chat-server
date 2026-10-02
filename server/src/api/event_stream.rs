@@ -22,11 +22,11 @@
 //! Every frame in both directions is JSON. The full protocol is described by
 //! `event_schema.json` (root type [`EventStreamProtocol`]).
 
-use crate::api::GlobalServerContext;
 use crate::api::extract::Query;
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app;
 use crate::app::UserId;
+use crate::app::context::GlobalServerContext;
 use crate::app::event_feed::{Delivery, FeedEvent, Subscription};
 use crate::app::user::UserPg;
 use crate::t;

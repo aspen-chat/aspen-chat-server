@@ -7,8 +7,8 @@
 //! Roles keep dense positions: everyone's at 0 and the rest at 1 and up, renumbered whenever
 //! one is made, deleted, or moved, each renumbered role announced by its update.
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::{self, server_event::*};
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::permissions::{
     CommunityAccess, Permissions, missing, require_actual_member, require_member, to_names,

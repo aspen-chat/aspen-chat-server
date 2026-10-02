@@ -5,8 +5,9 @@ use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, Path};
 use crate::api::message_enum::Message;
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_USERS};
+use crate::api::{API_PREFIX, TAG_USERS};
 use crate::app::bot_command::{BotCommands, CommandList, Invocation};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, UserId};
 use axum::extract::State;
 

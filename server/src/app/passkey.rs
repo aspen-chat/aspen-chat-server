@@ -15,7 +15,7 @@
 //! the outcome with its secret. Whoever sees the ceremony id in the browser cannot claim it.
 
 use crate::CHACHA_RNG;
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::login::{self, Session};
 use crate::app::two_factor::{self, Caller, PasskeySummary};
 use crate::app::{self, PasskeyId, UserId};

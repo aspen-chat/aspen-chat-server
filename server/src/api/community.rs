@@ -7,7 +7,8 @@ use crate::api::message_enum::request::{
 };
 use crate::api::message_enum::{Channel, User, UserCommunity};
 use crate::api::user::UserRef;
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_COMMUNITIES, message_enum};
+use crate::api::{API_PREFIX, TAG_COMMUNITIES, message_enum};
+use crate::app::context::GlobalServerContext;
 use crate::app::{CommunityId, UserId};
 use crate::{api, app};
 use axum::extract::State;

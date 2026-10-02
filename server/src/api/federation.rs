@@ -7,10 +7,10 @@
 use crate::api::admin::AdminUser;
 use crate::api::auth::{LoginResponse, SessionUser};
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::double_option;
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
-use crate::api::{
-    API_PREFIX, GlobalServerContext, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS, double_option,
-};
+use crate::api::{API_PREFIX, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS};
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::abroad::{self, ForeignDeployment, Issued};
 use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{

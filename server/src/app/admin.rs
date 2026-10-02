@@ -6,7 +6,7 @@
 //! never reach, since a dashboard anyone could open would let anyone mint the invites an
 //! invite-only deployment is closed by.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, CommunityId, IconId, UserId};
 use crate::database::schema::{community, user};
 use chrono::{DateTime, Utc};

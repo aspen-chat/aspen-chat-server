@@ -1,10 +1,11 @@
 //! Collapsing categories in the caller's own channel list (`app::category_collapse`). Community
 //! reads sideload the caller's collapsed categories with `include=collapses`.
 
+use crate::api::TAG_CATEGORIES;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path};
-use crate::api::{GlobalServerContext, TAG_CATEGORIES};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, CategoryId};
 use axum::extract::State;
 use axum::http::StatusCode;

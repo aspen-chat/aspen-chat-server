@@ -13,7 +13,7 @@
 //! deployment's own immigration gate no longer admits the home, and when the home has gone
 //! unreached for `standing_grace_seconds`. One server does each pass, under an advisory lock.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Statement, receive};
 use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};

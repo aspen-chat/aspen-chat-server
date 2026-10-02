@@ -23,6 +23,7 @@ pub mod category_collapse;
 pub mod channel;
 pub mod channel_mute;
 pub mod community;
+pub mod context;
 pub mod custom_emoji;
 pub mod deployment;
 pub mod dm;
@@ -61,7 +62,7 @@ pub mod user;
 pub mod user_status;
 pub mod visibility;
 pub mod voice;
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 pub use error::Error;
 pub use error::Result;
 

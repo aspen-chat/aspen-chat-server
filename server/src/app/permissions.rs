@@ -21,8 +21,8 @@
 //! `MODERATION` everywhere, and rank above every role but below the owner. `moderating` says
 //! when an action was allowed by that alone, which the caller then logs.
 
-use crate::api::ChannelType;
-use crate::api::GlobalServerContext;
+use crate::app::channel::ChannelType;
+use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
 use crate::database::schema::{

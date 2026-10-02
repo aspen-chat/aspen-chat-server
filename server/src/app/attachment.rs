@@ -16,8 +16,8 @@
 //! intentionally does not run that sweep itself so a hung confirm path can't
 //! delete an upload that's still racing toward `ready_at`.
 
-use crate::api::GlobalServerContext;
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::media_store::PresignedUpload;
 use crate::app::{AttachmentId, Loadable};
 use crate::database::schema::attachment;

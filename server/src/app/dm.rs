@@ -5,11 +5,12 @@
 //! started with, or joined by, people who share a community with the one starting or adding,
 //! and never with two people who have a block between them (`app::block`).
 
-use crate::api::ChannelType;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
+use crate::app::channel::ChannelType;
 use crate::app::channel::{Channel, record};
+use crate::app::context::GlobalServerContext;
 use crate::app::events::dm_recipients;
-use crate::app::{self, ChannelId, EventScope, GlobalServerContext, UserId, publish_event};
+use crate::app::{self, ChannelId, EventScope, UserId, publish_event};
 use crate::database::schema::{channel, community_user, dm_recipient, message, user};
 use crate::t;
 use chrono::Utc;

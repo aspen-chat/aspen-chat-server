@@ -15,8 +15,8 @@
 //! in it, is written to the moderation log (`moderation_log`). A change to what someone may do
 //! is published to them as `deploymentAccessChanged`, which their event stream follows.
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::context::GlobalServerContext;
 use crate::app::{
     self, AttachmentId, ChannelId, CommunityId, DeploymentRoleId, EventScope, MessageId, PollId,
     UserId, publish_event,
@@ -340,7 +340,7 @@ pub struct LoggedCommunity {
 #[serde(rename_all = "camelCase")]
 pub struct LoggedChannel {
     pub name: String,
-    pub ty: crate::api::ChannelType,
+    pub ty: crate::app::channel::ChannelType,
     pub deleted: bool,
     /// The channel a thread belongs to.
     pub parent_channel: Option<ChannelId>,
@@ -538,7 +538,7 @@ pub async fn read_moderation_log(
     let channels: Vec<(
         ChannelId,
         String,
-        crate::api::ChannelType,
+        crate::app::channel::ChannelType,
         bool,
         Option<ChannelId>,
     )> = channel::table

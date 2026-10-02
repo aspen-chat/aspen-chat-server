@@ -1,8 +1,8 @@
 //! Contacting another deployment: reading its document and checking the key it presents
 //! against the one pinned for it.
 
-use crate::api::GlobalServerContext;
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::{DeploymentDocument, current_of, follow_handovers};
 use crate::app::federation::{Domain, Listed, Origin, fetch, get, own_domain};
 use crate::aspen_config::FederationConfig;

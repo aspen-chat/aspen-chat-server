@@ -4,7 +4,8 @@
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path};
-use crate::api::{GlobalServerContext, TAG_CHANNELS, TAG_COMMUNITIES};
+use crate::api::{TAG_CHANNELS, TAG_COMMUNITIES};
+use crate::app::context::GlobalServerContext;
 use crate::app::notification_setting::{NotificationLevel, NotificationTarget};
 use crate::app::{self, ChannelId, CommunityId};
 use axum::extract::State;

@@ -10,10 +10,11 @@
 
 use crate::api::message_enum;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::DeploymentPermission;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::user::{User, UserPg, validate_profile, validate_username, with_online_status};
-use crate::app::{self, CommunityId, EventScope, GlobalServerContext, UserId, publish_event};
+use crate::app::{self, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{bot_token, community_user, user};
 use crate::t;
 use base64::Engine;

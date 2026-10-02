@@ -1,12 +1,13 @@
 //! Blocking other users, for the caller alone (`app::block`). Only the caller's own list is
 //! reachable: nobody may read who someone else has blocked, or learn that they are blocked.
 
+use crate::api::TAG_USERS;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path, Query};
 use crate::api::include::{IncludeSet, Included, SideloadedList};
 use crate::api::message_enum::User;
-use crate::api::{GlobalServerContext, TAG_USERS};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;

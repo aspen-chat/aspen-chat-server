@@ -1,7 +1,9 @@
+use crate::api::message_enum;
 use crate::api::message_enum::request::{CommunityCreateRequest, CommunityUpdateRequest};
 use crate::api::message_enum::server_event::{CommunityEvent, ServerEvent, UserCommunityEvent};
-use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::channel::ChannelType;
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::icon::Icon;
 use crate::app::permissions::{Permissions, community_access, missing, require_member};

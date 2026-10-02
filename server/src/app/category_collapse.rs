@@ -3,9 +3,8 @@
 //! fold or unfold the same category.
 
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::{
-    self, CategoryId, CommunityId, EventScope, GlobalServerContext, UserId, publish_event,
-};
+use crate::app::context::GlobalServerContext;
+use crate::app::{self, CategoryId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{category, category_collapse};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

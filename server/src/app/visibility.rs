@@ -427,7 +427,7 @@ pub struct Visibility {
 
 impl Visibility {
     pub async fn load(
-        state: &crate::api::GlobalServerContext,
+        state: &crate::app::context::GlobalServerContext,
         user: UserId,
         communities: &[CommunityId],
     ) -> app::Result<Self> {

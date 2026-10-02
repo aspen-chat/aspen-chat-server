@@ -12,11 +12,11 @@
 
 pub mod webpush;
 
-use crate::api::GlobalServerContext;
-use crate::api::MessageKind;
 use crate::app::channel::Channel;
+use crate::app::context::GlobalServerContext;
 use crate::app::events::{SubjectOwner, subject_owner};
 use crate::app::message::Message;
+use crate::app::message::MessageKind;
 use crate::app::notification_setting::{NotificationLevel, default_level};
 use crate::app::two_factor::Caller;
 use crate::app::visibility::CommunityModel;

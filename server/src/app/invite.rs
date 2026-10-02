@@ -1,7 +1,8 @@
 use crate::CHACHA_RNG;
+use crate::api::message_enum;
 use crate::api::message_enum::server_event::{InviteEvent, ServerEvent};
-use crate::api::{GlobalServerContext, message_enum};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::invite;

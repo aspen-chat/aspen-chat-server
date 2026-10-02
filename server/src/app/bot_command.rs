@@ -9,8 +9,8 @@
 //! whitespace, which separates a command's arguments, and emoji. A change is announced as
 //! `botCommandsChanged` wherever the bot's profile would be, so clients read the list again.
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{ChannelAccess, Permissions, channel_access, require_member};
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::bot_command_list;

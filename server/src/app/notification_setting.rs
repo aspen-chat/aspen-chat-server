@@ -6,11 +6,10 @@
 //! published to the user's own subject as `notificationSettingChanged`, so their other devices
 //! follow.
 
-use crate::api::ChannelType;
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::{
-    self, ChannelId, CommunityId, EventScope, GlobalServerContext, UserId, publish_event,
-};
+use crate::app::channel::ChannelType;
+use crate::app::context::GlobalServerContext;
+use crate::app::{self, ChannelId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{channel, community_user, notification_setting};
 use crate::t;
 use diesel::prelude::*;

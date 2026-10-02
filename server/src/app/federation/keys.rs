@@ -8,7 +8,7 @@
 //! makes no handover: the old key cannot be trusted to vouch for anything, so every deployment
 //! that pinned it refuses the new one until its administrators accept it.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{Domain, jws, own_domain};
 use crate::app::{self, FederationKeyId};

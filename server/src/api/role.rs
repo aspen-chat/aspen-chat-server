@@ -10,8 +10,9 @@ use crate::api::message_enum::request::{
     RoleUpdateRequest,
 };
 use crate::api::message_enum::{self, CategoryOverride, ChannelOverride, Role, UserCommunity};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_ROLES};
+use crate::api::{API_PREFIX, TAG_ROLES};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::from_names;
 use crate::app::role::OverrideTarget;
 use crate::app::{CategoryId, ChannelId, CommunityId, RoleId, UserId};

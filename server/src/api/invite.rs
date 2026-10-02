@@ -1,9 +1,11 @@
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::api::extract::double_option;
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::include::{IncludeSet, Included, Sideloaded};
 use crate::api::message_enum;
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_INVITES, double_option};
+use crate::api::{API_PREFIX, TAG_INVITES};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, CommunityId};
 use axum::extract::State;
 use chrono::{DateTime, Utc};

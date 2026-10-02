@@ -8,9 +8,10 @@
 //! channel are counted (`app::read_state`). Editing a message's text tags afresh, with its
 //! author's permissions as they are then.
 
+use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home, dm_recipients};
 use crate::app::permissions::{ChannelAccess, Permissions};
-use crate::app::{self, ChannelId, GlobalServerContext, MessageId, RoleId, UserId};
+use crate::app::{self, ChannelId, MessageId, RoleId, UserId};
 use crate::database::schema::{community_role, community_user, mention};
 use diesel::deserialize::{FromSql, FromSqlRow};
 use diesel::expression::AsExpression;

@@ -13,8 +13,9 @@ type PollSideload = (
     Vec<PollVote>,
     Vec<OwnWriteIn>,
 );
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_MESSAGES};
+use crate::api::{API_PREFIX, TAG_MESSAGES};
 use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
+use crate::app::context::GlobalServerContext;
 use crate::app::{AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
 use crate::t;
 use crate::{api, app};

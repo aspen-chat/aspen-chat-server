@@ -16,9 +16,9 @@
 //! Nothing announces a change: clients ask for the status of the users they show
 //! (`GET /users/statuses`) when they need it.
 
-use crate::api::GlobalServerContext;
 use crate::api::user::UserOnlineStatus;
 use crate::app::UserId;
+use crate::app::context::GlobalServerContext;
 use fred::interfaces::KeysInterface;
 use fred::types::Expiration;
 

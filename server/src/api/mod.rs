@@ -1,15 +1,8 @@
 use crate::app;
-use crate::app::ASPEN_NATS_STREAM_NAME;
+use crate::app::context::GlobalServerContext;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use axum::http::{HeaderValue, Method};
 use axum::routing::any;
-use diesel_async::{
-    AsyncPgConnection,
-    pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
-};
-use fred::prelude::ClientLike;
-use std::fs;
-use std::io::Write;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub(crate) mod admin;
@@ -46,22 +39,12 @@ pub(crate) mod rate_limit;
 pub(crate) mod react;
 pub(crate) mod read_state;
 pub(crate) mod role;
+mod schema;
 pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
 
-use crate::aspen_config::{AspenConfig, CorsConfig, FederationConfig, load_config};
-use async_nats::ConnectOptions;
-use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
-use diesel::FromSqlRow;
-use diesel::deserialize::FromSql;
-use diesel::expression::AsExpression;
-use diesel::pg::Pg;
-use diesel::serialize::{IsNull, Output, ToSql};
-use schemars::schema_for;
-use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use crate::aspen_config::{CorsConfig, FederationConfig};
 use std::time::Duration;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
@@ -160,18 +143,6 @@ impl Modify for SecurityAddon {
                 ),
             );
     }
-}
-
-/// Deserializes `Option<Option<T>>` for JSON Merge Patch fields. Plain serde folds a JSON `null`
-/// into the outer `None`, which would make "clear this field" indistinguishable from "leave it
-/// alone". Routing the field through this function (together with `#[serde(default)]` for the
-/// absent case) maps a present `null` to `Some(None)` and a present value to `Some(Some(v))`.
-pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// The CORS layer for `config`. A deployment that admits accounts from elsewhere allows every
@@ -446,31 +417,6 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .route("/events", any(event_stream::event_stream))
 }
 
-/// Refreshes the gauges that are sampled rather than kept current.
-fn spawn_samplers(context: GlobalServerContext) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(aspen_metrics::SAMPLE_INTERVAL);
-        loop {
-            interval.tick().await;
-            let status = context.connection_pool.status();
-            for (state, value) in [
-                ("size", status.size),
-                ("available", status.available),
-                ("waiting", status.waiting),
-                ("max", status.max_size),
-            ] {
-                ::metrics::gauge!(aspen_metrics::api::DB_POOL, "state" => state).set(value as f64);
-            }
-            let suspended = context.rate_limiter.suspension().current().is_some();
-            ::metrics::gauge!(aspen_metrics::api::RATE_LIMITS_SUSPENDED).set(if suspended {
-                1.0
-            } else {
-                0.0
-            });
-        }
-    });
-}
-
 /// The OpenAPI document of every API route.
 pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
     let mut openapi = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -482,19 +428,7 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
 
 pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
     if write_schema {
-        fs::write("openapi.yaml", openapi().to_yaml()?)?;
-        fs::write(
-            "federation_schema.json",
-            serde_json::to_string_pretty(&schema_for!(
-                app::federation::protocol::FederationProtocol
-            ))?,
-        )?;
-        let event_schema = schema_for!(event_stream::EventStreamProtocol);
-        fs::write(
-            "event_schema.json",
-            serde_json::to_string_pretty(&event_schema)?,
-        )?;
-        std::process::exit(0);
+        schema::write_schemas_and_exit()?;
     }
     let context = GlobalServerContext::new(&rate_limit::routes()).await?;
     // A route layer runs only for matched routes, after routing, so it knows the route's
@@ -536,19 +470,9 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     if context.config.metrics.enabled {
         aspen_metrics::install(context.config.metrics.listen_addr)
             .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
-        spawn_samplers(context.clone());
+        metrics::spawn_samplers(context.clone());
     }
-    app::poll::spawn_closer(context.clone());
-    app::voice::seed_servers(&context).await?;
-    app::voice::spawn_report_listener(context.clone()).await?;
-    app::voice::spawn_reaper(context.clone());
-    app::fleet::spawn_heartbeat(context.clone());
-    if context.config.federation.domain.is_some() {
-        app::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
-    }
-    app::federation::standing::spawn_confirmer(context.clone());
-    app::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
-    app::push::spawn_dispatcher(context.clone());
+    app::context::start_background_tasks(&context).await?;
     let cors = cors_layer(&context.config.cors, &context.config.federation);
     let router: axum::Router = axum::Router::from(router.with_state(context))
         .layer(axum::middleware::from_fn(app::locale::layer));
@@ -556,236 +480,4 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         Some(cors) => router.layer(cors),
         None => router,
     })
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Deserialize,
-    Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
-    FromSqlRow,
-    AsExpression,
-)]
-#[serde(rename_all = "camelCase")]
-#[diesel(sql_type = crate::database::schema::sql_types::ChannelType)]
-pub enum ChannelType {
-    Text,
-    Voice,
-    /// Replies to one message of a text channel, DM, or group DM; see `Channel.parentChannel`.
-    Thread,
-    /// A conversation between two people, outside any community.
-    Dm,
-    /// A conversation among up to `app::dm::MAX_RECIPIENTS` people, outside any community.
-    GroupDm,
-}
-
-impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
-    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
-        out.write_all(match self {
-            ChannelType::Text => b"text",
-            ChannelType::Voice => b"voice",
-            ChannelType::Thread => b"thread",
-            ChannelType::Dm => b"dm",
-            ChannelType::GroupDm => b"group_dm",
-        })?;
-        Ok(IsNull::No)
-    }
-}
-
-impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
-    fn from_sql(
-        bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
-    ) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"voice" => Ok(ChannelType::Voice),
-            b"text" => Ok(ChannelType::Text),
-            b"thread" => Ok(ChannelType::Thread),
-            b"dm" => Ok(ChannelType::Dm),
-            b"group_dm" => Ok(ChannelType::GroupDm),
-            _ => Err(format!(
-                "Unrecognized enum variant: {:?}",
-                String::from_utf8_lossy(bytes.as_bytes())
-            )
-            .into()),
-        }
-    }
-}
-
-/// What a message is. Both poll kinds and echoes carry no `content`; the client renders the poll
-/// kinds from the poll record the message's `poll` field names, and an echo from its reply.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Deserialize,
-    Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
-    FromSqlRow,
-    AsExpression,
-)]
-#[serde(rename_all = "camelCase")]
-#[diesel(sql_type = crate::database::schema::sql_types::MessageKind)]
-pub enum MessageKind {
-    /// Text written by its author.
-    Standard,
-    /// The message a poll was opened with.
-    Poll,
-    /// The system message announcing a poll's outcome; its `author` is the poll's creator.
-    PollClosed,
-    /// A thread reply shown in the thread's parent channel, by reference: `echoOf` names the
-    /// reply, and the echo has no content of its own. Its `author` is the reply's.
-    ThreadEcho,
-    /// The system message recording that a DM's call ended; `callSeconds` says how long it
-    /// lasted and its `author` is who started it. It has no content of its own.
-    Call,
-    /// The system message recording that a DM's call ended without anyone joining whoever
-    /// started it, its `author`. It has no content of its own.
-    MissedCall,
-    /// A bot command its `author` invoked, as it was sent (`/name` and its arguments), to the
-    /// bot `commandBot` names (see `app::bot_command`).
-    Command,
-}
-
-impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
-    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
-        out.write_all(match self {
-            MessageKind::Standard => b"standard",
-            MessageKind::Poll => b"poll",
-            MessageKind::PollClosed => b"poll_closed",
-            MessageKind::ThreadEcho => b"thread_echo",
-            MessageKind::Call => b"call",
-            MessageKind::MissedCall => b"missed_call",
-            MessageKind::Command => b"command",
-        })?;
-        Ok(IsNull::No)
-    }
-}
-
-impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
-    fn from_sql(
-        bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
-    ) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"standard" => Ok(MessageKind::Standard),
-            b"poll" => Ok(MessageKind::Poll),
-            b"poll_closed" => Ok(MessageKind::PollClosed),
-            b"thread_echo" => Ok(MessageKind::ThreadEcho),
-            b"call" => Ok(MessageKind::Call),
-            b"command" => Ok(MessageKind::Command),
-            b"missed_call" => Ok(MessageKind::MissedCall),
-            _ => Err(format!(
-                "Unrecognized enum variant: {:?}",
-                String::from_utf8_lossy(bytes.as_bytes())
-            )
-            .into()),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct GlobalServerContext {
-    pub connection_pool: Pool<AsyncPgConnection>,
-    pub nats_context: Arc<async_nats::jetstream::Context>,
-    pub valkey: fred::clients::Client,
-    pub media_store: Arc<app::media_store::MediaStore>,
-    pub config: Arc<AspenConfig>,
-    pub rate_limiter: Arc<app::rate_limit::RateLimiter>,
-    /// The WebAuthn relying party, when `[auth.passkeys]` is configured.
-    pub webauthn: Option<Arc<webauthn_rs::Webauthn>>,
-    /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
-    /// channel never moves.
-    pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
-    /// The server's one reading of the event stream, which every event stream connection
-    /// registers with.
-    pub event_feed: app::event_feed::EventFeed,
-    /// What every call to another deployment is made with (`app::federation::fetch`).
-    pub federation_client: reqwest::Client,
-}
-
-impl GlobalServerContext {
-    /// Connects to everything the server needs. `routes` are the API's routes, which the rate
-    /// limits are checked against.
-    pub async fn new(routes: &[app::rate_limit::Route]) -> Result<Self, app::Error> {
-        let config = load_config()?;
-        app::login::configure_password_work(
-            config.auth.password_hashing_threads,
-            Duration::from_secs(config.auth.password_hashing_wait_seconds),
-        );
-        let rate_limiter = app::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
-            .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
-        let client = async_nats::connect_with_options(
-            &config.nats_url,
-            ConnectOptions::new().token(config.nats_auth_token.clone()),
-        )
-        .await?;
-        aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
-        let context = async_nats::jetstream::new(client);
-        context
-            .create_or_update_stream(async_nats::jetstream::stream::Config {
-                name: ASPEN_NATS_STREAM_NAME.to_string(),
-                subjects: vec![format!("{}.>", app::events::SUBJECT_ROOT)],
-                discard: DiscardPolicy::Old,
-                max_messages: 1_000_000_000,
-                max_bytes: 8 * 1024 * 1024 * 1024,
-                max_age: app::event_feed::MAX_EVENT_AGE,
-                storage: StorageType::Memory,
-                consumer_limits: Some(ConsumerLimits {
-                    max_ack_pending: 1000,
-                    inactive_threshold: Duration::from_secs(60),
-                }),
-                ..Default::default()
-            })
-            .await?;
-        let valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
-        // Commands are small and many are in flight at once; with Nagle's algorithm on, one sent
-        // while another is unacknowledged waits for Valkey's delayed ACK.
-        let valkey_connection = fred::types::config::ConnectionConfig {
-            tcp: fred::types::config::TcpConfig {
-                nodelay: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let valkey =
-            fred::prelude::Client::new(valkey_config.clone(), None, Some(valkey_connection), None);
-        valkey.init().await?;
-
-        let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
-        let webauthn = app::passkey::relying_party(&config.auth)?;
-        let federation_client = app::federation::fetch::client(&config.federation)?;
-
-        Ok(Self {
-            channel_homes: Arc::new(Mutex::new(HashMap::new())),
-            connection_pool: {
-                let conn_manager =
-                    AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-                let pool = Pool::builder(conn_manager);
-                match config.database_pool_size {
-                    Some(size) => pool.max_size(size),
-                    None => pool,
-                }
-                .build()?
-            },
-            event_feed: app::event_feed::EventFeed::start(
-                context.clone(),
-                config.event_queue_size,
-                config.event_feed_shards,
-            ),
-            nats_context: Arc::new(context),
-            valkey,
-            media_store,
-            rate_limiter: Arc::new(rate_limiter),
-            webauthn,
-            federation_client,
-            config: config.into(),
-        })
-    }
 }

@@ -11,8 +11,8 @@
 //! communities they belong to, the DMs they are in, and the threads of both. Messages by anyone
 //! they blocked are left out, as they are of their unread counts.
 
-use crate::api::GlobalServerContext;
-use crate::api::MessageKind;
+use crate::app::context::GlobalServerContext;
+use crate::app::message::MessageKind;
 use crate::app::message::{Message, MessageWithRelations};
 use crate::app::visibility::Visibility;
 use crate::app::{self, ChannelId, CommunityId, MessageId, UserId};

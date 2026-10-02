@@ -14,15 +14,17 @@
 //! write-in, which takes its votes with it and leaves its index empty, so no other answer's
 //! index changes.
 
+use crate::api::message_enum;
 use crate::api::message_enum::request::PollCreateRequest;
 use crate::api::message_enum::server_event::{MessageEvent, PollEvent, ServerEvent};
 use crate::api::poll::{
     OwnWriteIn, PollOption as PollOptionRecord, PollOptionResult, PollVote as PollVoteRecord,
     PollWriteIn,
 };
-use crate::api::{GlobalServerContext, MessageKind, message_enum};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::message::Message;
+use crate::app::message::MessageKind;
 use crate::app::permissions::{Permissions, channel_access, missing};
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};

@@ -42,14 +42,13 @@
 //! stream's sequence jumps, or restarts after NATS lost it), every local connection is dropped,
 //! and each learns from `resumed: false` that it must rebuild its state.
 
+use crate::app::context::GlobalServerContext;
 use crate::app::events::{
     CHANNEL_HEADER, CREATOR_HEADER, REQUIRES_HEADER, SubjectOwner, memberships, subject_owner,
 };
 use crate::app::permissions::{Permission, Permissions};
 use crate::app::visibility::{CommunityModel, ModelChange, member_roles};
-use crate::app::{
-    self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, GlobalServerContext, RoleId, UserId,
-};
+use crate::app::{self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, RoleId, UserId};
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
 use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};

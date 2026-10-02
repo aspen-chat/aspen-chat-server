@@ -15,7 +15,8 @@
 //!   (`app::react`).
 
 use crate::api::message_enum::server_event::ServerEvent;
-use crate::app::{self, EventScope, GlobalServerContext, UserId, publish_event};
+use crate::app::context::GlobalServerContext;
+use crate::app::{self, EventScope, UserId, publish_event};
 use crate::database::schema::{user, user_block};
 use crate::t;
 use chrono::{DateTime, Utc};

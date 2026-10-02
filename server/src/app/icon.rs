@@ -7,8 +7,8 @@
 //! mime type, so the wire surface is one field shorter; everything else
 //! is symmetric.
 
-use crate::api::GlobalServerContext;
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::media_store::PresignedUpload;
 use crate::app::{IconId, Loadable};
 use crate::database::schema::icon;

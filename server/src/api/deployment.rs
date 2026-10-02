@@ -5,7 +5,8 @@
 use crate::api::admin::AdminUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_ADMIN};
+use crate::api::{API_PREFIX, TAG_ADMIN};
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{DeploymentPermission, DeploymentRoleRow, from_names, to_names};
 use crate::app::file_transfer::{FileTransferMode, FileTransferOutcome};
 use crate::app::{self, ChannelId, CommunityId, DeploymentRoleId, UserId};

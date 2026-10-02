@@ -4,10 +4,10 @@
 //! deployment moderator's ban is logged. Banning may also delete the person's recent messages
 //! in the community, which takes Manage messages besides.
 
-use crate::api::GlobalServerContext;
 use crate::api::message_enum::server_event::{CommunityBanEvent, ServerEvent};
 use crate::api::message_enum::{self};
 use crate::app;
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::events::{EventScope, publish_event};
 use crate::app::permissions::{Permissions, community_access, require_member};

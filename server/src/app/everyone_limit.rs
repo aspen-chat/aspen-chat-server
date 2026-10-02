@@ -9,7 +9,7 @@
 //! members are counted, so of two joins that cross the limit together exactly one acts, and a
 //! join that finds the limit reached acts even if the one that reached it could not.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::permissions::Permissions;
 use crate::app::{self, CommunityId, UserId};
 use crate::database::schema::{community, community_user};

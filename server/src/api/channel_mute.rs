@@ -1,10 +1,11 @@
 //! Muting channels and DMs, for the caller alone (`app::channel_mute`). Community and DM list
 //! reads sideload the caller's mutes with `include=mutes`.
 
+use crate::api::TAG_CHANNELS;
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
 use crate::api::extract::{Json, NoContent, Path};
-use crate::api::{GlobalServerContext, TAG_CHANNELS};
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId};
 use axum::extract::State;
 use axum::http::StatusCode;

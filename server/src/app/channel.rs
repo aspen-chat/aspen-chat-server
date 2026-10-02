@@ -1,9 +1,10 @@
+use crate::api::message_enum;
 use crate::api::message_enum::request::ChannelUpdateRequest;
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
-use crate::api::{ChannelType, GlobalServerContext, message_enum};
 use crate::app;
 use crate::app::category::Category;
 use crate::app::community::Community;
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{ModerationAction, log_moderation};
 use crate::app::link_preview::load_previews;
 use crate::app::message::{Message, MessageWithRelations};
@@ -15,13 +16,20 @@ use crate::app::{
 use crate::database::schema::message_attachment;
 use crate::database::schema::{channel, dm_recipient, message};
 use crate::t;
+use diesel::FromSqlRow;
+use diesel::deserialize::FromSql;
+use diesel::expression::AsExpression;
+use diesel::pg::Pg;
+use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::{
     AsChangeset, BoolExpressionMethods, CombineDsl, ExpressionMethods, Insertable, QueryDsl,
     Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use vecmap::VecMap;
 
 #[derive(Debug, Clone, Selectable, Insertable, Queryable)]
@@ -550,4 +558,62 @@ pub(crate) async fn delete_channel(
         .scope_boxed()
     })
     .await
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    utoipa::ToSchema,
+    schemars::JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = crate::database::schema::sql_types::ChannelType)]
+pub enum ChannelType {
+    Text,
+    Voice,
+    /// Replies to one message of a text channel, DM, or group DM; see `Channel.parentChannel`.
+    Thread,
+    /// A conversation between two people, outside any community.
+    Dm,
+    /// A conversation among up to `app::dm::MAX_RECIPIENTS` people, outside any community.
+    GroupDm,
+}
+
+impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
+        out.write_all(match self {
+            ChannelType::Text => b"text",
+            ChannelType::Voice => b"voice",
+            ChannelType::Thread => b"thread",
+            ChannelType::Dm => b"dm",
+            ChannelType::GroupDm => b"group_dm",
+        })?;
+        Ok(IsNull::No)
+    }
+}
+
+impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+    fn from_sql(
+        bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
+    ) -> diesel::deserialize::Result<Self> {
+        match bytes.as_bytes() {
+            b"voice" => Ok(ChannelType::Voice),
+            b"text" => Ok(ChannelType::Text),
+            b"thread" => Ok(ChannelType::Thread),
+            b"dm" => Ok(ChannelType::Dm),
+            b"group_dm" => Ok(ChannelType::GroupDm),
+            _ => Err(format!(
+                "Unrecognized enum variant: {:?}",
+                String::from_utf8_lossy(bytes.as_bytes())
+            )
+            .into()),
+        }
+    }
 }

@@ -6,7 +6,8 @@
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
-use crate::api::{API_PREFIX, GlobalServerContext, TAG_ADMIN};
+use crate::api::{API_PREFIX, TAG_ADMIN};
+use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{DeploymentAccess, DeploymentPermission, DeploymentPermissions};
 use crate::app::{self, CommunityId, DeploymentRoleId, IconId, UserId, VoiceServerId};
 use axum::extract::{FromRequestParts, State};

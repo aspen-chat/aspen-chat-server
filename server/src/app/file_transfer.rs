@@ -5,7 +5,7 @@
 //! this server. Anyone who may view the Administration Dashboard reads the record, newest offer
 //! first, each with its transfers.
 
-use crate::api::GlobalServerContext;
+use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, UserId};
 use crate::database::schema::{file_offer, file_transfer};
 use chrono::{DateTime, Utc};
