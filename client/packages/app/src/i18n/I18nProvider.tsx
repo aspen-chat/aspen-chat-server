@@ -2,7 +2,7 @@ import { setPreferredLanguages } from "@aspen/protocol";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nProvider as AriaI18nProvider } from "react-aria-components";
 import { LanguageContext, MessagesContext } from "./context";
-import { AUTOMATIC, resolveLocale } from "./locales";
+import { AUTOMATIC, platformLanguages, resolveLocale } from "./locales";
 
 /**
  * Where this install remembers the language last chosen, so the sign-in screen shows it too;
@@ -16,13 +16,6 @@ function storedChoice(): string {
   } catch {
     return AUTOMATIC;
   }
-}
-
-function platformLanguages(): readonly string[] {
-  if (typeof navigator === "undefined") {
-    return [];
-  }
-  return navigator.languages.length > 0 ? navigator.languages : [navigator.language];
 }
 
 /**

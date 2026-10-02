@@ -12,6 +12,7 @@ import {
 import { useChannel, useCustomEmoji } from "@/api/hooks";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { encodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { useEmojiLanguage } from "@/features/emoji/emojiData";
 import { loadEmojiNames, searchEmojiNames, type NamedEmoji } from "@/features/emoji/emojiNames";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
 import { useMessages } from "@/i18n/context";
@@ -42,8 +43,8 @@ export function emojiQueryAt(text: string, caret: number): { start: number; quer
  * Completes emoji in a message box: a colon followed by part of a name offers the community's
  * own emoji and every unicode emoji that answers to it, the community's first. A unicode pick
  * writes the glyph; a custom pick writes `:name:`, which `encode` turns into the emoji's
- * reference as the message is sent. The list is keyed as `useTagging`'s is, and reads the
- * same way.
+ * reference as the message is sent. The unicode names are the picker's, in the reader's
+ * language (`emojiData.ts`). The list is keyed as `useTagging`'s is, and reads the same way.
  */
 export function useEmojiCompletion({
   channelId,
@@ -64,7 +65,13 @@ export function useEmojiCompletion({
   const home = channel?.parentChannel != null ? parent : channel;
   const communityId = home?.community ?? null;
   const custom = useCustomEmoji(communityId ?? "");
-  const [named, setNamed] = useState<readonly NamedEmoji[] | null>(null);
+  const language = useEmojiLanguage();
+  // The names in the language they were loaded for; another language loads its own.
+  const [loadedNames, setLoadedNames] = useState<{
+    language: string;
+    names: readonly NamedEmoji[];
+  } | null>(null);
+  const named = loadedNames?.language === language ? loadedNames.names : null;
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
@@ -74,13 +81,14 @@ export function useEmojiCompletion({
   const query = typing?.query ?? "";
   const asking = typing !== null && query.length >= MIN_QUERY_CHARS && typing.start !== dismissedAt;
 
-  // The names load the first time they are asked for, and are kept.
+  // The names, in the reader's language, load the first time they are asked for and are
+  // kept; a change of language loads them afresh.
   useEffect(() => {
     if (asking && named === null) {
       let live = true;
-      void loadEmojiNames().then((loaded) => {
+      void loadEmojiNames(language).then((names) => {
         if (live) {
-          setNamed(loaded);
+          setLoadedNames({ language, names });
         }
       });
       return () => {
@@ -88,7 +96,7 @@ export function useEmojiCompletion({
       };
     }
     return undefined;
-  }, [asking, named]);
+  }, [asking, named, language]);
 
   const suggestions: EmojiSuggestion[] = [];
   if (asking) {

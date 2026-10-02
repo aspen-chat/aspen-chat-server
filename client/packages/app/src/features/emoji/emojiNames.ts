@@ -1,7 +1,9 @@
+import { loadEmojiData, type EmojiLanguage } from "@/features/emoji/emojiData";
+
 /**
- * Every unicode emoji by its names, for completing `:name` in a message box. The names are
- * the picker's own English list (`emoji-picker-react` ships one per language, and the picker
- * searches English too), loaded as its own chunk the first time a colon is typed.
+ * Every unicode emoji by its names in one language, for completing `:name` in a message box:
+ * read from the picker's data for that language (`emojiData.ts`), so the names the box
+ * completes are the ones the picker searches by.
  */
 
 /** One emoji: its glyph and the names it answers to, the last the fullest. */
@@ -10,24 +12,22 @@ export interface NamedEmoji {
   readonly names: readonly string[];
 }
 
-/** The picker's data file: emoji by category, each with its names and code points. */
-interface EmojiData {
-  emojis: Record<string, readonly { n: readonly string[]; u: string }[]>;
-}
+const loaded = new Map<EmojiLanguage, Promise<readonly NamedEmoji[]>>();
 
-let loading: Promise<readonly NamedEmoji[]> | null = null;
-
-/** Every emoji with its names, loaded once. */
-export function loadEmojiNames(): Promise<readonly NamedEmoji[]> {
-  loading ??= import("emoji-picker-react/dist/data/emojis-en.json").then((module) => {
-    const data = module.default as EmojiData;
-    return Object.values(data.emojis).flatMap((category) =>
-      category.map((e) => ({
-        glyph: String.fromCodePoint(...e.u.split("-").map((hex) => parseInt(hex, 16))),
-        names: e.n,
-      })),
+/** Every emoji with its names in `language`, loaded once. */
+export function loadEmojiNames(language: EmojiLanguage): Promise<readonly NamedEmoji[]> {
+  let loading = loaded.get(language);
+  if (loading === undefined) {
+    loading = loadEmojiData(language).then((data) =>
+      Object.values(data.emojis).flatMap((category) =>
+        category.map((e) => ({
+          glyph: String.fromCodePoint(...e.u.split("-").map((hex) => parseInt(hex, 16))),
+          names: e.n,
+        })),
+      ),
     );
-  });
+    loaded.set(language, loading);
+  }
   return loading;
 }
 

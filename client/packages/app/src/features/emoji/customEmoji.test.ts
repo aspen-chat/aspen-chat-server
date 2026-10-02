@@ -1,6 +1,7 @@
 import type { CustomEmoji } from "@aspen/protocol";
 import { describe, expect, it } from "vitest";
 import { decodeCustomEmoji, emojiIdOf, encodeCustomEmoji, referenceOf } from "./customEmoji";
+import { emojiLanguageFor } from "./emojiData";
 import { searchEmojiNames } from "./emojiNames";
 import { emojiQueryAt } from "./useEmojiCompletion";
 
@@ -58,5 +59,21 @@ describe("searchEmojiNames", () => {
     expect(searchEmojiNames(named, "cake", 5).map((e) => e.glyph)).toEqual(["🍰"]);
     expect(searchEmojiNames(named, "ort", 5).map((e) => e.glyph)).toEqual(["🍰"]);
     expect(searchEmojiNames(named, "zzz", 5)).toEqual([]);
+  });
+});
+
+describe("emojiLanguageFor", () => {
+  it("follows the browser's languages when the app's language is automatic", () => {
+    expect(emojiLanguageFor("automatic", ["fr-CA", "en-US"])).toBe("fr");
+    expect(emojiLanguageFor("automatic", ["zh-Hant-TW", "zh"])).toBe("zh-hant");
+    expect(emojiLanguageFor("automatic", ["en-GB", "en"])).toBe("en-gb");
+    expect(emojiLanguageFor("automatic", ["tlh", "eo"])).toBe("en");
+    expect(emojiLanguageFor("automatic", [])).toBe("en");
+  });
+
+  it("follows a chosen catalogue, pseudo-locales being English", () => {
+    expect(emojiLanguageFor("en", ["fr"])).toBe("en");
+    expect(emojiLanguageFor("en-XA", ["fr"])).toBe("en");
+    expect(emojiLanguageFor("ar-XB", ["fr"])).toBe("en");
   });
 });

@@ -1,7 +1,8 @@
-import Picker, { EmojiStyle, SkinTonePickerLocation, Theme } from "emoji-picker-react";
-import { useMemo } from "react";
+import Picker, { Categories, EmojiStyle, SkinTonePickerLocation, Theme } from "emoji-picker-react";
+import { useEffect, useMemo, useState } from "react";
 import { useCustomEmoji, useIcons } from "@/api/hooks";
 import { referenceOf } from "@/features/emoji/customEmoji";
+import { loadEmojiData, useEmojiLanguage, type EmojiData } from "@/features/emoji/emojiData";
 import { useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
 
@@ -36,6 +37,34 @@ export default function EmojiPicker({
 }) {
   const m = useMessages();
   const wide = useMediaQuery(FITS_WIDE);
+  const language = useEmojiLanguage();
+  // The names and headings in the reader's language, with the community's own section called
+  // what the app calls it; until they come, the room they will take.
+  const [loaded, setLoaded] = useState<{ language: string; data: EmojiData } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadEmojiData(language).then((data) => {
+      if (live) {
+        setLoaded({ language, data });
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [language]);
+  const emojiData = useMemo(
+    () =>
+      loaded?.language !== language
+        ? null
+        : {
+            ...loaded.data,
+            categories: {
+              ...loaded.data.categories,
+              custom: { category: Categories.CUSTOM, name: m.emoji.customCategory },
+            },
+          },
+    [loaded, language, m.emoji.customCategory],
+  );
   const custom = useCustomEmoji(communityId ?? "");
   const iconIds = useMemo(() => custom.map((e) => e.icon), [custom]);
   const icons = useIcons(iconIds);
@@ -49,8 +78,19 @@ export default function EmojiPicker({
       }),
     [custom, icons],
   );
+  if (emojiData === null) {
+    return (
+      <div
+        className="flex items-center justify-center text-sm text-ink-muted"
+        style={{ width: wide ? WIDE : NARROW, height: 384 }}
+      >
+        {m.loading}
+      </div>
+    );
+  }
   return (
     <Picker
+      emojiData={emojiData}
       onEmojiClick={(picked) => {
         onPick(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
       }}

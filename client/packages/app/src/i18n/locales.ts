@@ -41,6 +41,14 @@ export interface ResolvedLocale {
 
 const primary = (tag: string) => tag.split("-")[0]?.toLowerCase() ?? "";
 
+/** The browser's languages, most preferred first; none outside a browser. */
+export function platformLanguages(): readonly string[] {
+  if (typeof navigator === "undefined") {
+    return [];
+  }
+  return navigator.languages.length > 0 ? navigator.languages : [navigator.language];
+}
+
 function isLanguage(tag: string): tag is Language {
   return (LANGUAGES as readonly string[]).includes(tag);
 }
