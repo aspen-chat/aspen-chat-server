@@ -32,7 +32,9 @@ use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 
 /// The parsed value of an `include` query parameter: a set of relationship names drawn from the
-/// endpoint's own enum `E`. Duplicates are collapsed. Deserializes from a comma-separated
+/// endpoint's own enum `E`. Duplicates are collapsed, and a name this server does not know is
+/// left out rather than refused: a newer client, or another deployment's, may ask for a
+/// relationship this version lacks, and gets the rest. Deserializes from a comma-separated
 /// string; an empty or absent parameter is an empty set.
 #[derive(Debug, Clone)]
 pub struct IncludeSet<E>(Vec<E>);
@@ -57,7 +59,12 @@ where
         let raw = String::deserialize(deserializer)?;
         let mut relations = Vec::new();
         for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let relation = E::deserialize(name.into_deserializer())?;
+            let parsed: Result<E, serde::de::value::Error> =
+                E::deserialize(name.into_deserializer());
+            let Ok(relation) = parsed else {
+                tracing::debug!(name, "ignoring an include relationship this server lacks");
+                continue;
+            };
             if !relations.contains(&relation) {
                 relations.push(relation);
             }
@@ -273,6 +280,15 @@ mod tests {
     }
 
     #[test]
+    fn ignores_relations_it_does_not_know() {
+        // A newer client asks for what this version lacks and still gets what it has.
+        let q = parse("include=channels,emoji,members").unwrap();
+        assert!(q.include.contains(Relation::Channels));
+        assert!(q.include.contains(Relation::Members));
+        assert_eq!(q.include.0.len(), 2);
+    }
+
+    #[test]
     fn parses_comma_separated_relations() {
         let q = parse("include=channels,members").unwrap();
         assert!(q.include.contains(Relation::Channels));
@@ -289,12 +305,6 @@ mod tests {
     fn absent_and_empty_are_empty_sets() {
         assert!(parse("").unwrap().include.0.is_empty());
         assert!(parse("include=").unwrap().include.0.is_empty());
-    }
-
-    #[test]
-    fn rejects_unknown_relation() {
-        let err = parse("include=channels,pins").unwrap_err().to_string();
-        assert!(err.contains("pins"), "{err}");
     }
 
     /// Only the requested relationship types appear, and requesting a relationship with no
