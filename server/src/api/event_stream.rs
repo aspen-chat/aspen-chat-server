@@ -316,7 +316,7 @@ async fn identify(
     if caller.enrollment_required(&state.config.auth) {
         return Err(Rejection(EventStreamErrorCode::TwoFactorEnrollmentRequired));
     }
-    app::user::mark_user_online(state, &user);
+    app::user_status::mark_user_online(state, &user);
     Ok(Identified { user, resume_after })
 }
 
@@ -402,7 +402,7 @@ async fn pump_events(
                 }
                 unanswered_pings += 1;
                 // The connection is the user's presence: the key is refreshed as long as it is up.
-                app::user::mark_user_online_id(state, user, bot);
+                app::user_status::mark_user_online_id(state, user, bot);
                 if let Err(e) = socket.send(Message::Ping(Bytes::new())).await {
                     log_send_error(&e);
                     return;

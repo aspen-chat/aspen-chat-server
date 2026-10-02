@@ -707,7 +707,7 @@ impl FromRequestParts<GlobalServerContext> for EnrollingSessionUser {
             }
         };
         crate::api::rate_limit::limit_session(state, parts, user.id).await?;
-        app::user::mark_user_online(state, &user);
+        app::user_status::mark_user_online(state, &user);
         Ok(EnrollingSessionUser(SessionUser { user, caller }))
     }
 }
