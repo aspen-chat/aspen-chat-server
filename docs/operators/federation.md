@@ -105,10 +105,11 @@ dialog, or opens an invite link naming it (`/invite/<code>?at=<domain>`). Their 
 two-minute statement of who they are for that deployment, which signs them in there. Their
 profile stays their home's; their status is theirs to set anywhere.
 
-Visitors appear in lists as `name@domain`. Moderators with Moderate any community can ban a
-visitor from your deployment in the dashboard's user directory: their sessions end and they
-cannot sign in here again until the ban is lifted. A deployment's own users are never banned
-this way; moderate them as usual.
+Visitors appear in lists as `name@domain`. Moderators with Ban users can ban a visitor from your
+deployment in the dashboard's user directory, as they can your own users: their sessions end
+and they cannot sign in here again until the ban ends or is lifted. Banning one of your own users
+also tells every deployment they visit, at its next standing check, that they are no longer in
+good standing there.
 
 About every `standing_interval_seconds` this deployment asks each visitor's home whether they
 are still in good standing. A visitor whose account was deleted, who left, or whose home closed

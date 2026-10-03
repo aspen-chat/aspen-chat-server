@@ -1,6 +1,7 @@
 //! The moderation log (`moderation_log`): each use of Moderate any community that the
-//! community's own permissions would not have allowed, and every reading of a DM by someone not
-//! in it, and how the log is read back with what its ids name.
+//! community's own permissions would not have allowed, every reading of a DM by someone not in
+//! it, each ban from the deployment and its lifting, each warning and profile reset a report's
+//! review gave (`app::report`), and how the log is read back with what its ids name.
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
@@ -33,8 +34,16 @@ pub enum ModerationAction {
     RemoveWriteIn,
     /// A poll closed before its deadline; the subject is the poll.
     ClosePoll,
-    BanForeignUser,
-    LiftForeignUserBan,
+    /// A ban from the deployment (`app::user_ban`); the subject is the person.
+    BanUser,
+    LiftUserBan,
+    /// A warning sent in reviewing a report; the subject is the person warned.
+    WarnUser,
+    /// A profile reset in reviewing a report; the subject is the person.
+    ResetProfile,
+    /// The messages around a reported message in a DM, read in reviewing the report; the
+    /// subject is the reported message.
+    ReadReportContext,
 }
 
 /// Writes a use of Moderate any community to the moderation log, and to the server's own log.
@@ -91,8 +100,8 @@ pub struct ModerationEntry {
 pub struct ModerationDetails {
     pub community: Option<LoggedCommunity>,
     pub channel: Option<LoggedChannel>,
-    /// The person acted on: a member removed, a user of another deployment banned or let back,
-    /// or whoever's reaction was removed.
+    /// The person acted on: a member removed, someone banned from the deployment or let back,
+    /// warned, or whose profile was reset, or whoever's reaction was removed.
     pub user: Option<UserId>,
     /// The message acted on or read: deleted, stripped of an attachment or a reaction, or the
     /// poll a write-in was taken from.
@@ -156,11 +165,13 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
         | ModerationAction::BanMember
         | ModerationAction::LiftBan
         | ModerationAction::DeleteRecentMessages
-        | ModerationAction::BanForeignUser
-        | ModerationAction::LiftForeignUserBan => Some(Subject::User(UserId(id(subject)?))),
-        ModerationAction::DeleteMessage | ModerationAction::ReadDm => {
-            Some(Subject::Message(MessageId(id(subject)?)))
-        }
+        | ModerationAction::BanUser
+        | ModerationAction::LiftUserBan
+        | ModerationAction::WarnUser
+        | ModerationAction::ResetProfile => Some(Subject::User(UserId(id(subject)?))),
+        ModerationAction::DeleteMessage
+        | ModerationAction::ReadDm
+        | ModerationAction::ReadReportContext => Some(Subject::Message(MessageId(id(subject)?))),
         ModerationAction::RemoveAttachment => {
             let (message, attachment) = subject.split_once('/')?;
             Some(Subject::Attachment(
@@ -419,7 +430,7 @@ mod tests {
             Some(Subject::User(UserId(id(a))))
         );
         assert_eq!(
-            subject_of("liftForeignUserBan", a),
+            subject_of("liftUserBan", a),
             Some(Subject::User(UserId(id(a))))
         );
         assert_eq!(

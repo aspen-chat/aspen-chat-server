@@ -24,6 +24,7 @@ import {
   ToggleButtonGroup,
 } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
+import { toggleChipClass } from "@/features/invites/dialog";
 import { SourceScope } from "@/api/deployments";
 import { ScopeDomainContext } from "@/api/deploymentsContext";
 import { useSources, type Source } from "@/api/everywhere";
@@ -53,11 +54,6 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 type Scope = "channel" | "community" | "server" | "everywhere";
 
 const HOLDINGS: readonly MessageHolding[] = ["attachment", "image", "poll"];
-
-const chipClass =
-  "rounded-md border border-line px-3 py-1 text-sm text-ink-muted outline-none hover:bg-surface-hover " +
-  "pressed:bg-surface-hover selected:border-accent selected:bg-accent-soft selected:text-accent-strong " +
-  "focus-visible:ring-2 focus-visible:ring-accent/50";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -262,7 +258,7 @@ function SearchPanel({
             className="flex flex-wrap gap-1"
           >
             {scopes.map((s) => (
-              <ToggleButton key={s.id} id={s.id} className={chipClass}>
+              <ToggleButton key={s.id} id={s.id} className={toggleChipClass}>
                 {s.label}
               </ToggleButton>
             ))}
@@ -283,7 +279,7 @@ function SearchPanel({
               className="flex flex-wrap gap-1"
             >
               {HOLDINGS.map((h) => (
-                <ToggleButton key={h} id={h} className={chipClass}>
+                <ToggleButton key={h} id={h} className={toggleChipClass}>
                   {h === "attachment"
                     ? m.search.hasAttachment
                     : h === "image"
@@ -292,7 +288,11 @@ function SearchPanel({
                 </ToggleButton>
               ))}
             </ToggleButtonGroup>
-            <ToggleButton isSelected={taggingMe} onChange={setTaggingMe} className={chipClass}>
+            <ToggleButton
+              isSelected={taggingMe}
+              onChange={setTaggingMe}
+              className={toggleChipClass}
+            >
               {m.search.taggingMe}
             </ToggleButton>
           </div>

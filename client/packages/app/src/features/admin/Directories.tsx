@@ -17,6 +17,7 @@ import {
   Dialog,
   DialogTrigger,
   Popover,
+  ToggleButton,
 } from "react-aria-components";
 import { useDeploymentCan, useMe, useSync } from "@/api/hooks";
 import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoleRecords";
@@ -24,17 +25,22 @@ import { useDmTitle } from "@/features/dms/useDmTitle";
 import { markClass } from "@/features/layout/choices";
 import { useFigures } from "@/features/admin/format";
 import { Avatar } from "@/features/communities/Avatar";
-import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dialog";
+import {
+  dangerButtonClass,
+  secondaryButtonClass,
+  toggleChipClass,
+} from "@/features/invites/dialog";
+import { UserBanDialog } from "@/features/admin/UserBanDialog";
 import { BotBadge } from "@/features/users/BotBadge";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { Directory } from "@/features/admin/Directory";
 
 /**
- * The deployment's users, searched by username or display name and sortable, with the
- * deployment roles each holds, and bots marked. Those who may manage deployment roles change
- * them here, moderators open someone's DMs, and those who may manage bots delete a bot whose
- * owner is gone.
+ * The deployment's users, searched by username or display name and sortable, or only those
+ * banned, with the deployment roles each holds, bots marked, and bans shown. Those who may manage
+ * deployment roles change them here, moderators open someone's DMs, holders of Ban users ban
+ * and lift bans, and those who may manage bots delete a bot whose owner is gone.
  */
 export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
@@ -43,10 +49,17 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
   const manage = useDeploymentCan("manageDeploymentRoles");
   const moderator = useDeploymentCan("moderateCommunities");
   const manageBots = useDeploymentCan("manageBots");
+  const banUsers = useDeploymentCan("banUsers");
+  const me = useMe();
+  const [bannedOnly, setBannedOnly] = useState(false);
+  const [version, setVersion] = useState(0);
   const load = useCallback(
-    (query: AdminListQuery<UserSort>) => sync.admin.adminUsers(query),
-    [sync],
+    (query: AdminListQuery<UserSort>) => sync.admin.adminUsers({ ...query, banned: bannedOnly }),
+    [sync, bannedOnly],
   );
+  const reload = useCallback(() => {
+    setVersion((n) => n + 1);
+  }, []);
   return (
     <Directory<AdminUserEntry, UserSort>
       idThing="user"
@@ -54,6 +67,16 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
       title={m.admin.users}
       searchLabel={m.admin.searchUsers}
       load={load}
+      version={version}
+      controls={
+        <ToggleButton
+          isSelected={bannedOnly}
+          onChange={setBannedOnly}
+          className={toggleChipClass + " mb-0.5"}
+        >
+          {m.deployments.bannedOnly}
+        </ToggleButton>
+      }
       defaultSort="-createdAt"
       columns={[
         {
@@ -87,14 +110,16 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
           heading: m.admin.rolesColumn,
           cell: (user) => <UserRoles user={user} roles={roles} manage={manage} />,
         },
-        ...(moderator || manageBots
+        ...(moderator || manageBots || banUsers || bannedOnly
           ? [
               {
                 heading: m.admin.actions,
                 cell: (user: AdminUserEntry) => (
                   <span className="flex flex-wrap items-center gap-2">
                     {moderator && <UserDms user={user} />}
-                    {moderator && user.homeDomain != null && <BanForeignUser user={user} />}
+                    {((banUsers && !user.system && user.id !== me?.id) || user.ban != null) && (
+                      <UserBanControl user={user} mayBan={banUsers} onChanged={reload} />
+                    )}
                     {manageBots && user.bot && user.botOwner == null && (
                       <DeleteOwnerlessBot user={user} />
                     )}
@@ -109,66 +134,79 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
 }
 
 /**
- * Bans a user of another server from this one, after a confirming second press, or lifts the
- * ban: a banned user's sessions here end and they cannot sign in here again.
+ * Whether someone is banned from the server, and for a holder of Ban users the way to ban
+ * them, through `UserBanDialog`, or to lift the ban.
  */
-function BanForeignUser({ user }: { user: AdminUserEntry }) {
+function UserBanControl({
+  user,
+  mayBan,
+  onChanged,
+}: {
+  user: AdminUserEntry;
+  mayBan: boolean;
+  onChanged: () => void;
+}) {
   const m = useMessages();
   const sync = useSync();
-  const [banned, setBanned] = useState(user.banned);
-  const [confirming, setConfirming] = useState(false);
+  const { day } = useFigures();
+  const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = user.displayName ?? user.name;
-  const change = (next: boolean) => {
-    setPending(true);
-    setError(null);
-    sync.setForeignUserBanned(user.id, next).then(
-      () => {
-        setBanned(next);
-        setConfirming(false);
-        setPending(false);
-      },
-      (e: unknown) => {
-        setError(e instanceof ApiProblemError ? e.message : String(e));
-        setPending(false);
-      },
-    );
-  };
+  const ban = user.ban;
   return (
     <span className="flex flex-col gap-1">
-      {banned ? (
-        <>
-          <span className="text-xs text-danger">{m.deployments.banned}</span>
+      {ban != null && (
+        <span className="text-xs text-danger">
+          {ban.until == null
+            ? m.deployments.banned
+            : format(m.deployments.bannedUntil, { when: day(ban.until) })}
+        </span>
+      )}
+      {mayBan &&
+        (ban != null ? (
           <Button
             isDisabled={pending}
             aria-label={format(m.deployments.liftBanLabel, { name })}
             onPress={() => {
-              change(false);
+              setPending(true);
+              setError(null);
+              sync.admin.liftUserBan(user.id).then(
+                () => {
+                  setPending(false);
+                  onChanged();
+                },
+                (e: unknown) => {
+                  setError(e instanceof ApiProblemError ? e.message : String(e));
+                  setPending(false);
+                },
+              );
             }}
-            className={secondaryButtonClass + " self-start"}
+            className={secondaryButtonClass + " self-start py-0.5 text-xs"}
           >
             {m.deployments.liftBan}
           </Button>
-        </>
-      ) : (
-        <Button
-          isDisabled={pending}
-          aria-label={format(m.deployments.banLabel, { name })}
-          onPress={() => {
-            if (confirming) {
-              change(true);
-            } else {
-              setConfirming(true);
-            }
-          }}
-          className={
-            (confirming ? dangerButtonClass : secondaryButtonClass + " text-danger") + " self-start"
-          }
-        >
-          {confirming ? format(m.deployments.banConfirm, { name }) : m.deployments.ban}
-        </Button>
-      )}
+        ) : (
+          <>
+            <Button
+              aria-label={format(m.deployments.banLabel, { name })}
+              onPress={() => {
+                setOpen(true);
+              }}
+              className={secondaryButtonClass + " self-start py-0.5 text-xs text-danger"}
+            >
+              {m.members.ban}
+            </Button>
+            <UserBanDialog
+              userId={user.id}
+              name={name}
+              bot={user.bot}
+              isOpen={open}
+              onOpenChange={setOpen}
+              onBanned={onChanged}
+            />
+          </>
+        ))}
       {error !== null && (
         <span role="alert" className="text-xs text-danger">
           {error}

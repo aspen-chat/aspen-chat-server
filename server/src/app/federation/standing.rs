@@ -5,9 +5,9 @@
 //! (`aspen-standing+jwt`) saying, for each:
 //! - `good`: the account exists and its home still lets it use this deployment; it is confirmed.
 //! - `gone`: there is no such account any more; its user here is retired.
-//! - `refused`: its home no longer lets it use this deployment (the user left it, or the home's
-//!   emigration gate closed to it); its sessions here end, and it may sign in again if that
-//!   changes.
+//! - `refused`: its home no longer lets it use this deployment (the user left it, the home's
+//!   emigration gate closed to it, or the home banned them, `app::user_ban`); its sessions here
+//!   end, and it may sign in again if that changes.
 //!
 //! A standing this deployment does not know it takes as `refused`. Sessions also end when this
 //! deployment's own immigration gate no longer admits the home, and when the home has gone
@@ -134,8 +134,8 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
         .ok_or_else(|| app::Error::FederationRefused(crate::t!("federationOff")))?;
     let asked: Vec<Uuid> = claims.users.into_iter().take(MAX_USERS).collect();
     let mut conn = state.connection_pool.get().await?;
-    let found: Vec<(UserId, bool)> = user::table
-        .select((user::id, user::bot))
+    let found: Vec<(UserId, bool, bool)> = user::table
+        .select((user::id, user::bot, crate::app::user_ban::banned()))
         .filter(user::id.eq_any(&asked))
         .filter(user::home_domain.is_null())
         .filter(user::deleted_at.is_null())
@@ -151,11 +151,13 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
     let users = asked
         .into_iter()
         .map(|sub| {
-            let standing = match found.iter().find(|(id, _)| id.0 == sub) {
+            let standing = match found.iter().find(|(id, _, _)| id.0 == sub) {
                 None => Standing::Gone,
-                Some((id, bot)) => {
+                Some((id, bot, banned)) => {
                     let subject = if *bot { Subject::Bots } else { Subject::Users };
-                    if using.contains(id) && admits(config, subject, Direction::Emigration, &lists)
+                    if !banned
+                        && using.contains(id)
+                        && admits(config, subject, Direction::Emigration, &lists)
                     {
                         Standing::Good
                     } else {

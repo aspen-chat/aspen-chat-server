@@ -101,6 +101,9 @@ pub enum EventStreamErrorCode {
     TwoFactorEnrollmentRequired,
     /// No `identify` frame arrived within the allowed time. Close code 4408.
     IdentifyTimeout,
+    /// The account was banned from the deployment, which the `accountBanned` event before
+    /// this frame tells of. Close code 4410.
+    Banned,
     /// The server failed while setting up or serving the stream. Close code 1011.
     Internal,
 }
@@ -112,6 +115,7 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::Unauthorized => 4401,
             EventStreamErrorCode::TwoFactorEnrollmentRequired => 4403,
             EventStreamErrorCode::IdentifyTimeout => 4408,
+            EventStreamErrorCode::Banned => 4410,
             EventStreamErrorCode::Internal => 1011,
         }
     }
@@ -124,6 +128,7 @@ impl EventStreamErrorCode {
                 t!("problemTwoFactorEnrollmentRequired")
             }
             EventStreamErrorCode::IdentifyTimeout => t!("eventStreamIdentifyTimeout"),
+            EventStreamErrorCode::Banned => t!("eventStreamBanned"),
             EventStreamErrorCode::Internal => t!("eventStreamError"),
         }
     }
@@ -334,18 +339,30 @@ fn event_frame(event: &FeedEvent) -> Result<Message, axum::Error> {
     Ok(Message::Text(text.into()))
 }
 
-/// Writes one delivery's frames without flushing, and says how many.
-async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<usize, axum::Error> {
+/// What writing a delivery did: how many frames, and whether one of them ends the connection.
+struct Fed {
+    written: usize,
+    ends: bool,
+}
+
+/// Writes one delivery's frames without flushing.
+async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed, axum::Error> {
     match delivery {
         Delivery::CatchUp(events) => {
             for event in &events {
                 socket.feed(event_frame(event)?).await?;
             }
-            Ok(events.len())
+            Ok(Fed {
+                written: events.len(),
+                ends: events.iter().any(|event| event.ends_streams()),
+            })
         }
         Delivery::Live(event) => {
             socket.feed(event_frame(&event)?).await?;
-            Ok(1)
+            Ok(Fed {
+                written: 1,
+                ends: event.ends_streams(),
+            })
         }
     }
 }
@@ -370,19 +387,22 @@ async fn pump_events(
                     debug!("the event feed dropped a connection");
                     return;
                 };
-                let mut written = match feed_delivery(&mut socket, delivery).await {
-                    Ok(written) => written,
+                let Fed { mut written, mut ends } = match feed_delivery(&mut socket, delivery).await {
+                    Ok(fed) => fed,
                     Err(e) => {
                         log_send_error(&e);
                         return;
                     }
                 };
-                while written < FLUSH_EVERY {
+                while written < FLUSH_EVERY && !ends {
                     let Ok(delivery) = subscription.deliveries.try_recv() else {
                         break;
                     };
                     match feed_delivery(&mut socket, delivery).await {
-                        Ok(more) => written += more,
+                        Ok(more) => {
+                            written += more.written;
+                            ends = more.ends;
+                        }
                         Err(e) => {
                             log_send_error(&e);
                             return;
@@ -394,6 +414,10 @@ async fn pump_events(
                     return;
                 }
                 metrics::counter!(aspen_metrics::api::EVENTS_DELIVERED).increment(written as u64);
+                if ends {
+                    reject(&mut socket, EventStreamErrorCode::Banned).await;
+                    return;
+                }
             },
             _ = ping_interval.tick() => {
                 if unanswered_pings >= MAX_MISSED_PONGS {

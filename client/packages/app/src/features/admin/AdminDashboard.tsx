@@ -1,7 +1,9 @@
 import {
   ChartLineUpIcon,
   FileArrowUpIcon,
+  FlagIcon,
   GlobeIcon,
+  ListBulletsIcon,
   HandWavingIcon,
   HardDrivesIcon,
   IdentificationBadgeIcon,
@@ -16,7 +18,10 @@ import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { useCallback } from "react";
 import { planeClass } from "@/features/invites/dialog";
-import { useDeploymentPermissions, useIsAdmin, useSync } from "@/api/hooks";
+import { useDeploymentPermissions, useIsAdmin, useOpenReports, useSync } from "@/api/hooks";
+import { ReportCategoriesSection } from "@/features/admin/ReportCategories";
+import { ReportsSection } from "@/features/admin/Reports";
+import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { DeploymentProfileSection } from "@/features/admin/DeploymentProfile";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
@@ -39,6 +44,8 @@ const ADMIN_TABS = [
   "fleet",
   "invites",
   "roles",
+  "reports",
+  "reportCategories",
   "users",
   "communities",
   "profile",
@@ -52,12 +59,18 @@ type AdminTab = (typeof ADMIN_TABS)[number];
 function useAllowedTabs(): AdminTab[] {
   const permissions = useDeploymentPermissions();
   const view = permissions.has("viewDashboard");
-  const directories = view || permissions.has("moderateCommunities");
+  const directories =
+    view ||
+    permissions.has("moderateCommunities") ||
+    permissions.has("banUsers") ||
+    permissions.has("reviewReports");
   const allowed: Record<AdminTab, boolean> = {
     overview: view,
     fleet: view,
     invites: permissions.has("manageRegistrationInvites"),
     roles: true,
+    reports: permissions.has("reviewReports"),
+    reportCategories: permissions.has("manageReportCategories"),
     users: directories,
     communities: directories,
     profile: permissions.has("manageFederation"),
@@ -76,6 +89,8 @@ function useTabLabel(): (tab: AdminTab) => string {
       fleet: m.admin.fleet,
       invites: m.admin.invites,
       roles: m.admin.deploymentRoles,
+      reports: m.reports.title,
+      reportCategories: m.reports.categoriesTitle,
       users: m.admin.users,
       communities: m.admin.communities,
       profile: m.admin.profile,
@@ -90,6 +105,8 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   fleet: HardDrivesIcon,
   invites: TicketIcon,
   roles: IdentificationBadgeIcon,
+  reports: FlagIcon,
+  reportCategories: ListBulletsIcon,
   users: UsersIcon,
   communities: UsersThreeIcon,
   profile: HandWavingIcon,
@@ -101,8 +118,8 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
 /**
  * The Administration Dashboard, `/admin/{tab}`: a rail of tabs beside the one open, which a
  * one-pane screen sets across the top instead. The tabs are the deployment's totals and their
- * growth, the health of its servers, registration invites, its roles, searchable lists of its
- * users and communities, the name and icon it welcomes people with, federation with other
+ * growth, the health of its servers, registration invites, its roles, the reports people made
+ * and the categories they make them in, searchable lists of its users and communities, the name and icon it welcomes people with, federation with other
  * deployments, the moderation log, and the record
  * of file transfers. Each shows only to those with the deployment permission it needs; the
  * server refuses everyone else whatever this page shows. `/admin`, or a tab the caller may not
@@ -113,6 +130,7 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
   const admin = useIsAdmin();
   const allowed = useAllowedTabs();
   const label = useTabLabel();
+  const openReports = useOpenReports() ?? 0;
   const open = allowed.find((t) => t === tab);
   const first = allowed[0];
   if (admin && open === undefined && first !== undefined) {
@@ -140,6 +158,20 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
                   >
                     <TabIcon size={18} aria-hidden="true" />
                     {label(t)}
+                    {t === "reports" && (
+                      <>
+                        <MentionBadge
+                          count={openReports}
+                          title={format(m.admin.reportsWaiting, { count: String(openReports) })}
+                          className="ms-auto"
+                        />
+                        {openReports > 0 && (
+                          <span className="sr-only">
+                            {format(m.admin.reportsWaiting, { count: String(openReports) })}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </Link>
                 </li>
               );
@@ -177,6 +209,10 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return <Invites view={permissions.has("viewDashboard")} />;
     case "roles":
       return <DeploymentRolesSection read={roles} />;
+    case "reports":
+      return <ReportsSection />;
+    case "reportCategories":
+      return <ReportCategoriesSection />;
     case "users":
       return <UserDirectory roles={roles.data} />;
     case "communities":

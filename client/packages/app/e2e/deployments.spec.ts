@@ -67,15 +67,16 @@ test("a new message starts on the deployment chosen", async ({ page }) => {
 
 test("a moderator bans a user of another server, and lifts the ban", async ({ page }) => {
   const stranger = "0290f0a0-0000-7000-8000-0000000000aa";
-  const bans: string[] = [];
+  const bans: { method: string; body: unknown }[] = [];
+  let banned: { bannedAt: string; reason: string | null; until: string | null } | null = null;
   await signInToWorld(page, async (p) => {
-    const json = (body: unknown) => ({
-      status: 200,
+    const json = (body: unknown, status = 200) => ({
+      status,
       contentType: "application/json",
       body: JSON.stringify(body),
     });
     await p.route(/\/api\/v1\/users\/@me\/admin$/, (route) =>
-      route.fulfill(json({ permissions: ["viewDashboard", "moderateCommunities"], roles: [] })),
+      route.fulfill(json({ permissions: ["viewDashboard", "banUsers"], roles: [] })),
     );
     await p.route(/\/api\/v1\/admin\/users(\?.*)?$/, (route) =>
       route.fulfill(
@@ -91,14 +92,22 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
             bot: false,
             botOwner: null,
             homeDomain: foreignDomain,
-            banned: false,
+            system: false,
+            banned: banned !== null,
+            ban: banned,
           },
         ]),
       ),
     );
     await p.route(/\/api\/v1\/admin\/users\/[^/]+\/ban$/, (route) => {
-      bans.push(route.request().method());
-      return route.fulfill({ status: route.request().method() === "PUT" ? 201 : 204 });
+      const method = route.request().method();
+      bans.push({ method, body: method === "PUT" ? route.request().postDataJSON() : null });
+      if (method === "PUT") {
+        banned = { bannedAt: new Date().toISOString(), reason: "Spam", until: null };
+        return route.fulfill(json({ banned: [stranger], deletedMessages: 0 }, 201));
+      }
+      banned = null;
+      return route.fulfill({ status: 204 });
     });
   });
   await rail(page).getByRole("link", { name: "Administration" }).click();
@@ -110,11 +119,20 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
   const row = users.getByRole("row").filter({ hasText: "Stranger" });
   await expect(row).toContainText(`stranger@${foreignDomain}`);
   await row.getByRole("button", { name: "Ban Stranger from this server" }).click();
-  await row.getByRole("button", { name: "Ban Stranger from this server" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Ban Stranger from this server" });
+  // Without Moderate any community, a ban deletes no messages.
+  await expect(dialog.getByRole("button", { name: /delete their messages/i })).toHaveCount(0);
+  await dialog.getByRole("textbox", { name: "Reason" }).fill("Spam");
+  await dialog.getByRole("button", { name: "Ban", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Banned Stranger from this server.")).toBeVisible();
   await expect(row).toContainText("Banned");
   await row.getByRole("button", { name: "Lift the ban on Stranger" }).click();
   await expect(row.getByRole("button", { name: "Ban Stranger from this server" })).toBeVisible();
-  expect(bans).toEqual(["PUT", "DELETE"]);
+  expect(bans).toEqual([
+    { method: "PUT", body: { reason: "Spam", withOwner: false } },
+    { method: "DELETE", body: null },
+  ]);
 });
 
 test("an invite's link names its server", async ({ page }) => {

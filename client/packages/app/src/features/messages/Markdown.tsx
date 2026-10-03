@@ -1,11 +1,20 @@
 import type { Mentions } from "@aspen/protocol";
 import { type ReactNode, isValidElement, useContext } from "react";
+import { ChatTextIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
 import { CodeBlock } from "@/features/messages/CodeBlock";
-import { openInviteLink, useDomain } from "@/features/messages/links";
+import {
+  messageLink,
+  openInviteLink,
+  parseMessageUrl,
+  useDomain,
+  type MessageUrl,
+} from "@/features/messages/links";
+import { HomeClientContext } from "@/api/context";
+import { useForeignDeployments } from "@/api/deploymentsContext";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
@@ -14,24 +23,97 @@ import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
 import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
+import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 
 const linkClass =
   "text-accent underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
 
 /**
  * A link in a message. An Aspen invite link that names its deployment opens its invite screen
- * here (`InviteMessageLink`), whichever client made it; every other link opens elsewhere.
+ * here (`InviteMessageLink`), whichever client made it, and a link to a message of a deployment
+ * the user uses opens it here (`LinkToMessage`); every other link opens elsewhere.
  */
 function MessageLink({ href, children }: { href: string | undefined; children: ReactNode }) {
   const invite = href === undefined ? null : parseInvite(href);
   if (invite?.domain != null) {
     return <InviteMessageLink invite={invite}>{children}</InviteMessageLink>;
   }
+  const message = href === undefined ? null : parseMessageUrl(href);
+  if (message !== null) {
+    return (
+      <LinkToMessage target={message} href={href ?? ""}>
+        {children}
+      </LinkToMessage>
+    );
+  }
+  return <ExternalLink href={href}>{children}</ExternalLink>;
+}
+
+function ExternalLink({ href, children }: { href: string | undefined; children: ReactNode }) {
   return (
     <a href={href} target="_blank" rel="noreferrer noopener" className={linkClass}>
       {children}
     </a>
   );
+}
+
+/**
+ * A link to a message, opened here when it is on the user's home deployment (the address the
+ * app reaches it at, or the page's own) or another they use, and elsewhere otherwise. Written
+ * as its bare address, it shows as a short label, since the message itself shows beneath.
+ */
+function LinkToMessage({
+  target,
+  href,
+  children,
+}: {
+  target: MessageUrl;
+  href: string;
+  children: ReactNode;
+}) {
+  const m = useMessages();
+  const home = useContext(HomeClientContext);
+  const foreign = useForeignDeployments();
+  const homeHosts = [window.location.host, ...(home === null ? [] : [new URL(home.baseUrl).host])];
+  const domain = homeHosts.includes(target.host)
+    ? null
+    : foreign.find((d) => d.domain === target.host)?.domain;
+  if (domain === undefined) {
+    return <ExternalLink href={href}>{children}</ExternalLink>;
+  }
+  const bare = textOf(children) === href;
+  return (
+    <Link
+      {...messageLink({ domain, community: target.community }, target.channel, target.message)}
+      {...(bare ? { "aria-label": format(m.reports.messageLinkFull, { url: href }), title: href } : {})}
+      className={
+        bare
+          ? "inline-flex items-baseline gap-0.5 rounded bg-accent-soft px-1 text-accent-strong outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          : linkClass
+      }
+    >
+      {bare ? (
+        <>
+          <ChatTextIcon size={14} aria-hidden="true" className="self-center" />
+          {m.reports.messageLinkLabel}
+        </>
+      ) : (
+        children
+      )}
+    </Link>
+  );
+}
+
+/** The plain text of a link's children, or `null` when they hold more than text. */
+function textOf(children: ReactNode): string | null {
+  if (typeof children === "string") {
+    return children;
+  }
+  if (Array.isArray(children) && children.every((child) => typeof child === "string")) {
+    return children.join("");
+  }
+  return null;
 }
 
 function InviteMessageLink({ invite, children }: { invite: InviteRef; children: ReactNode }) {

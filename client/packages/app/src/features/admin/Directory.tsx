@@ -64,10 +64,13 @@ export function Directory<T extends { id: string }, S extends string>({
   columns: given,
   version = 0,
   idThing,
+  controls,
 }: {
   id: string;
   title: string;
   searchLabel: string;
+  /** More ways to narrow the list, shown beside the search; a change to them comes as a new `load`. */
+  controls?: ReactNode;
   load: (query: AdminListQuery<S>) => Promise<T[]>;
   /** The order when no heading is chosen; the server's own when absent. */
   defaultSort?: S;
@@ -99,6 +102,12 @@ export function Directory<T extends { id: string }, S extends string>({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // A new `load` narrows the list another way, which starts again from the first page.
+  const [loaded, setLoaded] = useState(() => load);
+  if (loaded !== load) {
+    setLoaded(() => load);
+    setPage(0);
+  }
 
   // The search follows what is typed once typing pauses, from the first page. Only a change
   // to it goes back there: paging while the box holds what was already searched stays put.
@@ -195,17 +204,20 @@ export function Directory<T extends { id: string }, S extends string>({
 
   return (
     <Section id={id} title={title}>
-      <SearchField value={typed} onChange={setTyped} className={fieldClass + " max-w-sm"}>
-        <Label className={labelClass}>{searchLabel}</Label>
-        <div className="relative">
-          <MagnifyingGlassIcon
-            size={16}
-            aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 start-3 -translate-y-1/2 text-ink-muted"
-          />
-          <Input className={inputClass + " w-full ps-9"} />
-        </div>
-      </SearchField>
+      <div className="flex flex-wrap items-end gap-3">
+        <SearchField value={typed} onChange={setTyped} className={fieldClass + " w-full max-w-sm"}>
+          <Label className={labelClass}>{searchLabel}</Label>
+          <div className="relative">
+            <MagnifyingGlassIcon
+              size={16}
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 start-3 -translate-y-1/2 text-ink-muted"
+            />
+            <Input className={inputClass + " w-full ps-9"} />
+          </div>
+        </SearchField>
+        {controls}
+      </div>
       {error !== null && (
         <ReadFailed
           error={error}

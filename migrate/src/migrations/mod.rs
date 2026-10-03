@@ -73,3 +73,5 @@ pub mod m20260930_150734_everyone_mention_limit;
 pub mod m20261002_062747_custom_emoji;
 pub mod m20261002_142250_community_ban;
 pub mod m20261003_045506_deployment_profile;
+pub mod m20261003_070819_reports;
+pub mod m20261003_090734_icon_uploader;

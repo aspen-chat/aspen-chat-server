@@ -15,7 +15,10 @@
         "deleteCommunity",
         "removeWriteIn",
         "closePoll",
-        "banForeignUser",
-        "liftForeignUserBan"
+        "banUser",
+        "liftUserBan",
+        "warnUser",
+        "resetProfile",
+        "readReportContext"
     ]
 }

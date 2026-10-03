@@ -45,7 +45,8 @@ fn digest(token: &str) -> Vec<u8> {
 }
 
 /// The bot a token signs in, with a caller that has no session behind it: nothing to sign out
-/// of, and no verification to give. `None` for a token no live bot holds.
+/// of, and no verification to give. `None` for a token no live bot holds, and while the bot is
+/// banned from the deployment, which keeps its tokens for when the ban is lifted.
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
@@ -58,7 +59,8 @@ pub async fn user_for_token(
             bot_token::digest
                 .eq(digest(token))
                 .and(user::bot)
-                .and(user::deleted_at.is_null()),
+                .and(user::deleted_at.is_null())
+                .and(diesel::dsl::not(app::user_ban::banned())),
         )
         .first(conn.as_mut())
         .await

@@ -24,6 +24,8 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `registrationInviteRequired`, `registrationInviteInvalid` | Registration takes an invite here, and none, or one that is used up, expired, or revoked, was given. | Make one in the dashboard or with `aspen-chat-server invites create`. |
 | `usernameTaken` | Someone already has that name. | Pick another. |
 | `adminRequired` | The dashboard is only for holders of a deployment role. | Grant one with `aspen-chat-server admin grant`, or a role in the dashboard. |
+| `deploymentBanned` | A moderator banned the account from this deployment; the detail carries the reason they gave and when the ban ends, if it does. | Holders of Ban users lift it from the dashboard's user directory (Banned filter). |
+| `alreadyReported` | The person already reported this message or profile, and the report awaits review. | Review it under Reports in the dashboard. |
 
 ### Load
 
@@ -60,6 +62,7 @@ uses one of these codes, after a message saying why:
 | 4401 | The session is not valid: expired, signed out elsewhere, or revoked. The app signs in again. |
 | 4403 | Two factors are required and the account has none. |
 | 4408 | No `identify` within ten seconds. Usually a very slow connection. |
+| 4410 | The account was banned from this deployment. The app signs out and says why. |
 
 If connections drop every minute or so, a proxy between clients and the server is closing idle
 WebSockets: the server pings every thirty seconds, so any idle timeout must be longer than that.

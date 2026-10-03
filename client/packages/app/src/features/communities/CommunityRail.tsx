@@ -13,7 +13,7 @@ import {
 import { useRef, useState } from "react";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, type Source } from "@/api/everywhere";
-import { useIsAdmin, usePreference, useSync, useSyncStatus } from "@/api/hooks";
+import { useIsAdmin, useOpenReports, usePreference, useSync, useSyncStatus } from "@/api/hooks";
 import { communityLink } from "@/features/messages/links";
 import {
   arrangeRail,
@@ -406,24 +406,39 @@ export function CommunityRail() {
       {admin && (
         <>
           <div aria-hidden="true" className="h-px w-8 shrink-0 bg-line" />
-          <Tooltip text={m.admin.open}>
-            <Link
-              to="/admin"
-              aria-label={m.admin.open}
-              aria-current={inAdmin ? "page" : undefined}
-              className={
-                "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
-                (inAdmin
-                  ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-rail"
-                  : "")
-              }
-            >
-              <GaugeIcon size={22} aria-hidden="true" />
-            </Link>
-          </Tooltip>
+          <AdminLink inAdmin={inAdmin} />
         </>
       )}
     </nav>
+  );
+}
+
+/** The way to the dashboard, with how many reports await review for a reviewer. */
+function AdminLink({ inAdmin }: { inAdmin: boolean }) {
+  const m = useMessages();
+  const reports = useOpenReports() ?? 0;
+  const label =
+    reports === 0 ? m.admin.open : format(m.admin.openWithReports, { count: String(reports) });
+  return (
+    <div className="relative isolate">
+      <RailBadge
+        count={reports}
+        title={format(m.admin.reportsWaiting, { count: String(reports) })}
+      />
+      <Tooltip text={label}>
+        <Link
+          to="/admin"
+          aria-label={label}
+          aria-current={inAdmin ? "page" : undefined}
+          className={
+            "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
+            (inAdmin ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-rail" : "")
+          }
+        >
+          <GaugeIcon size={22} aria-hidden="true" />
+        </Link>
+      </Tooltip>
+    </div>
   );
 }
 
@@ -579,12 +594,13 @@ function ForeignMark() {
   );
 }
 
-/** The count of unread tags over the corner of a rail entry. */
-function RailBadge({ count }: { count: number }) {
+/** The count of unread tags, or of what `title` names, over the corner of a rail entry. */
+function RailBadge({ count, title }: { count: number; title?: string }) {
   return (
     <MentionBadge
       count={count}
       className="pointer-events-none absolute -end-1 -bottom-1 z-10 ring-2 ring-surface-rail"
+      {...(title === undefined ? {} : { title })}
     />
   );
 }

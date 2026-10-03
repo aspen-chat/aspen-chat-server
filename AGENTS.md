@@ -189,13 +189,15 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/bots.md` — bots, their tokens, links, roles, and commands
 - `docs/architecture/custom-emoji.md` — a community's own emoji in text and reactions
 - `docs/architecture/blocking.md` — what a block does on the server
-- `docs/architecture/administration.md` — deployment roles, deployment moderation and its log, registration invites, and fleet health
+- `docs/architecture/administration.md` — deployment roles, deployment moderation and its log, bans from the deployment, registration invites, and fleet health
 - `docs/architecture/voice.md` — voice servers, sessions, reports, the reaper, and the voice server's media, signalling, and limits
 - `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and their record
 - `docs/architecture/federation.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
 - `docs/architecture/event-routing.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
+- `docs/architecture/reports.md` — reports of messages and profiles, their categories, cases and their review, warnings, and what deleting a message keeps
+- `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
 - `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
 
 ### Event Ordering Guarantee

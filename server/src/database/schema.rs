@@ -284,6 +284,7 @@ diesel::table! {
         timestamp -> Timestamptz,
         storage_key -> Text,
         ready_at -> Nullable<Timestamptz>,
+        uploaded_by -> Nullable<Uuid>,
     }
 }
 
@@ -328,6 +329,8 @@ diesel::table! {
         mentions -> Jsonb,
         call_seconds -> Nullable<Int4>,
         command_bot -> Nullable<Uuid>,
+        linked_messages -> Array<Nullable<Uuid>>,
+        warning -> Nullable<Jsonb>,
     }
 }
 
@@ -510,6 +513,46 @@ diesel::table! {
 }
 
 diesel::table! {
+    report (id) {
+        id -> Uuid,
+        case -> Uuid,
+        reporter -> Uuid,
+        category -> Uuid,
+        explanation -> Nullable<Text>,
+        aspects -> Array<Nullable<Text>>,
+        profile -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    report_case (id) {
+        id -> Uuid,
+        kind -> Text,
+        subject -> Uuid,
+        message -> Nullable<Uuid>,
+        status -> Text,
+        opened_at -> Timestamptz,
+        last_reported_at -> Timestamptz,
+        closed_at -> Nullable<Timestamptz>,
+        closed_by -> Nullable<Uuid>,
+        resolution -> Nullable<Jsonb>,
+    }
+}
+
+diesel::table! {
+    report_category (id) {
+        id -> Uuid,
+        builtin -> Nullable<Text>,
+        name -> Nullable<Text>,
+        description -> Nullable<Text>,
+        position -> Int4,
+        hidden -> Bool,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     session (token) {
         token -> Text,
         expires -> Timestamp,
@@ -552,6 +595,8 @@ diesel::table! {
         banned_at -> Nullable<Timestamptz>,
         banned_by -> Nullable<Uuid>,
         system -> Bool,
+        ban_reason -> Nullable<Text>,
+        banned_until -> Nullable<Timestamptz>,
     }
 }
 
@@ -677,6 +722,7 @@ diesel::joinable!(federation_list_entry -> user (added_by));
 diesel::joinable!(file_offer -> channel (channel));
 diesel::joinable!(file_offer -> user (sender));
 diesel::joinable!(file_transfer -> file_offer (offer));
+diesel::joinable!(icon -> user (uploaded_by));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(mention -> channel (channel));
@@ -711,6 +757,10 @@ diesel::joinable!(read_state -> channel (channel));
 diesel::joinable!(read_state -> user (user));
 diesel::joinable!(recovery_code -> user (user));
 diesel::joinable!(refresh_token -> user (user));
+diesel::joinable!(report -> report_case (case));
+diesel::joinable!(report -> report_category (category));
+diesel::joinable!(report -> user (reporter));
+diesel::joinable!(report_case -> message (message));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
 diesel::joinable!(user_deployment_role -> deployment_role (role));
@@ -773,6 +823,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     recovery_code,
     refresh_token,
     registration_invite,
+    report,
+    report_case,
+    report_category,
     session,
     totp_secret,
     user,

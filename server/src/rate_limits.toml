@@ -101,6 +101,17 @@ endpoints = [
   "GET /admin/users/{user}/dms",
   "PUT /admin/users/{user}/ban",
   "DELETE /admin/users/{user}/ban",
+  "GET /admin/reports",
+  "GET /admin/report-counts",
+  "GET /admin/reports/{case}",
+  "GET /admin/reports/{case}/context",
+  "POST /admin/reports/{case}/resolution",
+  "PUT /admin/reports/{case}/dismissal",
+  "DELETE /admin/reports/{case}/dismissal",
+  "GET /admin/report-categories",
+  "POST /admin/report-categories",
+  "PATCH /admin/report-categories/{category}",
+  "PUT /admin/report-category-order",
   "GET /admin/federation",
   "GET /admin/federation/deployments",
   "POST /admin/federation/deployments",
@@ -286,6 +297,13 @@ user = { requests = 10, per_seconds = 600, burst = 3 }
 
 [rate_limits.endpoints."PUT /bots/{bot}/owner"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
+
+# Reporting a message or a profile: ten back to back, and fifty a day, across both.
+[rate_limits.endpoints."POST /messages/{message}/reports"]
+user = { requests = 50, per_seconds = 86400, burst = 10, bucket = "reports" }
+
+[rate_limits.endpoints."POST /users/{user}/reports"]
+user = { requests = 50, per_seconds = 86400, burst = 10, bucket = "reports" }
 
 [rate_limits.endpoints."PATCH /bots/{bot}"]
 user = { requests = 30, per_seconds = 600, burst = 10 }

@@ -9,8 +9,10 @@ use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
 use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
 use crate::app::mention::{self, Mentions};
+use crate::app::message_link::{self, MessageLinks};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::report::Warning;
 use crate::app::user::User;
 use crate::app::{
     AttachmentId, ChannelId, CommunityId, EventScope, PollId, UserId, publish_event, read_state,
@@ -58,6 +60,10 @@ pub struct Message {
     pub call_seconds: Option<i32>,
     /// For a `Command`, the bot it was sent to.
     pub command_bot: Option<UserId>,
+    /// The messages of this deployment its text links to (`app::message_link`).
+    pub linked_messages: MessageLinks,
+    /// For a `Warning`, what it warns about (`app::report`).
+    pub warning: Option<Warning>,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -82,6 +88,8 @@ pub fn record(
         mentions: row.mentions.clone(),
         call_seconds: row.call_seconds,
         command_bot: row.command_bot,
+        linked_messages: row.linked_messages.0.clone(),
+        warning: row.warning.clone(),
     }
 }
 
@@ -128,6 +136,16 @@ async fn ensure_attachments_ready(
     Ok(())
 }
 
+/// What `create_message` posts besides its text.
+pub enum Posting {
+    /// Text written by its author.
+    Text,
+    /// A bot command, whose text is the command as checked.
+    Command(Invocation),
+    /// A moderator's warning, about what it names (`app::report`).
+    Warning(Warning),
+}
+
 /// Posts a message. In a thread it counts toward the thread's summary, and with
 /// `echo_to_parent` it is also shown in the parent channel as a `ThreadEcho`. In a DM, or a
 /// thread in one, only a recipient may post.
@@ -138,8 +156,13 @@ pub async fn create_message(
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
-    command: Option<Invocation>,
+    posting: Posting,
 ) -> Result<Message, app::Error> {
+    let (command, warning) = match posting {
+        Posting::Text => (None, None),
+        Posting::Command(invocation) => (Some(invocation), None),
+        Posting::Warning(warning) => (None, Some(warning)),
+    };
     let mut conn = state.connection_pool.get().await?;
     let message = conn
         .transaction(|conn| {
@@ -200,8 +223,16 @@ pub async fn create_message(
                         (content, mentions)
                     }
                 };
+                let id = MessageId::new();
+                // A command's text is the command, which links nowhere, and a warning shows
+                // what it is about through `warning`.
+                let linked_messages = if invoked.is_some() || warning.is_some() {
+                    MessageLinks::default()
+                } else {
+                    message_link::parse(&content, id)
+                };
                 let message = Message {
-                    id: MessageId::new(),
+                    id,
                     channel: MaybeLoaded::from_id(channel_id),
                     content,
                     author: MaybeLoaded::from_id(author),
@@ -210,6 +241,8 @@ pub async fn create_message(
                     edited_at: None,
                     kind: if invoked.is_some() {
                         MessageKind::Command
+                    } else if warning.is_some() {
+                        MessageKind::Warning
                     } else {
                         MessageKind::Standard
                     },
@@ -219,6 +252,8 @@ pub async fn create_message(
                     mentions,
                     call_seconds: None,
                     command_bot: command.as_ref().map(|invocation| invocation.bot),
+                    linked_messages,
+                    warning,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -366,7 +401,16 @@ pub async fn read_messages(
             visible.push(row);
         }
     }
-    let ids: Vec<MessageId> = visible.iter().map(|m| m.id).collect();
+    with_relations(state, conn.as_mut(), visible).await
+}
+
+/// Loads the child-table relations of `rows`, one query per relation.
+pub(crate) async fn with_relations(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    rows: Vec<Message>,
+) -> Result<Vec<MessageWithRelations>, app::Error> {
+    let ids: Vec<MessageId> = rows.iter().map(|m| m.id).collect();
     let mut attachments: std::collections::HashMap<MessageId, Vec<AttachmentId>> =
         std::collections::HashMap::new();
     for (message_id, attachment_id) in message_attachment::table
@@ -375,7 +419,7 @@ pub async fn read_messages(
             message_attachment::attachment_id,
         ))
         .filter(message_attachment::message_id.eq_any(&ids))
-        .load::<(MessageId, AttachmentId)>(conn.as_mut())
+        .load::<(MessageId, AttachmentId)>(conn)
         .await?
     {
         attachments
@@ -383,8 +427,8 @@ pub async fn read_messages(
             .or_default()
             .push(attachment_id);
     }
-    let mut previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &ids).await?;
-    Ok(visible
+    let mut previews = load_previews(conn, state.media_store.as_ref(), &ids).await?;
+    Ok(rows
         .into_iter()
         .map(|message| MessageWithRelations {
             attachments: attachments.remove(&message.id).unwrap_or_default(),
@@ -401,6 +445,7 @@ pub struct MessageChangeset {
     pub content: Option<String>,
     pub edited_at: Option<chrono::DateTime<Utc>>,
     pub mentions: Option<Mentions>,
+    pub linked_messages: Option<MessageLinks>,
 }
 
 pub async fn update_message(
@@ -451,11 +496,17 @@ pub async fn update_message(
                     ),
                     None => None,
                 };
+                // New text links afresh.
+                let linked_messages = command
+                    .content
+                    .as_deref()
+                    .map(|content| message_link::parse(content, id));
                 let Some(message) = diesel::update(message::table)
                     .set(MessageChangeset {
                         content: command.content.clone(),
                         edited_at: content_changed.then(Utc::now),
                         mentions: mentions.clone(),
+                        linked_messages: linked_messages.clone(),
                     })
                     .filter(message::id.eq(id).and(message::deleted_at.is_null()))
                     .returning(Message::as_select())
@@ -517,6 +568,7 @@ pub async fn update_message(
                         link_previews: previews_cleared.then(Vec::new),
                         thread: None,
                         mentions,
+                        linked_messages: linked_messages.map(|links| links.0),
                     }),
                 )
                 .await?;
@@ -579,23 +631,19 @@ pub async fn delete_message(
         async move { soft_delete(state, conn.as_mut(), id).await }.scope_boxed()
     })
     .await?;
-    delete_images_for_message(state, conn.as_mut(), id).await?;
     Ok(())
 }
 
 /// Marks a message deleted inside the caller's transaction, announcing it and everything that
-/// goes with it: its attachments' rows, a reply's echo (first, so no client ever holds an echo
-/// whose reply is gone), a poll shown in it, and a thread's count. Its stored images are
-/// removed after the transaction commits (`delete_images_for_message`), by the caller.
+/// goes with it: a reply's echo (first, so no client ever holds an echo whose reply is gone), a
+/// poll shown in it, and a thread's count. A deleted message is hidden, not erased: its text,
+/// attachments, and link previews stay, for the warnings and report reviews that show it
+/// (`app::report`), and readers never see it again otherwise.
 pub(crate) async fn soft_delete(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     id: MessageId,
 ) -> Result<(), app::Error> {
-    diesel::delete(message_attachment::table)
-        .filter(message_attachment::message_id.eq(id))
-        .execute(conn)
-        .await?;
     let Some(deleted) = diesel::update(message::table)
         .set(message::deleted_at.eq(diesel::dsl::now))
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
@@ -635,28 +683,30 @@ pub(crate) async fn soft_delete(
     Ok(())
 }
 
-/// Deletes every message `author` posted in `community`'s channels and threads since `since`,
-/// inside the caller's transaction, which has checked who may (a ban with a deletion window,
-/// `app::ban`). Echoes go with their replies. Returns the ids, whose stored images the caller
-/// removes once the transaction commits.
+/// Deletes every message `author` posted since `since` in `community`'s channels and threads,
+/// or with no community anywhere on the deployment, DMs included, inside the caller's
+/// transaction, which has checked who may (a ban with a deletion window, `app::ban` and
+/// `app::user_ban`). Echoes go with their replies. Returns the ids.
 pub(crate) async fn delete_recent_by(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
-    community: CommunityId,
+    community: Option<CommunityId>,
     author: UserId,
     since: DateTime<Utc>,
 ) -> Result<Vec<MessageId>, app::Error> {
-    let ids: Vec<MessageId> = message::table
+    let mut query = message::table
         .inner_join(channel::table.on(channel::id.eq(message::channel)))
         .select(message::id)
-        .filter(channel::community.eq(community))
         .filter(message::author.eq(author))
         .filter(message::deleted_at.is_null())
         .filter(message::timestamp.ge(since))
         .filter(message::kind.ne(MessageKind::ThreadEcho))
         .order(message::id.desc())
-        .load(conn)
-        .await?;
+        .into_boxed();
+    if let Some(community) = community {
+        query = query.filter(channel::community.eq(community));
+    }
+    let ids: Vec<MessageId> = query.load(conn).await?;
     for id in &ids {
         soft_delete(state, conn, *id).await?;
     }
@@ -834,6 +884,7 @@ pub async fn remove_attachment(
                     link_previews: None,
                     thread: None,
                     mentions: None,
+                    linked_messages: None,
                 }),
             )
             .await?;
@@ -880,6 +931,9 @@ pub enum MessageKind {
     /// A bot command its `author` invoked, as it was sent (`/name` and its arguments), to the
     /// bot `commandBot` names (see `app::bot_command`).
     Command,
+    /// A moderator's warning to the person `warning` names, sent by its `author` in their DM:
+    /// the moderator's own words as `content`, about what `warning` holds (see `app::report`).
+    Warning,
 }
 
 impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -892,6 +946,7 @@ impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind 
             MessageKind::Call => b"call",
             MessageKind::MissedCall => b"missed_call",
             MessageKind::Command => b"command",
+            MessageKind::Warning => b"warning",
         })?;
         Ok(IsNull::No)
     }
@@ -909,6 +964,7 @@ impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKin
             b"call" => Ok(MessageKind::Call),
             b"command" => Ok(MessageKind::Command),
             b"missed_call" => Ok(MessageKind::MissedCall),
+            b"warning" => Ok(MessageKind::Warning),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())

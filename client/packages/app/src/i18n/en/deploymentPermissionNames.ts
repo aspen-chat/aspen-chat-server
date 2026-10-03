@@ -27,4 +27,20 @@ export const deploymentPermissionNames = {
     name: "Moderate any community",
     hint: "See everything on the server, DMs included, and delete messages, attachments, reactions, members, channels, and communities. Every use is logged.",
   },
+  reviewReports: {
+    name: "Review reports",
+    hint: "Read what people report, with the messages around a reported one (a DM's is logged), and act on it or dismiss it.",
+  },
+  manageReportCategories: {
+    name: "Manage report categories",
+    hint: "Add, rename, reorder, and hide the categories people choose from when they report something.",
+  },
+  banUsers: {
+    name: "Ban users",
+    hint: "Ban accounts from the whole server, ending their sign-ins, and lift bans; reset a reported profile. Every use is logged.",
+  },
+  messageAnyUser: {
+    name: "Message any user",
+    hint: "Start a DM with anyone, whatever communities they share and whoever blocked whom. Needed to warn someone.",
+  },
 } as const;

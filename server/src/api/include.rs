@@ -96,10 +96,19 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub user_communities: Option<Vec<UserCommunity>>,
-    /// Messages other than those read: the thread replies that echoes in the read name.
+    /// Messages other than those read: the thread replies that echoes in the read name, and
+    /// the messages the read links to that the caller may read.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub messages: Option<Vec<Message>>,
+    /// What the caller finds at each message the read links to, one record per message linked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub linked_messages: Option<Vec<crate::app::message_link::LinkedMessage>>,
+    /// The messages the warnings in the read are about, deleted ones included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub warned_messages: Option<Vec<crate::api::report::ReviewedMessage>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub attachments: Option<Vec<Attachment>>,

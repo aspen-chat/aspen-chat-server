@@ -9,6 +9,14 @@ import type { components } from "./generated/openapi";
 export type Attachment = components["schemas"]["Attachment"];
 export type Icon = components["schemas"]["Icon"];
 export type Included = components["schemas"]["Included"];
+/**
+ * What the caller finds at a message another links to: `available` (its record is held as any
+ * message is), `deleted`, or `unavailable` (no such message, or one they may not read), and for
+ * an available one in a community, that community.
+ */
+export type LinkedMessage = components["schemas"]["LinkedMessage"];
+/** A message as a warning shows it, or a review reads it: deleted ones too. */
+export type KeptMessage = components["schemas"]["ReviewedMessage"];
 export type PollVote = components["schemas"]["PollVote"];
 /**
  * How far the caller has read a channel. `lastRead` is a position among the channel's message

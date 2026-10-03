@@ -243,6 +243,8 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         mentions: crate::app::mention::Mentions::default(),
         call_seconds: None,
         command_bot: None,
+        linked_messages: Default::default(),
+        warning: None,
     }
 }
 

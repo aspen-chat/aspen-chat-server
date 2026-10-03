@@ -120,7 +120,9 @@ pub async fn read_bans(
     Ok(rows.iter().map(message_enum::CommunityBan::from).collect())
 }
 
-fn validate(request: &BanRequest) -> app::Result<(Option<String>, Option<DateTime<Utc>>)> {
+pub(crate) fn validate(
+    request: &BanRequest,
+) -> app::Result<(Option<String>, Option<DateTime<Utc>>)> {
     let reason = request
         .reason
         .as_deref()
@@ -164,138 +166,130 @@ pub async fn ban_member(
 ) -> app::Result<Banned> {
     let (reason, until) = validate(request)?;
     let mut conn = state.connection_pool.get().await?;
-    let (banned, deleted) = conn
-        .transaction(|conn| {
-            async move {
-                let access = require_member(conn.as_mut(), caller, community).await?;
-                access.require(Permissions::BAN_MEMBERS)?;
-                if member == caller {
-                    return Err(app::Error::Validation(t!("banSelf")));
+    conn.transaction(|conn| {
+        async move {
+            let access = require_member(conn.as_mut(), caller, community).await?;
+            access.require(Permissions::BAN_MEMBERS)?;
+            if member == caller {
+                return Err(app::Error::Validation(t!("banSelf")));
+            }
+            // Someone still a member must rank below the banner; the owner never may be
+            // banned, member or not.
+            let theirs = community_access(conn.as_mut(), member, community).await?;
+            let by_rank = match &theirs {
+                Some(theirs) if theirs.owner => {
+                    return Err(app::Error::Forbidden(t!("banOwner")));
                 }
-                // Someone still a member must rank below the banner; the owner never may be
-                // banned, member or not.
-                let theirs = community_access(conn.as_mut(), member, community).await?;
-                let by_rank = match &theirs {
-                    Some(theirs) if theirs.owner => {
-                        return Err(app::Error::Forbidden(t!("banOwner")));
-                    }
-                    Some(theirs) if theirs.member => {
-                        access.require_above(theirs.role_rank())?;
-                        theirs.role_rank() < access.role_rank()
-                    }
-                    _ => true,
-                };
-                if access.moderator
-                    && !(access.member_permissions.contains(Permissions::BAN_MEMBERS) && by_rank)
-                {
-                    log_moderation(
-                        conn.as_mut(),
-                        caller,
-                        ModerationAction::BanMember,
-                        Some(community),
-                        None,
-                        Some(member.0.to_string()),
-                    )
-                    .await?;
+                Some(theirs) if theirs.member => {
+                    access.require_above(theirs.role_rank())?;
+                    theirs.role_rank() < access.role_rank()
                 }
-                let deleted = match request.delete_messages_seconds {
-                    None => Vec::new(),
-                    Some(window) => {
-                        if !access.has(Permissions::MANAGE_MESSAGES) {
-                            return Err(app::permissions::missing(Permissions::MANAGE_MESSAGES));
-                        }
-                        if access.moderating(Permissions::MANAGE_MESSAGES) {
-                            log_moderation(
-                                conn.as_mut(),
-                                caller,
-                                ModerationAction::DeleteRecentMessages,
-                                Some(community),
-                                None,
-                                Some(member.0.to_string()),
-                            )
-                            .await?;
-                        }
-                        let since = Utc::now() - Duration::seconds(i64::from(window));
-                        app::message::delete_recent_by(
-                            state,
+                _ => true,
+            };
+            if access.moderator
+                && !(access.member_permissions.contains(Permissions::BAN_MEMBERS) && by_rank)
+            {
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::BanMember,
+                    Some(community),
+                    None,
+                    Some(member.0.to_string()),
+                )
+                .await?;
+            }
+            let deleted = match request.delete_messages_seconds {
+                None => Vec::new(),
+                Some(window) => {
+                    if !access.has(Permissions::MANAGE_MESSAGES) {
+                        return Err(app::permissions::missing(Permissions::MANAGE_MESSAGES));
+                    }
+                    if access.moderating(Permissions::MANAGE_MESSAGES) {
+                        log_moderation(
                             conn.as_mut(),
-                            community,
-                            member,
-                            since,
+                            caller,
+                            ModerationAction::DeleteRecentMessages,
+                            Some(community),
+                            None,
+                            Some(member.0.to_string()),
                         )
-                        .await?
-                    }
-                };
-                let row = CommunityBanRow {
-                    community,
-                    user: member,
-                    banned_by: Some(caller),
-                    reason,
-                    banned_at: Utc::now(),
-                    until,
-                };
-                let replaced: Option<CommunityBanRow> = community_ban::table
-                    .select(CommunityBanRow::as_select())
-                    .filter(community_ban::community.eq(community))
-                    .filter(community_ban::user.eq(member))
-                    .first(conn.as_mut())
-                    .await
-                    .optional()?;
-                if replaced.is_some() {
-                    diesel::update(community_ban::table)
-                        .filter(community_ban::community.eq(community))
-                        .filter(community_ban::user.eq(member))
-                        .set((
-                            community_ban::banned_by.eq(row.banned_by),
-                            community_ban::reason.eq(&row.reason),
-                            community_ban::banned_at.eq(row.banned_at),
-                            community_ban::until.eq(row.until),
-                        ))
-                        .execute(conn.as_mut())
                         .await?;
-                    // A ban's record does not change in place: the one that stood goes, and
-                    // the new one is announced whole.
-                    publish_event(
+                    }
+                    let since = Utc::now() - Duration::seconds(i64::from(window));
+                    app::message::delete_recent_by(
                         state,
                         conn.as_mut(),
-                        EventScope::Community(community),
-                        &ServerEvent::CommunityBan(CommunityBanEvent::Delete {
-                            community,
-                            user: member,
-                        }),
+                        Some(community),
+                        member,
+                        since,
                     )
-                    .await?;
-                } else {
-                    diesel::insert_into(community_ban::table)
-                        .values(&row)
-                        .execute(conn.as_mut())
-                        .await?;
+                    .await?
                 }
-                let record = message_enum::CommunityBan::from(&row);
+            };
+            let row = CommunityBanRow {
+                community,
+                user: member,
+                banned_by: Some(caller),
+                reason,
+                banned_at: Utc::now(),
+                until,
+            };
+            let replaced: Option<CommunityBanRow> = community_ban::table
+                .select(CommunityBanRow::as_select())
+                .filter(community_ban::community.eq(community))
+                .filter(community_ban::user.eq(member))
+                .first(conn.as_mut())
+                .await
+                .optional()?;
+            if replaced.is_some() {
+                diesel::update(community_ban::table)
+                    .filter(community_ban::community.eq(community))
+                    .filter(community_ban::user.eq(member))
+                    .set((
+                        community_ban::banned_by.eq(row.banned_by),
+                        community_ban::reason.eq(&row.reason),
+                        community_ban::banned_at.eq(row.banned_at),
+                        community_ban::until.eq(row.until),
+                    ))
+                    .execute(conn.as_mut())
+                    .await?;
+                // A ban's record does not change in place: the one that stood goes, and
+                // the new one is announced whole.
                 publish_event(
                     state,
                     conn.as_mut(),
                     EventScope::Community(community),
-                    &ServerEvent::CommunityBan(CommunityBanEvent::Create(record.clone())),
+                    &ServerEvent::CommunityBan(CommunityBanEvent::Delete {
+                        community,
+                        user: member,
+                    }),
                 )
                 .await?;
-                app::community::end_membership(state, conn.as_mut(), member, community).await?;
-                Ok::<_, app::Error>((
-                    Banned {
-                        ban: record,
-                        replaced: replaced.is_some(),
-                        deleted_messages: deleted.len(),
-                    },
-                    deleted,
-                ))
+            } else {
+                diesel::insert_into(community_ban::table)
+                    .values(&row)
+                    .execute(conn.as_mut())
+                    .await?;
             }
-            .scope_boxed()
-        })
-        .await?;
-    for id in deleted {
-        app::link_preview::delete_images_for_message(state, conn.as_mut(), id).await?;
-    }
-    Ok(banned)
+            let record = message_enum::CommunityBan::from(&row);
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Community(community),
+                &ServerEvent::CommunityBan(CommunityBanEvent::Create(record.clone())),
+            )
+            .await?;
+            app::community::end_membership(state, conn.as_mut(), member, community).await?;
+            Ok::<_, app::Error>(Banned {
+                ban: record,
+                replaced: replaced.is_some(),
+                deleted_messages: deleted.len(),
+            })
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Lifts a ban. Nothing standing is not an error. Takes Ban members.

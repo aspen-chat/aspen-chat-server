@@ -39,6 +39,7 @@ pub mod push;
 pub(crate) mod rate_limit;
 pub(crate) mod react;
 pub(crate) mod read_state;
+pub(crate) mod report;
 pub(crate) mod role;
 mod schema;
 pub(crate) mod security;
@@ -75,6 +76,7 @@ pub const TAG_DEPLOYMENT: &str = "deployment";
 pub const TAG_ROLES: &str = "roles";
 pub const TAG_CUSTOM_EMOJI: &str = "custom emoji";
 pub const TAG_BANS: &str = "bans";
+pub const TAG_REPORTS: &str = "reports";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -111,6 +113,7 @@ pub const TAG_BANS: &str = "bans";
         (name = TAG_ROLES, description = "Roles and permissions in a community: roles, who holds them, channel and category overrides, removing members, and ownership"),
         (name = TAG_CUSTOM_EMOJI, description = "A community's own emoji: listing, adding, renaming, and removing them"),
         (name = TAG_BANS, description = "Bans from a community: listing, banning, and lifting"),
+        (name = TAG_REPORTS, description = "Reports of messages and profiles to the deployment's moderators, their review, and the categories they are made in"),
         (name = TAG_CATEGORIES, description = "Groupings of channels inside a community"),
         (name = TAG_CHANNELS, description = "Text and voice channels, threads, and DMs"),
         (name = TAG_MESSAGES, description = "Messages within a channel, and the threads they start"),
@@ -316,6 +319,24 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::get_fleet))
         .routes(routes!(admin::get_growth))
         .routes(routes!(admin::ban_user, admin::lift_ban))
+        .routes(routes!(report::list_report_categories))
+        .routes(routes!(report::report_message))
+        .routes(routes!(report::report_profile))
+        .routes(routes!(report::list_report_cases))
+        .routes(routes!(report::get_report_counts))
+        .routes(routes!(report::get_report_case))
+        .routes(routes!(report::get_report_context))
+        .routes(routes!(report::resolve_report_case))
+        .routes(routes!(
+            report::dismiss_report_case,
+            report::restore_report_case
+        ))
+        .routes(routes!(
+            report::list_all_report_categories,
+            report::create_report_category
+        ))
+        .routes(routes!(report::update_report_category))
+        .routes(routes!(report::order_report_categories))
         .routes(routes!(federation::issue_assertion))
         .routes(routes!(federation::federated_sign_in))
         .routes(routes!(federation::list_foreign_deployments))

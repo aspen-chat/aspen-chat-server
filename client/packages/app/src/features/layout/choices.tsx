@@ -15,7 +15,7 @@ export const markClass =
   "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-line bg-surface " +
   "text-accent-contrast group-selected:border-accent group-selected:bg-accent";
 
-/** A checkbox drawn as a bordered choice with a label and a hint. */
+/** A checkbox drawn as a bordered choice with a label and, where it needs one, a hint. */
 export function ChoiceCheckbox({
   isSelected,
   onChange,
@@ -27,7 +27,7 @@ export function ChoiceCheckbox({
   isSelected: boolean;
   onChange: (selected: boolean) => void;
   label: string;
-  hint: string;
+  hint?: string;
   isDisabled?: boolean;
   /** Added to the choice's own, to size it among others. */
   className?: string;
@@ -47,7 +47,7 @@ export function ChoiceCheckbox({
         </span>
         <span className="flex flex-col">
           <span className="font-medium">{label}</span>
-          <span className="text-xs text-ink-muted">{hint}</span>
+          {hint !== undefined && <span className="text-xs text-ink-muted">{hint}</span>}
         </span>
       </CheckboxButton>
     </CheckboxField>

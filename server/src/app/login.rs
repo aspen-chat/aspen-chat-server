@@ -218,6 +218,9 @@ pub async fn try_login(
     if !check_password(password.to_string(), u.password_hash).await? {
         return Ok(LoginOutcome::InvalidCredentials);
     }
+    // A banned account learns so once its password is right, before a second factor is asked
+    // for that could not be used.
+    app::user_ban::check_not_banned(conn, u.id).await?;
     let methods = two_factor::methods(conn, u.id).await?;
     if methods.any_factor() {
         let ticket = make_token();
@@ -238,7 +241,8 @@ pub async fn try_login(
 
 /// Starts a sign-in for `user_id`, made by `method`: a refresh token, verified now, and its first
 /// session token. A `foreign` user's sign-in abroad owes this deployment no second factor: it
-/// was admitted only if it proved enough at home.
+/// was admitted only if it proved enough at home. Every sign-in passes through here, so an
+/// account banned from the deployment is refused here (`app::user_ban`).
 pub async fn issue_session(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -251,6 +255,7 @@ pub async fn issue_session(
     let refresh_token = make_token();
     let now = Utc::now();
     let session_token_expires = now + SESSION_TOKEN_LIFETIME;
+    app::user_ban::check_not_banned(conn, user_id).await?;
     conn.transaction(|conn| {
         let (refresh_token, session_token) = (&refresh_token, &session_token);
         async move {

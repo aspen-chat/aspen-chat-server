@@ -60,6 +60,31 @@ pub async fn kick_participant(
     Ok(())
 }
 
+/// Removes `user` from every call they are in, as when they are banned from the deployment
+/// (`app::user_ban`). Each voice server disconnects them and reports their leaving.
+pub async fn kick_everywhere(state: &GlobalServerContext, user: UserId) -> app::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    let calls: Vec<(VoiceSessionId, VoiceServerId)> = voice_participant::table
+        .inner_join(voice_session::table)
+        .select((voice_session::id, voice_session::voice_server))
+        .filter(voice_participant::user.eq(user))
+        .load(conn.as_mut())
+        .await?;
+    for (session, server) in calls {
+        let payload = serde_json::to_vec(&VoiceCommand::Kick {
+            session: session.0,
+            user: user.0,
+        })?;
+        state
+            .nats_context
+            .client()
+            .publish(command_subject(server.0), payload.into())
+            .await
+            .map_err(app::Error::VoiceCommand)?;
+    }
+    Ok(())
+}
+
 /// Sends the voice server holding `channel`'s call a command about one of its participants.
 /// No call, or no such participant in it, is not found.
 async fn command_participant(
