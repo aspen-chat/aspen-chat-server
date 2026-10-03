@@ -119,15 +119,23 @@ export function ThreadPanel({
           </p>
         ) : (
           <>
-            <div className="border-b border-line px-2 py-2">
-              {starterGone ? (
-                <p className="px-2 text-sm text-ink-faint italic">{m.threads.starterDeleted}</p>
-              ) : (
-                starter != null && <Starter id={starter} home={home} channelId={parentId} />
-              )}
-            </div>
             <div className="relative flex min-h-0 flex-1 flex-col">
-              <MessageList channelId={threadId} home={home} highlightId={undefined} />
+              {/* The starter heads the replies and scrolls with them, so a long one never
+                  crowds them out of the panel. */}
+              <MessageList
+                channelId={threadId}
+                home={home}
+                highlightId={undefined}
+                start={
+                  <div className="border-b border-line pb-2">
+                    {starterGone ? (
+                      <p className="text-sm text-ink-faint italic">{m.threads.starterDeleted}</p>
+                    ) : (
+                      starter != null && <Starter id={starter} home={home} channelId={parentId} />
+                    )}
+                  </div>
+                }
+              />
               {/* Toasts show over the channel's messages beside the panel; on a one-pane
                   screen the panel is the whole screen and shows its own. */}
               {onePane && <Toasts />}

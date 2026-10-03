@@ -7,7 +7,9 @@
   those summaries. "Reply in thread" calls `AspenSync.openThread`, which the server answers with
   the thread it makes the first time, and routes to `.../threads/{thread}`, where
   `ChannelScreen` shows `ThreadPanel` (`src/features/threads`) beside the channel, in place of
-  it on small screens: the starter, the replies, and a `Composer` whose `echoTarget` offers to
+  it on small screens: the starter, heading the replies in one `MessageList` (its `start`, shown
+  once the window reaches the thread's beginning) so the two scroll together however long the
+  starter is, and a `Composer` whose `echoTarget` offers to
   also show the reply in the parent channel (`echoToParent`). Messages in a thread cannot start
   threads. An echo is a message of kind `threadEcho` naming the reply in `echoOf`; it is drawn
   from the reply record itself (sideloaded with `echoes`, or fetched with

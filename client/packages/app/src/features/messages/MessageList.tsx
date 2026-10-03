@@ -12,6 +12,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type TouchEvent as ReactTouchEvent,
+  type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button } from "react-aria-components";
@@ -148,10 +149,16 @@ export function MessageList({
   channelId,
   home,
   highlightId,
+  start,
 }: {
   channelId: string;
   home: ChannelHome;
   highlightId: string | undefined;
+  /**
+   * What stands at the beginning of the history, in place of the line saying it is the
+   * beginning, once the window reaches it: a thread's starter, which scrolls with its replies.
+   */
+  start?: ReactNode;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -173,6 +180,8 @@ export function MessageList({
   const content = useRef<HTMLDivElement>(null);
   /** The rows: messages, blocked runs, the new-messages line, and spaces closing. */
   const rows = useRef<HTMLDivElement>(null);
+  /** What stands at the beginning of the history, while it is shown. */
+  const startBox = useRef<HTMLDivElement>(null);
   const thumb = useRef<HTMLDivElement>(null);
   const indicator = useRef<HTMLDivElement>(null);
   /** How far past an end a finger has pulled the list, which its scroll position cannot hold. */
@@ -386,6 +395,7 @@ export function MessageList({
   const firstId = ids?.[0];
   const lastId = ids?.[ids.length - 1];
   const hasOlder = window?.hasOlder ?? false;
+  const startShown = loaded && !hasOlder && start !== undefined;
   const atLatest = window?.atLatest ?? true;
   const atLatestNow = useRef(atLatest);
   const highlightNow = useRef(highlightId);
@@ -864,8 +874,9 @@ export function MessageList({
   );
 
   // Rows change size without the window changing: pictures and link cards load, reactions come
-  // and go, a deleted message's space closes. The view holds by the noted row, before the frame
-  // is painted; pinned to the bottom, the list stays there.
+  // and go, a deleted message's space closes. What stands at the beginning changes the same way.
+  // The view holds by the noted row, before the frame is painted; pinned to the bottom, the
+  // list stays there.
   useEffect(() => {
     const body = rows.current;
     if (body === null || typeof ResizeObserver === "undefined") {
@@ -886,12 +897,16 @@ export function MessageList({
       noteStill();
     });
     observer.observe(body);
+    if (startBox.current !== null) {
+      observer.observe(startBox.current);
+    }
     return () => {
       observer.disconnect();
     };
-    // Reads the rest through refs; made once there is a list.
+    // Reads the rest through refs; made once there is a list, and again as the beginning comes
+    // and goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
+  }, [loaded, startShown]);
 
   // The viewport changes size: something takes the screen's space, as the keyboard does when
   // the message box is chosen on a phone, or gives it back. Its bottom edge stays where it was,
@@ -1079,6 +1094,8 @@ export function MessageList({
                 </>
               )}
             </p>
+          ) : start !== undefined ? (
+            <div ref={startBox}>{start}</div>
           ) : (
             <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
           )}
