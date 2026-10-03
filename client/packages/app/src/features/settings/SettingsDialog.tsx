@@ -27,7 +27,7 @@ import {
 } from "react-aria-components";
 import { useSignOut } from "@/api/deploymentsContext";
 import { OtherServersSection } from "@/features/deployments/OtherServersSection";
-import { usePreference, useSync } from "@/api/hooks";
+import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import {
   dialogClass,
   optionClass,
@@ -45,7 +45,11 @@ import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
 import { NotificationsSection } from "@/features/settings/NotificationsSection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
-import { useAudioDevices } from "@/features/settings/useAudioDevices";
+import {
+  type DeviceAccess,
+  type DeviceKind,
+  useAudioDevices,
+} from "@/features/settings/useAudioDevices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { PlaneColumns } from "@/features/layout/PlaneColumns";
 import { useMessages } from "@/i18n/context";
@@ -119,16 +123,15 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
 
 function AudioSection() {
   const m = useMessages();
-  const { devices, permission } = useAudioDevices();
+  const inCall = useVoiceCall().status === "connected";
+  const { devices, access, requestAccess } = useAudioDevices(inCall);
   const outputs = canChooseOutput();
   return (
     <section aria-labelledby="settings-audio" className={planeClass}>
       <h3 id="settings-audio" className="text-sm font-semibold text-ink-muted">
         {m.settings.audio}
       </h3>
-      {permission === "denied" && (
-        <p className="text-sm text-ink-muted">{m.settings.microphoneDenied}</p>
-      )}
+      <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
       <DeviceSelect
         label={m.settings.microphone}
         definition={AUDIO_INPUT}
@@ -153,6 +156,7 @@ function AudioSection() {
         ]}
         disabled={!outputs}
       />
+      <AccessNotice kind="camera" access={access.camera} onAllow={requestAccess} />
       <DeviceSelect
         label={m.settings.camera}
         definition={VIDEO_INPUT}
@@ -161,6 +165,55 @@ function AudioSection() {
       />
     </section>
   );
+}
+
+/**
+ * What stands in for a list of devices the browser will not name yet: a button that asks for the
+ * permission while it can still be asked, or what to do once it was refused.
+ */
+function AccessNotice({
+  kind,
+  access,
+  onAllow,
+}: {
+  kind: DeviceKind;
+  access: DeviceAccess;
+  onAllow: (kind: DeviceKind) => Promise<void>;
+}) {
+  const m = useMessages();
+  const microphone = kind === "microphone";
+  switch (access) {
+    case "granted":
+      return null;
+    case "denied":
+      return (
+        <p className="text-sm text-ink-muted">
+          {microphone ? m.settings.microphoneDenied : m.settings.cameraDenied}
+        </p>
+      );
+    case "absent":
+      return (
+        <p className="text-sm text-ink-muted">
+          {microphone ? m.settings.noMicrophone : m.settings.noCamera}
+        </p>
+      );
+    case "locked":
+      return (
+        <div className="flex flex-col items-start gap-1.5">
+          <p className="text-sm text-ink-muted">
+            {microphone ? m.settings.microphoneLocked : m.settings.cameraLocked}
+          </p>
+          <Button
+            onPress={() => {
+              void onAllow(kind);
+            }}
+            className={secondaryButtonClass}
+          >
+            {microphone ? m.settings.allowMicrophone : m.settings.allowCamera}
+          </Button>
+        </div>
+      );
+  }
 }
 
 const MISSING = "missing";

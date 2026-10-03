@@ -26,7 +26,15 @@ export const settings = {
   unnamedSpeaker: "Speaker {index}",
   unnamedCamera: "Camera {index}",
   camera: "Camera",
+  microphoneLocked: "Your microphones and speakers are listed once Aspen may use the microphone.",
+  allowMicrophone: "Allow microphone",
   microphoneDenied:
-    "Microphone access was refused, so devices cannot be named. Allow it in the browser to choose one.",
+    "Microphone access was refused, so microphones and speakers cannot be listed. Allow it in your browser or system settings to choose one.",
+  noMicrophone: "No microphone is connected.",
+  cameraLocked: "Your cameras are listed once Aspen may use the camera.",
+  allowCamera: "Allow camera",
+  cameraDenied:
+    "Camera access was refused, so cameras cannot be listed. Allow it in your browser or system settings to choose one.",
+  noCamera: "No camera is connected.",
   outputUnsupported: "This browser cannot choose a speaker; the system default is used.",
 } as const;
