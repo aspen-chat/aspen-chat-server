@@ -1,8 +1,8 @@
 # The Administration Dashboard
 
 - The Administration Dashboard is `/admin/{tab}` (`src/features/admin`; `/admin` opens the first
-  tab the caller may), a rail of tabs beside the one open, set across the top on a one-pane
-  screen, each section on it a plane; it is offered in the community
+  tab the caller may), a rail of tabs beside the one open, with the user bar (`SidebarFooter`) at its
+  foot, set across the top on a one-pane screen with the user bar at the screen's foot, each section on it a plane; it is offered in the community
   rail to anyone with a deployment permission (`RecordStore.deploymentPermissions`, topic
   `admin`, read at bootstrap from `GET /users/@me/admin` and kept by `deploymentAccessChanged`
   events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each tab shows

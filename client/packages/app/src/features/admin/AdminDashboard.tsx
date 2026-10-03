@@ -29,6 +29,7 @@ import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { FileTransferLog } from "@/features/admin/FileTransferLog";
 import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
+import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { linkButtonClass } from "@/features/auth/styles";
 import { CommunityDirectory, UserDirectory } from "@/features/admin/Directories";
 import { FleetHealth } from "@/features/admin/FleetHealth";
@@ -117,7 +118,8 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
 
 /**
  * The Administration Dashboard, `/admin/{tab}`: a rail of tabs beside the one open, which a
- * one-pane screen sets across the top instead. The tabs are the deployment's totals and their
+ * one-pane screen sets across the top instead. The user bar (`SidebarFooter`) is at the foot of
+ * the rail, or of the screen on a one-pane screen. The tabs are the deployment's totals and their
  * growth, the health of its servers, registration invites, its roles, the reports people made
  * and the categories they make them in, searchable lists of its users and communities, the name and icon it welcomes people with, federation with other
  * deployments, the moderation log, and the record
@@ -137,10 +139,12 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
     return <Navigate to="/admin/$tab" params={{ tab: first }} replace />;
   }
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-surface md:flex-row">
+    // A grid where the rail stands beside the tab, so the user bar can sit at the rail's foot
+    // while staying last in reading order, as it is on a one-pane screen.
+    <main className="flex min-w-0 flex-1 flex-col bg-surface md:grid md:grid-cols-[14rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto]">
       <nav
         aria-label={m.admin.tabs}
-        className="flex shrink-0 flex-col gap-2 border-b border-line bg-surface-sunken p-3 md:w-56 md:border-e md:border-b-0"
+        className="flex shrink-0 flex-col gap-2 border-b border-line bg-surface-sunken p-3 md:col-start-1 md:row-start-1 md:overflow-y-auto md:border-e md:border-b-0"
       >
         <h1 className="px-2 text-lg font-semibold">{m.admin.title}</h1>
         {admin && (
@@ -179,7 +183,7 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
           </ul>
         )}
       </nav>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto md:col-start-2 md:row-span-2 md:row-start-1">
         <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 md:px-6">
           {!admin ? (
             <p className="text-ink-muted">{m.admin.notAllowed}</p>
@@ -187,6 +191,9 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
             <TabContent tab={open} />
           )}
         </div>
+      </div>
+      <div className="shrink-0 bg-surface-sunken md:col-start-1 md:row-start-2 md:border-e md:border-line">
+        <SidebarFooter />
       </div>
     </main>
   );
