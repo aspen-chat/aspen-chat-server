@@ -203,11 +203,7 @@ pub async fn try_login(
     let conn = conn.as_mut();
     let user_entry: Option<UserPg> = user
         .select(UserPg::as_select())
-        .filter(name.eq(username))
-        .filter(home_domain.is_null())
-        // The system account has a username outside everyone else's, and no password.
-        .filter(system.eq(false))
-        .filter(deleted_at.is_null())
+        .filter(app::user::named(username.to_owned()))
         .first(conn)
         .await
         .optional()?;

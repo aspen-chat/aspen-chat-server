@@ -56,13 +56,9 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
     use diesel_async::RunQueryDsl;
     let mut conn = database(config).await?;
     let find = |username: String| {
-        user::table.select(user::id).filter(
-            user::name
-                .eq(username)
-                .and(user::home_domain.is_null())
-                .and(user::system.eq(false))
-                .and(user::deleted_at.is_null()),
-        )
+        user::table
+            .select(user::id)
+            .filter(crate::app::user::named(username))
     };
     match command {
         AdminCommand::Grant { username } => {

@@ -413,7 +413,8 @@ impl RateLimiter {
             Dimension::Global => "all".to_string(),
             Dimension::Ip => ip()?,
             Dimension::User => user()?,
-            Dimension::Username => key_part(identity.username?),
+            // One account answers to its name in any case, so every case of it shares a bucket.
+            Dimension::Username => key_part(&identity.username?.to_lowercase()),
             Dimension::Per(name) => param(name)?,
             Dimension::UserPer(name) => format!("{}:{}", user()?, param(name)?),
             Dimension::IpPer(name) => format!("{}:{}", ip()?, param(name)?),

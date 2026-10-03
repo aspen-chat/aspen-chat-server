@@ -35,10 +35,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                 .filter(
                     community_user::community
                         .eq(id)
-                        .and(user::name.eq(&username))
-                        .and(user::home_domain.is_null())
-                        .and(user::system.eq(false))
-                        .and(user::deleted_at.is_null()),
+                        .and(crate::app::user::named(username.clone())),
                 )
                 .first(&mut conn)
                 .await

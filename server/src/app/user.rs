@@ -144,6 +144,23 @@ pub(crate) fn validate_profile(command: &UserUpdateRequest) -> Result<(), app::E
     Ok(())
 }
 
+diesel::define_sql_function! {
+    /// PostgreSQL's `lower`, by which `user_name_key` keeps usernames unique.
+    fn lower(text: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+/// The one user of this deployment named `username`, in whatever case it is written: the account
+/// a sign-in or an operator command names. Its terms match `user_name_key`, so the index answers
+/// it. Bots are among them; the system account and deleted users are not.
+#[diesel::dsl::auto_type]
+pub(crate) fn named(username: String) -> _ {
+    lower(user::name)
+        .eq(lower(username))
+        .and(user::home_domain.is_null())
+        .and(diesel::dsl::not(user::system))
+        .and(user::deleted_at.is_null())
+}
+
 /// Rejects usernames that are blank, padded with whitespace, or too long; a bot's name follows
 /// the same rules.
 pub(crate) fn validate_username(name: &str) -> Result<(), app::Error> {

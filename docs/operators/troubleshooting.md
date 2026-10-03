@@ -22,7 +22,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `passkeysUnavailable` | `[auth.passkeys]` is not set. | Set it (see [Configuration](configuration.md#authpasskeys)) to offer passkeys. |
 | `passkeyRejected` | The passkey's answer did not verify. Most often the page's origin is not in `[auth.passkeys] origins`, or `rp_id` changed since the passkey was made. | Check both settings against the address in the browser. |
 | `registrationInviteRequired`, `registrationInviteInvalid` | Registration takes an invite here, and none, or one that is used up, expired, or revoked, was given. | Make one in the dashboard or with `aspen-chat-server invites create`. |
-| `usernameTaken` | Someone already has that name. | Pick another. |
+| `usernameTaken` | Someone already has that name, in some mix of capitals: usernames are unique regardless of case. | Pick another. |
 | `adminRequired` | The dashboard is only for holders of a deployment role. | Grant one with `aspen-chat-server admin grant`, or a role in the dashboard. |
 | `deploymentBanned` | A moderator banned the account from this deployment; the detail carries the reason they gave and when the ban ends, if it does. | Holders of Ban users lift it from the dashboard's user directory (Banned filter). |
 | `alreadyReported` | The person already reported this message or profile, and the report awaits review. | Review it under Reports in the dashboard. |
@@ -114,6 +114,11 @@ again in the dashboard.
 **The server will not start.** It says why on standard error: a setting it cannot read, a rate
 limit naming an endpoint that does not exist, federation gates open without a `domain`, or a
 service it cannot reach.
+
+**`aspen-migrate up` stops at "usernames that differ only by case".** Usernames are unique
+regardless of case, so people can sign in however they type theirs, and the migration that makes
+them so names the accounts that clash. Ask all but one of each group to change their username
+under their profile, then run it again.
 
 **Everyone is signed out after an upgrade.** It should not happen: sessions are in the database.
 Check that the new servers point at the same `database_url`.
