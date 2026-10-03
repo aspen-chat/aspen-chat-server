@@ -19,7 +19,10 @@
   whole at each bootstrap by `replaceMutes`), kept current by `channelMuteChanged` events;
   `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
   server announces no end it did not make. A muted channel or DM (`useMute`) is drawn in
-  `text-ink-faint` with a muted bell, is never marked unread, and does not count toward
+  `text-ink-faint` with a muted bell (`MuteBell`, a focusable image whose tooltip says until
+  when, in the words of the Mute submenu: `useMuteEnd`; in the DM list it sits beside the
+  options button rather than in the row's link, which may hold nothing focusable), is never
+  marked unread, and does not count toward
   `unreadPlaces`; its read position is kept, so it is unread again once the mute ends, and the
   "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) holds two
   submenus, Mute (one of the offered lengths, or, while muted, until when and Unmute) and

@@ -3,7 +3,7 @@ import { SidebarHeader } from "@/features/layout/SidebarHeader";
 import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
 import { CHANNEL_LIST } from "@/features/layout/paneSizes";
-import { BellSlashIcon, NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button, Label, RadioButton, RadioField, RadioGroup } from "react-aria-components";
@@ -24,6 +24,7 @@ import { channelLink, useDomain } from "@/features/messages/links";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
+import { MuteBell } from "@/features/channels/MuteBell";
 import { Avatar } from "@/features/communities/Avatar";
 import { MAX_DM_PEOPLE } from "@/features/dms/DmHeader";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
@@ -153,8 +154,9 @@ function DmSidebar({ current }: { current: string | undefined }) {
 
 /**
  * One DM in the list, marked while it holds something the caller has not read, or dimmed with a
- * muted bell while they have muted it, and with a phone while a call is under way in it. Its menu opens on a right click or from its options
- * button, which sits over the row's right end, in room the link leaves for it. The row of the
+ * muted bell, whose tooltip says until when, while they have muted it, and with a phone while a
+ * call is under way in it. Its menu opens on a right click or from its options button, which
+ * sits over the row's right end with the bell, in room the link leaves for them. The row of the
  * one-to-one DM already open opens the other person's card instead, beside the row, so an
  * unwanted conversation is a press away from a block.
  */
@@ -165,7 +167,8 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
   const first = useUser(otherRecipients(dm, me?.id ?? null)[0]);
   const unread = useUnread(dm.id);
   const tags = useMentions(dm.id);
-  const muted = useMute(dm.id) !== undefined;
+  const mute = useMute(dm.id);
+  const muted = mute !== undefined;
   const calling = useChannelVoice(dm.id).participants.length > 0;
   const row = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -178,14 +181,17 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
     tags > 0
       ? format(m.withMentions, { name: stateName ?? title, mentions: mentionsText(m, tags) })
       : stateName;
+  // The room the link leaves at its end for the options button, and for the bell beside it and
+  // the gap before it while muted.
+  const endRoom = muted ? "pe-[54px] " : "pe-8 ";
   const rowClass =
     "flex w-full items-center gap-2 rounded-md text-start text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
     (current
-      ? "bg-surface-hover py-1.5 pe-8 ps-2 font-medium text-ink"
+      ? "bg-surface-hover py-1.5 ps-2 font-medium text-ink " + endRoom
       : unread && !muted
         ? // The border and this padding make up the usual padding, so nothing moves.
           "py-[5px] pe-[31px] ps-[7px] " + unreadMarkClass
-        : "py-1.5 pe-8 ps-2 " + (muted ? "text-ink-faint" : "text-ink-muted"));
+        : "py-1.5 ps-2 " + endRoom + (muted ? "text-ink-faint" : "text-ink-muted"));
   const content = (
     <>
       {dm.ty === "groupDm" ? (
@@ -223,7 +229,6 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
           className="shrink-0 text-online"
         />
       )}
-      {muted && <BellSlashIcon size={14} aria-hidden="true" className="shrink-0" />}
     </>
   );
   return (
@@ -254,8 +259,15 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
           {content}
         </Link>
       )}
-      {/* Placed by a wrapper, since the button's own touch area keeps it `relative`. */}
-      <span className="absolute top-1/2 end-2 flex -translate-y-1/2">
+      {/* Placed by a wrapper, since the button's own touch area keeps it `relative`. The bell is
+          here rather than in the link, which may not hold anything focusable. */}
+      <span
+        className={
+          "absolute top-1/2 end-2 flex -translate-y-1/2 items-center gap-1.5" +
+          (current ? " text-ink" : " text-ink-faint")
+        }
+      >
+        {mute !== undefined && <MuteBell mute={mute} />}
         <ChannelMenuButton
           name={title}
           isOpen={menuOpen}
