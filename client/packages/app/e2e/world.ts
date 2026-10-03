@@ -35,6 +35,7 @@ export {
   lunchPoll,
   me,
   missingPictureLink,
+  missingPictureMessageId,
   organiserRole,
   organiserRoleWith,
   ownText,

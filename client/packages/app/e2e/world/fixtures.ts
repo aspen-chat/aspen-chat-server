@@ -182,6 +182,9 @@ export function organiserRoleWith(extra: readonly string[]): Record<string, unkn
 export const gifPageLink = "https://tenor.com/view/ghost-12345.gif";
 /** A link to a picture that no longer exists, which the tests answer with nothing. */
 export const missingPictureLink = "https://pictures.example.com/missing-picture.png";
+/** Where the missing picture's link is posted in #general. */
+const missingPictureMessage = 199;
+export const missingPictureMessageId = messageId(missingPictureMessage);
 
 /** The thread's starter, in #general. */
 export const starterText = "Who is bringing snacks on Saturday?";
@@ -229,7 +232,7 @@ export const generalMessages = [
       },
     ],
   }),
-  message(199, me, missingPictureLink, 140),
+  message(missingPictureMessage, me, missingPictureLink, 140),
   // Older history, enough for several pages, so reading back through it can be exercised.
   ...Array.from({ length: 120 }, (_, i) =>
     message(120 - i, i % 2 === 0 ? me : bob, `Older message ${String(120 - i)}`, 180 + i * 10),

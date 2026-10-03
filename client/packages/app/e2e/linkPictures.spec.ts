@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gifPageLink, missingPictureLink, signInToWorld } from "./world";
+import { gifPageLink, missingPictureLink, missingPictureMessageId, signInToWorld } from "./world";
 
 test.beforeEach(async ({ page }) => {
   await page.route(missingPictureLink, (route) => route.fulfill({ status: 404 }));
@@ -24,7 +24,11 @@ test("a share page named like a gif shows the picture the server found there", a
 test("a picture link that answers nothing shows as a link, not a broken picture", async ({
   page,
 }) => {
-  const article = page.locator("article").filter({ hasText: "missing-picture.png" });
+  // Found by its id, since the link's text shows only once the picture has failed, and the
+  // picture loads lazily, asked for (and failing) only once it comes into view, which on a
+  // phone's short screen takes a scroll.
+  const article = page.locator(`article[data-message-id="${missingPictureMessageId}"]`);
+  await article.scrollIntoViewIfNeeded();
   await expect(article.getByRole("link", { name: missingPictureLink })).toBeVisible();
   await expect(article.getByRole("img")).toHaveCount(0);
 });

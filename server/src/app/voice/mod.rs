@@ -14,15 +14,15 @@ mod servers;
 mod sessions;
 
 pub use reports::spawn_report_listener;
+use ring::clear_spent_rings;
 pub use ring::{decline_ring, read_channels_rings};
+use servers::reap_silent_servers;
 pub use servers::{
     create_server, delete_server, join_offer, list_servers, report_failure, seed_servers,
     update_server,
 };
-pub use sessions::{kick_everywhere, kick_participant, mute_participant};
-use ring::clear_spent_rings;
-use servers::reap_silent_servers;
 use sessions::reap_idle_sessions;
+pub use sessions::{kick_everywhere, kick_participant, mute_participant};
 
 use crate::api::message_enum;
 use crate::app;

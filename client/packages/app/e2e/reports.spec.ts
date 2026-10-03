@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { reactedText, signInToWorld } from "./world";
+import { longPress, reactedText, signInToWorld } from "./world";
 
 /**
  * Reporting Bob's "Sounds good" in the stubbed world: the dialog offers the server's
@@ -24,6 +24,21 @@ const categories = [
   },
 ];
 
+/** Opens "Sounds good"'s actions, hovered where there is a pointer and pressed long on a phone, and picks `action`. */
+async function messageAction(page: Page, isMobile: boolean, action: string) {
+  const message = page.locator("article").filter({ hasText: reactedText }).last();
+  if (isMobile) {
+    await longPress(page, message.locator(".message-body"));
+    await page
+      .getByRole("dialog", { name: "Message actions" })
+      .getByRole("button", { name: action })
+      .tap();
+  } else {
+    await message.hover();
+    await message.getByRole("button", { name: action }).click();
+  }
+}
+
 async function withReports(page: Page, sent: unknown[]) {
   await page.route(/\/api\/v1\/report-categories$/, (route) => route.fulfill({ json: categories }));
   await page.route(/\/api\/v1\/messages\/[^/]+\/reports$/, (route) => {
@@ -35,7 +50,10 @@ async function withReports(page: Page, sent: unknown[]) {
   });
 }
 
-test("a message is reported in a category, and Other needs an explanation", async ({ page }) => {
+test("a message is reported in a category, and Other needs an explanation", async ({
+  page,
+  isMobile,
+}) => {
   const sent: unknown[] = [];
   await signInToWorld(page, (p) => withReports(p, sent));
   await page
@@ -43,9 +61,7 @@ test("a message is reported in a category, and Other needs an explanation", asyn
     .first()
     .getByText("general", { exact: true })
     .click();
-  const message = page.locator("article").filter({ hasText: reactedText }).last();
-  await message.hover();
-  await message.getByRole("button", { name: "Report message" }).click();
+  await messageAction(page, isMobile, "Report message");
   const dialog = page.getByRole("dialog", { name: "Report this message" });
   await expect(dialog).toBeVisible();
   const send = dialog.getByRole("button", { name: "Send report" });
@@ -60,18 +76,26 @@ test("a message is reported in a category, and Other needs an explanation", asyn
   expect(sent).toEqual([{ category: categories[1]?.id, explanation: "Not a nice thing to say" }]);
 });
 
-test("a message's link is copied from its actions", async ({ page, context }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+test("a message's link is copied from its actions", async ({
+  page,
+  context,
+  isMobile,
+  browserName,
+}) => {
+  // Reading the clipboard back takes a permission only Chromium's driver grants.
+  if (browserName === "chromium") {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  }
   await signInToWorld(page);
   await page
     .getByRole("grid", { name: "Channels" })
     .first()
     .getByText("general", { exact: true })
     .click();
-  const message = page.locator("article").filter({ hasText: reactedText }).last();
-  await message.hover();
-  await message.getByRole("button", { name: "Copy link" }).click();
+  await messageAction(page, isMobile, "Copy link");
   await expect(page.getByText("Copied link to the message")).toBeVisible();
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toMatch(/\/communities\/[^/]+\/channels\/[^/]+\/messages\/[^/]+$/);
+  if (browserName === "chromium") {
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    expect(copied).toMatch(/\/communities\/[^/]+\/channels\/[^/]+\/messages\/[^/]+$/);
+  }
 });
