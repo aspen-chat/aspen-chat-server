@@ -1,5 +1,12 @@
 import type { User } from "@aspen/protocol";
-import { ChatCircleIcon, PhoneIcon, PlusIcon, ProhibitIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ChatCircleIcon,
+  FlagIcon,
+  PhoneIcon,
+  PlusIcon,
+  ProhibitIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import {
@@ -14,6 +21,7 @@ import {
 import {
   useBlocked,
   useChannel,
+  useDeploymentCan,
   useMe,
   useMemberRoles,
   useRoles,
@@ -37,15 +45,17 @@ import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { ReportModal } from "@/features/reports/ReportDialog";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
- * bio, with ways to message and to block them when they are someone else. Opens from any
+ * bio, with ways to message, block, and report them when they are someone else. Opens from any
  * control that names the user, such as a message author or a member row. Opened within a
  * community it shows the roles they hold there, with a way to give them another for those who
  * may. Inside the reader's one-to-one DM with them it offers no way to message them, which is
- * where the reader already is. The system account's card offers none of these: it sends
- * notices, and is not messaged, called, or blocked.
+ * where the reader already is. A block takes away messaging and calling, except for a holder of
+ * Message any user, who reaches anyone. The system account's card offers none of these: it
+ * sends notices, and is not messaged, called, blocked, or reported.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
@@ -55,6 +65,7 @@ export function ProfileCard({ user }: { user: User }) {
   const { channelId, communityId } = useParams({ strict: false });
   const open = useChannel(channelId ?? "");
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
+  const messagesAnyone = useDeploymentCan("messageAnyUser");
   const name = displayNameOf(user);
   return (
     <div className="flex w-72 flex-col gap-2 p-2">
@@ -99,13 +110,14 @@ export function ProfileCard({ user }: { user: User }) {
       )}
       {me !== null && me.id !== user.id && !user.system && (
         <>
-          {!blocked && (!inTheirDm || !user.bot) && (
+          {(!blocked || messagesAnyone) && (!inTheirDm || !user.bot) && (
             <div className="flex gap-2">
               {!inTheirDm && <MessageButton userId={user.id} />}
-              {!user.bot && <CallButton userId={user.id} name={name} />}
+              {!user.bot && !blocked && <CallButton userId={user.id} name={name} />}
             </div>
           )}
           <BlockControl userId={user.id} name={name} blocked={blocked} />
+          <ReportProfileButton userId={user.id} name={name} />
         </>
       )}
       {wizard && (
@@ -341,6 +353,23 @@ function CommunityRoles({
         </p>
       )}
     </section>
+  );
+}
+
+/** Reports the user's profile to the deployment's moderators, through `ReportModal`. */
+function ReportProfileButton({ userId, name }: { userId: string; name: string }) {
+  const m = useMessages();
+  return (
+    <DialogTrigger>
+      <Button
+        aria-label={format(m.reports.reportProfileLabel, { name })}
+        className={secondaryButtonClass + " flex items-center justify-center gap-1.5"}
+      >
+        <FlagIcon size={16} aria-hidden="true" />
+        {m.reports.reportProfile}
+      </Button>
+      <ReportModal target={{ kind: "profile", userId, name }} />
+    </DialogTrigger>
   );
 }
 

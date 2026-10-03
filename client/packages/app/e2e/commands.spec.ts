@@ -116,6 +116,7 @@ test("a command in the channel says whose it was", async ({ page }) => {
     timestamp: new Date().toISOString(),
     editedAt: null,
     linkPreviews: [],
+    linkedMessages: [],
     kind: "command",
     commandBot: helper,
     poll: null,

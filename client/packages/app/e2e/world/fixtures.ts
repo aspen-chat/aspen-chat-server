@@ -153,6 +153,7 @@ export const message = (
   timestamp: minutesAgo(minutes),
   editedAt: null,
   linkPreviews: [],
+  linkedMessages: [],
   kind: "standard",
   poll: null,
   thread: null,

@@ -123,6 +123,9 @@ pub struct UserEntry {
     /// For a user of another deployment, that deployment.
     #[diesel(sql_type = Nullable<Text>)]
     pub home_domain: Option<String>,
+    /// Whether this is the deployment's own account (`app::system_account`).
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    pub system: bool,
     /// The ban from the deployment standing now, if one does (`app::user_ban`): when it was
     /// made, the reason they were given, and when it ends.
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -152,7 +155,7 @@ pub async fn search_users(
     Ok(diesel::sql_query(format!(
         r#"
         SELECT id, name, display_name, icon, created_at, registered_with, bot, bot_owner,
-               home_domain,
+               home_domain, system,
                CASE WHEN {banned} THEN banned_at END AS banned_at,
                CASE WHEN {banned} THEN ban_reason END AS ban_reason,
                CASE WHEN {banned} THEN banned_until END AS banned_until

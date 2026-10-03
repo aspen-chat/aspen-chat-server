@@ -73,6 +73,7 @@ function message(n: number, channelId = general.id, author = me.id): Message {
     kind: "standard",
     poll: null,
     mentions: { users: [], roles: [], everyone: false },
+    linkedMessages: [],
   };
 }
 

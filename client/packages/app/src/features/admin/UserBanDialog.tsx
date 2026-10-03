@@ -1,7 +1,7 @@
 import { ApiProblemError } from "@aspen/protocol";
 import { useState } from "react";
 import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
-import { useAccess, useCommunity, useSync } from "@/api/hooks";
+import { useDeploymentCan, useSync } from "@/api/hooks";
 import { alertClass } from "@/features/auth/styles";
 import { BanFields } from "@/features/community-settings/BanFields";
 import { NEW_BAN, banRequest, type BanChoice } from "@/features/community-settings/banChoice";
@@ -11,35 +11,38 @@ import {
   modalClass,
   overlayClass,
 } from "@/features/invites/dialog";
+import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { toast } from "@/features/layout/toast";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
- * Bans a member: a reason they are shown when they try to come back, how long for, and, for a
- * banner who also holds Manage messages, whether their messages from the last hour or day go
- * with them. Done, it says so in a toast and closes.
+ * Bans someone from the whole server: a reason they are told when they try to sign in, how
+ * long for, for a holder of Moderate any community whether their messages everywhere from the
+ * last hour or day go with them, and for a bot whether its owner is banned too. Done, it says
+ * so in a toast and closes.
  */
-export function BanDialog({
-  communityId,
+export function UserBanDialog({
   userId,
   name,
+  bot,
   isOpen,
   onOpenChange,
+  onBanned,
 }: {
-  communityId: string;
   userId: string;
   name: string;
+  bot: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  onBanned: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
-  const community = useCommunity(communityId);
-  const access = useAccess(communityId);
-  const mayDelete = access?.has("manageMessages") ?? false;
+  const mayDelete = useDeploymentCan("moderateCommunities");
   const [choice, setChoice] = useState<BanChoice>(NEW_BAN);
+  const [withOwner, setWithOwner] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,13 +53,20 @@ export function BanDialog({
     setBusy(true);
     setError(null);
     try {
-      const deleted = await sync.banMember(communityId, userId, banRequest(choice, mayDelete));
+      const outcome = await sync.admin.banUser(userId, {
+        ...banRequest(choice, mayDelete),
+        withOwner: bot && withOwner,
+      });
       toast(
-        deleted > 0
-          ? format(m.members.bannedAndDeleted, { name, count: String(deleted) })
-          : format(m.members.banned, { name }),
+        outcome.deletedMessages > 0
+          ? format(m.deployments.bannedAndDeleted, {
+              name,
+              count: String(outcome.deletedMessages),
+            })
+          : format(m.deployments.bannedNamed, { name }),
       );
       onOpenChange(false);
+      onBanned();
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
@@ -73,17 +83,23 @@ export function BanDialog({
     >
       <Modal className={modalClass}>
         <Dialog role="alertdialog" className={dialogClass}>
-          <DialogHeading>{format(m.members.banHeading, { name })}</DialogHeading>
-          <p className="text-sm text-ink-muted">
-            {format(m.members.banHint, { community: community?.name ?? "" })}
-          </p>
+          <DialogHeading>{format(m.deployments.banHeading, { name })}</DialogHeading>
+          <p className="text-sm text-ink-muted">{m.deployments.banHint}</p>
           <BanFields
             value={choice}
             onChange={setChoice}
             mayDelete={mayDelete}
-            reasonHint={m.members.banReasonHint}
-            deleteLabel={m.members.banDeleteLabel}
+            reasonHint={m.deployments.banReasonHint}
+            deleteLabel={m.deployments.banDeleteLabel}
           />
+          {bot && (
+            <ChoiceCheckbox
+              isSelected={withOwner}
+              onChange={setWithOwner}
+              label={m.deployments.banWithOwner}
+              hint={m.deployments.banWithOwnerHint}
+            />
+          )}
           {error !== null && (
             <p role="alert" className={alertClass}>
               {error}

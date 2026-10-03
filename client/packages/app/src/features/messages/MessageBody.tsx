@@ -18,16 +18,19 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * files, and cards for its links. A message that is nothing but links to pictures shows the
  * pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
+ * `still` draws it for reference only, as another message shows it: no poll to vote in.
  */
 export function MessageBody({
   message,
   home,
   hideText = false,
+  still = false,
   onRemoveAttachment,
 }: {
   message: Message;
   home: ChannelHome;
   hideText?: boolean;
+  still?: boolean;
   onRemoveAttachment?: (attachmentId: string) => void;
 }) {
   const m = useMessages();
@@ -86,7 +89,9 @@ export function MessageBody({
           )}
         </div>
       )}
-      {message.kind === "poll" && message.poll != null && <PollCard pollId={message.poll} />}
+      {!still && message.kind === "poll" && message.poll != null && (
+        <PollCard pollId={message.poll} />
+      )}
       <MessageMedia
         attachmentIds={message.attachments}
         linkedImages={linkedImages}

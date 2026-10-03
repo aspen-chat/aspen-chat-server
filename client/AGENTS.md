@@ -72,6 +72,7 @@ commit, as with comments.
 - [`push.md`](docs/architecture/push.md): waking phones: the app's subscriptions, Android's handler, and iOS's notification service extension.
 - [`rail-and-channel-list.md`](docs/architecture/rail-and-channel-list.md): drag-and-drop reordering, folders on the rail, and folded categories.
 - [`reactions.md`](docs/architecture/reactions.md): reaction summaries, chips, and the reactions dialog.
+- [`reports.md`](docs/architecture/reports.md): reporting messages and profiles, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.

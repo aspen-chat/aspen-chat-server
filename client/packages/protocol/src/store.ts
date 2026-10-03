@@ -35,6 +35,8 @@ import type {
   EmojiReactions,
   Icon,
   Included,
+  KeptMessage,
+  LinkedMessage,
   Listener,
   MessageWindow,
   MissingKind,
@@ -153,6 +155,10 @@ export class RecordStore {
   readonly #channels = new Map<string, Channel>();
   readonly #categories = new Map<string, Category>();
   readonly #messages = new Map<string, Message>();
+  /** What the caller finds at each message another links to, by the linked message's id. */
+  readonly #links = new Map<string, LinkedMessage>();
+  /** The messages warnings are about, deleted or not, by id; read only with their warnings. */
+  readonly #warned = new Map<string, KeptMessage>();
   readonly #attachments = new Map<string, Attachment>();
   readonly #icons = new Map<string, Icon>();
   readonly #voiceSessions = new Map<string, VoiceSession>();
@@ -203,6 +209,9 @@ export class RecordStore {
   readonly #memberRoles = new Map<string, readonly string[]>();
   /** What the caller may do across the deployment. */
   #deployment: ReadonlySet<DeploymentPermission> = new Set();
+  /** How many report cases await review, for a reviewer, once read; and each change to them. */
+  #openReports: number | undefined = undefined;
+  #reportsChanges = 0;
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
@@ -315,6 +324,16 @@ export class RecordStore {
 
   channel(id: string): Channel | undefined {
     return this.#channels.get(id);
+  }
+
+  /** Topic `link:<id>`: what the caller finds at a message another links to, once read. */
+  linkedMessage(id: string): LinkedMessage | undefined {
+    return this.#links.get(id);
+  }
+
+  /** Topic `warned:<id>`: a message a warning is about, as the warning shows it, once read. */
+  warnedMessage(id: string): KeptMessage | undefined {
+    return this.#warned.get(id);
   }
 
   category(id: string): Category | undefined {
@@ -786,6 +805,23 @@ export class RecordStore {
     return this.#deployment.has("moderateCommunities");
   }
 
+  /** Topic `reports`: how many report cases await review, once a read or event has said. */
+  get openReports(): number | undefined {
+    return this.#openReports;
+  }
+
+  /** Topic `reports`: counts every change to what awaits review, for lists to read again. */
+  get reportsChanges(): number {
+    return this.#reportsChanges;
+  }
+
+  /** Records how many report cases are open, from a read or a `reportsChanged` event. */
+  setOpenReports(open: number): void {
+    this.#openReports = open;
+    this.#reportsChanges += 1;
+    this.#touch("reports");
+  }
+
   /**
    * Records what the caller may do across the deployment, as the server says. Moderating it
    * changes what they may do everywhere.
@@ -1105,6 +1141,14 @@ export class RecordStore {
         this.#touch(`message:${messageId}`);
       }
       this.#messages.clear();
+      for (const id of this.#links.keys()) {
+        this.#touch(`link:${id}`);
+      }
+      this.#links.clear();
+      for (const id of this.#warned.keys()) {
+        this.#touch(`warned:${id}`);
+      }
+      this.#warned.clear();
       for (const messageId of this.#reactions.keys()) {
         this.#touch(`reactions:${messageId}`);
       }
@@ -1145,6 +1189,14 @@ export class RecordStore {
       // Messages outside any loaded window, such as the thread replies echoes show.
       for (const message of included.messages ?? []) {
         this.#putMessage(message);
+      }
+      for (const link of included.linkedMessages ?? []) {
+        this.#links.set(link.id, link);
+        this.#touch(`link:${link.id}`);
+      }
+      for (const kept of included.warnedMessages ?? []) {
+        this.#warned.set(kept.message.id, kept);
+        this.#touch(`warned:${kept.message.id}`);
       }
       for (const category of included.categories ?? []) {
         this.#putCategory(category);
@@ -1885,6 +1937,12 @@ export class RecordStore {
           break;
         case "deploymentAccessChanged":
           this.setDeploymentPermissions(event.permissions);
+          break;
+        case "reportsChanged":
+          this.setOpenReports(event.open);
+          break;
+        case "accountBanned":
+          // The stream closes after this, and the sign-in with it; nothing here to keep.
           break;
         case "userBlockChanged":
           this.#setBlocked(event.user, event.blocked);
@@ -2790,6 +2848,12 @@ export class RecordStore {
   }
 
   #removeMessage(id: string): void {
+    // A link to it now finds it deleted.
+    const link = this.#links.get(id);
+    if (link?.state === "available") {
+      this.#links.set(id, { ...link, state: "deleted" });
+      this.#touch(`link:${id}`);
+    }
     const message = this.#messages.get(id);
     if (message === undefined) {
       return;

@@ -2,6 +2,8 @@ import type { Permission } from "@aspen/protocol";
 import {
   ChatsCircleIcon,
   CopyIcon,
+  FlagIcon,
+  LinkIcon,
   PencilSimpleIcon,
   SmileyIcon,
   TrashIcon,
@@ -18,6 +20,7 @@ import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { PinButton } from "@/features/messages/PinButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
+import { ReportMessageButton } from "@/features/reports/ReportDialog";
 import { useMessages } from "@/i18n/context";
 
 /** One action's button: square, with its icon, at finger size on a touch screen. */
@@ -26,11 +29,11 @@ export const actionClass =
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-3";
 
 /** What a message's actions open beyond themselves, each a sheet of its own on a touch screen. */
-export type MessageSheet = "react" | "reactions" | "delete";
+export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
  * What can be done to a message, as a row of icon buttons: react, pin, see who reacted, reply
- * in a thread, edit, delete, copy its text, and copy its id. A computer shows the row at the
+ * in a thread, edit, delete, copy its text, copy a link to it, report it, and copy its id. A computer shows the row at the
  * message's corner while the pointer is over it or focus is in it, and the picker and the
  * dialogs open from their buttons. A touch screen shows it in a popover under a long press
  * (`MessageItem`), which every action closes: the ones that open something hand that to
@@ -46,6 +49,8 @@ export function MessageActions({
   canThread,
   editable,
   deletable,
+  reportable,
+  link,
   onOpenThread,
   onEdit,
   open,
@@ -61,6 +66,10 @@ export function MessageActions({
   canThread: boolean;
   editable: boolean;
   deletable: boolean;
+  /** Whether the reader may report it to the moderators: not their own, nor a notice. */
+  reportable: boolean;
+  /** The link to share for it, which Copy link copies. */
+  link: string;
   onOpenThread: () => void;
   onEdit: () => void;
   /** Opens a sheet outside the row; given, the row's own picker and dialogs are not used. */
@@ -158,6 +167,26 @@ export function MessageActions({
       {text !== null && text !== "" && (
         <CopyTextButton text={text} {...(onDone === undefined ? {} : { onDone })} />
       )}
+      <CopyButton
+        text={link}
+        label={m.reports.copyLink}
+        copied={m.reports.copiedLink}
+        icon={<LinkIcon size={ACTION_ICON} aria-hidden="true" />}
+        {...(onDone === undefined ? {} : { onDone })}
+      />
+      {reportable &&
+        (open === undefined ? (
+          <ReportMessageButton messageId={messageId} triggerClassName={actionClass} />
+        ) : (
+          <Action
+            label={m.reports.reportMessage}
+            onPress={() => {
+              open("report");
+            }}
+          >
+            <FlagIcon size={ACTION_ICON} aria-hidden="true" />
+          </Action>
+        ))}
       <CopyIdButton
         id={messageId}
         thing="message"
@@ -192,17 +221,42 @@ function Action({
 /** Copies the message's text, and says so in a toast. */
 function CopyTextButton({ text, onDone }: { text: string; onDone?: () => void }) {
   const m = useMessages();
+  return (
+    <CopyButton
+      text={text}
+      label={m.copyMessageText}
+      copied={m.copiedMessageText}
+      icon={<CopyIcon size={ACTION_ICON} aria-hidden="true" />}
+      {...(onDone === undefined ? {} : { onDone })}
+    />
+  );
+}
+
+/** Copies `text`, and says `copied` in a toast. */
+function CopyButton({
+  text,
+  label,
+  copied,
+  icon,
+  onDone,
+}: {
+  text: string;
+  label: string;
+  copied: string;
+  icon: ReactNode;
+  onDone?: () => void;
+}) {
   const button = useRef<HTMLButtonElement>(null);
   return (
-    <Tooltip text={m.copyMessageText}>
+    <Tooltip text={label}>
       <Button
         ref={button}
-        aria-label={m.copyMessageText}
+        aria-label={label}
         onPress={() => {
           if (button.current !== null) {
             void copyText(text, button.current).then((ok) => {
               if (ok) {
-                toast(m.copiedMessageText);
+                toast(copied);
                 onDone?.();
               }
             });
@@ -210,7 +264,7 @@ function CopyTextButton({ text, onDone }: { text: string; onDone?: () => void })
         }}
         className={actionClass}
       >
-        <CopyIcon size={ACTION_ICON} aria-hidden="true" />
+        {icon}
       </Button>
     </Tooltip>
   );

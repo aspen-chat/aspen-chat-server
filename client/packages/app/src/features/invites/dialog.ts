@@ -48,3 +48,8 @@ export const optionClass =
   "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover selected:font-medium selected:text-accent";
 export const selectPopoverClass =
   "min-w-(--trigger-width) rounded-md border border-line bg-surface-raised p-1 shadow-lg";
+/** A chip that toggles on and off, alone or as one of a group of choices. */
+export const toggleChipClass =
+  "rounded-md border border-line px-3 py-1 text-sm text-ink-muted outline-none hover:bg-surface-hover " +
+  "pressed:bg-surface-hover selected:border-accent selected:bg-accent-soft selected:text-accent-strong " +
+  "focus-visible:ring-2 focus-visible:ring-accent/50";

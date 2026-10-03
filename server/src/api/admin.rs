@@ -227,6 +227,8 @@ pub struct AdminUserEntry {
     pub bot_owner: Option<UserId>,
     /// For a user of another deployment, that deployment's domain.
     pub home_domain: Option<String>,
+    /// Whether this is the deployment's own account, which sends notices and is never banned.
+    pub system: bool,
     /// Whether a ban from the deployment stands now.
     pub banned: bool,
     /// The ban standing now, if one does.
@@ -309,6 +311,7 @@ pub async fn list_users(
                 bot: u.bot,
                 bot_owner: u.bot_owner,
                 home_domain: u.home_domain,
+                system: u.system,
                 banned: u.banned_at.is_some(),
                 ban: u.banned_at.map(|banned_at| AdminUserBan {
                     banned_at,

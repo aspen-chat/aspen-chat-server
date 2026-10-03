@@ -14,4 +14,6 @@
   a community (a `communityId` in the route) the card lists the roles the user holds there,
   read with `AspenSync.loadMember` when they are outside the member sample, and offers those
   who may change them the ones they could give and an × on each they could take away
-  (`useAssignableRoles`, which the members panel's role picker shares).
+  (`useAssignableRoles`, which the members panel's role picker shares). Someone else's card
+  offers Message and Call, which a block takes away except Message for a holder of Message any
+  user, Block, and Report profile (see Reports).

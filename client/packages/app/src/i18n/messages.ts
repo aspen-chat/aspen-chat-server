@@ -27,6 +27,7 @@ import { permissionNames } from "./en/permissionNames";
 import { pins } from "./en/pins";
 import { poll } from "./en/poll";
 import { profile } from "./en/profile";
+import { reports } from "./en/reports";
 import { roles } from "./en/roles";
 import { search } from "./en/search";
 import { security } from "./en/security";
@@ -263,6 +264,7 @@ export const en = {
   access,
   palettes,
   syncStatus,
+  reports,
 } as const;
 
 /** A catalogue: the shape of `en`, with any text in place of its strings. */

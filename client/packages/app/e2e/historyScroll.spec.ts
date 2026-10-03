@@ -67,6 +67,7 @@ function messageOf(n: number): { record: Record<string, unknown>; picture: Pictu
       timestamp: new Date(Date.UTC(2026, 0, 1) + n * 60_000).toISOString(),
       editedAt: null,
       linkPreviews: [],
+      linkedMessages: [],
       kind: "standard",
       poll: null,
       thread: null,

@@ -7,8 +7,9 @@
   `admin`, read at bootstrap from `GET /users/@me/admin` and kept by `deploymentAccessChanged`
   events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each tab shows
   only with the permission it needs: the totals and growth, and the fleet, with `viewDashboard`,
-  registration invites with `manageRegistrationInvites`, the directories with `viewDashboard`
-  or `moderateCommunities`, the moderation log with `viewDashboard`, the deployment's profile with `manageFederation`
+  registration invites with `manageRegistrationInvites`, the directories with `viewDashboard`,
+  `moderateCommunities`, `banUsers`, or `reviewReports`, the reports with `reviewReports`, the
+  report categories with `manageReportCategories`, the moderation log with `viewDashboard`, the deployment's profile with `manageFederation`
   (`DeploymentProfile.tsx`: the display name and icon the sign-in screens welcome people with,
   an emptied name saved as none), federation with
   `manageFederation` (`Federation.tsx`: this deployment's domain, key fingerprint, and gates;
@@ -39,5 +40,7 @@
   and `RegisterForm` asks for a code whenever `GET /auth/methods` says the server requires one
   (`useAuthMethods`).
 - The Administration Dashboard's user directory shows a user of another deployment as
-  `name@domain`, and offers moderators a ban from this deployment (`BanForeignUser`,
-  `AspenSync.setForeignUserBanned`).
+  `name@domain`. Holders of Ban users ban anyone but the system account and themselves from the
+  deployment, and lift bans, there (`UserBanControl`, `UserBanDialog`; see Reports), and it
+  filters to those banned. The Reports and Report categories tabs are described under
+  Reports.

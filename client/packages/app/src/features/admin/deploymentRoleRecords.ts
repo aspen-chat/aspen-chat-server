@@ -12,6 +12,10 @@ export const DEPLOYMENT_PERMISSIONS: readonly DeploymentPermission[] = [
   "moderateCommunities",
   "manageBots",
   "manageFederation",
+  "reviewReports",
+  "manageReportCategories",
+  "banUsers",
+  "messageAnyUser",
 ];
 
 /** The deployment's roles and the caller's standing among them, read together. */

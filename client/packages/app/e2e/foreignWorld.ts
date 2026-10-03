@@ -181,6 +181,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
             timestamp: later(-1),
             editedAt: null,
             linkPreviews: [],
+            linkedMessages: [],
             kind: "standard",
             poll: null,
             thread: null,

@@ -55,6 +55,7 @@ function post(publish: Publish, content: string, tags: string[] = []) {
     timestamp: new Date().toISOString(),
     editedAt: null,
     linkPreviews: [],
+    linkedMessages: [],
     kind: "standard",
     poll: null,
     thread: null,

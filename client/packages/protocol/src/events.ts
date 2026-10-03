@@ -16,6 +16,11 @@ export function reconnectDelayMs(attempt: number): number {
 
 /** WebSocket close code the server uses when the `identify` token is rejected. */
 const CLOSE_UNAUTHORIZED = 4401;
+/**
+ * WebSocket close code the server uses when the account was banned from the deployment, whose
+ * sign-ins are revoked with it: the next attempt refreshes, which signs the client out.
+ */
+const CLOSE_BANNED = 4410;
 
 export type EventStreamStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -76,8 +81,9 @@ export interface EventStreamOptions extends EventStreamHandlers {
  * `ready`, and `onResyncRequired` fires so the caller can rebuild from REST.
  *
  * A dropped connection enters an outage: `onConnectionLost` fires once, reconnection follows
- * `reconnectDelayMs`, and `onReady` fires again when the handshake succeeds. A `4401` close
- * makes the next `authenticate` call ask for a fresh token.
+ * `reconnectDelayMs`, and `onReady` fires again when the handshake succeeds. A `4401` close,
+ * or a `4410` for a ban from the deployment, makes the next `authenticate` call ask for a fresh
+ * token.
  */
 export class EventStream {
   #status: EventStreamStatus = "closed";
@@ -199,7 +205,7 @@ export class EventStream {
       if (this.#socket !== socket) {
         return;
       }
-      if (event.code === CLOSE_UNAUTHORIZED) {
+      if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_BANNED) {
         this.#tokenRejected = true;
       }
       this.#onDropped(
@@ -288,8 +294,8 @@ export class EventStream {
         break;
       case "error":
         // The server closes right after this; the close handler drives reconnection and, for
-        // `unauthorized`, the token refresh.
-        if (frame.code === "unauthorized") {
+        // `unauthorized` and `banned`, the token refresh.
+        if (frame.code === "unauthorized" || frame.code === "banned") {
           this.#tokenRejected = true;
         }
         break;

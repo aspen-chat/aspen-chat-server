@@ -20,6 +20,8 @@ import type {
   DeploymentPermission,
   Icon,
   Invite,
+  KeptMessage,
+  LinkedMessage,
   Message,
   MessageWindow,
   NotificationLevel,
@@ -291,6 +293,32 @@ export function useDeploymentCan(permission: DeploymentPermission): boolean {
   return useDeploymentPermissions().has(permission);
 }
 
+/**
+ * For a holder of Review reports, how many report cases await review, read when first asked
+ * and kept by `reportsChanged` events; `undefined` for anyone else, and until it is read.
+ */
+export function useOpenReports(): number | undefined {
+  const sync = useSync();
+  const reviewer = useDeploymentCan("reviewReports");
+  const open = useTopic("reports", (s) => s.openReports);
+  useEffect(() => {
+    if (reviewer && open === undefined) {
+      sync.admin.reportCounts().then(
+        (counts) => {
+          sync.store.setOpenReports(counts.open);
+        },
+        () => undefined,
+      );
+    }
+  }, [sync, reviewer, open]);
+  return reviewer ? open : undefined;
+}
+
+/** Counts every change to what awaits review, for a list of reports to read itself again. */
+export function useReportsChanges(): number {
+  return useTopic("reports", (s) => s.reportsChanges);
+}
+
 /** Whether the caller holds any deployment permission, and so has the dashboard to open. */
 export function useIsAdmin(): boolean {
   return useDeploymentPermissions().size > 0;
@@ -492,6 +520,16 @@ export function useMessageWindow(channelId: string): MessageWindow | undefined {
 
 export function useMessage(id: string): Message | undefined {
   return useTopic(`message:${id}`, (s) => s.message(id));
+}
+
+/** What the caller finds at a message another links to, once a read has said. */
+export function useLinkedMessage(id: string): LinkedMessage | undefined {
+  return useTopic(`link:${id}`, (s) => s.linkedMessage(id));
+}
+
+/** A message a warning is about, deleted or not, once a read of the warning has brought it. */
+export function useWarnedMessage(id: string): KeptMessage | undefined {
+  return useTopic(`warned:${id}`, (s) => s.warnedMessage(id));
 }
 
 /** A community's member records; re-renders when membership or any member's status changes. */

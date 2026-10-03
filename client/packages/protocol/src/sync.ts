@@ -229,6 +229,8 @@ export class AspenSync {
   /** Increments on every start/stop so a stale async step can notice and bail. */
   #generation = 0;
   readonly #windowLoads = new Map<string, Promise<void>>();
+  /** Reads of what a message links to, under way, by the message linking. */
+  readonly #linkLoads = new Map<string, Promise<void>>();
   readonly #userLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -783,7 +785,17 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/messages/{message}", {
       params: {
         path: { message: messageId },
-        query: { include: ["authors", "attachments", "polls", "threads", "reactions"] },
+        query: {
+          include: [
+            "authors",
+            "attachments",
+            "polls",
+            "threads",
+            "reactions",
+            "linked",
+            "warnings",
+          ],
+        },
       },
     });
     if (result.data === undefined) {
@@ -792,6 +804,36 @@ export class AspenSync {
     this.store.ingest({ ...result.data.included, messages: [result.data.data] });
     this.store.setReactions([result.data.data.id], result.data.included.reactions ?? []);
     return result.data.data;
+  }
+
+  /**
+   * Reads what a held message links to and, for a warning, what it is about, as this caller
+   * finds them: for a message that arrived live or was edited, whose links no read has brought.
+   * Several asks for one message share a read.
+   */
+  loadLinks(messageId: string): Promise<void> {
+    const pending = this.#linkLoads.get(messageId);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const promise = this.#client.api
+      .GET("/api/v1/messages/{message}", {
+        params: {
+          path: { message: messageId },
+          query: { include: ["linked", "warnings", "authors", "attachments"] },
+        },
+      })
+      .then((result) => {
+        if (result.data === undefined) {
+          throw new ApiProblemError(problemOf(result.error, result.response));
+        }
+        this.store.ingest(result.data.included);
+      })
+      .finally(() => {
+        this.#linkLoads.delete(messageId);
+      });
+    this.#linkLoads.set(messageId, promise);
+    return promise;
   }
 
   /**
@@ -1460,21 +1502,51 @@ export class AspenSync {
     this.store.ingest({ users: [result.data] });
   }
 
-  /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
-  /**
-   * Bans a user of another deployment from this one, ending their sessions here, or lifts the
-   * ban; takes Moderate any community.
-   */
-  async setForeignUserBanned(userId: string, banned: boolean): Promise<void> {
-    const params = { params: { path: { user: userId } } };
-    const result = banned
-      ? await this.#client.api.PUT("/api/v1/admin/users/{user}/ban", params)
-      : await this.#client.api.DELETE("/api/v1/admin/users/{user}/ban", params);
-    if (result.error !== undefined) {
+  /** The categories a report may be made in, in the order they are offered. */
+  async reportCategories(): Promise<components["schemas"]["ReportCategory"][]> {
+    const result = await this.#client.api.GET("/api/v1/report-categories");
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.data;
+  }
+
+  /** Reports a message to the deployment's moderators. */
+  async reportMessage(
+    messageId: string,
+    category: string,
+    explanation: string | null,
+  ): Promise<void> {
+    const result = await this.#client.api.POST("/api/v1/messages/{message}/reports", {
+      params: { path: { message: messageId } },
+      body: { category, ...(explanation === null ? {} : { explanation }) },
+    });
+    if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
   }
 
+  /** Reports someone's profile to the deployment's moderators, naming what is wrong with it. */
+  async reportProfile(
+    userId: string,
+    category: string,
+    explanation: string | null,
+    aspects: readonly components["schemas"]["ProfileAspect"][],
+  ): Promise<void> {
+    const result = await this.#client.api.POST("/api/v1/users/{user}/reports", {
+      params: { path: { user: userId } },
+      body: {
+        category,
+        aspects: [...aspects],
+        ...(explanation === null ? {} : { explanation }),
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
   async deleteBot(botId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/bots/{bot}", {
       params: { path: { bot: botId } },
@@ -2630,7 +2702,16 @@ export class AspenSync {
         path: { channel: channelId },
         query: {
           ...query,
-          include: ["authors", "attachments", "polls", "threads", "echoes", "reactions"],
+          include: [
+            "authors",
+            "attachments",
+            "polls",
+            "threads",
+            "echoes",
+            "reactions",
+            "linked",
+            "warnings",
+          ],
         },
       },
     });

@@ -38,11 +38,27 @@ export type LoggedChannel = components["schemas"]["LoggedChannel"];
 export type LoggedMessage = components["schemas"]["LoggedMessage"];
 export type FileOfferEntry = components["schemas"]["FileOfferEntry"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
+export type UserBanRequest = components["schemas"]["UserBanRequest"];
+export type UserBanOutcome = components["schemas"]["UserBanOutcome"];
+export type ReportCase = components["schemas"]["ReportCase"];
+export type ReportCaseList = components["schemas"]["ReportCaseList"];
+export type ReportCounts = components["schemas"]["ReportCounts"];
+export type ReportStatus = components["schemas"]["ReportStatus"];
+export type ReportContext = components["schemas"]["ReportContext"];
+export type ReportResolutionRequest = components["schemas"]["ReportResolutionRequest"];
+export type ReportCategory = components["schemas"]["ReportCategory"];
+export type ReviewedMessage = components["schemas"]["ReviewedMessage"];
+export type ProfileAspect = components["schemas"]["ProfileAspect"];
+export type ProfileSnapshot = components["schemas"]["ProfileSnapshot"];
+export type Report = components["schemas"]["Report"];
+export type Resolution = components["schemas"]["Resolution"];
 
 /** A page of one of the dashboard's lists. */
 export interface AdminListQuery<S extends string> {
   /** Only those whose names contain this, ignoring case. */
   name?: string;
+  /** Only those banned from the deployment now (the user list). */
+  banned?: boolean;
   /** The order; newest first when absent. */
   sort?: S;
   /** How many rows to skip. */
@@ -53,8 +69,15 @@ export interface AdminListQuery<S extends string> {
 
 function listQuery<S extends string>(
   query: AdminListQuery<S>,
-): { "filter[name]"?: string; sort?: S; offset?: number; limit?: number } {
+): {
+  "filter[name]"?: string;
+  "filter[banned]"?: boolean;
+  sort?: S;
+  offset?: number;
+  limit?: number;
+} {
   return {
+    ...(query.banned === true ? { "filter[banned]": true } : {}),
     ...(query.name === undefined || query.name.trim() === ""
       ? {}
       : { "filter[name]": query.name.trim() }),
@@ -100,6 +123,134 @@ export class AdminApi {
         params: { query: listQuery(query) },
       }),
     );
+  }
+
+  /**
+   * Bans someone from the deployment: their sign-ins end, and they cannot sign in until the ban
+   * ends or is lifted. Takes Ban users.
+   */
+  async banUser(userId: string, request: UserBanRequest): Promise<UserBanOutcome> {
+    return adminRead(
+      await this.#client.api.PUT("/api/v1/admin/users/{user}/ban", {
+        params: { path: { user: userId } },
+        body: request,
+      }),
+    );
+  }
+
+  /** Lifts a ban from the deployment. Takes Ban users. */
+  async liftUserBan(userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/users/{user}/ban", {
+      params: { path: { user: userId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** A page of the report cases in one state. Takes Review reports. */
+  async reportCases(
+    status: ReportStatus,
+    page: { offset?: number; limit?: number } = {},
+  ): Promise<ReportCaseList> {
+    return adminRead(
+      await this.#client.api.GET("/api/v1/admin/reports", {
+        params: {
+          query: {
+            "filter[status]": status,
+            ...(page.offset === undefined || page.offset === 0 ? {} : { offset: page.offset }),
+            ...(page.limit === undefined ? {} : { limit: page.limit }),
+          },
+        },
+      }),
+    );
+  }
+
+  /** One report case. */
+  async reportCase(caseId: string): Promise<ReportCaseList> {
+    return adminRead(
+      await this.#client.api.GET("/api/v1/admin/reports/{case}", {
+        params: { path: { case: caseId } },
+      }),
+    );
+  }
+
+  /** How many report cases are open, and how many dismissed. */
+  async reportCounts(): Promise<ReportCounts> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/report-counts"));
+  }
+
+  /** The messages around a case's reported message; around it, or before or after one. */
+  async reportContext(
+    caseId: string,
+    anchor: { before?: string; after?: string } = {},
+  ): Promise<ReportContext> {
+    return adminRead(
+      await this.#client.api.GET("/api/v1/admin/reports/{case}/context", {
+        params: { path: { case: caseId }, query: anchor },
+      }),
+    );
+  }
+
+  /** Resolves an open case with the actions given. */
+  async resolveReportCase(
+    caseId: string,
+    request: ReportResolutionRequest,
+  ): Promise<ReportCaseList> {
+    return adminRead(
+      await this.#client.api.POST("/api/v1/admin/reports/{case}/resolution", {
+        params: { path: { case: caseId } },
+        body: request,
+      }),
+    );
+  }
+
+  /** Dismisses an open case, or restores a dismissed one to review. */
+  async setReportCaseDismissed(caseId: string, dismissed: boolean): Promise<void> {
+    const params = { params: { path: { case: caseId } } };
+    const result = dismissed
+      ? await this.#client.api.PUT("/api/v1/admin/reports/{case}/dismissal", params)
+      : await this.#client.api.DELETE("/api/v1/admin/reports/{case}/dismissal", params);
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Every report category, hidden ones included, in the order they are offered. */
+  async allReportCategories(): Promise<ReportCategory[]> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/report-categories"));
+  }
+
+  /** Adds a category of the deployment's own. */
+  async createReportCategory(name: string, description: string | null): Promise<ReportCategory> {
+    return adminRead(
+      await this.#client.api.POST("/api/v1/admin/report-categories", {
+        body: { name, ...(description === null ? {} : { description }) },
+      }),
+    );
+  }
+
+  /** Renames, describes, hides, or shows a category, as a merge patch. */
+  async updateReportCategory(
+    categoryId: string,
+    patch: { name?: string; description?: string | null; hidden?: boolean },
+  ): Promise<ReportCategory> {
+    return adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/report-categories/{category}", {
+        params: { path: { category: categoryId } },
+        body: patch,
+      }),
+    );
+  }
+
+  /** Puts the deployment's own categories in order. */
+  async orderReportCategories(categoryIds: readonly string[]): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/admin/report-category-order", {
+      body: { categories: [...categoryIds] },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /** The newest registration invites, usable or not. */

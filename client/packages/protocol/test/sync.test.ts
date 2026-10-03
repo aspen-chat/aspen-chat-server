@@ -65,6 +65,7 @@ function message(n: number, author = me.id): Message {
     kind: "standard",
     poll: null,
     mentions: { users: [], roles: [], everyone: false },
+    linkedMessages: [],
   };
 }
 
@@ -382,7 +383,7 @@ describe("AspenSync", () => {
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/messages`]: (url) => {
         expect(url.searchParams.get("include")).toBe(
-          "authors,attachments,polls,threads,echoes,reactions",
+          "authors,attachments,polls,threads,echoes,reactions,linked,warnings",
         );
         if (url.searchParams.get("before") !== null) {
           return json({ data: [message(50)], included: { users: [], attachments: [] } });

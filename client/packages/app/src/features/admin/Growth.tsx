@@ -2,6 +2,7 @@ import type { Growth as GrowthSeries, GrowthRange } from "@aspen/protocol";
 import { useCallback, useState } from "react";
 import { ToggleButton, ToggleButtonGroup, useLocale } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { toggleChipClass } from "@/features/invites/dialog";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
@@ -87,11 +88,7 @@ export function Growth() {
           className="flex flex-wrap gap-1"
         >
           {RANGES.map((r) => (
-            <ToggleButton
-              key={r}
-              id={r}
-              className="rounded-md border border-line px-3 py-1 text-sm text-ink-muted outline-none hover:bg-surface-hover pressed:bg-surface-hover selected:border-accent selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
-            >
+            <ToggleButton key={r} id={r} className={toggleChipClass}>
               {m.admin.ranges[r]}
             </ToggleButton>
           ))}

@@ -31,7 +31,11 @@ import {
   ReactionsDialog,
 } from "@/features/messages/Reactions";
 import { DeleteMessageModal } from "@/features/messages/DeleteMessageDialog";
-import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
+import { messageLink, messageUrl, threadLink, type ChannelHome } from "@/features/messages/links";
+import { LinkedMessages } from "@/features/messages/EmbeddedMessage";
+import { WarningBody } from "@/features/messages/WarningBody";
+import { ReportModal } from "@/features/reports/ReportDialog";
+import { useAspenClient } from "@/api/context";
 import { useMessages } from "@/i18n/context";
 import { feelPress } from "@/features/messages/haptics";
 import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
@@ -106,6 +110,7 @@ export const MessageItem = memo(function MessageItem({
 }) {
   const m = useMessages();
   const sync = useSync();
+  const client = useAspenClient();
   const navigate = useNavigate();
   const message = useMessage(id);
   const author = useUser(message?.author);
@@ -187,6 +192,13 @@ export const MessageItem = memo(function MessageItem({
   // manage messages here.
   const own = me !== null && me.id === message.author;
   const deletable = own || permissions.has("manageMessages");
+  // The system account's notices and a call's record are no one's to report.
+  const reportable =
+    me !== null &&
+    !own &&
+    author?.system !== true &&
+    message.kind !== "call" &&
+    message.kind !== "missedCall";
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   const editable = own && message.kind === "standard";
   if (message.kind === "call" || message.kind === "missedCall") {
@@ -216,6 +228,8 @@ export const MessageItem = memo(function MessageItem({
     canThread,
     editable,
     deletable,
+    reportable,
+    link: messageUrl(client.baseUrl, home.community, channelId, id),
     onOpenThread: openThread,
     onEdit: () => {
       setEditing(true);
@@ -290,6 +304,7 @@ export const MessageItem = memo(function MessageItem({
             {...sheetProps("reactions")}
           />
           <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
+          <ReportModal target={{ kind: "message", messageId: id }} {...sheetProps("report")} />
         </>
       )}
       {author === undefined ? (
@@ -345,18 +360,23 @@ export const MessageItem = memo(function MessageItem({
         ) : message.kind === "threadEcho" && message.echoOf != null ? (
           <EchoedReply replyId={message.echoOf} home={home} channelId={channelId} />
         ) : null}
-        <MessageBody
-          message={message}
-          home={home}
-          hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
-          {...(own || permissions.has("manageMessages")
-            ? {
-                onRemoveAttachment: (attachmentId: string) => {
-                  void sync.removeAttachment(id, attachmentId).catch(() => undefined);
-                },
-              }
-            : {})}
-        />
+        {message.kind === "warning" && !editing ? (
+          <WarningBody message={message} home={home} />
+        ) : (
+          <MessageBody
+            message={message}
+            home={home}
+            hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
+            {...(own || permissions.has("manageMessages")
+              ? {
+                  onRemoveAttachment: (attachmentId: string) => {
+                    void sync.removeAttachment(id, attachmentId).catch(() => undefined);
+                  },
+                }
+              : {})}
+          />
+        )}
+        {!editing && <LinkedMessages message={message} />}
         <ReactionChips
           messageId={id}
           canReact={permissions.has("addReactions")}
