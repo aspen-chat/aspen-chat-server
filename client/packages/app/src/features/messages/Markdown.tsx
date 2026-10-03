@@ -86,7 +86,9 @@ function LinkToMessage({
   return (
     <Link
       {...messageLink({ domain, community: target.community }, target.channel, target.message)}
-      {...(bare ? { "aria-label": format(m.reports.messageLinkFull, { url: href }), title: href } : {})}
+      {...(bare
+        ? { "aria-label": format(m.reports.messageLinkFull, { url: href }), title: href }
+        : {})}
       className={
         bare
           ? "inline-flex items-baseline gap-0.5 rounded bg-accent-soft px-1 text-accent-strong outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
