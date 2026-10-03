@@ -49,6 +49,7 @@ export type SecondFactorMethod = Schemas["SecondFactorMethod"];
 export type TypedSecondFactor = Schemas["TypedSecondFactor"];
 export type ReauthenticationMethod = Schemas["ReauthenticationMethod"];
 export type AuthMethods = Schemas["AuthMethods"];
+export type DeploymentProfile = Schemas["DeploymentProfile"];
 
 /** How a password sign-in ended. */
 export type LoginOutcome =
@@ -180,6 +181,11 @@ export class AspenClient {
   /** How this server lets people sign in: whether it offers passkeys, and on which domain. */
   async authMethods(): Promise<AuthMethods> {
     return unwrap(await this.api.GET(`${API_PREFIX}/auth/methods`));
+  }
+
+  /** How the deployment presents itself: its display name and icon. Needs no session. */
+  async deploymentProfile(): Promise<DeploymentProfile> {
+    return unwrap(await this.api.GET(`${API_PREFIX}/deployment`));
   }
 
   /**

@@ -26,6 +26,7 @@ pub mod community;
 pub mod context;
 pub mod custom_emoji;
 pub mod deployment;
+pub mod deployment_profile;
 pub mod deployment_role;
 pub mod dm;
 pub mod ephemeral_token;

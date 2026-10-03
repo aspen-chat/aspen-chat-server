@@ -19,6 +19,7 @@ pub(crate) mod channel_mute;
 pub(crate) mod community;
 pub(crate) mod custom_emoji;
 pub(crate) mod deployment;
+pub(crate) mod deployment_profile;
 pub(crate) mod dm;
 pub(crate) mod error;
 mod event_stream;
@@ -70,6 +71,7 @@ pub const TAG_ICONS: &str = "icons";
 pub const TAG_DMS: &str = "dms";
 pub const TAG_SECURITY: &str = "security";
 pub const TAG_ADMIN: &str = "administration";
+pub const TAG_DEPLOYMENT: &str = "deployment";
 pub const TAG_ROLES: &str = "roles";
 pub const TAG_CUSTOM_EMOJI: &str = "custom emoji";
 pub const TAG_BANS: &str = "bans";
@@ -119,6 +121,7 @@ pub const TAG_BANS: &str = "bans";
         (name = TAG_INVITES, description = "Invite codes for joining communities"),
         (name = TAG_ATTACHMENTS, description = "Files attached to messages (two-phase direct-to-storage upload)"),
         (name = TAG_ICONS, description = "User and community icons (two-phase direct-to-storage upload)"),
+        (name = TAG_DEPLOYMENT, description = "How the deployment presents itself: its display name and icon"),
     )
 )]
 struct ApiDoc;
@@ -186,6 +189,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::login))
         .routes(routes!(auth::login_second_factor))
         .routes(routes!(auth::auth_methods))
+        .routes(routes!(
+            deployment_profile::get_deployment_profile,
+            deployment_profile::update_deployment_profile
+        ))
         .routes(routes!(auth::reauthenticate))
         .routes(routes!(auth::start_passkey_ceremony))
         .routes(routes!(auth::get_passkey_ceremony))

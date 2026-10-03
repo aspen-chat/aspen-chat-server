@@ -21,7 +21,7 @@ pub struct Icon {
     pub download_url: String,
 }
 
-fn icon_to_api(state: &GlobalServerContext, row: app::icon::Icon) -> Icon {
+pub(crate) fn icon_to_api(state: &GlobalServerContext, row: app::icon::Icon) -> Icon {
     let download_url = state.media_store.public_url(&row.storage_key);
     Icon {
         id: row.id,

@@ -15,13 +15,14 @@ export function signedIn(status: "signedIn" | null = "signedIn"): string {
 }
 
 /**
- * A server that offers passwords only, so the sign-in screen shows no passkey button, and takes
- * new accounts from anyone unless `registrationInviteRequired`.
+ * A server that offers passwords only, so the sign-in screen shows no passkey button, takes
+ * new accounts from anyone unless `registrationInviteRequired`, and has no display name or icon.
  */
 export async function stubAuthMethods(
   page: Page,
   { registrationInviteRequired = false }: { registrationInviteRequired?: boolean } = {},
 ): Promise<void> {
+  await stubDeploymentProfile(page, { displayName: null, icon: null });
   await page.route("**/api/v1/auth/methods", (route) =>
     route.fulfill({
       status: 200,
@@ -32,6 +33,22 @@ export async function stubAuthMethods(
         registrationInviteRequired,
       }),
     }),
+  );
+}
+
+/**
+ * How the server presents itself on the sign-in screen (`GET /deployment`). Registered after
+ * `stubAuthMethods`, it replaces the empty profile that gives.
+ */
+export async function stubDeploymentProfile(
+  page: Page,
+  profile: {
+    displayName: string | null;
+    icon: { id: string; mimeType: string; downloadUrl: string } | null;
+  },
+): Promise<void> {
+  await page.route("**/api/v1/deployment", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(profile) }),
   );
 }
 

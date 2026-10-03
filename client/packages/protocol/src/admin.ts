@@ -21,6 +21,8 @@ export type FederatedDeployment = components["schemas"]["FederatedDeployment"];
 export type FederationList = components["schemas"]["FederationList"];
 export type ContactResult = components["schemas"]["ContactResult"];
 export type Gate = components["schemas"]["Gate"];
+export type DeploymentProfileUpdateRequest =
+  components["schemas"]["DeploymentProfileUpdateRequest"];
 
 export type UserSort = NonNullable<
   NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
@@ -120,6 +122,16 @@ export class AdminApi {
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+  }
+
+  /**
+   * Changes how the deployment presents itself: its display name and icon, each cleared with
+   * `null`. Answers with the profile as it now is.
+   */
+  async updateDeploymentProfile(
+    change: DeploymentProfileUpdateRequest,
+  ): Promise<components["schemas"]["DeploymentProfile"]> {
+    return adminRead(await this.#client.api.PATCH("/api/v1/deployment", { body: change }));
   }
 
   /** This deployment's part in federation: its domain, key, gates, and lists in force. */

@@ -47,6 +47,8 @@ import { voice } from "./en/voice";
 export const en = {
   appName: "Aspen",
   loginHeading: "Sign in",
+  welcomeNamed: "Welcome to {name}, an Aspen Chat instance.",
+  welcomeUnnamed: "Welcome to our Aspen Chat instance.",
   inviteCodeLabel: "Invite code",
   inviteCodeRequiredHint:
     "This server takes new accounts by invite. Ask its administrators for a code.",

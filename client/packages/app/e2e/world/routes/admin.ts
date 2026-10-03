@@ -52,6 +52,12 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       () => admin.revoke(path.split("/").pop() ?? ""),
     ],
     ["GET", /^\/admin\/fleet$/, admin.fleet],
+    ["GET", /^\/deployment$/, admin.profile],
+    [
+      "PATCH",
+      /^\/deployment$/,
+      () => admin.updateProfile(request.postDataJSON() as { displayName?: string | null }),
+    ],
     ["GET", /^\/admin\/federation$/, admin.federation.overview],
     ["GET", /^\/admin\/federation\/deployments$/, () => admin.federation.list(url)],
     [

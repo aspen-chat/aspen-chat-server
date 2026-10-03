@@ -72,4 +72,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20260930_150734_everyone_mention_limit::M,
     &migrations::m20261002_062747_custom_emoji::M,
     &migrations::m20261002_142250_community_ban::M,
+    &migrations::m20261003_045506_deployment_profile::M,
 ];

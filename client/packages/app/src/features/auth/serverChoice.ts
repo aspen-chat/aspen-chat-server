@@ -3,7 +3,8 @@ import { createContext, useContext } from "react";
 /** The chosen server and a way back to the server picker, for the sign-in screen. */
 export interface ServerChoice {
   serverUrl: string;
-  changeServer: () => void;
+  /** Back to the server picker; `null` on the web, whose server is the one serving the page. */
+  changeServer: (() => void) | null;
 }
 
 export const ServerChoiceContext = createContext<ServerChoice | null>(null);

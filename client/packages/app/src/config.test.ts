@@ -6,13 +6,16 @@ describe("defaultServerUrl", () => {
     window.localStorage.clear();
   });
 
-  it("prefers a remembered server, then falls back to the page origin on the web", () => {
+  it("uses the page's origin on the web, whatever was remembered", () => {
     expect(defaultServerUrl("web")).toBe(window.location.origin);
     rememberServerUrl("https://chat.example.org");
-    expect(defaultServerUrl("web")).toBe("https://chat.example.org");
+    expect(defaultServerUrl("web")).toBe(window.location.origin);
   });
 
-  it("has no default in a shell without a meaningful origin", () => {
+  it("uses the remembered server in a shell without a meaningful origin", () => {
     expect(defaultServerUrl("desktop")).toBeNull();
+    rememberServerUrl("https://chat.example.org");
+    expect(defaultServerUrl("desktop")).toBe("https://chat.example.org");
+    expect(defaultServerUrl("mobile")).toBe("https://chat.example.org");
   });
 });

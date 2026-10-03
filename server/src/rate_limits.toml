@@ -111,6 +111,7 @@ endpoints = [
   "PUT /admin/federation/deployments/{domain}/key",
   "PUT /admin/federation/deployments/{domain}/lists/{list}",
   "DELETE /admin/federation/deployments/{domain}/lists/{list}",
+  "PATCH /deployment",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -169,6 +170,10 @@ ip = { requests = 5, per_seconds = 3600, burst = 3 }
 ip = { requests = 60, per_seconds = 60, burst = 20 }
 
 [rate_limits.endpoints."GET /auth/methods"]
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."GET /deployment"]
+# The sign-in screen reads it each time it opens.
 ip = { requests = 60, per_seconds = 60, burst = 20 }
 
 [rate_limits.endpoints."GET /.well-known/aspen"]

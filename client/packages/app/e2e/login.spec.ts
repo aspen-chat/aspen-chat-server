@@ -1,5 +1,17 @@
 import { expect, test } from "@playwright/test";
-import { signedIn, stubAuthMethods, stubSignedInBackend } from "./stubs";
+import {
+  signedIn,
+  stubAuthMethods,
+  stubDeploymentProfile,
+  stubSignedInBackend,
+  uuid,
+} from "./stubs";
+
+/** A one-pixel PNG, for the deployment's icon. */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 /**
  * Exercises the login screen against a stubbed server so the suite runs without infrastructure.
@@ -8,6 +20,47 @@ import { signedIn, stubAuthMethods, stubSignedInBackend } from "./stubs";
 test.describe("login", () => {
   test.beforeEach(async ({ page }) => {
     await stubAuthMethods(page);
+  });
+
+  test("welcomes people to the deployment by name, under its icon", async ({ page }) => {
+    const iconUrl = "https://media.example.org/icons/deployment.png";
+    await page.route(iconUrl, (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
+    );
+    await stubDeploymentProfile(page, {
+      displayName: "Kiesel Family Chat",
+      icon: { id: uuid, mimeType: "image/png", downloadUrl: iconUrl },
+    });
+    await page.goto("/");
+    await expect(
+      page.getByText("Welcome to Kiesel Family Chat, an Aspen Chat instance.", { exact: true }),
+    ).toBeVisible();
+    const icon = page.locator(`img[src="${iconUrl}"]`);
+    await expect(icon).toBeVisible();
+    // Above the welcome, at 256 pixels where the screen has room for them.
+    const [iconBox, welcomeBox] = await Promise.all([
+      icon.boundingBox(),
+      page.getByText(/^Welcome to/).boundingBox(),
+    ]);
+    expect(iconBox?.width).toBe(256);
+    expect((iconBox?.y ?? 0) + (iconBox?.height ?? 0)).toBeLessThanOrEqual(welcomeBox?.y ?? 0);
+    // The address still shows, but the web client's server is the one serving it.
+    await expect(page.getByText("Server:")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Change" })).toHaveCount(0);
+  });
+
+  test("welcomes people generally to a deployment with no name or icon", async ({ page }) => {
+    await page.goto("/");
+    await expect(
+      page.getByText("Welcome to our Aspen Chat instance.", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("main img")).toHaveCount(0);
+    // The create-account screen welcomes them the same way.
+    await page.getByRole("button", { name: "Create one" }).click();
+    await expect(page.getByRole("heading", { name: "Create an account" })).toBeVisible();
+    await expect(
+      page.getByText("Welcome to our Aspen Chat instance.", { exact: true }),
+    ).toBeVisible();
   });
 
   test("shows the server's Problem text when credentials are rejected", async ({ page }) => {

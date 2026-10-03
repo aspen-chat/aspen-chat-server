@@ -7,6 +7,7 @@ export {
   type AspenClientOptions,
   type AspenHttpClient,
   type AuthMethods,
+  type DeploymentProfile,
   type LoginOutcome,
   type PasskeyOutcome,
   type PasskeyRequest,
@@ -112,6 +113,7 @@ export {
   type ContactResult,
   type FederatedDeployment,
   type FederationList,
+  type DeploymentProfileUpdateRequest,
   type FederationOverview,
   type Gate,
 } from "./admin";

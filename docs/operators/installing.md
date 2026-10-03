@@ -201,7 +201,8 @@ aspen-chat-server admin grant <username>
 It gives that account the deployment's top role, making an Administrator role with every
 permission but moderating communities if there is none. `admin allow moderateCommunities`
 lets the top role moderate too. From then on, administrators manage everything else from the
-Administration Dashboard.
+Administration Dashboard, starting with its Profile tab: the display name and icon the
+sign-in screen welcomes people with.
 
 If `[registration] invite_required` is on, nobody can create the first account without an
 invite: make one first with `aspen-chat-server invites create`.

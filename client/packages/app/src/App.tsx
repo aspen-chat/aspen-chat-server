@@ -1,7 +1,7 @@
 import { RouterProvider } from "@tanstack/react-router";
 import { useState } from "react";
 import { AspenProvider } from "@/api/AspenProvider";
-import { defaultServerUrl, rememberServerUrl } from "@/config";
+import { defaultServerUrl, detectShell, rememberServerUrl } from "@/config";
 import { ServerForm } from "@/features/auth/ServerForm";
 import { ServerChoiceContext } from "@/features/auth/serverChoice";
 import { Toasts } from "@/features/layout/Toasts";
@@ -35,9 +35,12 @@ export function App() {
       <ServerChoiceContext.Provider
         value={{
           serverUrl,
-          changeServer: () => {
-            setChoosingServer(true);
-          },
+          changeServer:
+            detectShell() === "web"
+              ? null
+              : () => {
+                  setChoosingServer(true);
+                },
         }}
       >
         <RouterProvider router={router} />

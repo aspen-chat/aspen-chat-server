@@ -97,7 +97,19 @@ export function administration() {
     const limit = Number(url.searchParams.get("limit") ?? "15");
     return sorted.slice(offset, offset + limit);
   }
+  // How the deployment presents itself, as `GET /deployment` answers and its `PATCH` changes.
+  const profile: { displayName: string | null; icon: null } = {
+    displayName: "Family Server",
+    icon: null,
+  };
   return {
+    profile: () => profile,
+    updateProfile: (change: { displayName?: string | null }) => {
+      if (change.displayName !== undefined) {
+        profile.displayName = change.displayName;
+      }
+      return profile;
+    },
     overview: () => ({
       users: 22,
       newUsersThisWeek: 2,

@@ -37,17 +37,9 @@ function failure(e: unknown): string | null {
 /**
  * Signing in to the currently selected server: a username and password, then a second factor
  * when the account has two-factor sign-in on; or a passkey on its own. Failures show the
- * server's localized Problem text.
+ * server's localized Problem text. Which server it is shows above it (`DeploymentWelcome`).
  */
-export function LoginForm({
-  serverUrl,
-  onChangeServer,
-  onSwitchToRegister,
-}: {
-  serverUrl: string;
-  onChangeServer: () => void;
-  onSwitchToRegister: () => void;
-}) {
+export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
   const transport = usePasskeyTransport();
   const [step, setStep] = useState<Step>({ kind: "password" });
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +59,6 @@ export function LoginForm({
   }
   return (
     <PasswordStep
-      serverUrl={serverUrl}
       transport={transport}
       error={error}
       setError={setError}
@@ -75,27 +66,22 @@ export function LoginForm({
         setError(null);
         setStep({ kind: "secondFactor", ticket, methods });
       }}
-      onChangeServer={onChangeServer}
       onSwitchToRegister={onSwitchToRegister}
     />
   );
 }
 
 function PasswordStep({
-  serverUrl,
   transport,
   error,
   setError,
   onSecondFactor,
-  onChangeServer,
   onSwitchToRegister,
 }: {
-  serverUrl: string;
   transport: PasskeyTransport | null;
   error: string | null;
   setError: (error: string | null) => void;
   onSecondFactor: (ticket: string, methods: SecondFactorMethod[]) => void;
-  onChangeServer: () => void;
   onSwitchToRegister: () => void;
 }) {
   const m = useMessages();
@@ -143,14 +129,6 @@ function PasswordStep({
         className="flex flex-col gap-4"
       >
         <h1 className="text-2xl font-semibold">{m.loginHeading}</h1>
-        <div className="flex items-baseline justify-between text-sm text-ink-muted">
-          <span>
-            {m.serverLabel}: <span className="font-mono">{serverUrl}</span>
-          </span>
-          <Button onPress={onChangeServer} className={linkButtonClass}>
-            {m.changeServer}
-          </Button>
-        </div>
         <TextField
           name="username"
           isRequired

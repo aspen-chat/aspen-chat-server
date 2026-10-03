@@ -2,6 +2,7 @@ import {
   ChartLineUpIcon,
   FileArrowUpIcon,
   GlobeIcon,
+  HandWavingIcon,
   HardDrivesIcon,
   IdentificationBadgeIcon,
   ScrollIcon,
@@ -16,6 +17,7 @@ import { Button } from "react-aria-components";
 import { useCallback } from "react";
 import { planeClass } from "@/features/invites/dialog";
 import { useDeploymentPermissions, useIsAdmin, useSync } from "@/api/hooks";
+import { DeploymentProfileSection } from "@/features/admin/DeploymentProfile";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
@@ -39,6 +41,7 @@ const ADMIN_TABS = [
   "roles",
   "users",
   "communities",
+  "profile",
   "federation",
   "moderation",
   "transfers",
@@ -57,6 +60,7 @@ function useAllowedTabs(): AdminTab[] {
     roles: true,
     users: directories,
     communities: directories,
+    profile: permissions.has("manageFederation"),
     federation: permissions.has("manageFederation"),
     moderation: view,
     transfers: view,
@@ -74,6 +78,7 @@ function useTabLabel(): (tab: AdminTab) => string {
       roles: m.admin.deploymentRoles,
       users: m.admin.users,
       communities: m.admin.communities,
+      profile: m.admin.profile,
       federation: m.federation.title,
       moderation: m.admin.moderationLog,
       transfers: m.admin.fileTransfers,
@@ -87,6 +92,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   roles: IdentificationBadgeIcon,
   users: UsersIcon,
   communities: UsersThreeIcon,
+  profile: HandWavingIcon,
   federation: GlobeIcon,
   moderation: ScrollIcon,
   transfers: FileArrowUpIcon,
@@ -96,7 +102,8 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
  * The Administration Dashboard, `/admin/{tab}`: a rail of tabs beside the one open, which a
  * one-pane screen sets across the top instead. The tabs are the deployment's totals and their
  * growth, the health of its servers, registration invites, its roles, searchable lists of its
- * users and communities, federation with other deployments, the moderation log, and the record
+ * users and communities, the name and icon it welcomes people with, federation with other
+ * deployments, the moderation log, and the record
  * of file transfers. Each shows only to those with the deployment permission it needs; the
  * server refuses everyone else whatever this page shows. `/admin`, or a tab the caller may not
  * open, goes to the first they may.
@@ -174,6 +181,8 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return <UserDirectory roles={roles.data} />;
     case "communities":
       return <CommunityDirectory />;
+    case "profile":
+      return <DeploymentProfileSection />;
     case "federation":
       return <FederationSection />;
     case "moderation":

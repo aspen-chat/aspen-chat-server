@@ -75,7 +75,7 @@ commit, as with comments.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.
-- [`sign-in.md`](docs/architecture/sign-in.md): passkey ceremonies and their hand-off to the system browser.
+- [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, echoes, DMs and group DMs, the DM list, and the system account's DM.
 - [`unread-and-muting.md`](docs/architecture/unread-and-muting.md): read states, unread marks, marking read, the New Messages line, and muting.

@@ -187,6 +187,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    deployment_profile (singleton) {
+        singleton -> Bool,
+        display_name -> Nullable<Text>,
+        icon -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
     deployment_role (id) {
         id -> Uuid,
         name -> Text,
@@ -660,6 +668,7 @@ diesel::joinable!(community_user -> user (user));
 diesel::joinable!(custom_emoji -> community (community));
 diesel::joinable!(custom_emoji -> icon (icon));
 diesel::joinable!(custom_emoji -> user (created_by));
+diesel::joinable!(deployment_profile -> icon (icon));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
@@ -736,6 +745,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_role,
     community_user,
     custom_emoji,
+    deployment_profile,
     deployment_role,
     dm_recipient,
     federated_deployment,

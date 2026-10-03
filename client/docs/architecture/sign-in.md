@@ -1,5 +1,18 @@
-# Signing in with passkeys
+# Signing in
 
+- The signed-out screens (`SignedOut` in `src/features/layout/RootLayout.tsx`) open with
+  `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`) above the sign-in or
+  create-account form: the deployment's icon at 256 pixels when it has one, the welcome naming
+  it (`welcomeNamed`), or `welcomeUnnamed` when it has no display name, both read from
+  `GET /deployment` each time the screen opens (`AspenClient.deploymentProfile`), and the
+  server's address. The welcome waits for the read rather than showing the general one and
+  then the name; a failed read shows the general one. Which server the app signs in to is
+  `defaultServerUrl` (`src/config.ts`): the web client always uses the origin serving the page,
+  or the build's `VITE_ASPEN_SERVER_URL`, and never asks, so it offers no way to change the
+  server (`ServerChoice.changeServer` is `null`); the desktop and mobile shells use the server
+  last entered, then the build's, and otherwise ask (`ServerForm`), and the welcome offers to
+  change it. `detectShell` tells the mobile shells apart by `Capacitor.isNativePlatform()`,
+  since Android serves the bundle from `https://localhost`, which a browser tab can be too.
 - Signing in: `AspenClient.login` answers `signedIn` or `secondFactorRequired` with a ticket,
   finished by `completeSecondFactor` or a passkey; `runPasskeyCeremony` runs any passkey
   ceremony (`signIn`, `register`, `reauthenticate`) end to end and stores the session a

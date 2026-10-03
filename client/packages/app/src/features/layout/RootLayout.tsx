@@ -8,6 +8,7 @@ import { WakeThisPhone } from "@/api/push";
 import { NotifyOnMessages } from "@/features/notifications/NotifyOnMessages";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
+import { DeploymentWelcome } from "@/features/auth/DeploymentWelcome";
 import { LoginForm } from "@/features/auth/LoginForm";
 import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
@@ -37,8 +38,8 @@ export function RootLayout() {
 }
 
 /**
- * Signed out. An invite link naming another deployment says the user's account may be on any
- * deployment. A registration link (`/register`, with `?invite=` from the Administration
+ * Signed out: the deployment's welcome above the sign-in or create-account form. An invite link
+ * naming another deployment says the user's account may be on any deployment. A registration link (`/register`, with `?invite=` from the Administration
  * Dashboard) opens on the create-account screen with the invite filled in.
  */
 function SignedOut() {
@@ -60,6 +61,7 @@ function SignedOut() {
           {format(m.inviteOnDomain, { domain: inviteAt })}
         </p>
       )}
+      <DeploymentWelcome serverUrl={serverUrl} onChangeServer={changeServer} />
       {screen === "register" ? (
         <RegisterForm
           initialInvite={invite}
@@ -69,8 +71,6 @@ function SignedOut() {
         />
       ) : (
         <LoginForm
-          serverUrl={serverUrl}
-          onChangeServer={changeServer}
           onSwitchToRegister={() => {
             setScreen("register");
           }}

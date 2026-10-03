@@ -1,4 +1,5 @@
 import { normalizeServerUrl } from "@aspen/protocol";
+import { Capacitor } from "@capacitor/core";
 
 const SERVER_URL_KEY = "aspen.serverUrl";
 
@@ -15,21 +16,27 @@ export function detectShell(): Shell {
   if (window.aspenDesktop !== undefined) {
     return "desktop";
   }
-  if (window.location.protocol === "capacitor:" || window.location.hostname === "localhost") {
-    // Capacitor serves the bundle from `capacitor://localhost` (iOS) or `https://localhost`
-    // (Android). A browser tab at `localhost` is the Vite dev server, which also counts as web
-    // but needs no server address, so this guess only matters once a build is installed.
-    return window.location.protocol === "capacitor:" ? "mobile" : "web";
+  // Capacitor serves the bundle from `capacitor://localhost` on iOS and `https://localhost` on
+  // Android, which only its own bridge tells apart from a browser tab at `localhost`.
+  if (Capacitor.isNativePlatform()) {
+    return "mobile";
   }
   return "web";
 }
 
 /**
- * The server origin the app should use, in order of preference: what the user last entered,
- * the build-time `VITE_ASPEN_SERVER_URL`, then the page's own origin. Electron and Capacitor
- * have no meaningful own origin, so they always need one of the first two.
+ * The server origin the app should use. The web client is served by the deployment it signs in
+ * to, so it uses the page's own origin, or the build-time `VITE_ASPEN_SERVER_URL` when one is
+ * set (a development build pointed elsewhere); it never asks. Electron and Capacitor have no
+ * meaningful own origin, so they use what the user last entered, then the build-time address,
+ * and otherwise ask.
  */
 export function defaultServerUrl(shell: Shell = detectShell()): string | null {
+  const fromEnv = import.meta.env.VITE_ASPEN_SERVER_URL;
+  const built = fromEnv !== undefined && fromEnv.length > 0 ? normalizeServerUrl(fromEnv) : null;
+  if (shell === "web") {
+    return built ?? (window.location.protocol.startsWith("http") ? window.location.origin : null);
+  }
   try {
     const remembered = window.localStorage.getItem(SERVER_URL_KEY);
     if (remembered !== null) {
@@ -38,14 +45,7 @@ export function defaultServerUrl(shell: Shell = detectShell()): string | null {
   } catch {
     // Storage may be unavailable (private mode, blocked); fall through.
   }
-  const fromEnv = import.meta.env.VITE_ASPEN_SERVER_URL;
-  if (fromEnv !== undefined && fromEnv.length > 0) {
-    return normalizeServerUrl(fromEnv);
-  }
-  if (shell === "web" && window.location.protocol.startsWith("http")) {
-    return window.location.origin;
-  }
-  return null;
+  return built;
 }
 
 export function rememberServerUrl(serverUrl: string): void {

@@ -23,6 +23,7 @@ const TAB_OF: Record<string, string> = {
   Users: "Users",
   Communities: "Communities",
   "Moderation log": "Moderation log",
+  "Deployment profile": "Profile",
 };
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Administration sections" });
@@ -175,4 +176,27 @@ test("deployment roles list, and the caller's own top role is theirs but not the
     users.getByRole("row").filter({ hasText: "Kate" }).getByText("Administrator"),
   ).toBeVisible();
   await expect((await openSection(page, "Moderation log")).getByText("Nothing yet.")).toBeVisible();
+});
+
+test("the deployment profile renames the server its sign-in screen welcomes people to", async ({
+  page,
+}) => {
+  const profile = await openSection(page, "Deployment profile");
+  const name = profile.getByRole("textbox", { name: "Display name" });
+  await expect(name).toHaveValue("Family Server");
+  const save = profile.getByRole("button", { name: "Save" });
+  // Nothing to save until the name changes.
+  await expect(save).toBeDisabled();
+  await name.fill("  Kiesel Family Chat ");
+  await save.click();
+  await expect(profile.getByRole("status")).toHaveText("Saved.");
+  await expect(save).toBeDisabled();
+  // Emptied, the name is cleared rather than saved blank.
+  const saved = page.waitForRequest(
+    (request) => request.method() === "PATCH" && request.url().endsWith("/api/v1/deployment"),
+  );
+  await name.fill("");
+  await save.click();
+  expect((await saved).postDataJSON()).toEqual({ displayName: null });
+  await expect(profile.getByRole("button", { name: "Add icon" })).toBeVisible();
 });

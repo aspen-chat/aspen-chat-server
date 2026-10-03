@@ -164,4 +164,18 @@ export const admin = {
   },
   invite: "Invite",
   members: "Members",
+  profile: "Profile",
+  profileTitle: "Deployment profile",
+  profileHint: "The name and icon this server's sign-in screen welcomes people with.",
+  displayName: "Display name",
+  displayNameHint:
+    "Up to 64 characters. Left empty, people are welcomed to “our Aspen Chat instance”.",
+  saveDisplayName: "Save",
+  savingDisplayName: "Saving…",
+  displayNameSaved: "Saved.",
+  deploymentIcon: "Icon",
+  deploymentIconHint: "Shown above the welcome. Without one, nothing is shown.",
+  addDeploymentIcon: "Add icon",
+  changeDeploymentIcon: "Change icon",
+  removeDeploymentIcon: "Remove icon",
 } as const;
