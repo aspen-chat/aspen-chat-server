@@ -77,6 +77,7 @@ eventStreamIdentifyTimeout: "The live connection didn't identify itself in time.
 
 # Media uploads
 attachmentUploadNotFound: "Upload was not found in storage. Please try uploading the file again."
+iconInUse: "That picture is in use, so it can't be deleted. Stop using it first."
 iconUploadNotFound: "Upload was not found in storage. Please try uploading the icon again."
 attachmentNotReady: "Some attachments haven't finished uploading. Wait for them, or remove them, and send again."
 attachmentDimensions: "A picture's width and height must be given together, each a whole number of pixels from 1 to %{max}, or not at all. Upload the picture again, and if this happens again the app needs updating."

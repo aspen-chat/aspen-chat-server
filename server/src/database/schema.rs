@@ -284,6 +284,7 @@ diesel::table! {
         timestamp -> Timestamptz,
         storage_key -> Text,
         ready_at -> Nullable<Timestamptz>,
+        uploaded_by -> Nullable<Uuid>,
     }
 }
 
@@ -721,6 +722,7 @@ diesel::joinable!(federation_list_entry -> user (added_by));
 diesel::joinable!(file_offer -> channel (channel));
 diesel::joinable!(file_offer -> user (sender));
 diesel::joinable!(file_transfer -> file_offer (offer));
+diesel::joinable!(icon -> user (uploaded_by));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
 diesel::joinable!(mention -> channel (channel));

@@ -60,10 +60,10 @@ pub struct IconUploadHandle {
 )]
 pub async fn init_icon_upload(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(request): Json<IconUploadInitRequest>,
 ) -> ApiResult<Created<IconUploadHandle>> {
-    let upload = app::icon::init_upload(&state, request.mime_type).await?;
+    let upload = app::icon::init_upload(&state, user.id, request.mime_type).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/icons/{}", upload.id.0),
         IconUploadHandle {
@@ -127,6 +127,9 @@ pub async fn get_icon(
     Ok(Json(icon_to_api(&state, row)))
 }
 
+/// Deletes an icon the caller uploaded that nothing uses: no profile, community, custom emoji,
+/// the deployment's profile, or a profile a report or warning keeps. Anyone else's icon is not
+/// found.
 #[utoipa::path(
     delete,
     path = "/icons/{icon}",
@@ -137,15 +140,16 @@ pub async fn get_icon(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = NOT_FOUND, description = "No such icon, or one the caller did not upload", body = Problem),
+        (status = CONFLICT, description = "`conflict`: something uses the icon", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn delete_icon(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(icon): Path<IconId>,
 ) -> ApiResult<NoContent> {
-    app::icon::delete_icon(&state, icon).await?;
+    app::icon::delete_own_icon(&state, user.id, icon).await?;
     Ok(NoContent)
 }
