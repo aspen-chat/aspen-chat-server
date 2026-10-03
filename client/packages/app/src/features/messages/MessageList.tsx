@@ -1151,7 +1151,14 @@ export function MessageList({
           />
         </div>
       )}
-      {(!window.atLatest || farBack) && <JumpToLatest onJump={jumpToLatest} />}
+      {(!window.atLatest || farBack) && (
+        // Over the bottom of the view, taking no room in the list: the pill comes and goes as
+        // the reader nears the newest, and room of its own going at the bottom would move
+        // everything in view down by its height.
+        <div className="pointer-events-none sticky bottom-3 flex h-0 items-end justify-center">
+          <JumpToLatest onJump={jumpToLatest} />
+        </div>
+      )}
       {diagnostics !== null && (
         <ScrollDiagnosticsPanel diagnostics={diagnostics} viewport={viewport} />
       )}
@@ -1180,7 +1187,7 @@ function JumpToLatest({ onJump }: { onJump: () => Promise<void> }) {
         });
       }}
       isPending={jumping}
-      className="motion-rise sticky bottom-3 left-1/2 flex w-fit -translate-x-1/2 items-center gap-2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+      className="motion-rise pointer-events-auto flex shrink-0 items-center gap-2 rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-contrast shadow outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       {jumping && (
         <span
