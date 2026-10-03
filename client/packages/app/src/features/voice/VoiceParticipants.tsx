@@ -87,7 +87,7 @@ function ParticipantRow({
       aria-label={speaking ? format(m.voice.speaking, { name }) : undefined}
       role={speaking ? "img" : undefined}
     >
-      <Avatar name={name} iconId={user?.icon} size="sm" />
+      <Avatar name={name} iconId={user?.icon} size="md" />
     </span>
   );
   return (

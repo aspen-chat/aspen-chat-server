@@ -76,7 +76,7 @@ function MemberRow({ user }: { user: User }) {
           className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-start outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <span className="relative">
-            <Avatar name={name} iconId={user.icon} size="sm" />
+            <Avatar name={name} iconId={user.icon} size="md" />
             <StatusDot status={user.onlineStatus} label={m.status[user.onlineStatus]} />
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
