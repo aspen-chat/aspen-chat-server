@@ -24,7 +24,7 @@ export function Avatar({
   const dimensions = {
     lg: "h-12 w-12 text-base",
     md: "h-9 w-9 text-sm",
-    sm: "h-6 w-6 text-xs",
+    sm: "h-7 w-7 text-xs",
     xs: "h-5 w-5 text-[0.5rem]",
   }[size];
   const skeleton = "animate-pulse bg-surface-hover motion-reduce:animate-none";
