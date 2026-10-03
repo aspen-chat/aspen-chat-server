@@ -64,7 +64,7 @@ const menuItemClass =
   "focus:bg-surface-hover pointer-coarse:py-2.5";
 
 const toolButtonClass =
-  "rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
+  "shrink-0 rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
@@ -425,7 +425,7 @@ export function Composer({
           aria-label={m.messageLabel}
           value={draft}
           onChange={setDraft}
-          className="relative flex-1"
+          className="relative min-w-0 flex-1"
         >
           <p role="status" className="sr-only">
             {commands.active
@@ -464,7 +464,7 @@ export function Composer({
             aria-placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}
-            className="block max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
+            className="block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
           {draft === "" && (
             // The box's own placeholder would wrap, and grow the box, where it is too long for
@@ -482,7 +482,7 @@ export function Composer({
             type="submit"
             aria-label={m.send}
             isDisabled={!canSend}
-            className="rounded-md border border-transparent bg-accent p-2.5 text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="shrink-0 rounded-md border border-transparent bg-accent p-2.5 text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             <PaperPlaneRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
           </Button>

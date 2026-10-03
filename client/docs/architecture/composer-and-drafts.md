@@ -7,7 +7,10 @@
   its other controls share one + button whose menu offers attaching a file and making a poll
   (`CreatePollModal`, which the wide screen's own poll button opens too). Its placeholder is
   drawn by the box itself on one line, cut short with an ellipsis, since the textarea's own
-  would wrap and grow the box; the textarea carries it as `aria-placeholder`. When the list
+  would wrap and grow the box; the textarea carries it as `aria-placeholder`. The box grows with
+  what is written up to its row's width and no further: it may shrink below its content
+  (`min-w-0`), a word too long for the line (a link, say) breaks anywhere, and the buttons
+  beside it never shrink, so Send stays on screen however wide the text. When the list
   shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it was (pinned to the
   newest message, or moved down by what it lost), so what is being answered stays in view; the
   web app asks for this with `interactive-widget=resizes-content` in its viewport. "Jump to
