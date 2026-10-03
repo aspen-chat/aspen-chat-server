@@ -120,12 +120,24 @@ pub async fn record_offer(conn: &mut AsyncPgConnection, offer: NewOffer) -> app:
     Ok(())
 }
 
+/// Opens a transfer of the offer `record` to `receiver`, unless one is open already: a receiver
+/// has at most one at a time, and the report of its start may be applied twice.
 pub async fn record_start(
     conn: &mut AsyncPgConnection,
     record: Uuid,
     receiver: Uuid,
     mode: TransferMode,
 ) -> app::Result<()> {
+    let open: i64 = file_transfer::table
+        .filter(file_transfer::offer.eq(record))
+        .filter(file_transfer::receiver.eq(UserId(receiver)))
+        .filter(file_transfer::ended_at.is_null())
+        .count()
+        .get_result(conn)
+        .await?;
+    if open > 0 {
+        return Ok(());
+    }
     diesel::insert_into(file_transfer::table)
         .values((
             file_transfer::id.eq(Uuid::now_v7()),

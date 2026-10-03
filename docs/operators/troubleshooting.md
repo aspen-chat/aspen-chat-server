@@ -84,6 +84,13 @@ enabled, has room, and reported within `[voice] offer_silence_seconds`. The dash
 tab shows each voice server's last report. Check that the voice server is running, reaches
 NATS with the same token, and has the `id` the registry gave it.
 
+**The log warns that a voice server's snapshot repaired the record of a call**, or that a voice
+server no longer holds a call recorded on it. Some of that voice server's reports never reached
+an API server: NATS was unreachable or restarted, or a report kept failing (an `ERROR` line says
+which). The record is right again, and someone who appeared missing from, or stuck in, a call
+for up to a minute was that. Warnings that keep coming mean the voice server's link to NATS
+keeps dropping.
+
 **People join a call but hear nothing.** Signalling works but media does not flow: the media
 ports (`[rtc] min_port` to `max_port`, UDP and TCP) are closed, or `[rtc] announced_address` is
 not the address clients can reach (behind NAT it must be the public one).

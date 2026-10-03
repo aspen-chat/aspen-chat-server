@@ -425,6 +425,10 @@ pub enum ServerMessage {
     Error {
         detail: String,
         fatal: bool,
+        /// Set when the request was refused for coming too fast: how many seconds until the
+        /// same request would be taken.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_seconds: Option<u64>,
     },
 }
 

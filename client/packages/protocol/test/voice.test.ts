@@ -3,6 +3,7 @@ import {
   AspenClient,
   CameraError,
   MemorySessionStore,
+  READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,
   VoiceCall,
   rankCandidates,
@@ -16,6 +17,7 @@ import type { ClientMessage } from "../src/generated/voiceSignal";
 
 const baseUrl = "http://api.example.org";
 const channel = "0190f0a0-0000-7000-8000-000000000020";
+const otherChannel = "0190f0a0-0000-7000-8000-000000000021";
 const me = "0190f0a0-0000-7000-8000-000000000001";
 const session = "0190f0a0-0000-7000-8000-000000000900";
 const servers = {
@@ -44,8 +46,18 @@ function liveSession() {
 /** A voice server's socket: answers the signalling flow, or refuses, per its host. */
 class FakeSocket {
   static instances: FakeSocket[] = [];
-  static behaviour = new Map<string, "ready" | "refuse" | "silent">();
+  /**
+   * Per host: answers everything (`ready`), refuses the token, never answers `identify`
+   * (`silent`), turns `identify` away for coming too fast (`throttledIdentify`), refuses
+   * transports for coming too fast (`throttled`), or never answers them (`noTransport`).
+   */
+  static behaviour = new Map<
+    string,
+    "ready" | "refuse" | "silent" | "throttledIdentify" | "throttled" | "noTransport"
+  >();
   readonly sent: ClientMessage[] = [];
+  /** Every frame each way in order, `>` for the client's and `<` for the server's. */
+  readonly log: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((m: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
@@ -59,12 +71,14 @@ class FakeSocket {
   get readyState() {
     return this.closed ? 3 : this.OPEN;
   }
-  frame(frame: unknown) {
+  frame(frame: { type: string } & Record<string, unknown>) {
+    this.log.push(`<${frame.type}`);
     this.onmessage?.({ data: JSON.stringify(frame) });
   }
   send(data: string) {
     const frame = JSON.parse(data) as ClientMessage;
     this.sent.push(frame);
+    this.log.push(`>${frame.type}`);
     const host = new URL(this.url).hostname.split(".")[0] ?? "";
     const mode = FakeSocket.behaviour.get(host) ?? "ready";
     queueMicrotask(() => {
@@ -76,7 +90,14 @@ class FakeSocket {
               detail: "the token's signature does not match",
               fatal: true,
             });
-          } else if (mode === "ready") {
+          } else if (mode === "throttledIdentify") {
+            this.frame({
+              type: "error",
+              detail: "too many identify frames; try again in 7s",
+              fatal: true,
+              retryAfterSeconds: 7,
+            });
+          } else if (mode !== "silent") {
             this.frame({
               type: "ready",
               session,
@@ -87,6 +108,18 @@ class FakeSocket {
           }
           break;
         case "createTransport":
+          if (mode === "noTransport") {
+            break;
+          }
+          if (mode === "throttled") {
+            this.frame({
+              type: "error",
+              detail: "too many createTransport frames; try again in 5s",
+              fatal: false,
+              retryAfterSeconds: 5,
+            });
+            break;
+          }
           this.frame({
             type: "transportCreated",
             direction: frame.direction,
@@ -231,6 +264,9 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const transports: FakeTransport[] = [];
   const screens: { video: FakeTrack; audio: FakeTrack }[] = [];
   const microphones: (string | null)[] = [];
+  const microphoneTracks: FakeTrack[] = [];
+  /** How many times a device was loaded with a router's capabilities. */
+  const loads = { count: 0 };
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
   const cameras: (string | null)[] = [];
@@ -239,7 +275,10 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   let sendTransports = 0;
   const played: string[] = [];
   const device: VoiceDevice = {
-    load: () => Promise.resolve(),
+    load: () => {
+      loads.count += 1;
+      return Promise.resolve();
+    },
     rtpCapabilities: { codecs: [] },
     createSendTransport: () => {
       sendTransports += 1;
@@ -257,9 +296,12 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     createDevice: () => Promise.resolve(device),
     getMicrophone: (choice) => {
       microphones.push(choice === "default" ? null : choice.id);
-      return microphone === "ok"
-        ? Promise.resolve(new FakeTrack("audio") as unknown as MediaStreamTrack)
-        : Promise.reject(new Error("Permission denied"));
+      if (microphone !== "ok") {
+        return Promise.reject(new Error("Permission denied"));
+      }
+      const track = new FakeTrack("audio");
+      microphoneTracks.push(track);
+      return Promise.resolve(track as unknown as MediaStreamTrack);
     },
     getCamera: (choice) => {
       cameras.push(choice === "default" ? null : choice.id);
@@ -293,6 +335,8 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     played,
     screens,
     microphones,
+    microphoneTracks,
+    loads,
     outputs,
     volumes,
     cameras,
@@ -369,6 +413,8 @@ function makeCall(options: {
     played,
     screens,
     microphones,
+    microphoneTracks,
+    loads,
     outputs,
     volumes,
     cameras,
@@ -393,6 +439,8 @@ function makeCall(options: {
     played,
     screens,
     microphones,
+    microphoneTracks,
+    loads,
     outputs,
     volumes,
     cameras,
@@ -511,6 +559,58 @@ describe("VoiceCall", () => {
     });
     expect(FakeSocket.instances).toHaveLength(0);
     expect(calls.some((c) => c.includes("/failures") || c.includes("/health"))).toBe(false);
+  });
+
+  it("fails a join the voice server turns away for coming too fast, blaming no server", async () => {
+    FakeSocket.behaviour = new Map([["near", "throttled"]]);
+    const { call, calls } = makeCall({
+      candidates: ["near", "far"],
+      latency: { near: 1, far: 2 },
+    });
+    await expect(call.join(channel)).rejects.toThrow("too many createTransport frames");
+    expect(call.state).toMatchObject({
+      status: "failed",
+      channelId: channel,
+      errorKind: "refused",
+      retryAfterSeconds: 5,
+    });
+    // Another server would refuse the user no differently, and this one did nothing wrong.
+    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
+    expect(calls.some((c) => c.includes("/failures"))).toBe(false);
+  });
+
+  it("treats being turned away at identify for coming too fast as a refusal too", async () => {
+    FakeSocket.behaviour = new Map([["near", "throttledIdentify"]]);
+    const { call, calls } = makeCall({ candidates: ["near", "far"], latency: { near: 1, far: 2 } });
+    await expect(call.join(channel)).rejects.toThrow("too many identify frames");
+    expect(call.state).toMatchObject({ errorKind: "refused", retryAfterSeconds: 7 });
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(calls.some((c) => c.includes("/failures"))).toBe(false);
+  });
+
+  it("gives up on a request the voice server never answers and tries the next server", async () => {
+    FakeSocket.behaviour = new Map([["near", "noTransport"]]);
+    const { call, calls, timers } = makeCall({
+      candidates: ["near", "far"],
+      latency: { near: 1, far: 30 },
+    });
+    const joined = call.join(channel);
+    // Once the transports have been asked for, the wait for them runs out.
+    await vi.waitFor(() => {
+      expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "createTransport")).toBe(true);
+    });
+    for (const timer of timers.filter((t) => t.delay === READY_TIMEOUT_MS)) {
+      timer.fn();
+    }
+    await joined;
+    expect(call.state.status).toBe("connected");
+    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual([
+      "near.example.org",
+      "far.example.org",
+    ]);
+    expect(calls.filter((c) => c.includes("/failures"))).toEqual([
+      `POST api.example.org/api/v1/voice-servers/${servers.near.id}/failures`,
+    ]);
   });
 
   it("fails once every candidate is exhausted", async () => {
@@ -904,6 +1004,42 @@ describe("VoiceCall", () => {
     call.leave();
     await call.setAudioDevices({ input: { id: "mic-c", label: "C" }, output: "default" });
     expect(microphones).toEqual(["mic-a", "mic-b"]);
+  });
+
+  it("moves to another call keeping the microphone and the loaded device", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports, microphones, microphoneTracks, loads } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+    });
+    await call.join(channel);
+    await call.join(otherChannel);
+    expect(call.state).toMatchObject({ status: "connected", channelId: otherChannel });
+    const [first, second] = FakeSocket.instances;
+    expect(first?.sent.at(-1)?.type).toBe("leave");
+    expect(first?.closed).toBe(true);
+    expect(transports.slice(0, 2).every((t) => t.closed)).toBe(true);
+    // One microphone, opened once and still open, now sent into the second call.
+    expect(microphones).toHaveLength(1);
+    expect(microphoneTracks[0]?.stopped).toBe(false);
+    expect(transports[2]?.produced).toEqual(["p-microphone"]);
+    expect(loads.count).toBe(1);
+    // Both transports are asked for before either answer arrives.
+    const log = second?.log ?? [];
+    expect(log.lastIndexOf(">createTransport")).toBeLessThan(log.indexOf("<transportCreated"));
+    call.leave();
+    expect(microphoneTracks[0]?.stopped).toBe(true);
+  });
+
+  it("closes a microphone kept from the last call when the next one only lets them listen", async () => {
+    FakeSocket.behaviour = new Map();
+    const options = { candidates: ["near" as const], latency: { near: 1 }, speak: true };
+    const { call, microphoneTracks } = makeCall(options);
+    await call.join(channel);
+    options.speak = false;
+    await call.join(otherChannel);
+    expect(call.state).toMatchObject({ status: "connected", canSpeak: false });
+    expect(microphoneTracks[0]?.stopped).toBe(true);
   });
 
   it("leaves a call it is already in alone when asked to join it again", async () => {

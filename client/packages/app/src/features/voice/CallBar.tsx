@@ -19,6 +19,11 @@ import { channelLink, useDomain } from "@/features/messages/links";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
+import { useNumberFormat } from "@/i18n/format";
+import { format } from "@/i18n/messages";
+
+/** A wait in whole seconds, spelled out ("5 seconds") in the app's language. */
+const SECONDS: Intl.NumberFormatOptions = { style: "unit", unit: "second", unitDisplay: "long" };
 
 const buttonClass =
   "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover " +
@@ -33,6 +38,7 @@ export function CallBar() {
   const sync = useSync();
   const call = useVoiceCall();
   const channel = useChannel(call.channelId ?? "");
+  const seconds = useNumberFormat(SECONDS);
   if (call.status === "idle" || call.channelId === null) {
     return null;
   }
@@ -59,7 +65,11 @@ export function CallBar() {
           </span>
           <span className="truncate text-xs text-ink-muted">
             {call.status === "failed" && call.error !== null ? (
-              call.error
+              call.errorKind === "refused" && call.retryAfterSeconds !== null ? (
+                format(m.voice.tooFast, { wait: seconds.format(call.retryAfterSeconds) })
+              ) : (
+                call.error
+              )
             ) : channel === undefined ? null : (
               <CallPlace channel={channel} />
             )}

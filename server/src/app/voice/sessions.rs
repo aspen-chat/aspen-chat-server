@@ -17,10 +17,9 @@ use chrono::{DateTime, Duration, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use futures_util::StreamExt;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use voice_protocol::control::{
-    REPORT_QUEUE_GROUP, REPORT_SUBJECT, VoiceCommand, VoiceReport, command_subject,
+    ParticipantSnapshot, REPORT_PARTITIONS, VoiceCommand, VoiceReport, command_subject,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -100,33 +99,38 @@ async fn command_participant(
 // ---------------------------------------------------------------------------------------------
 // Reports from voice servers
 
-/// Subscribes to the voice servers' reports and applies each one. The subscription is in a
-/// queue group, so with several API servers running each report is handled by one of them.
-pub async fn spawn_report_listener(state: GlobalServerContext) -> app::Result<()> {
-    let client = state.nats_context.client();
-    let mut reports = client
-        .queue_subscribe(REPORT_SUBJECT, REPORT_QUEUE_GROUP.to_string())
-        .await?;
-    tokio::spawn(async move {
-        while let Some(message) = reports.next().await {
-            let report: VoiceReport = match serde_json::from_slice(&message.payload) {
-                Ok(report) => report,
-                Err(e) => {
-                    warn!(error = e.to_string(), "unreadable voice report ignored");
-                    continue;
-                }
-            };
-            if let Err(e) = apply_report(&state, report).await {
-                error!(error = e.to_string(), "applying a voice report failed");
-            }
-        }
-        error!("the voice report subscription ended");
-    });
-    Ok(())
-}
-
-async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::Result<()> {
+/// Applies one report from a voice server, `published` being when the report stream took it.
+/// The reports about one channel arrive here one at a time in the order they were sent
+/// (`super::reports`), and applying one twice changes nothing more, since a report whose
+/// acknowledgement was lost is delivered again.
+pub(super) async fn apply_report(
+    state: &GlobalServerContext,
+    report: VoiceReport,
+    published: DateTime<Utc>,
+) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
+    // A speaking change is only passed on: it writes nothing, so it needs no transaction, and
+    // it names its channel, so it needs no lookup either.
+    if let VoiceReport::Speaking {
+        channel,
+        user,
+        speaking,
+        ..
+    } = report
+    {
+        let channel = ChannelId::from(channel);
+        return publish_event(
+            state,
+            conn.as_mut(),
+            EventScope::Channel(channel),
+            &ServerEvent::VoiceSpeaking {
+                channel,
+                user: UserId::from(user),
+                speaking,
+            },
+        )
+        .await;
+    }
     conn.transaction(|conn| {
         async move {
             match report {
@@ -134,10 +138,12 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     server,
                     participants,
                 } => {
+                    // When the server sent it, not when it was applied: a report that waited in
+                    // the stream says nothing about whether the server is up now.
                     diesel::update(voice_server::table)
                         .filter(voice_server::id.eq(VoiceServerId::from(server)))
                         .set((
-                            voice_server::last_report_at.eq(Utc::now()),
+                            voice_server::last_report_at.eq(published),
                             voice_server::reported_participants
                                 .eq(i32::try_from(participants).unwrap_or(i32::MAX)),
                         ))
@@ -149,109 +155,31 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     session,
                     channel,
                 } => {
-                    let now = Utc::now();
-                    let mut row = VoiceSession {
-                        id: VoiceSessionId::from(session),
-                        channel: ChannelId::from(channel),
-                        voice_server: VoiceServerId::from(server),
-                        created_at: now,
-                        alone_since: Some(now),
-                        started_by: None,
-                        had_company: false,
-                    };
-                    // A voice server reports a session only once it holds the room, and it
-                    // holds the room because a client with a valid join token arrived, so the
-                    // call it announces is the one the channel now has. A session already
-                    // recorded for the channel is therefore a room that no longer exists: the
-                    // same server's, lost to a restart, or another server's that the joiner
-                    // could not reach. It is ended as lost, which sends its participants to
-                    // rejoin, and their offers now name this server.
-                    if let Some(stale) = session_on_channel(conn.as_mut(), row.channel).await? {
-                        if stale.id == row.id {
-                            return Ok(());
-                        }
-                        // The call goes on on this server: its people rejoin, so it keeps its
-                        // start and its starter, and rings no one again.
-                        row.created_at = stale.created_at;
-                        row.started_by = stale.started_by;
-                        row.had_company = stale.had_company;
-                        end_session(
-                            state,
-                            conn.as_mut(),
-                            &stale,
-                            VoiceSessionEndReason::ServerLost,
-                        )
-                        .await?;
-                    }
-                    match diesel::insert_into(voice_session::table)
-                        .values(&row)
-                        .execute(conn.as_mut())
-                        .await
-                    {
-                        Ok(_) => {
-                            publish_event(
-                                state,
-                                conn.as_mut(),
-                                EventScope::Channel(row.channel),
-                                &ServerEvent::VoiceSession(VoiceSessionEvent::Create(
-                                    message_enum::VoiceSession::from(&row),
-                                )),
-                            )
-                            .await?;
-                        }
-                        Err(diesel::result::Error::DatabaseError(
-                            diesel::result::DatabaseErrorKind::UniqueViolation,
-                            _,
-                        )) => {
-                            warn!(
-                                channel = channel.to_string(),
-                                server = server.to_string(),
-                                "voice server reported a session for a channel already in a call"
-                            );
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
+                    record_session(state, conn.as_mut(), server, session, channel).await?;
                 }
-                VoiceReport::ParticipantJoined { session, user } => {
+                VoiceReport::ParticipantJoined { session, user, .. } => {
                     let session_id = VoiceSessionId::from(session);
-                    let Some(existing) = find_session(conn.as_mut(), session_id).await? else {
+                    let Some(mut existing) = find_session(conn.as_mut(), session_id).await? else {
                         warn!(
                             session = session.to_string(),
                             "participant reported for an unknown session"
                         );
                         return Ok(());
                     };
-                    let row = VoiceParticipant {
-                        session: session_id,
-                        user: UserId::from(user),
-                        joined_at: Utc::now(),
-                        muted: false,
-                        deafened: false,
-                        sharing_screen: false,
-                    };
-                    let inserted = diesel::insert_into(voice_participant::table)
-                        .values(&row)
-                        .on_conflict_do_nothing()
-                        .execute(conn.as_mut())
-                        .await?;
-                    if inserted > 0 {
-                        publish_event(
-                            state,
-                            conn.as_mut(),
-                            EventScope::Channel(existing.channel),
-                            &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Create(
-                                participant_record(&row, existing.channel),
-                            )),
-                        )
-                        .await?;
-                        note_company(conn.as_mut(), &existing).await?;
-                        end_ring(state, conn.as_mut(), &existing, row.user).await?;
-                        if existing.started_by.is_none() {
-                            start_call(state, conn.as_mut(), &existing, row.user).await?;
-                        }
-                    }
+                    record_participant(
+                        state,
+                        conn.as_mut(),
+                        &mut existing,
+                        &ParticipantSnapshot {
+                            user,
+                            muted: false,
+                            deafened: false,
+                            sharing_screen: false,
+                        },
+                    )
+                    .await?;
                 }
-                VoiceReport::ParticipantLeft { session, user } => {
+                VoiceReport::ParticipantLeft { session, user, .. } => {
                     let session_id = VoiceSessionId::from(session);
                     let Some(existing) = find_session(conn.as_mut(), session_id).await? else {
                         return Ok(());
@@ -268,66 +196,30 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                         .await?;
                     }
                 }
-                VoiceReport::Speaking {
-                    session,
-                    user,
-                    speaking,
-                } => {
-                    let Some(existing) =
-                        find_session(conn.as_mut(), VoiceSessionId::from(session)).await?
-                    else {
-                        return Ok(());
-                    };
-                    publish_event(
-                        state,
-                        conn.as_mut(),
-                        EventScope::Channel(existing.channel),
-                        &ServerEvent::VoiceSpeaking {
-                            channel: existing.channel,
-                            user: UserId::from(user),
-                            speaking,
-                        },
-                    )
-                    .await?;
-                }
+                // Applied above, outside any transaction.
+                VoiceReport::Speaking { .. } => {}
                 VoiceReport::ParticipantState {
                     session,
                     user,
                     muted,
                     deafened,
                     sharing_screen,
+                    ..
                 } => {
-                    let session_id = VoiceSessionId::from(session);
-                    let changed = diesel::update(voice_participant::table)
-                        .filter(
-                            voice_participant::session
-                                .eq(session_id)
-                                .and(voice_participant::user.eq(UserId::from(user))),
-                        )
-                        .set((
-                            voice_participant::muted.eq(muted),
-                            voice_participant::deafened.eq(deafened),
-                            voice_participant::sharing_screen.eq(sharing_screen),
-                        ))
-                        .execute(conn.as_mut())
-                        .await?;
-                    if changed > 0 {
-                        publish_event(
-                            state,
-                            conn.as_mut(),
-                            EventScope::Session(session_id),
-                            &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Update {
-                                session: session_id,
-                                user: UserId::from(user),
-                                muted: Some(muted),
-                                deafened: Some(deafened),
-                                sharing_screen: Some(sharing_screen),
-                            }),
-                        )
-                        .await?;
-                    }
+                    record_state(
+                        state,
+                        conn.as_mut(),
+                        VoiceSessionId::from(session),
+                        &ParticipantSnapshot {
+                            user,
+                            muted,
+                            deafened,
+                            sharing_screen,
+                        },
+                    )
+                    .await?;
                 }
-                VoiceReport::SessionEnded { session } => {
+                VoiceReport::SessionEnded { session, .. } => {
                     if let Some(existing) =
                         find_session(conn.as_mut(), VoiceSessionId::from(session)).await?
                     {
@@ -376,6 +268,7 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     receiver,
                     ended_by,
                     reason,
+                    ..
                 } => {
                     app::file_transfer::record_end(
                         conn.as_mut(),
@@ -386,12 +279,286 @@ async fn apply_report(state: &GlobalServerContext, report: VoiceReport) -> app::
                     )
                     .await?;
                 }
+                VoiceReport::SessionSnapshot {
+                    server,
+                    session,
+                    channel,
+                    participants,
+                } => {
+                    apply_snapshot(
+                        state,
+                        conn.as_mut(),
+                        server,
+                        session,
+                        channel,
+                        &participants,
+                    )
+                    .await?;
+                }
+                VoiceReport::SessionsHeld {
+                    server,
+                    partition,
+                    sessions,
+                } => {
+                    end_sessions_not_held(state, conn.as_mut(), server, partition, &sessions)
+                        .await?;
+                }
             }
             Ok(())
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Records the session a voice server started, or returns the one already recorded under its
+/// id. `None` when the channel's call could not be recorded as this one.
+async fn record_session(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    server: uuid::Uuid,
+    session: uuid::Uuid,
+    channel: uuid::Uuid,
+) -> app::Result<Option<VoiceSession>> {
+    let now = Utc::now();
+    let mut row = VoiceSession {
+        id: VoiceSessionId::from(session),
+        channel: ChannelId::from(channel),
+        voice_server: VoiceServerId::from(server),
+        created_at: now,
+        alone_since: Some(now),
+        started_by: None,
+        had_company: false,
+    };
+    // A voice server reports a session only once it holds the room, and it holds the room
+    // because a client with a valid join token arrived, so the call it announces is the one the
+    // channel now has. A session already recorded for the channel is therefore a room that no
+    // longer exists: the same server's, lost to a restart, or another server's that the joiner
+    // could not reach. It is ended as lost, which sends its participants to rejoin, and their
+    // offers now name this server.
+    if let Some(stale) = session_on_channel(conn, row.channel).await? {
+        if stale.id == row.id {
+            return Ok(Some(stale));
+        }
+        // The call goes on on this server: its people rejoin, so it keeps its start and its
+        // starter, and rings no one again.
+        row.created_at = stale.created_at;
+        row.started_by = stale.started_by;
+        row.had_company = stale.had_company;
+        end_session(state, conn, &stale, VoiceSessionEndReason::ServerLost).await?;
+    }
+    match diesel::insert_into(voice_session::table)
+        .values(&row)
+        .execute(conn)
+        .await
+    {
+        Ok(_) => {
+            publish_event(
+                state,
+                conn,
+                EventScope::Channel(row.channel),
+                &ServerEvent::VoiceSession(VoiceSessionEvent::Create(
+                    message_enum::VoiceSession::from(&row),
+                )),
+            )
+            .await?;
+            Ok(Some(row))
+        }
+        Err(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::UniqueViolation,
+            _,
+        )) => {
+            warn!(
+                channel = channel.to_string(),
+                server = server.to_string(),
+                "voice server reported a session for a channel already in a call"
+            );
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Records someone joining `session` in the state `joined` gives, unless they are recorded in
+/// it already. The first to join starts the call, which in a DM rings everyone else.
+async fn record_participant(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    session: &mut VoiceSession,
+    joined: &ParticipantSnapshot,
+) -> app::Result<()> {
+    let row = VoiceParticipant {
+        session: session.id,
+        user: UserId::from(joined.user),
+        joined_at: Utc::now(),
+        muted: joined.muted,
+        deafened: joined.deafened,
+        sharing_screen: joined.sharing_screen,
+    };
+    let inserted = diesel::insert_into(voice_participant::table)
+        .values(&row)
+        .on_conflict_do_nothing()
+        .execute(conn)
+        .await?;
+    if inserted == 0 {
+        return Ok(());
+    }
+    publish_event(
+        state,
+        conn,
+        EventScope::Channel(session.channel),
+        &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Create(participant_record(
+            &row,
+            session.channel,
+        ))),
+    )
+    .await?;
+    note_company(conn, session).await?;
+    end_ring(state, conn, session, row.user).await?;
+    if session.started_by.is_none() {
+        start_call(state, conn, session, row.user).await?;
+        session.started_by = Some(row.user);
+    }
+    Ok(())
+}
+
+/// Records a participant's mute, deafen, and sharing state as `now` gives it.
+async fn record_state(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    session: VoiceSessionId,
+    now: &ParticipantSnapshot,
+) -> app::Result<()> {
+    let user = UserId::from(now.user);
+    let changed = diesel::update(voice_participant::table)
+        .filter(
+            voice_participant::session
+                .eq(session)
+                .and(voice_participant::user.eq(user)),
+        )
+        .set((
+            voice_participant::muted.eq(now.muted),
+            voice_participant::deafened.eq(now.deafened),
+            voice_participant::sharing_screen.eq(now.sharing_screen),
+        ))
+        .execute(conn)
+        .await?;
+    if changed > 0 {
+        publish_event(
+            state,
+            conn,
+            EventScope::Session(session),
+            &ServerEvent::VoiceParticipant(VoiceParticipantEvent::Update {
+                session,
+                user,
+                muted: Some(now.muted),
+                deafened: Some(now.deafened),
+                sharing_screen: Some(now.sharing_screen),
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Makes the record of one call match what its voice server says of it: the session recorded,
+/// everyone in it recorded in the state they are in, and no one else. Nothing changes when the
+/// record was already right; a change means a report was lost, and is logged.
+async fn apply_snapshot(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    server: uuid::Uuid,
+    session: uuid::Uuid,
+    channel: uuid::Uuid,
+    participants: &[ParticipantSnapshot],
+) -> app::Result<()> {
+    let known = find_session(conn, VoiceSessionId::from(session))
+        .await?
+        .is_some();
+    let Some(mut existing) = record_session(state, conn, server, session, channel).await? else {
+        return Ok(());
+    };
+    let recorded: Vec<VoiceParticipant> = voice_participant::table
+        .select(VoiceParticipant::as_select())
+        .filter(voice_participant::session.eq(existing.id))
+        .load(conn)
+        .await?;
+    let mut repairs = usize::from(!known);
+    for participant in participants {
+        match recorded.iter().find(|row| row.user.0 == participant.user) {
+            None => {
+                record_participant(state, conn, &mut existing, participant).await?;
+                repairs += 1;
+            }
+            Some(row)
+                if (row.muted, row.deafened, row.sharing_screen)
+                    != (
+                        participant.muted,
+                        participant.deafened,
+                        participant.sharing_screen,
+                    ) =>
+            {
+                record_state(state, conn, existing.id, participant).await?;
+                repairs += 1;
+            }
+            Some(_) => {}
+        }
+    }
+    let departed: Vec<UserId> = recorded
+        .iter()
+        .map(|row| row.user)
+        .filter(|user| !participants.iter().any(|p| p.user == user.0))
+        .collect();
+    for user in &departed {
+        remove_participant(state, conn, &existing, *user).await?;
+    }
+    if !departed.is_empty() {
+        note_company(conn, &existing).await?;
+        repairs += departed.len();
+    }
+    if repairs > 0 {
+        warn!(
+            session = session.to_string(),
+            server = server.to_string(),
+            repairs,
+            "a voice server's snapshot repaired the record of a call, so reports about it were lost"
+        );
+    }
+    Ok(())
+}
+
+/// Ends every session recorded on `server`, in a channel of lane `partition`, that it no
+/// longer holds.
+async fn end_sessions_not_held(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    server: uuid::Uuid,
+    partition: u8,
+    held: &[uuid::Uuid],
+) -> app::Result<()> {
+    let held: Vec<VoiceSessionId> = held.iter().copied().map(VoiceSessionId::from).collect();
+    // `voice_protocol::control::partition`, computed by the database.
+    let in_lane = diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
+        "get_byte(uuid_send(channel), 15) % {REPORT_PARTITIONS} = "
+    ))
+    .bind::<diesel::sql_types::Integer, _>(i32::from(partition));
+    let gone: Vec<VoiceSession> = voice_session::table
+        .select(VoiceSession::as_select())
+        .filter(voice_session::voice_server.eq(VoiceServerId::from(server)))
+        .filter(voice_session::id.ne_all(held))
+        .filter(in_lane)
+        .load(conn)
+        .await?;
+    for session in gone {
+        warn!(
+            session = session.id.0.to_string(),
+            server = server.to_string(),
+            "a voice server no longer holds a call recorded on it, so reports about it were lost"
+        );
+        // Its people may still believe they are in it, so they are sent to rejoin.
+        end_session(state, conn, &session, VoiceSessionEndReason::ServerLost).await?;
+    }
+    Ok(())
 }
 
 /// The call on `channel` whose server has not reported within `silence`, if that is the

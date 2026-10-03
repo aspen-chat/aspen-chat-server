@@ -37,21 +37,26 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 # Joining a big call resumes one consumer per producer already in it.
 user = { requests = 50, per_seconds = 1, burst = 400 }
 
+# Joining a call takes one `identify`, `setCapabilities`, `produce`, and `setState`, and two
+# `createTransport` and `connectTransport`. Their limits let someone moving from call to call
+# join a dozen times back to back, and every two seconds or so after that.
 [rate_limits.frames.identify]
-user = { requests = 20, per_seconds = 60, burst = 10 }
+user = { requests = 30, per_seconds = 60, burst = 12 }
 
 [rate_limits.frames.setCapabilities]
-user = { requests = 10, per_seconds = 60, burst = 5 }
+user = { requests = 30, per_seconds = 60, burst = 12 }
 
-# Each transport takes ports from the media range.
+# Each transport takes ports from the media range. A participant holds one in each direction,
+# a new one replacing the last, and leaving closes both, so moving between calls churns
+# transports rather than piling them up.
 [rate_limits.frames.createTransport]
-user = { requests = 12, per_seconds = 60, burst = 6 }
+user = { requests = 60, per_seconds = 60, burst = 24 }
 
 [rate_limits.frames.connectTransport]
-user = { requests = 12, per_seconds = 60, burst = 6 }
+user = { requests = 60, per_seconds = 60, burst = 24 }
 
 [rate_limits.frames.produce]
-user = { requests = 20, per_seconds = 60, burst = 10 }
+user = { requests = 40, per_seconds = 60, burst = 20 }
 
 [rate_limits.frames.produceRtp]
 user = { requests = 10, per_seconds = 60, burst = 4 }
@@ -64,7 +69,7 @@ user = { requests = 10, per_seconds = 60, burst = 4 }
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
 [rate_limits.frames.setState]
-user = { requests = 30, per_seconds = 60, burst = 10 }
+user = { requests = 40, per_seconds = 60, burst = 20 }
 # Every mute and deafen is reported to the API server and announced to everyone who can see
 # the call.
 channel = { requests = 120, per_seconds = 60, burst = 30 }

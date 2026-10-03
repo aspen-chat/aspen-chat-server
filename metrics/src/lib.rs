@@ -64,6 +64,11 @@ pub mod api {
     pub const RATE_LIMIT_REFUSALS: &str = "aspen_rate_limit_refusals_total";
     /// 1 while a suspension of the rate limits is in force.
     pub const RATE_LIMITS_SUSPENDED: &str = "aspen_rate_limits_suspended";
+    /// Voice server reports applied, by `report` (its type).
+    pub const VOICE_REPORTS_APPLIED: &str = "aspen_voice_reports_applied_total";
+    /// Time from a voice server's report reaching the report stream to an API server having
+    /// applied it, by `report`: how far behind the record of calls runs.
+    pub const VOICE_REPORT_WAIT_DURATION: &str = "aspen_voice_report_wait_duration_seconds";
 }
 
 /// Voice server metrics.

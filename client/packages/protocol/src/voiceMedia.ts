@@ -75,6 +75,8 @@ export interface VoiceTransport {
   produce(options: {
     track: MediaStreamTrack;
     appData: Record<string, unknown>;
+    /** Whether closing the producer, or its transport, stops the track; true by default. */
+    stopTracks?: boolean;
     encodings?: { maxBitrate?: number; maxFramerate?: number }[];
     codecOptions?: {
       opusStereo?: boolean;

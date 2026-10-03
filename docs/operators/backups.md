@@ -33,8 +33,9 @@ posted them would have to post them again.
 
 ## What needs no backup
 
-- **NATS** holds only the last minute of events. After a loss, every client notices the gap,
-  reloads what it shows, and carries on.
+- **NATS** holds only the last minute of events, and voice servers' reports waiting to be
+  applied. After a loss, every client notices the gap, reloads what it shows, and carries on,
+  and within a minute each voice server's next snapshot puts the record of its calls right.
 - **Valkey** holds rate limit counters, who is online, and sign-in steps in progress (tickets
   for a second factor, passkey ceremonies). After a loss, people halfway through signing in
   start again; nobody is signed out.

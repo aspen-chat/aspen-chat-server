@@ -121,6 +121,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                     let _ = outbox.send(ServerMessage::Error {
                         detail: e.to_string(),
                         fatal: true,
+                        retry_after_seconds: None,
                     });
                     drop(outbox);
                     let _ = writer.await;
@@ -132,6 +133,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             let _ = outbox.send(ServerMessage::Error {
                 detail: "the first frame must be identify".to_string(),
                 fatal: true,
+                retry_after_seconds: None,
             });
             drop(outbox);
             let _ = writer.await;
@@ -153,21 +155,26 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 wait.as_secs().max(1)
             ),
             fatal: true,
+            retry_after_seconds: Some(wait.as_secs().max(1)),
         });
         drop(outbox);
         let _ = writer.await;
         return;
     }
-    if let Err(e) = state.rooms.join(channel, user, outbox.clone()).await {
-        warn!(error = e.to_string(), "join failed");
-        let _ = outbox.send(ServerMessage::Error {
-            detail: e.to_string(),
-            fatal: true,
-        });
-        drop(outbox);
-        let _ = writer.await;
-        return;
-    }
+    let connection = match state.rooms.join(channel, user, outbox.clone()).await {
+        Ok(connection) => connection,
+        Err(e) => {
+            warn!(error = e.to_string(), "join failed");
+            let _ = outbox.send(ServerMessage::Error {
+                detail: e.to_string(),
+                fatal: true,
+                retry_after_seconds: None,
+            });
+            drop(outbox);
+            let _ = writer.await;
+            return;
+        }
+    };
 
     while let Some(frame) = next_frame(&mut stream).await {
         let kind = frame.kind();
@@ -180,6 +187,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                     wait.as_secs().max(1)
                 ),
                 fatal: false,
+                retry_after_seconds: Some(wait.as_secs().max(1)),
             });
             continue;
         }
@@ -292,11 +300,15 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             let _ = outbox.send(ServerMessage::Error {
                 detail: e.to_string(),
                 fatal: false,
+                retry_after_seconds: None,
             });
         }
     }
     info!(user = user.to_string(), "socket closed");
-    state.rooms.leave(channel, user, None).await;
+    state
+        .rooms
+        .leave(channel, user, Some(connection), None)
+        .await;
     drop(outbox);
     let _ = writer.await;
 }

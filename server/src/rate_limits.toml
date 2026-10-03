@@ -346,8 +346,10 @@ user = { requests = 20, per_seconds = 60, burst = 5 }
 [rate_limits.endpoints."PATCH /users/{user}/preferences"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Every move to another call asks for an offer; as the voice servers' own limits do, this lets
+# someone join a dozen calls back to back.
 [rate_limits.endpoints."POST /channels/{channel}/voice/join"]
-user = { requests = 20, per_seconds = 60, burst = 5 }
+user = { requests = 30, per_seconds = 60, burst = 12 }
 
 [rate_limits.endpoints."POST /voice-servers/{server}/failures"]
 user = { requests = 10, per_seconds = 60, burst = 5 }

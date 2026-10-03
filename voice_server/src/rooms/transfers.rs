@@ -221,7 +221,7 @@ impl Rooms {
             valid_for_seconds,
         };
         room.broadcast(&ServerMessage::FileOffered { offer: wire }, None);
-        self.reporter.report(reported).await;
+        self.reporter.report(reported);
         info!(
             channel = channel.to_string(),
             user = user.to_string(),
@@ -355,14 +355,13 @@ impl Rooms {
             },
             None,
         );
-        self.reporter
-            .report(VoiceReport::TransferStarted {
-                record,
-                sender,
-                receiver: user,
-                mode,
-            })
-            .await;
+        self.reporter.report(VoiceReport::TransferStarted {
+            channel,
+            record,
+            sender,
+            receiver: user,
+            mode,
+        });
         info!(
             channel = channel.to_string(),
             sender = sender.to_string(),
@@ -449,14 +448,13 @@ impl Rooms {
             },
             None,
         );
-        self.reporter
-            .report(VoiceReport::TransferEnded {
-                record: transfer.record,
-                receiver,
-                ended_by,
-                reason,
-            })
-            .await;
+        self.reporter.report(VoiceReport::TransferEnded {
+            channel: room.channel,
+            record: transfer.record,
+            receiver,
+            ended_by,
+            reason,
+        });
     }
 
     /// Everything of `user`'s in a call they are leaving: their offers are withdrawn and every

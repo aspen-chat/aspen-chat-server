@@ -104,9 +104,10 @@ async fn main() -> anyhow::Result<()> {
     }
     info!(workers = workers.len(), "mediasoup workers started");
 
-    let reporter = reporter::Reporter::connect(&config.nats_url, &config.nats_auth_token)
-        .await
-        .context("failed to connect to NATS")?;
+    let reporter =
+        reporter::Reporter::connect(&config.nats_url, &config.nats_auth_token, config.id)
+            .await
+            .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
     let announced_address = config.rtc.resolved_announced_address()?;
     if let Some(address) = &announced_address {
@@ -154,6 +155,10 @@ async fn main() -> anyhow::Result<()> {
         reporter
             .clone()
             .spawn_load_reports(config.id, move || rooms.participant_count());
+    }
+    {
+        let rooms = Arc::clone(&rooms);
+        reporter.clone().spawn_snapshots(move || rooms.snapshot());
     }
     {
         let rooms = Arc::clone(&rooms);
