@@ -2,7 +2,6 @@ import { groupChannels, type Category, type Channel, type Community } from "@asp
 import { useGrowthKey, useReorderGlide } from "@/features/layout/motion";
 import { PaneEdge } from "@/features/layout/ResizablePane";
 import {
-  BellSlashIcon,
   CaretDownIcon,
   DotsSixVerticalIcon,
   HashIcon,
@@ -37,6 +36,7 @@ import {
 } from "@/api/hooks";
 import { DeleteChannelDialog, RenameChannelDialog } from "@/features/channels/ChannelDialogs";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
+import { MuteBell } from "@/features/channels/MuteBell";
 import { AddDialog } from "@/features/channels/AddDialog";
 import { AddToCategoryDialog } from "@/features/channels/AddToCategoryDialog";
 import { AccessDialog } from "@/features/community-settings/AccessDialog";
@@ -368,15 +368,16 @@ export const unreadMarkClass = "rounded-md border border-accent bg-accent/20 tex
  * are marked together, and the label takes all the width up to the drag handle, so every unread
  * channel's mark is as wide as the next. The mark fills the row's padding: 3px and the border
  * make its 4px top and bottom, 6px and the border its 8px sides, less the 1px the row keeps at
- * its edges. A muted channel is dimmed, carries a muted bell, and is never marked unread, though
- * the count of unread messages that tag the reader shows on it as on any other. A text
- * channel's menu opens on a right click or from its options button.
+ * its edges. A muted channel is dimmed, carries a muted bell whose tooltip says until when, and
+ * is never marked unread, though the count of unread messages that tag the reader shows on it
+ * as on any other. A text channel's menu opens on a right click or from its options button.
  */
 function ChannelLabel({ channel, current }: { channel: Channel; current: boolean }) {
   const m = useMessages();
   const unread = useUnread(channel.id);
   const tags = useMentions(channel.id);
-  const muted = useMute(channel.id) !== undefined;
+  const mute = useMute(channel.id);
+  const muted = mute !== undefined;
   const manage = useCan(channel.community, "manageChannels");
   // A moderator of the server may rename and delete any channel, and nothing else here.
   const moderator = useDeploymentCan("moderateCommunities");
@@ -433,13 +434,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
         </>
       )}
       <MentionBadge count={tags} className="ms-auto" />
-      {muted && (
-        <BellSlashIcon
-          size={14}
-          aria-hidden="true"
-          className={(tags > 0 ? "" : "ms-auto ") + "shrink-0"}
-        />
-      )}
+      {mute !== undefined && <MuteBell mute={mute} className={tags > 0 ? "" : "ms-auto"} />}
       {hasMenu && (
         <>
           <ChannelMenuButton

@@ -16,9 +16,9 @@ import { useChannel, useMute, useNotificationLevel, useSync } from "@/api/hooks"
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
-import { useDateFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
 import { CopyIdMenuItem } from "@/features/layout/CopyId";
+import { useMuteEnd } from "@/features/channels/muteEnd";
 
 /** The lengths of mute offered, in the menu's order; `null` lasts until the user unmutes. */
 const MUTE_DURATIONS: readonly {
@@ -33,14 +33,6 @@ const MUTE_DURATIONS: readonly {
   { key: "week", seconds: 7 * 24 * 60 * 60 },
   { key: "forever", seconds: null },
 ];
-
-/** When a mute ends: the date and time, which a mute of a week at most needs no year for. */
-const UNTIL: Intl.DateTimeFormatOptions = {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-};
 
 const popoverClass = "w-56 rounded-md border border-line bg-surface-raised p-1 shadow-lg";
 const itemClass = "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover";
@@ -83,7 +75,7 @@ export function ChannelMenu({
   onDelete?: () => void;
 }) {
   const m = useMessages();
-  const until = useDateFormat(UNTIL);
+  const muteEnd = useMuteEnd();
   const sync = useSync();
   const mute = useMute(channelId);
   const channel = useChannel(channelId);
@@ -121,13 +113,7 @@ export function ChannelMenu({
           {mutable && (
             <SubmenuTrigger>
               <MenuItem id="mute" className={parentClass}>
-                <ParentLabel>
-                  {mute === undefined
-                    ? m.mute.heading
-                    : mute.until == null
-                      ? m.mute.mutedForGood
-                      : format(m.mute.mutedUntil, { time: until.format(new Date(mute.until)) })}
-                </ParentLabel>
+                <ParentLabel>{mute === undefined ? m.mute.heading : muteEnd(mute)}</ParentLabel>
               </MenuItem>
               <Popover className={popoverClass} placement={submenuPlacement}>
                 <Menu
