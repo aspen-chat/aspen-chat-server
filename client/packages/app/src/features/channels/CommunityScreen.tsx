@@ -1,11 +1,12 @@
 import { Navigate, Outlet, useParams } from "@tanstack/react-router";
 import { ResizablePane } from "@/features/layout/ResizablePane";
 import { CHANNEL_LIST, MEMBER_LIST } from "@/features/layout/paneSizes";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChannels, useCommunity, useDeploymentCan, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelSidebar } from "@/features/channels/ChannelSidebar";
-import { MemberList } from "@/features/members/MemberList";
-import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
+import { MemberGroups, MemberList } from "@/features/members/MemberList";
+import { Drawer } from "@/features/layout/Drawer";
+import { LARGE_SCREEN, MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { MembersPanelContext } from "@/features/members/membersPanel";
 import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
@@ -15,9 +16,11 @@ import { ChannelListSkeleton, ChannelSkeleton } from "@/features/layout/ScreenSk
 /**
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
  * list on the right. On narrow screens only one of the sidebar and the content is shown: the
- * sidebar at the community index, the content once a channel is chosen. The member list is
- * hidden below the large breakpoint and can be toggled from a channel's header. A moderator of
- * the server may open a community they are not in, which is read here on arrival.
+ * sidebar at the community index, the content once a channel is chosen. From the large
+ * breakpoint the member list is a pane, which a channel's header shows and hides; below it the
+ * list is a drawer over the channel, which the header's button opens, or a swipe across the
+ * channel toward the inline start draws out. A moderator of the server may open a community
+ * they are not in, which is read here on arrival.
  */
 export function ChannelSidebarLayout() {
   const onePane = useOnePane();
@@ -29,7 +32,15 @@ export function ChannelSidebarLayout() {
   const sync = useSync();
   const live = useSyncStatus() === "live";
   const moderator = useDeploymentCan("moderateCommunities");
+  const large = useMediaQuery(LARGE_SCREEN);
   const [membersOpen, setMembersOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const channelArea = useRef<HTMLDivElement>(null);
+  const showingChannel = channelId !== undefined;
+  const drawerEnabled = !large && showingChannel && community !== undefined;
+  if (!drawerEnabled && drawerOpen) {
+    setDrawerOpen(false);
+  }
   const [missingId, setMissingId] = useState<string | null>(null);
   const held = community !== undefined;
   useEffect(() => {
@@ -64,15 +75,23 @@ export function ChannelSidebarLayout() {
       </main>
     );
   }
-  const showingChannel = channelId !== undefined;
   return (
     <MembersPanelContext.Provider
-      value={{
-        open: membersOpen,
-        toggle: () => {
-          setMembersOpen((open) => !open);
-        },
-      }}
+      value={
+        large
+          ? {
+              open: membersOpen,
+              toggle: () => {
+                setMembersOpen((open) => !open);
+              },
+            }
+          : {
+              open: drawerOpen,
+              toggle: () => {
+                setDrawerOpen((open) => !open);
+              },
+            }
+      }
     >
       <ResizablePane
         sizing={CHANNEL_LIST}
@@ -83,18 +102,35 @@ export function ChannelSidebarLayout() {
       >
         <ChannelSidebar community={community} />
       </ResizablePane>
-      <div className={`${showingChannel ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
+      <div
+        ref={channelArea}
+        className={`${showingChannel ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}
+      >
         <Outlet />
       </div>
-      {membersOpen && (
-        <ResizablePane
-          sizing={MEMBER_LIST}
-          edge="start"
-          label={m.layout.memberList}
-          className="hidden lg:flex"
+      {large ? (
+        membersOpen && (
+          <ResizablePane
+            sizing={MEMBER_LIST}
+            edge="start"
+            label={m.layout.memberList}
+            className="flex"
+          >
+            <MemberList communityId={communityId} />
+          </ResizablePane>
+        )
+      ) : (
+        <Drawer
+          swipeFrom={channelArea}
+          enabled={drawerEnabled}
+          isOpen={drawerOpen}
+          onOpenChange={setDrawerOpen}
+          title={m.membersLabel}
         >
-          <MemberList communityId={communityId} />
-        </ResizablePane>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3">
+            <MemberGroups communityId={communityId} headingLevel={3} />
+          </div>
+        </Drawer>
       )}
     </MembersPanelContext.Provider>
   );

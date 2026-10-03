@@ -77,6 +77,15 @@ for (const { palette, scheme } of combinations) {
       await openChannel(page, "general");
       await expect(page.getByText("Sounds good.").first()).toBeVisible();
       await expectAccessible(page, "#general");
+      // Below the large breakpoint the member list is a drawer over the channel.
+      const showMembers = page.getByRole("button", { name: "Show members" });
+      if (await showMembers.isVisible()) {
+        await showMembers.click();
+        await expect(page.getByRole("dialog", { name: "Members" })).toBeVisible();
+        await expectAccessible(page, "members drawer");
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog", { name: "Members" })).toBeHidden();
+      }
       await page.getByRole("link", { name: /2 replies/ }).click();
       await expect(page.getByRole("heading", { name: "Thread" })).toBeVisible();
       await expectAccessible(page, "thread");

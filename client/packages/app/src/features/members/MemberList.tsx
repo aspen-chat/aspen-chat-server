@@ -10,16 +10,9 @@ import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
-/**
- * Who is in the community, online members first. The server samples the most recently seen
- * members, so in a large community this is the active part of the roster rather than all of it.
- * People the user blocked are marked.
- */
+/** The member list as a pane beside the channel, on screens wide enough for one. */
 export function MemberList({ communityId }: { communityId: string }) {
   const m = useMessages();
-  const members = useMembers(communityId);
-  const online = members.filter((u) => u.onlineStatus !== "offline").sort(byName);
-  const offline = members.filter((u) => u.onlineStatus === "offline").sort(byName);
   return (
     // The list scrolls within the landmark, so the pane's edge stays along its whole side.
     <aside
@@ -27,17 +20,43 @@ export function MemberList({ communityId }: { communityId: string }) {
       className="motion-from-end relative flex w-full shrink-0 flex-col border-s border-line bg-surface-raised"
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3">
-        <MemberGroup
-          heading={format(m.onlineGroup, { count: String(online.length) })}
-          users={online}
-        />
-        <MemberGroup
-          heading={format(m.offlineGroup, { count: String(offline.length) })}
-          users={offline}
-        />
+        <MemberGroups communityId={communityId} headingLevel={2} />
       </div>
       <PaneEdge />
     </aside>
+  );
+}
+
+/**
+ * Who is in the community, online members first. The server samples the most recently seen
+ * members, so in a large community this is the active part of the roster rather than all of it.
+ * People the user blocked are marked. Each group is headed at `headingLevel`: a level below
+ * whatever titles the list.
+ */
+export function MemberGroups({
+  communityId,
+  headingLevel,
+}: {
+  communityId: string;
+  headingLevel: 2 | 3;
+}) {
+  const m = useMessages();
+  const members = useMembers(communityId);
+  const online = members.filter((u) => u.onlineStatus !== "offline").sort(byName);
+  const offline = members.filter((u) => u.onlineStatus === "offline").sort(byName);
+  return (
+    <>
+      <MemberGroup
+        heading={format(m.onlineGroup, { count: String(online.length) })}
+        headingLevel={headingLevel}
+        users={online}
+      />
+      <MemberGroup
+        heading={format(m.offlineGroup, { count: String(offline.length) })}
+        headingLevel={headingLevel}
+        users={offline}
+      />
+    </>
   );
 }
 
@@ -45,15 +64,24 @@ function byName(a: User, b: User): number {
   return displayNameOf(a).localeCompare(displayNameOf(b));
 }
 
-function MemberGroup({ heading, users }: { heading: string; users: readonly User[] }) {
+function MemberGroup({
+  heading,
+  headingLevel,
+  users,
+}: {
+  heading: string;
+  headingLevel: 2 | 3;
+  users: readonly User[];
+}) {
   if (users.length === 0) {
     return null;
   }
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
     <section className="mb-3">
-      <h2 className="px-2 pb-1 text-xs font-semibold tracking-wide text-ink-faint uppercase">
+      <Heading className="px-2 pb-1 text-xs font-semibold tracking-wide text-ink-faint uppercase">
         {heading}
-      </h2>
+      </Heading>
       <ul className="flex flex-col gap-0.5">
         {users.map((user) => (
           <MemberRow key={user.id} user={user} />

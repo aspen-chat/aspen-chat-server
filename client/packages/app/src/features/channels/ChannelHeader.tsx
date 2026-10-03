@@ -48,7 +48,7 @@ export function ChannelHeader({
         <Button
           onPress={membersPanel.toggle}
           aria-label={membersPanel.open ? m.hideMembers : m.showMembers}
-          className="hidden rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 lg:block"
+          className="rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           {membersPanel.open ? (
             <ArrowSquareRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
