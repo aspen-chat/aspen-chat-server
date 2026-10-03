@@ -8,7 +8,8 @@ import { Toasts } from "@/features/layout/Toasts";
 import { router } from "@/router";
 
 /**
- * Chooses the server, then hands the page to the router. Everything the router renders lives
+ * Chooses the server (`defaultServerUrl`, or the user's answer to `ServerForm` in a shell with
+ * none), then hands the page to the router. Everything the router renders lives
  * inside `<AspenProvider>`, so the client for the chosen server is available to every route.
  */
 export function App() {
@@ -19,12 +20,18 @@ export function App() {
     return (
       <main className="flex min-h-full items-center justify-center p-6">
         <ServerForm
-          initial={serverUrl ?? ""}
           onSubmit={(url) => {
             rememberServerUrl(url);
             setServerUrl(url);
             setChoosingServer(false);
           }}
+          {...(serverUrl === null
+            ? {}
+            : {
+                onCancel: () => {
+                  setChoosingServer(false);
+                },
+              })}
         />
       </main>
     );

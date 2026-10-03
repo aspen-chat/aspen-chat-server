@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   signedIn,
   stubAuthMethods,
@@ -6,6 +6,14 @@ import {
   stubSignedInBackend,
   uuid,
 } from "./stubs";
+
+/** Aspen's icon, which is small enough that Vite inlines it as an SVG data URL. */
+const ASPEN_ICON = /^data:image\/svg\+xml,.*aria-label='Aspen'/;
+
+/** The icon's side: 256 pixels from Tailwind's `md` (48rem) up, half that on a phone. */
+function iconPx(page: Page): number {
+  return (page.viewportSize()?.width ?? 0) >= 768 ? 256 : 128;
+}
 
 /** A one-pixel PNG, for the deployment's icon. */
 const PNG = Buffer.from(
@@ -37,30 +45,46 @@ test.describe("login", () => {
     ).toBeVisible();
     const icon = page.locator(`img[src="${iconUrl}"]`);
     await expect(icon).toBeVisible();
-    // Above the welcome, at 256 pixels where the screen has room for them.
+    // Above the welcome, at 256 pixels, or half that on a phone.
     const [iconBox, welcomeBox] = await Promise.all([
       icon.boundingBox(),
       page.getByText(/^Welcome to/).boundingBox(),
     ]);
-    expect(iconBox?.width).toBe(256);
+    expect(iconBox?.width).toBe(iconPx(page));
     expect((iconBox?.y ?? 0) + (iconBox?.height ?? 0)).toBeLessThanOrEqual(welcomeBox?.y ?? 0);
     // The address still shows, but the web client's server is the one serving it.
     await expect(page.getByText("Server:")).toBeVisible();
     await expect(page.getByRole("button", { name: "Change" })).toHaveCount(0);
   });
 
-  test("welcomes people generally to a deployment with no name or icon", async ({ page }) => {
+  test("welcomes people generally, under Aspen's icon, to a deployment with neither", async ({
+    page,
+  }) => {
     await page.goto("/");
     await expect(
       page.getByText("Welcome to our Aspen Chat instance.", { exact: true }),
     ).toBeVisible();
-    await expect(page.locator("main img")).toHaveCount(0);
+    const icon = page.locator("main img");
+    await expect(icon).toHaveCount(1);
+    await expect(icon).toHaveAttribute("src", ASPEN_ICON);
+    expect((await icon.boundingBox())?.width).toBe(iconPx(page));
     // The create-account screen welcomes them the same way.
     await page.getByRole("button", { name: "Create one" }).click();
     await expect(page.getByRole("heading", { name: "Create an account" })).toBeVisible();
     await expect(
       page.getByText("Welcome to our Aspen Chat instance.", { exact: true }),
     ).toBeVisible();
+  });
+
+  test("shows Aspen's icon in place of a deployment icon that fails to load", async ({ page }) => {
+    const iconUrl = "https://media.example.org/icons/missing.png";
+    await page.route(iconUrl, (route) => route.fulfill({ status: 404 }));
+    await stubDeploymentProfile(page, {
+      displayName: "Kiesel Family Chat",
+      icon: { id: uuid, mimeType: "image/png", downloadUrl: iconUrl },
+    });
+    await page.goto("/");
+    await expect(page.locator("main img")).toHaveAttribute("src", ASPEN_ICON);
   });
 
   test("shows the server's Problem text when credentials are rejected", async ({ page }) => {

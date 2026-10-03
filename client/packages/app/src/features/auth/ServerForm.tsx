@@ -3,14 +3,22 @@ import { useState, type SyntheticEvent } from "react";
 import { Button, Form, Input, Label, TextField } from "react-aria-components";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { AspenIcon } from "./AspenIcon";
+import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
 
-/** Asks which Aspen server to connect to. Shown when no server is remembered or configured. */
+/**
+ * Asks which Aspen deployment to connect to, under Aspen's icon, in the desktop and mobile
+ * shells, which have no server of their own: on first launch, and when the user changes it.
+ * The field starts empty. Whatever follows the host in the address (a path, a query, a
+ * fragment) is dropped, since a deployment is named by its origin (`normalizeServerUrl`).
+ * `onCancel`, given when a server is already chosen, goes back to it.
+ */
 export function ServerForm({
-  initial,
   onSubmit,
+  onCancel,
 }: {
-  initial: string;
   onSubmit: (serverUrl: string) => void;
+  onCancel?: () => void;
 }) {
   const m = useMessages();
   const [error, setError] = useState<string | null>(null);
@@ -26,28 +34,40 @@ export function ServerForm({
 
   return (
     <Form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4">
-      <h1 className="text-2xl font-semibold">{m.appName}</h1>
+      <div className="flex flex-col items-center gap-3 text-center">
+        <AspenIcon />
+        <h1 className="text-xl font-semibold">{m.welcomeToAspenChat}</h1>
+      </div>
       <TextField
         name="server"
-        defaultValue={initial}
         isRequired
         isInvalid={error !== null}
+        // An invalid field blocks the form's submission, so a new address clears the error.
+        onChange={() => {
+          setError(null);
+        }}
         autoComplete="url"
-        className="flex flex-col gap-1"
+        className={fieldClass}
       >
-        <Label className="text-sm font-medium text-ink-muted">{m.serverLabel}</Label>
+        <Label className={labelClass}>{m.deploymentUrlLabel}</Label>
         <Input
+          inputMode="url"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           placeholder={m.serverPlaceholder}
-          className="rounded-md border border-line bg-surface-raised px-3 py-2 text-base outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 invalid:border-danger"
+          className={inputClass}
         />
         {error !== null && <p className="text-sm text-danger">{error}</p>}
       </TextField>
-      <Button
-        type="submit"
-        className="rounded-md bg-accent px-4 py-2 font-medium text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
-      >
+      <Button type="submit" className={primaryButtonClass}>
         {m.continue}
       </Button>
+      {onCancel !== undefined && (
+        <Button onPress={onCancel} className={linkButtonClass + " self-center text-sm"}>
+          {m.backToSignIn}
+        </Button>
+      )}
     </Form>
   );
 }

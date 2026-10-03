@@ -10,6 +10,16 @@ describe("normalizeServerUrl", () => {
     expect(normalizeServerUrl("http://localhost:8080")).toBe("http://localhost:8080");
   });
 
+  it("drops everything after the host", () => {
+    expect(normalizeServerUrl("chat.example.org:8443/invite/abc?at=x#top")).toBe(
+      "https://chat.example.org:8443",
+    );
+    expect(normalizeServerUrl("chat.example.org?x=1")).toBe("https://chat.example.org");
+    expect(normalizeServerUrl("https://user:secret@chat.example.org/")).toBe(
+      "https://chat.example.org",
+    );
+  });
+
   it("rejects non-http schemes", () => {
     expect(() => normalizeServerUrl("ftp://example.org")).toThrow(TypeError);
   });

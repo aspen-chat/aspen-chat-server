@@ -4,18 +4,17 @@ import { Button } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { AspenIcon, ICON_PX, iconSizeClass } from "./AspenIcon";
 import { linkButtonClass } from "./styles";
 
-/** The side of the deployment's icon on the sign-in screens, in CSS pixels. */
-const ICON_PX = 256;
-
 /**
- * What the signed-out screens open with: the deployment's icon, when it has one, a welcome
+ * What the signed-out screens open with: the deployment's icon, or Aspen's when it has none or
+ * its own fails to load, a welcome
  * naming it, or a general welcome when it has no name, and the server's address, with a way to
  * change it where the app can (`changeServer`; not on the web, whose server is the one serving
  * the page). The profile is read each time the screen opens, so a change shows at once; until
- * it arrives the welcome waits, rather than showing the general one and then the name, and a
- * failed read shows the general one.
+ * it arrives the icon and welcome wait, rather than showing Aspen's and the general one and then
+ * the deployment's own, and a failed read shows Aspen's icon and the general welcome.
  */
 export function DeploymentWelcome({
   serverUrl,
@@ -27,20 +26,22 @@ export function DeploymentWelcome({
   const m = useMessages();
   const profile = useDeploymentProfile();
   const [iconFailed, setIconFailed] = useState(false);
-  const icon = profile === undefined || iconFailed ? null : profile.icon;
+  const own = profile?.icon != null && !iconFailed ? profile.icon : null;
   return (
     <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
-      {icon != null && (
+      {own !== null ? (
         <img
-          src={icon.downloadUrl}
+          src={own.downloadUrl}
           alt=""
           width={ICON_PX}
           height={ICON_PX}
           onError={() => {
             setIconFailed(true);
           }}
-          className="aspect-square max-w-full rounded-full object-cover select-none"
+          className={`${iconSizeClass} rounded-full object-cover select-none`}
         />
+      ) : (
+        profile !== undefined && <AspenIcon />
       )}
       {profile !== undefined && (
         <p className="text-xl font-semibold text-balance break-words">

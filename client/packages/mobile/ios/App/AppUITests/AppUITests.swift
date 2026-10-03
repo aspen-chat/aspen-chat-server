@@ -1,10 +1,10 @@
 import XCTest
 
-/// The app driven as a person drives it, with real taps and finger drags in WebKit, against the
-/// Aspen server the web build names (`VITE_ASPEN_SERVER_URL`). The account comes from the
-/// environment, `ASPEN_TEST_USER` and `ASPEN_TEST_PASSWORD`, which `xcodebuild test` passes on
-/// when given as `TEST_RUNNER_ASPEN_TEST_USER` and `TEST_RUNNER_ASPEN_TEST_PASSWORD`; without
-/// them the tests skip. `ASPEN_TEST_CHANNEL` names the channel read back through ("general").
+/// The app driven as a person drives it, with real taps and finger drags in WebKit. The server
+/// and account come from the environment, `ASPEN_TEST_SERVER` (entered when the app asks which
+/// deployment to use, since the app bakes in none), `ASPEN_TEST_USER`, and
+/// `ASPEN_TEST_PASSWORD`, which `xcodebuild test` passes on when given with a `TEST_RUNNER_`
+/// prefix (`TEST_RUNNER_ASPEN_TEST_SERVER`, and so on); without them the tests skip. `ASPEN_TEST_CHANNEL` names the channel read back through ("general").
 final class AppUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -23,11 +23,18 @@ final class AppUITests: XCTestCase {
         return value
     }
 
-    /// Signs in when the app asks; an app signed in already goes on as it is.
+    /// Names the deployment, then signs in, each when the app asks; an app signed in already
+    /// goes on as it is.
     private func signIn() throws {
+        let server = try environment("ASPEN_TEST_SERVER")
         let user = try environment("ASPEN_TEST_USER")
         let password = try environment("ASPEN_TEST_PASSWORD")
         defer { allowNotifications() }
+        let deployment = web.textFields["Deployment URL"]
+        if deployment.waitForExistence(timeout: 5) {
+            type(server, into: deployment)
+            web.buttons["Continue"].firstMatch.tap()
+        }
         let username = web.textFields["Username"]
         guard username.waitForExistence(timeout: 10) else { return }
         type(user, into: username)

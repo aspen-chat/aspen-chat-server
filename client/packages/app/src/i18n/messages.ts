@@ -49,6 +49,9 @@ export const en = {
   loginHeading: "Sign in",
   welcomeNamed: "Welcome to {name}, an Aspen Chat instance.",
   welcomeUnnamed: "Welcome to our Aspen Chat instance.",
+  welcomeToAspenChat: "Welcome to Aspen Chat.",
+  deploymentUrlLabel: "Deployment URL",
+  backToSignIn: "Back",
   inviteCodeLabel: "Invite code",
   inviteCodeRequiredHint:
     "This server takes new accounts by invite. Ask its administrators for a code.",
@@ -95,7 +98,7 @@ export const en = {
   dms,
   changeServer: "Change",
   continue: "Continue",
-  invalidServerUrl: "Enter a server address such as chat.example.org.",
+  invalidServerUrl: "Enter a deployment URL such as chat.example.org.",
   loading: "Loading…",
   retry: "Retry",
   notFoundHeading: "There is nothing here.",

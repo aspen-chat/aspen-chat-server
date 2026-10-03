@@ -28,24 +28,23 @@ export function detectShell(): Shell {
  * The server origin the app should use. The web client is served by the deployment it signs in
  * to, so it uses the page's own origin, or the build-time `VITE_ASPEN_SERVER_URL` when one is
  * set (a development build pointed elsewhere); it never asks. Electron and Capacitor have no
- * meaningful own origin, so they use what the user last entered, then the build-time address,
- * and otherwise ask.
+ * server of their own and bake none in: they use the one the user entered, and until there is
+ * one, `null`, which asks (`ServerForm`).
  */
 export function defaultServerUrl(shell: Shell = detectShell()): string | null {
-  const fromEnv = import.meta.env.VITE_ASPEN_SERVER_URL;
-  const built = fromEnv !== undefined && fromEnv.length > 0 ? normalizeServerUrl(fromEnv) : null;
   if (shell === "web") {
-    return built ?? (window.location.protocol.startsWith("http") ? window.location.origin : null);
+    const fromEnv = import.meta.env.VITE_ASPEN_SERVER_URL;
+    if (fromEnv !== undefined && fromEnv.length > 0) {
+      return normalizeServerUrl(fromEnv);
+    }
+    return window.location.protocol.startsWith("http") ? window.location.origin : null;
   }
   try {
-    const remembered = window.localStorage.getItem(SERVER_URL_KEY);
-    if (remembered !== null) {
-      return remembered;
-    }
+    return window.localStorage.getItem(SERVER_URL_KEY);
   } catch {
-    // Storage may be unavailable (private mode, blocked); fall through.
+    // Storage may be unavailable (private mode, blocked); the user is asked.
+    return null;
   }
-  return built;
 }
 
 export function rememberServerUrl(serverUrl: string): void {

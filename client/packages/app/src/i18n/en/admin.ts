@@ -174,7 +174,7 @@ export const admin = {
   savingDisplayName: "Saving…",
   displayNameSaved: "Saved.",
   deploymentIcon: "Icon",
-  deploymentIconHint: "Shown above the welcome. Without one, nothing is shown.",
+  deploymentIconHint: "Shown above the welcome. Without one, Aspen's icon is shown.",
   addDeploymentIcon: "Add icon",
   changeDeploymentIcon: "Change icon",
   removeDeploymentIcon: "Remove icon",
