@@ -19,11 +19,12 @@ use crate::app::permissions::{
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
 use crate::database::schema::{
     category_override, channel, channel_override, community, community_member_role, community_role,
+    community_user,
 };
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What decides who may view each channel of one community.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,6 +478,44 @@ impl Visibility {
             )
         })
     }
+}
+
+/// Which of `users` belong to `community` and may view `place`, a channel of it that is not a
+/// thread. Three queries however many there are.
+pub async fn viewers(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    users: &HashSet<UserId>,
+    place: ChannelId,
+) -> app::Result<HashSet<UserId>> {
+    let listed: Vec<UserId> = users.iter().copied().collect();
+    let members: Vec<UserId> = community_user::table
+        .select(community_user::user)
+        .filter(community_user::community.eq(community))
+        .filter(community_user::user.eq_any(&listed))
+        .load(conn)
+        .await?;
+    let Some(model) = CommunityModel::load(conn, &[community])
+        .await?
+        .remove(&community)
+    else {
+        return Ok(HashSet::new());
+    };
+    let mut roles: HashMap<UserId, Vec<RoleId>> = HashMap::new();
+    for (user, role) in community_member_role::table
+        .select((community_member_role::user, community_member_role::role))
+        .filter(community_member_role::community.eq(community))
+        .filter(community_member_role::user.eq_any(&members))
+        .load::<(UserId, RoleId)>(conn)
+        .await?
+    {
+        roles.entry(user).or_default().push(role);
+    }
+    let none = Vec::new();
+    Ok(members
+        .into_iter()
+        .filter(|user| model.can_view(*user, roles.get(user).unwrap_or(&none), place))
+        .collect())
 }
 
 #[cfg(test)]

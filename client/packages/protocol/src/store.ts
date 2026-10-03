@@ -194,6 +194,8 @@ export class RecordStore {
   readonly #categoryOverrides = new Map<string, CategoryOverride>();
   /** `channel -> message -> pin`, for the channels whose pins have been loaded. */
   readonly #pins = new Map<string, Map<string, Pin>>();
+  /** How many people are online in each channel whose count has been read. */
+  readonly #channelOnline = new Map<string, number>();
   /** When messages that arrived while the app was open came, for drawing them arriving. */
   readonly #arrivals = new Map<string, number>();
   /** When messages deleted while the app was open went, for drawing them going. */
@@ -523,6 +525,25 @@ export class RecordStore {
       return pins === undefined
         ? undefined
         : Array.from(pins.values()).sort((a, b) => a.sortIndex - b.sortIndex);
+    });
+  }
+
+  /**
+   * Topic `channel-online:<channelId>`: how many people who may view the channel are online,
+   * or `undefined` until read.
+   */
+  channelOnline(channelId: string): number | undefined {
+    return this.#channelOnline.get(channelId);
+  }
+
+  /** Installs a channel's online count as read. */
+  setChannelOnline(channelId: string, online: number): void {
+    if (this.#channelOnline.get(channelId) === online) {
+      return;
+    }
+    this.#batch(() => {
+      this.#channelOnline.set(channelId, online);
+      this.#touch(`channel-online:${channelId}`);
     });
   }
 
@@ -1619,6 +1640,7 @@ export class RecordStore {
       this.#customEmoji.clear();
       this.#bans.clear();
       this.#pins.clear();
+      this.#channelOnline.clear();
       this.#forgetCommands();
       this.#channelOverrides.clear();
       this.#categoryOverrides.clear();

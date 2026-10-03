@@ -282,6 +282,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             channel::delete_channel
         ))
         .routes(routes!(channel::list_channel_pins))
+        .routes(routes!(channel::get_channel_presence))
         .routes(routes!(
             message::create_message,
             message::list_channel_messages

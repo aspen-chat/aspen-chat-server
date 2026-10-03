@@ -326,6 +326,7 @@ pub(crate) async fn add_member(
             .execute(conn)
             .await?;
     }
+    app::user_status::list_in_community(state, user, community);
     let membership = message_enum::UserCommunity {
         community,
         user,

@@ -7,6 +7,7 @@ import {
   MESSAGE_AROUND_RADIUS,
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
+  PRESENCE_POLL_MS,
   type Category,
   type Channel,
   type Community,
@@ -233,6 +234,51 @@ describe("AspenSync", () => {
     again.onopen?.();
     again.frame({ type: "ready", userId: me.id, resumed: true });
     expect(again.sent.filter((f) => (f as { type: string }).type === "activity")).toHaveLength(0);
+    sync.stop();
+  });
+
+  it("keeps a shown channel's online count current with the presence poll", async () => {
+    let online = 3;
+    const presencePolls: (() => void)[] = [];
+    const { sync, calls } = makeSync(
+      {
+        ...bootstrapResponses(),
+        [`/api/v1/channels/${general.id}/presence`]: () => json({ online }),
+      },
+      () => 0,
+      {
+        setTimeout: ((handler: () => void, ms?: number) => {
+          if (ms === PRESENCE_POLL_MS) {
+            presencePolls.push(handler);
+          }
+          return 0;
+        }) as typeof setTimeout,
+      },
+    );
+    await goLive(sync);
+    await settle();
+    const reads = () =>
+      calls.filter((u) => u.pathname === `/api/v1/channels/${general.id}/presence`).length;
+    expect(reads()).toBe(0);
+
+    const unwatch = sync.watchChannelPresence(general.id);
+    // A second place showing the same channel reads nothing more.
+    const unwatchAgain = sync.watchChannelPresence(general.id);
+    await settle();
+    expect(reads()).toBe(1);
+    expect(sync.store.channelOnline(general.id)).toBe(3);
+
+    online = 5;
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(2);
+    expect(sync.store.channelOnline(general.id)).toBe(5);
+
+    unwatch();
+    unwatchAgain();
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(2);
     sync.stop();
   });
 

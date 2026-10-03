@@ -247,6 +247,8 @@ export class AspenSync {
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
+  /** The channels whose online count is shown, with how many places show each. */
+  readonly #presenceChannels = new Map<string, number>();
   readonly #commandLoads = new Map<string, Promise<void>>();
   /** Reads of a channel's newest page under way, which a second ask joins. */
   readonly #latestLoads = new Map<string, Promise<void>>();
@@ -2296,7 +2298,37 @@ export class AspenSync {
   }
 
   /**
-   * Asks the server for the presence of everyone on screen, then again after
+   * Keeps a channel's online count current while it is shown: read at once when the sync is
+   * live, then with every presence poll. Returns what stops it.
+   */
+  watchChannelPresence(channelId: string): () => void {
+    const watchers = this.#presenceChannels.get(channelId) ?? 0;
+    this.#presenceChannels.set(channelId, watchers + 1);
+    if (watchers === 0 && this.#isLive()) {
+      void this.#loadChannelPresence(channelId).catch(() => undefined);
+    }
+    return () => {
+      const left = (this.#presenceChannels.get(channelId) ?? 1) - 1;
+      if (left > 0) {
+        this.#presenceChannels.set(channelId, left);
+      } else {
+        this.#presenceChannels.delete(channelId);
+      }
+    };
+  }
+
+  async #loadChannelPresence(channelId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/channels/{channel}/presence", {
+      params: { path: { channel: channelId } },
+    });
+    if (result.data !== undefined) {
+      this.store.setChannelOnline(channelId, result.data.online);
+    }
+  }
+
+  /**
+   * Asks the server for the presence of everyone on screen and the online count of each channel
+   * shown, then again after
    * `PRESENCE_POLL_MS` for as long as the sync stays live. A hidden page skips the request.
    */
   async #pollPresence(): Promise<void> {
@@ -2314,8 +2346,8 @@ export class AspenSync {
       for (let i = 0; i < ids.length; i += PRESENCE_BATCH) {
         batches.push(ids.slice(i, i + PRESENCE_BATCH));
       }
-      await Promise.all(
-        batches.map(async (batch) => {
+      await Promise.all([
+        ...batches.map(async (batch) => {
           const result = await this.#client.api.GET("/api/v1/users/statuses", {
             params: { query: { ids: batch.join(",") } },
           });
@@ -2323,7 +2355,8 @@ export class AspenSync {
             this.store.applyStatuses(result.data);
           }
         }),
-      ).catch(() => undefined);
+        ...Array.from(this.#presenceChannels.keys(), (id) => this.#loadChannelPresence(id)),
+      ]).catch(() => undefined);
     }
     // Read afresh after the awaits, where narrowing is stale.
     if (this.#isLive() && !this.#presencePollScheduled()) {

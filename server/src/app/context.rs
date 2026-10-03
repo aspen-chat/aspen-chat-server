@@ -28,6 +28,8 @@ pub struct GlobalServerContext {
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
+    /// Each channel's recent count of who is online in it (`app::channel_presence`).
+    pub channel_presence: Arc<app::channel_presence::PresenceCounts>,
     /// The server's one reading of the event stream, which every event stream connection
     /// registers with.
     pub event_feed: app::event_feed::EventFeed,
@@ -89,6 +91,7 @@ impl GlobalServerContext {
 
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
+            channel_presence: Arc::default(),
             connection_pool: {
                 let conn_manager =
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);

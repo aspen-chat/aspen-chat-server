@@ -75,6 +75,41 @@ pub async fn get_channel(
     ))
 }
 
+/// Who is online in a channel.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelPresence {
+    /// How many people who may view the channel are online, not away: the members of its
+    /// community who may view it, or a DM's recipients. The caller is among them when online.
+    pub online: u32,
+}
+
+/// How many people who may view a channel are online. Each server works a channel's count out
+/// at most every ten seconds, so it may be that old.
+#[utoipa::path(
+    get,
+    path = "/channels/{channel}/presence",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = ChannelPresence),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or the caller may not view it", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_channel_presence(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+) -> ApiResult<Json<ChannelPresence>> {
+    Ok(Json(ChannelPresence {
+        online: app::channel_presence::online_in_channel(&state, user.id, channel).await?,
+    }))
+}
+
 /// Pinned messages in the channel, in pin order.
 #[utoipa::path(
     get,

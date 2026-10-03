@@ -10,3 +10,8 @@
   gains focus or comes into view (`src/api/activity.ts`); it sends an `activity` frame at most
   every `ACTIVITY_INTERVAL_MS`, and on reconnecting only if the user was active within that
   interval. Nothing else may call it: background work is not the user using the app.
+- A channel's header shows how many people who may view it are online (not away), behind the
+  online status's green dot (`OnlineCount` in `ChannelHeader`). No client knows every member of
+  a large community, so the server counts (`GET /channels/{channel}/presence`). `useChannelOnline`
+  asks `AspenSync.watchChannelPresence` to keep the count current while the header is shown: it
+  is read at once, then with every presence poll, into `RecordStore.channelOnline`.

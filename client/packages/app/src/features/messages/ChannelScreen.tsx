@@ -107,7 +107,12 @@ export function ChannelScreen() {
         {isDm(channel) ? (
           <DmHeader channel={channel} />
         ) : (
-          <ChannelHeader communityId={communityId ?? ""} glyph="#" name={channel.name}>
+          <ChannelHeader
+            communityId={communityId ?? ""}
+            channelId={channel.id}
+            glyph="#"
+            name={channel.name}
+          >
             <SearchButton
               channelId={channelId}
               channelName={channel.name}

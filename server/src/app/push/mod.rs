@@ -19,10 +19,10 @@ use crate::app::message::Message;
 use crate::app::message::MessageKind;
 use crate::app::notification_setting::{NotificationLevel, default_level};
 use crate::app::two_factor::Caller;
-use crate::app::visibility::CommunityModel;
+use crate::app::visibility::viewers;
 use crate::app::{
     self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, PushKeyId, PushSubscriptionId,
-    RoleId, UserId,
+    UserId,
 };
 use crate::database::schema::{
     channel, channel_mute, community_member_role, community_user, dm_recipient, message,
@@ -770,7 +770,7 @@ async fn recipients(
         NotificationLevel::Nothing => false,
     });
     if let Some(community) = community {
-        let viewers = can_view(conn.as_mut(), community, &candidates, place.id).await?;
+        let viewers = viewers(conn.as_mut(), community, &candidates, place.id).await?;
         candidates.retain(|user| viewers.contains(user));
     }
     if candidates.is_empty() {
@@ -845,43 +845,6 @@ async fn tagged(
             .await?
     };
     Ok(members.into_iter().collect())
-}
-
-/// Which of `users` belong to `community` and may view `place`.
-async fn can_view(
-    conn: &mut AsyncPgConnection,
-    community: CommunityId,
-    users: &HashSet<UserId>,
-    place: ChannelId,
-) -> app::Result<HashSet<UserId>> {
-    let listed: Vec<UserId> = users.iter().copied().collect();
-    let members: Vec<UserId> = community_user::table
-        .select(community_user::user)
-        .filter(community_user::community.eq(community))
-        .filter(community_user::user.eq_any(&listed))
-        .load(conn)
-        .await?;
-    let Some(model) = CommunityModel::load(conn, &[community])
-        .await?
-        .remove(&community)
-    else {
-        return Ok(HashSet::new());
-    };
-    let mut roles: HashMap<UserId, Vec<RoleId>> = HashMap::new();
-    for (user, role) in community_member_role::table
-        .select((community_member_role::user, community_member_role::role))
-        .filter(community_member_role::community.eq(community))
-        .filter(community_member_role::user.eq_any(&members))
-        .load::<(UserId, RoleId)>(conn)
-        .await?
-    {
-        roles.entry(user).or_default().push(role);
-    }
-    let none = Vec::new();
-    Ok(members
-        .into_iter()
-        .filter(|user| model.can_view(*user, roles.get(user).unwrap_or(&none), place))
-        .collect())
 }
 
 /// What the phone's badge shows for this deployment: the unread messages tagging the person,

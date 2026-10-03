@@ -210,6 +210,7 @@ export const en = {
   dragCommunity: "Drag {community}",
   showMembers: "Show members",
   hideMembers: "Hide members",
+  channelOnline: "{count} are online.",
   onlineGroup: "Online — {count}",
   offlineGroup: "Offline — {count}",
   status,

@@ -22,6 +22,7 @@ pub mod category;
 pub mod category_collapse;
 pub mod channel;
 pub mod channel_mute;
+pub mod channel_presence;
 pub mod community;
 pub mod context;
 pub mod custom_emoji;

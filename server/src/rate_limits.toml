@@ -340,6 +340,11 @@ user = { requests = 30, per_seconds = 600, burst = 10 }
 # The client asks every thirty seconds per device, and again when a page comes into view.
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+[rate_limits.endpoints."GET /channels/{channel}/presence"]
+# The client asks for the open channel with every presence poll, every thirty seconds per
+# device, and again when the channel changes.
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
 [rate_limits.endpoints."PATCH /users/{user}"]
 user = { requests = 20, per_seconds = 60, burst = 5 }
 

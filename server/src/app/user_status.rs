@@ -15,18 +15,32 @@
 //! any connected one keeps them from going offline, whichever API server each device talks to.
 //! Nothing announces a change: clients ask for the status of the users they show
 //! (`GET /users/statuses`) when they need it.
+//!
+//! To count who is online among a community's members without reading every member's keys, each
+//! community has a sorted set, `community:{uuid}:online`, of the members who may be online, each
+//! scored with the Unix time their listing runs out. Setting a user's `active` key lists them in
+//! all their communities, to run out `ttl / 2` after the key itself can, and `user:{uuid}:listed`,
+//! which lives those `ttl / 2` seconds, keeps that fan-out to once per margin however often the
+//! key is set: whenever the key is alive, so is a listing made since it was last set. Joining a
+//! community lists the joiner there too. A listing says only that someone may be online; the
+//! counts confirm each one by their keys (`app::channel_presence`).
 
 use crate::api::user::UserOnlineStatus;
 use crate::app;
-use crate::app::UserId;
 use crate::app::context::GlobalServerContext;
 use crate::app::user::UserPg;
-use fred::interfaces::KeysInterface;
-use fred::types::Expiration;
+use crate::app::{CommunityId, UserId};
+use crate::database::schema::community_user;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
+use fred::interfaces::{KeysInterface, SortedSetsInterface};
+use fred::types::{Expiration, SetOptions};
 
 const KEY_PREFIX: &str = "user:";
 const ONLINE_KEY_SUFFIX: &str = ":online";
 const ACTIVE_KEY_SUFFIX: &str = ":active";
+const LISTED_KEY_SUFFIX: &str = ":listed";
+const COMMUNITY_KEY_PREFIX: &str = "community:";
 
 /// The Valkey key whose presence means the user has a connection: `user:{uuid}:online`.
 pub fn online_key(user_id: UserId) -> String {
@@ -36,6 +50,31 @@ pub fn online_key(user_id: UserId) -> String {
 /// The Valkey key whose presence means the user has recently used Aspen: `user:{uuid}:active`.
 pub fn active_key(user_id: UserId) -> String {
     format!("{KEY_PREFIX}{}{ACTIVE_KEY_SUFFIX}", user_id.0)
+}
+
+/// The Valkey key present while the user's community listings run far enough ahead of their
+/// `active` key that setting it again need not renew them: `user:{uuid}:listed`.
+fn listed_key(user_id: UserId) -> String {
+    format!("{KEY_PREFIX}{}{LISTED_KEY_SUFFIX}", user_id.0)
+}
+
+/// The Valkey sorted set of `community`'s members who may be online: `community:{uuid}:online`.
+pub fn community_online_key(community: CommunityId) -> String {
+    format!("{COMMUNITY_KEY_PREFIX}{}{ONLINE_KEY_SUFFIX}", community.0)
+}
+
+/// How far past a key set to live `ttl` seconds a listing made with it runs, and so how long one
+/// listing serves before the next renewal.
+fn listing_margin(ttl: i64) -> i64 {
+    ttl / 2
+}
+
+/// How long a community's set lives after its last listing: as long as the longest listing, a
+/// person's, so it lasts while any listing in it does and goes once nobody is listed.
+fn community_set_lifetime(state: &GlobalServerContext) -> i64 {
+    let away = i64::try_from(state.config.presence.away_after_seconds).unwrap_or(i64::MAX / 2);
+    let ttl = away.max(ONLINE_TTL_SECONDS);
+    ttl.saturating_add(listing_margin(ttl))
 }
 
 /// A user's status from the values of their two keys.
@@ -61,6 +100,117 @@ pub fn mark_active(state: &GlobalServerContext, user: UserId) {
             tracing::warn!(error = %e, "failed to record the user as active");
         }
     });
+    list_in_communities(state, user, ttl);
+}
+
+/// Lists `user` in each of their communities' sets as someone who may be online for as long as
+/// an `active` key just set to live `ttl` seconds can, unless a listing made within the margin
+/// already covers it. Fire and forget, like the keys.
+fn list_in_communities(state: &GlobalServerContext, user: UserId, ttl: i64) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let margin = listing_margin(ttl);
+        let fresh: Option<String> = match state
+            .valkey
+            .set(
+                listed_key(user),
+                1,
+                Some(Expiration::EX(margin.max(1))),
+                Some(SetOptions::NX),
+                false,
+            )
+            .await
+        {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to renew the user's community listings");
+                return;
+            }
+        };
+        if fresh.is_none() {
+            return;
+        }
+        if let Err(e) = renew_listings(&state, user, ttl.saturating_add(margin)).await {
+            tracing::warn!(error = %e, "failed to renew the user's community listings");
+            // The next time the key is set tries again rather than waiting out the margin.
+            let _ = state.valkey.del::<(), _>(listed_key(user)).await;
+        }
+    });
+}
+
+/// Lists `user` in every community they belong to for `seconds` from now, in one round trip.
+async fn renew_listings(
+    state: &GlobalServerContext,
+    user: UserId,
+    seconds: i64,
+) -> app::Result<()> {
+    let communities: Vec<CommunityId> = community_user::table
+        .select(community_user::community)
+        .filter(community_user::user.eq(user))
+        .load(state.connection_pool.get().await?.as_mut())
+        .await?;
+    if communities.is_empty() {
+        return Ok(());
+    }
+    let until = chrono::Utc::now().timestamp().saturating_add(seconds) as f64;
+    let lifetime = community_set_lifetime(state);
+    let pipeline = state.valkey.pipeline();
+    for community in communities {
+        let key = community_online_key(community);
+        let () = pipeline
+            .zadd(&key, None, None, false, false, (until, user.0.to_string()))
+            .await?;
+        let () = pipeline.expire(&key, lifetime, None).await?;
+    }
+    let _: Vec<fred::types::Value> = pipeline.all().await?;
+    Ok(())
+}
+
+/// Lists `user`, who just joined `community`, in its set for as long as an `active` key of theirs
+/// can last, since their listings elsewhere may not be due for renewal. Fire and forget.
+pub fn list_in_community(state: &GlobalServerContext, user: UserId, community: CommunityId) {
+    let valkey = state.valkey.clone();
+    let lifetime = community_set_lifetime(state);
+    tokio::spawn(async move {
+        let key = community_online_key(community);
+        let until = chrono::Utc::now().timestamp().saturating_add(lifetime) as f64;
+        let pipeline = valkey.pipeline();
+        let listed: Result<Vec<fred::types::Value>, fred::error::Error> = async {
+            let () = pipeline
+                .zadd(&key, None, None, false, false, (until, user.0.to_string()))
+                .await?;
+            let () = pipeline.expire(&key, lifetime, None).await?;
+            pipeline.all().await
+        }
+        .await;
+        if let Err(e) = listed {
+            tracing::warn!(error = %e, "failed to list a new member as possibly online");
+        }
+    });
+}
+
+/// The members of `community` who may be online now: everyone whose listing has not run out,
+/// a superset of those whose keys say they are. Listings that have run out are dropped on the
+/// way.
+pub async fn online_candidates(
+    state: &GlobalServerContext,
+    community: CommunityId,
+) -> app::Result<Vec<UserId>> {
+    let key = community_online_key(community);
+    // Scores are bounded as floats: fred reads an integer bound as a rank.
+    let now = chrono::Utc::now().timestamp() as f64;
+    let () = state
+        .valkey
+        .zremrangebyscore(&key, f64::NEG_INFINITY, now - 1.0)
+        .await?;
+    let listed: Vec<String> = state
+        .valkey
+        .zrangebyscore(&key, now, f64::INFINITY, false, None)
+        .await?;
+    Ok(listed
+        .iter()
+        .filter_map(|id| uuid::Uuid::parse_str(id).ok().map(UserId))
+        .collect())
 }
 
 pub async fn user_online_status(
@@ -113,7 +263,6 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// the API rather than as a person does, so being connected is being active, and both of its
 /// keys are set together.
 pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool) {
-    use fred::interfaces::KeysInterface;
     let valkey = state.valkey.clone();
     let mut keys = vec![app::user_status::online_key(user)];
     if bot {
@@ -135,6 +284,9 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
             }
         }
     });
+    if bot {
+        list_in_communities(state, user, ONLINE_TTL_SECONDS);
+    }
 }
 
 /// How long a presence key lives; the event stream refreshes it while the user is connected.

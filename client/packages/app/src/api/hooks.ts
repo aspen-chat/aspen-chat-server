@@ -568,6 +568,16 @@ export function useCategoryOverrides(categoryId: string): readonly CategoryOverr
   return useTopic(`overrides:${categoryId}`, (s) => s.categoryOverrides(categoryId));
 }
 
+/**
+ * How many people who may view a channel are online, `undefined` until read; kept current with
+ * the presence poll while in use.
+ */
+export function useChannelOnline(channelId: string): number | undefined {
+  const sync = useSync();
+  useEffect(() => sync.watchChannelPresence(channelId), [sync, channelId]);
+  return useTopic(`channel-online:${channelId}`, (s) => s.channelOnline(channelId));
+}
+
 /** A channel's pins in their order, `undefined` until read; the first use reads them. */
 export function usePins(channelId: string): readonly Pin[] | undefined {
   const sync = useSync();

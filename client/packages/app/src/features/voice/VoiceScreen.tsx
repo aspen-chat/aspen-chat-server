@@ -54,6 +54,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
     <main className="flex min-h-0 flex-1 flex-col">
       <ChannelHeader
         communityId={communityId}
+        channelId={channel.id}
         glyph={<SpeakerHighIcon size={16} aria-hidden="true" />}
         name={channel.name}
       >
