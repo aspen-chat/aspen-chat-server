@@ -16,12 +16,12 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::num::NonZeroU16;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
-use voice_protocol::control::VoiceReport;
+use voice_protocol::control::{ParticipantSnapshot, REPORT_PARTITIONS, VoiceReport, partition};
 use voice_protocol::signal::{
     KickReason, MediaKind as WireKind, MediaSource, ParticipantInfo, ProducerInfo, ServerMessage,
     TransportDirection,
@@ -74,8 +74,14 @@ pub enum RoomError {
 /// Where a participant's frames go: the writer half of their socket.
 pub type Outbox = mpsc::UnboundedSender<ServerMessage>;
 
+/// One signalling socket's place in a call. A user joining again from another socket replaces
+/// their participant, and the socket replaced must not take the new one out when it closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Connection(u64);
+
 struct Participant {
     user: Uuid,
+    connection: Connection,
     outbox: Outbox,
     rtp_capabilities: Option<RtpCapabilities>,
     send_transport: Option<WebRtcTransport>,
@@ -149,6 +155,13 @@ pub struct Room {
     /// Held for its lifetime: dropping it stops the volume events.
     _audio_observer: AudioLevelObserver,
     participants: Mutex<HashMap<Uuid, Participant>>,
+    /// Set, under the participants lock, when the last participant leaves. A closed room
+    /// takes no one in: whoever arrives next starts the channel's next call. It keeps the
+    /// channel's place until its end is reported, so snapshots list it until then.
+    closed: AtomicBool,
+    /// Becomes true once the room's end has been reported and it has left the channel's place,
+    /// so the next call's start is reported after it.
+    ended: watch::Sender<bool>,
     /// Which user each audio producer belongs to, for the volume events.
     producer_owner: Mutex<HashMap<ProducerId, Uuid>>,
     /// Files offered in the call that may still be accepted, by id.
@@ -204,6 +217,7 @@ pub struct Rooms {
     reporter: Reporter,
     relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
+    next_connection: AtomicU64,
 }
 
 impl Rooms {
@@ -224,6 +238,7 @@ impl Rooms {
             reporter,
             relay,
             rooms: Mutex::new(HashMap::new()),
+            next_connection: AtomicU64::new(0),
         })
     }
 
@@ -269,6 +284,62 @@ impl Rooms {
             .ok_or(RoomError::NotInCall)
     }
 
+    /// Takes `room` out of the channel's place, unless another has already taken it.
+    fn forget(&self, room: &Arc<Room>) {
+        let mut rooms = self.rooms.lock().expect("rooms lock");
+        if rooms
+            .get(&room.channel)
+            .is_some_and(|current| Arc::ptr_eq(current, room))
+        {
+            rooms.remove(&room.channel);
+        }
+    }
+
+    /// Every call this server holds and who is in it, ending with the list of them in each lane
+    /// (every lane's, even one with no calls). Made inside `Reporter::report_with`, so it
+    /// describes the calls as of its place among the reports.
+    pub fn snapshot(&self) -> Vec<VoiceReport> {
+        let rooms: Vec<Arc<Room>> = self
+            .rooms
+            .lock()
+            .expect("rooms lock")
+            .values()
+            .cloned()
+            .collect();
+        let mut reports: Vec<VoiceReport> = rooms
+            .iter()
+            .map(|room| VoiceReport::SessionSnapshot {
+                server: self.server,
+                session: room.session,
+                channel: room.channel,
+                participants: room
+                    .participants
+                    .lock()
+                    .expect("room lock")
+                    .values()
+                    .map(|participant| ParticipantSnapshot {
+                        user: participant.user,
+                        muted: participant.muted,
+                        deafened: participant.deafened,
+                        sharing_screen: participant.sharing_screen(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        reports.extend((0..REPORT_PARTITIONS).map(|lane| {
+            VoiceReport::SessionsHeld {
+                server: self.server,
+                partition: lane,
+                sessions: rooms
+                    .iter()
+                    .filter(|room| partition(room.channel) == lane)
+                    .map(|room| room.session)
+                    .collect(),
+            }
+        }));
+        reports
+    }
+
     fn room_of_session(&self, session: Uuid) -> Option<Arc<Room>> {
         self.rooms
             .lock()
@@ -279,82 +350,102 @@ impl Rooms {
     }
 
     /// Puts `user` in `channel`'s call, starting the call if it has none, and replies with
-    /// `ready`. A user already in the call from another socket is replaced.
+    /// `ready`. A user already in the call from another socket is replaced. Returns the
+    /// connection that leaving names.
     pub async fn join(
         self: &Arc<Self>,
         channel: Uuid,
         user: Uuid,
         outbox: Outbox,
-    ) -> Result<(), RoomError> {
-        let existing = self
-            .rooms
-            .lock()
-            .expect("rooms lock")
-            .get(&channel)
-            .cloned();
-        let room = match existing {
-            Some(room) => room,
-            None => self.start_room(channel).await?,
-        };
-        let replaced = {
-            let mut participants = room.participants.lock().expect("room lock");
-            let replaced = participants.remove(&user);
-            if let Some(old) = &replaced {
-                old.send(ServerMessage::Kicked {
-                    reason: KickReason::Replaced,
-                });
-            }
-            let others: Vec<ParticipantInfo> =
-                participants.values().map(Participant::info).collect();
-            let joined = ServerMessage::ParticipantJoined {
-                user,
-                muted: false,
-                deafened: false,
+    ) -> Result<Connection, RoomError> {
+        let connection = Connection(self.next_connection.fetch_add(1, Ordering::Relaxed));
+        loop {
+            let existing = self
+                .rooms
+                .lock()
+                .expect("rooms lock")
+                .get(&channel)
+                .cloned();
+            let room = match existing {
+                Some(room) => room,
+                None => self.start_room(channel).await?,
             };
-            for other in participants.values() {
-                other.send(joined.clone());
+            if let Some(replaced) = self.enter(&room, user, connection, &outbox) {
+                if !replaced {
+                    self.reporter.report(VoiceReport::ParticipantJoined {
+                        session: room.session,
+                        channel,
+                        user,
+                    });
+                }
+                info!(
+                    channel = channel.to_string(),
+                    user = user.to_string(),
+                    "joined a call"
+                );
+                return Ok(connection);
             }
-            let participant = Participant {
-                user,
-                outbox,
-                rtp_capabilities: None,
-                send_transport: None,
-                recv_transport: None,
-                rtp_transports: HashMap::new(),
-                producers: HashMap::new(),
-                own_preview: HashSet::new(),
-                consumers: HashMap::new(),
-                muted: false,
-                deafened: false,
-                speaking: false,
-            };
-            participant.send(ServerMessage::Ready {
-                session: room.session,
-                user,
-                router_rtp_capabilities: serde_json::to_value(room.router.rtp_capabilities())
-                    .expect("capabilities serialize"),
-                participants: others,
-                offers: room.standing_offers(),
-                links: room.links(),
-                transfers: self.relay.policy(),
-            });
-            participants.insert(user, participant);
-            replaced.is_some()
-        };
-        if !replaced {
-            self.reporter
-                .report(VoiceReport::ParticipantJoined {
-                    session: room.session,
-                    user,
-                })
-                .await;
+            // The room's last participant left as this one arrived. Once its end is reported
+            // and it has gone from the channel's place, this one starts the channel's next call.
+            let _ = room.ended.subscribe().wait_for(|ended| *ended).await;
         }
-        info!(
-            channel = channel.to_string(),
-            user = user.to_string(),
-            "joined a call"
-        );
-        Ok(())
+    }
+
+    /// Adds the participant to `room` and sends them `ready`, returning whether they replaced
+    /// themself from another socket, or `None` when the room has closed.
+    fn enter(
+        &self,
+        room: &Room,
+        user: Uuid,
+        connection: Connection,
+        outbox: &Outbox,
+    ) -> Option<bool> {
+        let mut participants = room.participants.lock().expect("room lock");
+        if room.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        let replaced = participants.remove(&user);
+        if let Some(old) = &replaced {
+            old.send(ServerMessage::Kicked {
+                reason: KickReason::Replaced,
+            });
+        }
+        let others: Vec<ParticipantInfo> = participants.values().map(Participant::info).collect();
+        let joined = ServerMessage::ParticipantJoined {
+            user,
+            muted: false,
+            deafened: false,
+        };
+        for other in participants.values() {
+            other.send(joined.clone());
+        }
+        let participant = Participant {
+            user,
+            connection,
+            outbox: outbox.clone(),
+            rtp_capabilities: None,
+            send_transport: None,
+            recv_transport: None,
+            rtp_transports: HashMap::new(),
+            producers: HashMap::new(),
+            own_preview: HashSet::new(),
+            consumers: HashMap::new(),
+            muted: false,
+            deafened: false,
+            speaking: false,
+        };
+        participant.send(ServerMessage::Ready {
+            session: room.session,
+            user,
+            router_rtp_capabilities: serde_json::to_value(room.router.rtp_capabilities())
+                .expect("capabilities serialize"),
+            participants: others,
+            offers: room.standing_offers(),
+            links: room.links(),
+            transfers: self.relay.policy(),
+        });
+        participants.insert(user, participant);
+        Some(replaced.is_some())
     }
 
     async fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
@@ -379,10 +470,21 @@ impl Rooms {
             router,
             _audio_observer: audio_observer.clone(),
             participants: Mutex::new(HashMap::new()),
+            closed: AtomicBool::new(false),
+            ended: watch::Sender::new(false),
             producer_owner: Mutex::new(HashMap::new()),
             offers: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
         });
+        {
+            let mut rooms = self.rooms.lock().expect("rooms lock");
+            // Another join started the channel's call while this router was being made: that
+            // one is the call, and this room is dropped unused.
+            if let Some(other) = rooms.get(&channel) {
+                return Ok(Arc::clone(other));
+            }
+            rooms.insert(channel, Arc::clone(&room));
+        }
         // Volume events arrive on mediasoup's own threads; they are handed to a task that
         // owns the room and reports, so the callbacks stay quick and never block.
         let (speaking_tx, mut speaking_rx) = mpsc::unbounded_channel::<HashSet<Uuid>>();
@@ -421,17 +523,11 @@ impl Rooms {
                 }
             });
         }
-        self.rooms
-            .lock()
-            .expect("rooms lock")
-            .insert(channel, Arc::clone(&room));
-        self.reporter
-            .report(VoiceReport::SessionStarted {
-                server: self.server,
-                session,
-                channel,
-            })
-            .await;
+        self.reporter.report(VoiceReport::SessionStarted {
+            server: self.server,
+            session,
+            channel,
+        });
         info!(
             channel = channel.to_string(),
             session = session.to_string(),
@@ -455,13 +551,12 @@ impl Rooms {
         };
         for (user, speaking) in changes {
             room.broadcast(&ServerMessage::Speaking { user, speaking }, None);
-            self.reporter
-                .report(VoiceReport::Speaking {
-                    session: room.session,
-                    user,
-                    speaking,
-                })
-                .await;
+            self.reporter.report(VoiceReport::Speaking {
+                session: room.session,
+                channel: room.channel,
+                user,
+                speaking,
+            });
         }
     }
 
@@ -616,7 +711,7 @@ impl Rooms {
             (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
         };
         if let Some(report) = state {
-            self.reporter.report(report).await;
+            self.reporter.report(report);
         }
         let others: Vec<Uuid> = room
             .participants
@@ -774,7 +869,7 @@ impl Rooms {
             self.drop_producer(&room, producer).await;
         }
         if let Some(report) = state {
-            self.reporter.report(report).await;
+            self.reporter.report(report);
         }
         Ok(())
     }
@@ -783,6 +878,7 @@ impl Rooms {
     fn state_report(room: &Room, participant: &Participant) -> VoiceReport {
         VoiceReport::ParticipantState {
             session: room.session,
+            channel: room.channel,
             user: participant.user,
             muted: participant.muted,
             deafened: participant.deafened,
@@ -880,7 +976,7 @@ impl Rooms {
             },
             None,
         );
-        self.reporter.report(report).await;
+        self.reporter.report(report);
         if muted {
             self.apply_speaking(&room, &HashSet::new()).await;
         }
@@ -888,13 +984,26 @@ impl Rooms {
     }
 
     /// Takes `user` out of the call, telling them why if there is a reason, and ends the call
-    /// when they were the last one in it.
-    pub async fn leave(&self, channel: Uuid, user: Uuid, reason: Option<KickReason>) {
+    /// when they were the last one in it. With a `connection`, only the participant that
+    /// connection made is taken out, not one that has since replaced it.
+    pub async fn leave(
+        &self,
+        channel: Uuid,
+        user: Uuid,
+        connection: Option<Connection>,
+        reason: Option<KickReason>,
+    ) {
         let Ok(room) = self.room(channel) else {
             return;
         };
-        let (removed, producers, empty) = {
+        let (producers, empty) = {
             let mut participants = room.participants.lock().expect("room lock");
+            if !participants
+                .get(&user)
+                .is_some_and(|p| connection.is_none_or(|c| p.connection == c))
+            {
+                return;
+            }
             let Some(participant) = participants.remove(&user) else {
                 return;
             };
@@ -906,34 +1015,38 @@ impl Rooms {
                 .into_values()
                 .map(|(producer, _)| producer)
                 .collect();
-            (true, producers, participants.is_empty())
+            let empty = participants.is_empty();
+            if empty {
+                room.closed.store(true, Ordering::Relaxed);
+            }
+            (producers, empty)
         };
-        if !removed {
-            return;
-        }
         for producer in producers {
             self.drop_producer(&room, producer).await;
         }
         self.end_everything_of(&room, user).await;
         room.broadcast(&ServerMessage::ParticipantLeft { user }, None);
-        self.reporter
-            .report(VoiceReport::ParticipantLeft {
-                session: room.session,
-                user,
-            })
-            .await;
+        self.reporter.report(VoiceReport::ParticipantLeft {
+            session: room.session,
+            channel,
+            user,
+        });
         info!(
             channel = channel.to_string(),
             user = user.to_string(),
             "left the call"
         );
         if empty {
-            self.rooms.lock().expect("rooms lock").remove(&channel);
-            self.reporter
-                .report(VoiceReport::SessionEnded {
+            // The room leaves the channel's place as its end is reported, so every snapshot
+            // either lists it before its end or follows the end without it.
+            self.reporter.report_with(|| {
+                self.forget(&room);
+                vec![VoiceReport::SessionEnded {
                     session: room.session,
-                })
-                .await;
+                    channel,
+                }]
+            });
+            room.ended.send_replace(true);
             info!(
                 channel = channel.to_string(),
                 session = room.session.to_string(),
@@ -967,7 +1080,7 @@ impl Rooms {
             }
             VoiceCommand::Kick { session, user } => {
                 if let Some(room) = self.room_of_session(session) {
-                    self.leave(room.channel, user, Some(KickReason::Kicked))
+                    self.leave(room.channel, user, None, Some(KickReason::Kicked))
                         .await;
                 }
             }
@@ -992,7 +1105,7 @@ impl Rooms {
                 .copied()
                 .collect();
             for user in users {
-                self.leave(room.channel, user, Some(KickReason::ServerStopping))
+                self.leave(room.channel, user, None, Some(KickReason::ServerStopping))
                     .await;
             }
         }

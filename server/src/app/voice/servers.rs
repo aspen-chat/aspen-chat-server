@@ -117,34 +117,39 @@ pub async fn update_server(
 /// Removes a server. Its sessions go with it, so their participants are told to leave.
 pub async fn delete_server(state: &GlobalServerContext, id: VoiceServerId) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let sessions: Vec<VoiceSession> = voice_session::table
-                .select(VoiceSession::as_select())
-                .filter(voice_session::voice_server.eq(id))
-                .load(conn.as_mut())
-                .await?;
-            for session in sessions {
-                end_session(
-                    state,
-                    conn.as_mut(),
-                    &session,
-                    VoiceSessionEndReason::ServerRemoved,
-                )
-                .await?;
+    let removed = conn
+        .transaction(|conn| {
+            async move {
+                let sessions: Vec<VoiceSession> = voice_session::table
+                    .select(VoiceSession::as_select())
+                    .filter(voice_session::voice_server.eq(id))
+                    .load(conn.as_mut())
+                    .await?;
+                for session in sessions {
+                    end_session(
+                        state,
+                        conn.as_mut(),
+                        &session,
+                        VoiceSessionEndReason::ServerRemoved,
+                    )
+                    .await?;
+                }
+                let deleted = diesel::delete(voice_server::table)
+                    .filter(voice_server::id.eq(id))
+                    .execute(conn.as_mut())
+                    .await?;
+                if deleted == 0 {
+                    return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+                }
+                Ok(())
             }
-            let deleted = diesel::delete(voice_server::table)
-                .filter(voice_server::id.eq(id))
-                .execute(conn.as_mut())
-                .await?;
-            if deleted == 0 {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            }
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await;
+    if removed.is_ok() {
+        super::reports::forget_server(state, id).await;
+    }
+    removed
 }
 
 // ---------------------------------------------------------------------------------------------

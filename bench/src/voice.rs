@@ -182,6 +182,7 @@ pub async fn run_call(
             if let ServerMessage::Error {
                 detail,
                 fatal: true,
+                ..
             } = &message
             {
                 return Err(detail.clone());
@@ -287,7 +288,7 @@ pub async fn run_call(
                     }
                     send(&mut sink, &ClientMessage::ResumeConsumer { consumer_id }).await?;
                 }
-                Some(ServerMessage::Error { detail, fatal: true }) => return Err(detail),
+                Some(ServerMessage::Error { detail, fatal: true, .. }) => return Err(detail),
                 Some(ServerMessage::Kicked { .. }) | None => break,
                 Some(_) => {}
             },

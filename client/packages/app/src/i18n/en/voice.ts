@@ -12,6 +12,7 @@ export const voice = {
   rejoining: "Reconnecting…",
   failed: "Could not join",
   microphoneFailed: "Microphone unavailable",
+  tooFast: "You're joining calls too quickly. Try again in {wait}.",
   mute: "Mute",
   unmute: "Unmute",
   deafen: "Deafen",

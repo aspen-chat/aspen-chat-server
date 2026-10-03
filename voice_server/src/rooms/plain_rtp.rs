@@ -188,7 +188,7 @@ impl Rooms {
             (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
         };
         if let Some(report) = state {
-            self.reporter.report(report).await;
+            self.reporter.report(report);
         }
         let everyone: Vec<Uuid> = room
             .participants

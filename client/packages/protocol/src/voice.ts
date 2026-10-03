@@ -36,6 +36,7 @@ import type {
   RtpTarget,
   ScreenCapture,
   TransportParams,
+  VoiceDevice,
   VoiceMedia,
   VoiceTransport,
 } from "./voiceMedia";
@@ -140,9 +141,15 @@ export interface VoiceCallState {
   cameraError: CameraFailure | null;
   /**
    * What failed when `status` is `failed`: the microphone (permission refused, no device, or an
-   * insecure page origin, which browsers refuse media on), or every voice server.
+   * insecure page origin, which browsers refuse media on), every voice server, or the voice
+   * server refusing one of the call's requests (`refused`), most often for coming too fast.
    */
-  errorKind: "microphone" | "server" | null;
+  errorKind: "microphone" | "server" | "refused" | null;
+  /**
+   * When the voice server refused a request for coming too fast, how many seconds until it
+   * would take it; `null` otherwise.
+   */
+  retryAfterSeconds: number | null;
   /** Why the last attempt failed, for the UI; cleared on the next join. */
   readonly error: string | null;
   /**
@@ -197,6 +204,7 @@ const IDLE: VoiceCallState = {
   cameraError: null,
   cameras: [],
   errorKind: null,
+  retryAfterSeconds: null,
   error: null,
   endedReason: null,
 };
@@ -234,9 +242,32 @@ export class MicrophoneError extends Error {
   }
 }
 
-function failure(error: unknown): Pick<VoiceCallState, "errorKind" | "error"> {
+/**
+ * The voice server refused one of the call's requests (an `error` frame); `retryAfterSeconds` is
+ * set when the request came too fast. The refusal is about the request, not the server, so it
+ * is not reported as the server's failure and no other server is tried.
+ */
+export class VoiceRequestRefused extends Error {
+  constructor(
+    detail: string,
+    readonly retryAfterSeconds: number | null,
+  ) {
+    super(detail);
+    this.name = "VoiceRequestRefused";
+  }
+}
+
+function failure(
+  error: unknown,
+): Pick<VoiceCallState, "errorKind" | "error" | "retryAfterSeconds"> {
   return {
-    errorKind: error instanceof MicrophoneError ? "microphone" : "server",
+    errorKind:
+      error instanceof MicrophoneError
+        ? "microphone"
+        : error instanceof VoiceRequestRefused
+          ? "refused"
+          : "server",
+    retryAfterSeconds: error instanceof VoiceRequestRefused ? error.retryAfterSeconds : null,
     error: error instanceof Error ? error.message : String(error),
   };
 }
@@ -329,8 +360,9 @@ export class VoiceCall {
     ) {
       return;
     }
+    // Moving from one call to another keeps the microphone open for the next one.
     if (this.#state.channelId !== null) {
-      this.#teardown();
+      this.#teardown({ keepMicrophone: true });
     }
     const generation = ++this.#generation;
     this.#set({
@@ -338,6 +370,7 @@ export class VoiceCall {
       channelId,
       session: null,
       errorKind: null,
+      retryAfterSeconds: null,
       error: null,
       endedReason: null,
     });
@@ -503,17 +536,9 @@ export class VoiceCall {
     signal: Signal,
     source: "screen" | "screenAudio",
   ): Promise<{ producerId: string; target: RtpTarget }> {
-    const produced = signal.next((f) => f.type === "rtpProduced" && f.source === source);
+    const produced = this.#reply(signal, "rtpProduced", (f) => f.source === source);
     signal.send({ type: "produceRtp", source });
-    const timeout = new Promise<never>((_, reject) => {
-      this.#setTimeout(() => {
-        reject(new Error("the voice server did not answer in time"));
-      }, READY_TIMEOUT_MS);
-    });
-    const frame = await Promise.race([produced, timeout]);
-    if (frame.type !== "rtpProduced") {
-      throw new Error("unexpected frame");
-    }
+    const frame = await produced;
     return {
       producerId: frame.producerId,
       target: {
@@ -792,7 +817,7 @@ export class VoiceCall {
     if (channelId === null || this.#state.status === "rejoining") {
       return;
     }
-    this.#teardown();
+    this.#teardown({ keepMicrophone: true });
     this.#set({ status: "rejoining", session: null });
     const generation = ++this.#generation;
     const delay = Math.floor(this.#random() * REJOIN_DELAY_MAX_MS);
@@ -809,7 +834,11 @@ export class VoiceCall {
     }, delay);
   }
 
-  #teardown(): void {
+  /**
+   * Releases everything the call holds. `keepMicrophone` leaves the microphone open for the
+   * next attempt or call, which then does not wait on the browser to open it again.
+   */
+  #teardown({ keepMicrophone = false }: { keepMicrophone?: boolean } = {}): void {
     this.#files.closeAll();
     this.stopScreenShare();
     this.stopCamera();
@@ -831,8 +860,10 @@ export class VoiceCall {
     this.#recvTransport?.close();
     this.#sendTransport = null;
     this.#recvTransport = null;
-    this.#microphone?.stop();
-    this.#microphone = null;
+    if (!keepMicrophone) {
+      this.#microphone?.stop();
+      this.#microphone = null;
+    }
     this.#microphoneProducer = null;
     if (this.#signal !== null) {
       this.#signal.send({ type: "leave" });
@@ -854,16 +885,24 @@ export class VoiceCall {
     });
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.
-    // Someone who may not speak joins to listen and never opens it.
-    if (offer.speak) {
+    // Someone who may not speak joins to listen and never opens it, and one kept open from
+    // a call they could speak in is closed.
+    if (!offer.speak) {
+      this.#microphone?.stop();
+      this.#microphone = null;
+    } else if (this.#microphone === null) {
+      let microphone: MediaStreamTrack;
       try {
-        this.#microphone = await this.#media.getMicrophone(this.#devices.input);
+        microphone = await this.#media.getMicrophone(this.#devices.input);
       } catch (error) {
         throw new MicrophoneError(error);
       }
-    }
-    if (generation !== this.#generation) {
-      return;
+      // A join that took over meanwhile opens its own.
+      if (generation !== this.#generation) {
+        microphone.stop();
+        return;
+      }
+      this.#microphone = microphone;
     }
     const ranked = await this.#rank(offer.candidates);
     let lastError: Error | null = null;
@@ -880,12 +919,14 @@ export class VoiceCall {
         if (generation !== this.#generation) {
           return;
         }
+        // A refused request is the user's to wait out, not this server's failure, and another
+        // server would refuse it no differently.
+        if (error instanceof VoiceRequestRefused) {
+          throw error;
+        }
         // Whatever the attempt set up (socket, transports) is released before the next
         // candidate builds its own; the microphone is kept for it.
-        const microphone: MediaStreamTrack | null = this.#microphone;
-        this.#microphone = null;
-        this.#teardown();
-        this.#microphone = microphone;
+        this.#teardown({ keepMicrophone: true });
         await this.#reportFailure(candidate.id);
       }
     }
@@ -957,6 +998,10 @@ export class VoiceCall {
       signal.send({ type: "identify", token });
       const frame = await Promise.race([ready, timeout]);
       if (frame.type !== "ready") {
+        // Turned away for joining too fast is a refusal to wait out, not the server failing.
+        if (frame.type === "error" && frame.retryAfterSeconds != null) {
+          throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds);
+        }
         throw new Error(frame.type === "error" ? frame.detail : "unexpected reply");
       }
       if (generation !== this.#generation) {
@@ -992,15 +1037,14 @@ export class VoiceCall {
     if (ready === null) {
       throw new Error("ready frame missing");
     }
-    const device = await this.#media.createDevice();
-    await device.load({ routerRtpCapabilities: ready.routerRtpCapabilities });
+    const device = await this.#loadedDevice(ready.routerRtpCapabilities);
     signal.send({ type: "setCapabilities", rtpCapabilities: device.rtpCapabilities });
+    // Both transports are asked for at once; the server answers each by its direction.
     const send = this.#awaitTransport(signal, "send");
-    signal.send({ type: "createTransport", direction: "send" });
-    const sendParams = await send;
     const recv = this.#awaitTransport(signal, "recv");
+    signal.send({ type: "createTransport", direction: "send" });
     signal.send({ type: "createTransport", direction: "recv" });
-    const recvParams = await recv;
+    const [sendParams, recvParams] = await Promise.all([send, recv]);
     if (generation !== this.#generation) {
       throw new Error("superseded");
     }
@@ -1010,9 +1054,12 @@ export class VoiceCall {
       if (this.#microphone === null) {
         throw new Error("microphone missing");
       }
+      // The call owns the microphone's track, which outlives the transport when the user
+      // moves to another call.
       this.#microphoneProducer = await this.#sendTransport.produce({
         track: this.#microphone,
         appData: { source: "microphone" },
+        stopTracks: false,
       });
       // The server accepting the producer says nothing about media: ICE runs after the
       // signalling, and fails when the server announces an address this browser cannot reach.
@@ -1053,20 +1100,77 @@ export class VoiceCall {
 
   #lastReady: Extract<ServerMessage, { type: "ready" }> | null = null;
 
-  #awaitTransport(signal: Signal, direction: "send" | "recv"): Promise<TransportParams> {
-    return signal
-      .next((f) => f.type === "transportCreated" && f.direction === direction)
-      .then((f) => {
-        if (f.type !== "transportCreated") {
+  /**
+   * The device loaded for the last router, kept by its capabilities. Loading probes what the
+   * browser can send and receive, which takes a while, and every call on a voice server (and
+   * every voice server of one version) answers the same capabilities, so moving between calls
+   * loads it once.
+   */
+  #device: { capabilities: string; device: Promise<VoiceDevice> } | null = null;
+
+  /** A device loaded with the router's capabilities, the one kept when they match. */
+  #loadedDevice(routerRtpCapabilities: unknown): Promise<VoiceDevice> {
+    const capabilities = JSON.stringify(routerRtpCapabilities);
+    if (this.#device?.capabilities !== capabilities) {
+      const device = this.#media.createDevice().then(async (created) => {
+        await created.load({ routerRtpCapabilities });
+        return created;
+      });
+      this.#device = { capabilities, device };
+      // A device that failed to load is not kept for the next call.
+      device.catch(() => {
+        if (this.#device?.device === device) {
+          this.#device = null;
+        }
+      });
+    }
+    return this.#device.device;
+  }
+
+  /**
+   * The server's answer to a request: the next frame of `type` that `matches`. An `error` frame
+   * arriving first refuses it (`VoiceRequestRefused`), since the server answers a request it
+   * will not honour with one, and no answer within `READY_TIMEOUT_MS` is the server's failure.
+   * Error frames do not say which request they answer, so one refuses every request waiting
+   * for an answer when it comes.
+   */
+  #reply<T extends ServerMessage["type"]>(
+    signal: Signal,
+    type: T,
+    matches: (frame: Extract<ServerMessage, { type: T }>) => boolean = () => true,
+  ): Promise<Extract<ServerMessage, { type: T }>> {
+    const isAnswer = (frame: ServerMessage): frame is Extract<ServerMessage, { type: T }> =>
+      frame.type === type && matches(frame as Extract<ServerMessage, { type: T }>);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = this.#setTimeout(() => {
+        reject(new Error("the voice server did not answer in time"));
+      }, READY_TIMEOUT_MS);
+    });
+    const answer = signal
+      .next((frame) => isAnswer(frame) || frame.type === "error")
+      .then((frame) => {
+        if (frame.type === "error") {
+          throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds ?? null);
+        }
+        if (!isAnswer(frame)) {
           throw new Error("unexpected frame");
         }
-        return {
-          id: f.id,
-          iceParameters: f.iceParameters,
-          iceCandidates: f.iceCandidates,
-          dtlsParameters: f.dtlsParameters,
-        };
+        return frame;
       });
+    return Promise.race([answer, timeout]).finally(() => {
+      clearTimeout(timer);
+    });
+  }
+
+  async #awaitTransport(signal: Signal, direction: "send" | "recv"): Promise<TransportParams> {
+    const frame = await this.#reply(signal, "transportCreated", (f) => f.direction === direction);
+    return {
+      id: frame.id,
+      iceParameters: frame.iceParameters,
+      iceCandidates: frame.iceCandidates,
+      dtlsParameters: frame.dtlsParameters,
+    };
   }
 
   /** Bridges a transport's connect and produce requests to the signalling socket. */
@@ -1083,8 +1187,7 @@ export class VoiceCall {
       }
     });
     transport.on("connect", ({ dtlsParameters }, callback, errback) => {
-      signal
-        .next((f) => f.type === "transportConnected" && f.transportId === transportId)
+      this.#reply(signal, "transportConnected", (f) => f.transportId === transportId)
         .then(() => {
           callback();
         })
@@ -1098,12 +1201,9 @@ export class VoiceCall {
         appData.source === "camera"
           ? appData.source
           : "microphone";
-      signal
-        .next((f) => f.type === "produced" && f.source === source)
+      this.#reply(signal, "produced", (f) => f.source === source)
         .then((f) => {
-          if (f.type === "produced") {
-            callback({ id: f.producerId });
-          }
+          callback({ id: f.producerId });
         })
         .catch(errback);
       signal.send({

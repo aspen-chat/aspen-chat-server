@@ -3,21 +3,23 @@
 //! The media itself flows through voice servers, which are separate processes registered in
 //! the `voice_server` table. This module hands out join offers (a short-lived token plus the
 //! servers worth trying), keeps the registry, disables servers that keep failing, and turns
-//! the voice servers' NATS reports into rows and client events. A session binds a channel to
+//! the voice servers' reports, read from the report stream (`reports`), into rows and client
+//! events. A session binds a channel to
 //! one server while anyone is in the call; it is created by the first report of a participant
 //! and ends when the last one leaves, so the channel can land anywhere the next time.
 
+mod reports;
 mod ring;
 mod servers;
 mod sessions;
 
+pub use reports::spawn_report_listener;
 pub use ring::{decline_ring, read_channels_rings};
 pub use servers::{
     create_server, delete_server, join_offer, list_servers, report_failure, seed_servers,
     update_server,
 };
-pub use sessions::{kick_everywhere, kick_participant, mute_participant, spawn_report_listener};
-
+pub use sessions::{kick_everywhere, kick_participant, mute_participant};
 use ring::clear_spent_rings;
 use servers::reap_silent_servers;
 use sessions::reap_idle_sessions;

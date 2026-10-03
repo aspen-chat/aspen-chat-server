@@ -206,6 +206,7 @@ export {
   CONNECT_TIMEOUT_MS,
   CameraError,
   MicrophoneError,
+  VoiceRequestRefused,
   PING_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,

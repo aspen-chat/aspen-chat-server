@@ -1,19 +1,53 @@
-//! Messages between the API server and the voice servers, carried over core NATS.
+//! Messages between the API server and the voice servers, carried over NATS.
 //!
-//! Every voice server publishes [`VoiceReport`]s on [`REPORT_SUBJECT`]; the API servers share a
-//! queue group on it so exactly one of them acts on each report. The API server sends a
-//! [`VoiceCommand`] to one voice server on that server's own subject from [`command_subject`].
+//! Every voice server publishes its [`VoiceReport`]s to the JetStream stream [`REPORT_STREAM`].
+//! Reports are spread over [`REPORT_PARTITIONS`] lanes by the channel they are about
+//! ([`partition`]), and speaking changes go in lanes of their own, so each report's subject
+//! ([`VoiceReport::subject`]) names its kind of lane, its lane, and its voice server. The API
+//! servers read every lane through one durable consumer that hands out a report only once the
+//! one before it has been applied, so the reports about one channel are applied once each, in
+//! the order they were sent, however many API servers share the work, while different lanes
+//! are applied side by side. A busy channel never holds up the others in its voice server
+//! beyond its lane, and speaking changes, which come many times faster than anything else,
+//! never hold up a call's joins and leaves. The API server sends a [`VoiceCommand`] to one voice
+//! server over core NATS, on that server's own subject from [`command_subject`].
 
 use crate::signal::{TransferEnd, TransferMode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Where every voice server publishes its reports.
-pub const REPORT_SUBJECT: &str = "aspen.voice.report";
+/// The JetStream stream every voice server's reports are kept in until an API server has
+/// applied them. The API servers create it.
+pub const REPORT_STREAM: &str = "aspen_voice_reports";
 
-/// The queue group the API servers subscribe to reports with, so a report is handled once
-/// however many API servers run.
-pub const REPORT_QUEUE_GROUP: &str = "aspen-api";
+/// What the subjects of every report but speaking changes start with.
+pub const REPORT_SUBJECT_ROOT: &str = "aspen.voice.report";
+
+/// What the subjects of speaking changes start with.
+pub const SPEAKING_SUBJECT_ROOT: &str = "aspen.voice.speaking";
+
+/// How many lanes reports are spread over, for each of the two kinds. Every report about a
+/// channel goes in the same lane, so its calls' reports stay in order, a channel's next call
+/// included. Both sides compute the lane, so this is part of the protocol: changing it while
+/// reports are waiting would let a channel's reports be applied out of order.
+pub const REPORT_PARTITIONS: u8 = 64;
+
+/// The lane of reports about `key` (a channel, or a voice server for what is about the whole
+/// server): its last byte, which is random in a UUIDv7, modulo [`REPORT_PARTITIONS`]. The API
+/// server's database computes the same as `get_byte(uuid_send(key), 15) % 64`.
+pub fn partition(key: Uuid) -> u8 {
+    key.as_bytes()[15] % REPORT_PARTITIONS
+}
+
+/// The subject of a report in lane `partition` from `server`.
+pub fn report_subject(partition: u8, server: Uuid) -> String {
+    format!("{REPORT_SUBJECT_ROOT}.{partition}.{server}")
+}
+
+/// The subject of a speaking change in lane `partition` from `server`.
+pub fn speaking_subject(partition: u8, server: Uuid) -> String {
+    format!("{SPEAKING_SUBJECT_ROOT}.{partition}.{server}")
+}
 
 /// The subject one voice server listens on for commands.
 pub fn command_subject(server: Uuid) -> String {
@@ -24,13 +58,29 @@ pub fn command_subject(server: Uuid) -> String {
 /// treats a server silent for several of these as gone and ends its sessions.
 pub const LOAD_REPORT_INTERVAL_SECONDS: u64 = 15;
 
-/// Something a voice server tells the API server.
+/// How often a voice server reports every call it holds as it stands ([`VoiceReport::SessionSnapshot`]
+/// and [`VoiceReport::SessionsHeld`]), which repairs whatever a lost report left wrong. It also
+/// does so whenever it reconnects to NATS, since reports may have been lost while it was away.
+pub const SNAPSHOT_INTERVAL_SECONDS: u64 = 60;
+
+/// Someone in a call as a snapshot shows them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantSnapshot {
+    pub user: Uuid,
+    pub muted: bool,
+    pub deafened: bool,
+    pub sharing_screen: bool,
+}
+
+/// Something a voice server tells the API server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, strum::IntoStaticStr)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
+#[strum(serialize_all = "camelCase")]
 pub enum VoiceReport {
     /// The periodic heartbeat: how many participants the server carries right now.
     Load { server: Uuid, participants: u32 },
@@ -42,18 +92,28 @@ pub enum VoiceReport {
         channel: Uuid,
     },
     /// A user's media is flowing.
-    ParticipantJoined { session: Uuid, user: Uuid },
+    ParticipantJoined {
+        session: Uuid,
+        channel: Uuid,
+        user: Uuid,
+    },
     /// A user disconnected or was removed.
-    ParticipantLeft { session: Uuid, user: Uuid },
+    ParticipantLeft {
+        session: Uuid,
+        channel: Uuid,
+        user: Uuid,
+    },
     /// A user started or stopped speaking, as the server's audio level observer sees it.
     Speaking {
         session: Uuid,
+        channel: Uuid,
         user: Uuid,
         speaking: bool,
     },
     /// A user's mute or deafen state changed, whether by their own hand or a command.
     ParticipantState {
         session: Uuid,
+        channel: Uuid,
         user: Uuid,
         muted: bool,
         deafened: bool,
@@ -63,7 +123,7 @@ pub enum VoiceReport {
         sharing_screen: bool,
     },
     /// The last participant left, or the server is shutting the session down.
-    SessionEnded { session: Uuid },
+    SessionEnded { session: Uuid, channel: Uuid },
     /// A participant offered a file to the call, for the deployment's record of transfers.
     /// `record` is the voice server's own id for the offer, time-ordered and never the id the
     /// client chose, so no client can make its offer collide with another in the record.
@@ -78,6 +138,7 @@ pub enum VoiceReport {
     },
     /// A transfer of an offered file began.
     TransferStarted {
+        channel: Uuid,
         record: Uuid,
         sender: Uuid,
         receiver: Uuid,
@@ -85,11 +146,54 @@ pub enum VoiceReport {
     },
     /// A transfer ended, ended by `ended_by` (one of its two sides) for `reason`.
     TransferEnded {
+        channel: Uuid,
         record: Uuid,
         receiver: Uuid,
         ended_by: Uuid,
         reason: TransferEnd,
     },
+    /// One call this server holds and everyone in it, as they stand. Part of a snapshot: one of
+    /// these for every call, then a [`VoiceReport::SessionsHeld`] for every lane, all sent
+    /// together, so no other report comes between them and each says what its call or lane is
+    /// as of its place in the order.
+    SessionSnapshot {
+        server: Uuid,
+        session: Uuid,
+        channel: Uuid,
+        participants: Vec<ParticipantSnapshot>,
+    },
+    /// Every call this server holds in the channels of lane `partition`, ending a snapshot. A
+    /// call recorded on this server in that lane and not listed is one it no longer has. It is
+    /// sent for every lane, those with no calls included, and in its own lane, so it is applied
+    /// after every report about those calls sent before it.
+    SessionsHeld {
+        server: Uuid,
+        partition: u8,
+        sessions: Vec<Uuid>,
+    },
+}
+
+impl VoiceReport {
+    /// The subject this report is published on: its lane by the channel it is about, or by
+    /// the server for a report about the whole server, among speaking changes or the rest.
+    pub fn subject(&self, server: Uuid) -> String {
+        match self {
+            VoiceReport::Speaking { channel, .. } => speaking_subject(partition(*channel), server),
+            VoiceReport::Load { .. } => report_subject(partition(server), server),
+            VoiceReport::SessionsHeld { partition, .. } => report_subject(*partition, server),
+            VoiceReport::SessionStarted { channel, .. }
+            | VoiceReport::ParticipantJoined { channel, .. }
+            | VoiceReport::ParticipantLeft { channel, .. }
+            | VoiceReport::ParticipantState { channel, .. }
+            | VoiceReport::SessionEnded { channel, .. }
+            | VoiceReport::FileOffered { channel, .. }
+            | VoiceReport::TransferStarted { channel, .. }
+            | VoiceReport::TransferEnded { channel, .. }
+            | VoiceReport::SessionSnapshot { channel, .. } => {
+                report_subject(partition(*channel), server)
+            }
+        }
+    }
 }
 
 /// Something the API server asks a voice server to do.
@@ -118,11 +222,79 @@ mod tests {
     fn reports_are_tagged_by_type() {
         let report = VoiceReport::Speaking {
             session: Uuid::nil(),
+            channel: Uuid::nil(),
             user: Uuid::nil(),
             speaking: true,
         };
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["type"], "speaking");
         assert_eq!(serde_json::from_value::<VoiceReport>(json).unwrap(), report);
+    }
+
+    #[test]
+    fn snapshots_name_their_fields_in_camel_case() {
+        let report = VoiceReport::SessionSnapshot {
+            server: Uuid::nil(),
+            session: Uuid::nil(),
+            channel: Uuid::nil(),
+            participants: vec![ParticipantSnapshot {
+                user: Uuid::nil(),
+                muted: true,
+                deafened: false,
+                sharing_screen: true,
+            }],
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["type"], "sessionSnapshot");
+        assert_eq!(json["participants"][0]["sharingScreen"], true);
+        assert_eq!(serde_json::from_value::<VoiceReport>(json).unwrap(), report);
+        let held = serde_json::to_value(VoiceReport::SessionsHeld {
+            server: Uuid::nil(),
+            partition: 3,
+            sessions: vec![],
+        })
+        .unwrap();
+        assert_eq!(held["type"], "sessionsHeld");
+    }
+
+    #[test]
+    fn reports_go_in_the_lane_of_their_channel_and_speaking_in_its_own() {
+        let server = Uuid::now_v7();
+        let channel = Uuid::now_v7();
+        let lane = partition(channel);
+        assert!(lane < REPORT_PARTITIONS);
+        let joined = VoiceReport::ParticipantJoined {
+            session: Uuid::now_v7(),
+            channel,
+            user: Uuid::now_v7(),
+        };
+        assert_eq!(
+            joined.subject(server),
+            format!("{REPORT_SUBJECT_ROOT}.{lane}.{server}")
+        );
+        let speaking = VoiceReport::Speaking {
+            session: Uuid::now_v7(),
+            channel,
+            user: Uuid::now_v7(),
+            speaking: true,
+        };
+        assert_eq!(
+            speaking.subject(server),
+            format!("{SPEAKING_SUBJECT_ROOT}.{lane}.{server}")
+        );
+        let load = VoiceReport::Load {
+            server,
+            participants: 0,
+        };
+        assert_eq!(
+            load.subject(server),
+            report_subject(partition(server), server)
+        );
+    }
+
+    #[test]
+    fn the_lane_is_the_last_byte_modulo_the_lanes() {
+        let key = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdc7);
+        assert_eq!(partition(key), 0xc7 % REPORT_PARTITIONS);
     }
 }
