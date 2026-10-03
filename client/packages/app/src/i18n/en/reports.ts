@@ -24,7 +24,7 @@ export const reports = {
   categoriesLoading: "Loading the reasons…",
   explanationLabel: "Anything to add?",
   explanationRequiredLabel: "What's wrong?",
-  explanationHint: "Up to 1000 characters. Optional, except for Other.",
+  explanationHint: "Up to 1000 characters.",
   send: "Send report",
   sending: "Sending…",
   sent: "Report sent. Thank you.",
