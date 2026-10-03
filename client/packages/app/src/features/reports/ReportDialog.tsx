@@ -208,7 +208,11 @@ function ReportForm({ target, close }: { target: ReportTarget; close: () => void
         >
           <Label className={labelClass}>{m.reports.categoryLabel}</Label>
           <Button className={selectButtonClass}>
-            <SelectValue className="truncate" />
+            <SelectValue className="truncate">
+              {({ isPlaceholder, selectedText, defaultChildren }) =>
+                isPlaceholder ? defaultChildren : selectedText
+              }
+            </SelectValue>
             <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
           </Button>
           {chosen?.description != null && <p className={hintClass}>{chosen.description}</p>}
