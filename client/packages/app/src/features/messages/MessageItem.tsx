@@ -1,6 +1,7 @@
 import { ArrowBendDownRightIcon, ChatsCircleIcon, RobotIcon } from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { memo, useEffect, useRef, useState } from "react";
+import type { Message, User } from "@aspen/protocol";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 // React Aria Components has no long press; the hook it is built on does.
 import { useLongPress } from "react-aria";
 import { Button, Dialog, Popover } from "react-aria-components";
@@ -63,6 +64,9 @@ interface Press {
 const actionsPopoverClass =
   "max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-1 shadow-lg";
 
+/** How far the pointer's actions rise above their message's top, over the message before. */
+const TOOLBAR_RISE_PX = 20;
+
 /** How soon after a message arrives that it is drawn arriving. */
 const ARRIVING_MS = 1000;
 
@@ -72,8 +76,10 @@ const ARRIVING_MS = 1000;
  * start a thread, and one that started a thread shows its replies' summary; an echo shows the
  * thread reply it names.
  *
- * Its actions (`MessageActions`) show at its corner while the pointer is over it or focus is
- * in it. A touch screen has no hover, and a row of buttons over every message would cost the
+ * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
+ * over it or focus is in it, kept out of the layout so the header and body sit where they
+ * would without it; near the top of its list, the bar rises only as far as there is room. A
+ * touch screen has no hover, and a row of buttons over every message would cost the
  * screen's room, so there a long press on the message opens them in a popover under it,
  * settling into place, with a tap felt in the hand in the apps; the press owns the message,
  * so the browser's own long press, which would select its text, is turned off there, and the
@@ -98,7 +104,6 @@ export const MessageItem = memo(function MessageItem({
   /** Whether it is the newest message, on which the actions never open downward. */
   latest?: boolean;
 }) {
-  const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const sync = useSync();
   const navigate = useNavigate();
@@ -108,6 +113,8 @@ export const MessageItem = memo(function MessageItem({
   const me = useMe();
   const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
+  // How far the pointer's actions rise above the row: all the way, or as far as there is room.
+  const [toolbarRise, setToolbarRise] = useState(TOOLBAR_RISE_PX);
   // A touch screen offers the actions under a long press; a pointer, at the corner.
   const touchOnly = useMediaQuery(TOUCH_ONLY);
   // What the press has open: the actions, or what one of them opened in their place.
@@ -164,9 +171,6 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "call" &&
     message.kind !== "missedCall" &&
     (message.thread != null || permissions.has("startThreads"));
-  const permalink = inThread
-    ? threadLink(home, parentId, channelId)
-    : messageLink(home, channelId, id);
   const openThread = () => {
     if (message.thread != null) {
       void navigate(threadLink(home, channelId, message.thread));
@@ -187,44 +191,47 @@ export const MessageItem = memo(function MessageItem({
   const editable = own && message.kind === "standard";
   if (message.kind === "call" || message.kind === "missedCall") {
     return (
-      <article
-        data-message-id={id}
-        className={
-          "flex gap-3 rounded-md px-2 py-1.5 " +
-          arriving +
-          (highlighted ? "motion-flash " : "") +
-          "hover:bg-surface-hover/60"
-        }
-      >
-        <div className="w-10 shrink-0" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          {message.kind === "call" ? (
-            <CallNotice starter={message.author} seconds={message.callSeconds ?? 0} />
-          ) : (
-            <MissedCallNotice caller={message.author} />
-          )}
-        </div>
-      </article>
+      <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
+        {message.kind === "call" ? (
+          <CallNotice starter={message.author} seconds={message.callSeconds ?? 0} />
+        ) : (
+          <MissedCallNotice caller={message.author} />
+        )}
+      </NoticeRow>
     );
   }
   if (message.kind === "pollClosed" && message.poll != null) {
     return (
-      <article
-        data-message-id={id}
-        className={
-          "flex gap-3 rounded-md px-2 py-1.5 " +
-          arriving +
-          (highlighted ? "motion-flash " : "") +
-          "hover:bg-surface-hover/60"
-        }
-      >
-        <div className="w-10 shrink-0" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <PollClosedNotice pollId={message.poll} home={home} channelId={channelId} />
-        </div>
-      </article>
+      <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
+        <PollClosedNotice pollId={message.poll} home={home} channelId={channelId} />
+      </NoticeRow>
     );
   }
+  const actions = {
+    messageId: id,
+    channelId,
+    communityId: home.community,
+    text: message.content,
+    permissions,
+    canThread,
+    editable,
+    deletable,
+    onOpenThread: openThread,
+    onEdit: () => {
+      setEditing(true);
+    },
+  };
+  // The pointer's actions rise over the message before, but no further than the top of the
+  // list, or of whatever holds the row, where they would be cut off or cover what is above.
+  const placeToolbar = () => {
+    const el = row.current;
+    if (el === null) {
+      return;
+    }
+    const room = el.closest<HTMLElement>("[data-message-list]") ?? el.parentElement;
+    const above = el.getBoundingClientRect().top - (room?.getBoundingClientRect().top ?? 0);
+    setToolbarRise(Math.min(TOOLBAR_RISE_PX, Math.max(0, Math.floor(above))));
+  };
   // A message that tags the reader stands out, with a bar at its edge in place of padding.
   const tagsMe = sync.store.mentionsMe(message);
   return (
@@ -233,7 +240,7 @@ export const MessageItem = memo(function MessageItem({
       data-message-id={id}
       data-mentions-me={tagsMe ? "true" : undefined}
       tabIndex={-1}
-      {...(touchOnly ? longPressProps : {})}
+      {...(touchOnly ? longPressProps : { onPointerEnter: placeToolbar, onFocus: placeToolbar })}
       className={
         "group relative flex gap-3 rounded-md py-1.5 outline-none " +
         (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
@@ -246,13 +253,44 @@ export const MessageItem = memo(function MessageItem({
       }
     >
       {touchOnly && press !== null && (
-        // The point the finger pressed, which the popovers open beside.
-        <span
-          ref={anchor}
-          aria-hidden="true"
-          className="pointer-events-none absolute h-0 w-0"
-          style={{ left: press.x, top: press.y }}
-        />
+        <>
+          {/* The point the finger pressed, which the popovers open beside. */}
+          <span
+            ref={anchor}
+            aria-hidden="true"
+            className="pointer-events-none absolute h-0 w-0"
+            style={{ left: press.x, top: press.y }}
+          />
+          <Popover
+            triggerRef={anchor}
+            {...popoverProps("actions")}
+            className={"motion-settle " + actionsPopoverClass}
+          >
+            <Dialog aria-label={m.messageActionsLabel} className="outline-none">
+              <div role="group" aria-label={m.messageActionsLabel} className="flex flex-wrap gap-1">
+                <MessageActions
+                  {...actions}
+                  open={setSheet}
+                  onDone={() => {
+                    setSheet(null);
+                  }}
+                />
+              </div>
+            </Dialog>
+          </Popover>
+          <ReactionPickerPopover
+            messageId={id}
+            communityId={home.community}
+            triggerRef={anchor}
+            {...popoverProps("react")}
+          />
+          <ReactionsDialog
+            messageId={id}
+            communityId={home.community}
+            {...sheetProps("reactions")}
+          />
+          <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
+        </>
       )}
       {author === undefined ? (
         authorLoading ? (
@@ -274,122 +312,27 @@ export const MessageItem = memo(function MessageItem({
         </ProfilePopover>
       )}
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          {author === undefined ? (
-            authorLoading ? (
-              <>
-                <LoadingLabel />
-                <Skeleton className="h-3.5 w-24 self-center" />
-              </>
-            ) : (
-              <span className="font-medium">{m.unknownUser}</span>
-            )
-          ) : (
-            <ProfilePopover user={author}>
-              <Button
-                aria-label={format(m.profile.show, { name: displayNameOf(author) })}
-                className="rounded font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                {displayNameOf(author)}
-              </Button>
-            </ProfilePopover>
-          )}
-          {author?.bot === true && <BotBadge />}
-          {author?.system === true && <SystemBadge />}
-          {message.kind === "command" && message.commandBot != null && (
-            <span className="flex items-center gap-1 text-xs text-ink-muted">
-              <RobotIcon size={12} aria-hidden="true" />
-              {formatNodes(m.commands.sentTo, {
-                bot: <UserMention id={message.commandBot} chip />,
-              })}
-            </span>
-          )}
-          {message.kind === "threadEcho" && (
-            <span className="flex items-center gap-1 text-xs whitespace-nowrap text-ink-muted">
-              <ArrowBendDownRightIcon size={12} aria-hidden="true" className="rtl:-scale-x-100" />
-              {m.threads.repliedInThread}
-            </span>
-          )}
-          <Link
-            {...permalink}
-            className="text-xs whitespace-nowrap text-ink-faint outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
-            title={m.linkToMessage}
+        <MessageHeader
+          message={message}
+          author={author}
+          authorLoading={authorLoading}
+          home={home}
+          channelId={channelId}
+          parentId={parentId}
+        />
+        {!editing && !touchOnly && (
+          // Out of the header's flow, so its buttons never make the header taller than its
+          // text; after the header in the document, so a keyboard reaches it before the body.
+          // Hidden, it lets the pointer through to the message it rises over.
+          <div
+            role="group"
+            aria-label={m.messageActionsLabel}
+            className="pointer-events-none absolute end-2 z-10 flex gap-0.5 rounded-lg border border-line bg-surface-raised p-0.5 opacity-0 shadow-sm group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+            style={{ top: -toolbarRise }}
           >
-            <time dateTime={message.timestamp}>
-              {timeFormat.format(new Date(message.timestamp))}
-            </time>
-          </Link>
-          {!editing && !touchOnly && (
-            <span
-              role="group"
-              aria-label={m.messageActionsLabel}
-              className="ms-auto flex gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-            >
-              <MessageActions
-                messageId={id}
-                channelId={channelId}
-                communityId={home.community}
-                text={message.content}
-                permissions={permissions}
-                canThread={canThread}
-                editable={editable}
-                deletable={deletable}
-                onOpenThread={openThread}
-                onEdit={() => {
-                  setEditing(true);
-                }}
-              />
-            </span>
-          )}
-          {touchOnly && press !== null && (
-            <>
-              <Popover
-                triggerRef={anchor}
-                {...popoverProps("actions")}
-                className={"motion-settle " + actionsPopoverClass}
-              >
-                <Dialog aria-label={m.messageActionsLabel} className="outline-none">
-                  <div
-                    role="group"
-                    aria-label={m.messageActionsLabel}
-                    className="flex flex-wrap gap-1"
-                  >
-                    <MessageActions
-                      messageId={id}
-                      channelId={channelId}
-                      communityId={home.community}
-                      text={message.content}
-                      permissions={permissions}
-                      canThread={canThread}
-                      editable={editable}
-                      deletable={deletable}
-                      onOpenThread={openThread}
-                      onEdit={() => {
-                        setEditing(true);
-                      }}
-                      open={setSheet}
-                      onDone={() => {
-                        setSheet(null);
-                      }}
-                    />
-                  </div>
-                </Dialog>
-              </Popover>
-              <ReactionPickerPopover
-                messageId={id}
-                communityId={home.community}
-                triggerRef={anchor}
-                {...popoverProps("react")}
-              />
-              <ReactionsDialog
-                messageId={id}
-                communityId={home.community}
-                {...sheetProps("reactions")}
-              />
-              <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
-            </>
-          )}
-        </div>
+            <MessageActions {...actions} />
+          </div>
+        )}
         {editing ? (
           <MessageEditor
             messageId={id}
@@ -426,6 +369,109 @@ export const MessageItem = memo(function MessageItem({
     </article>
   );
 });
+
+/** A notice the server writes into the conversation, under no author, set in line with text. */
+function NoticeRow({
+  id,
+  arriving,
+  highlighted,
+  children,
+}: {
+  id: string;
+  /** The arriving motion's class, or nothing for a message drawn still. */
+  arriving: string;
+  highlighted: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <article
+      data-message-id={id}
+      className={
+        "flex gap-3 rounded-md px-2 py-1.5 " +
+        arriving +
+        (highlighted ? "motion-flash " : "") +
+        "hover:bg-surface-hover/60"
+      }
+    >
+      <div className="w-10 shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1">{children}</div>
+    </article>
+  );
+}
+
+/**
+ * A message's first line: who wrote it, what they are, what kind of message it is, and when,
+ * linking to the message. It holds only text, so it is as tall as a line of it.
+ */
+function MessageHeader({
+  message,
+  author,
+  authorLoading,
+  home,
+  channelId,
+  parentId,
+}: {
+  message: Message;
+  author: User | undefined;
+  authorLoading: boolean;
+  home: ChannelHome;
+  channelId: string;
+  parentId: string | null;
+}) {
+  const timeFormat = useDateFormat(TIME);
+  const m = useMessages();
+  // A thread's messages link to the thread; elsewhere a message links to itself in its history.
+  const permalink =
+    parentId === null
+      ? messageLink(home, channelId, message.id)
+      : threadLink(home, parentId, channelId);
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+      {author === undefined ? (
+        authorLoading ? (
+          <>
+            <LoadingLabel />
+            <Skeleton className="h-3.5 w-24 self-center" />
+          </>
+        ) : (
+          <span className="font-medium">{m.unknownUser}</span>
+        )
+      ) : (
+        <ProfilePopover user={author}>
+          <Button
+            aria-label={format(m.profile.show, { name: displayNameOf(author) })}
+            className="rounded font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            {displayNameOf(author)}
+          </Button>
+        </ProfilePopover>
+      )}
+      {author?.bot === true && <BotBadge />}
+      {author?.system === true && <SystemBadge />}
+      {message.kind === "command" && message.commandBot != null && (
+        <span className="flex items-center gap-1 text-xs text-ink-muted">
+          <RobotIcon size={12} aria-hidden="true" />
+          {formatNodes(m.commands.sentTo, {
+            bot: <UserMention id={message.commandBot} chip />,
+          })}
+        </span>
+      )}
+      {message.kind === "threadEcho" && (
+        <span className="flex items-center gap-1 text-xs whitespace-nowrap text-ink-muted">
+          <ArrowBendDownRightIcon size={12} aria-hidden="true" className="rtl:-scale-x-100" />
+          {m.threads.repliedInThread}
+        </span>
+      )}
+      <Link
+        {...permalink}
+        className="text-xs whitespace-nowrap text-ink-faint outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+        title={m.linkToMessage}
+      >
+        <time dateTime={message.timestamp}>{timeFormat.format(new Date(message.timestamp))}</time>
+      </Link>
+    </div>
+  );
+}
 
 /**
  * The thread reply an echo shows, read from the reply itself so its edits show here too, with

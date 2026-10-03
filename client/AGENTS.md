@@ -231,8 +231,10 @@ commit, as with comments.
   works there and in iOS Safari.
 - Nothing may depend on hover, which a touch screen does not have. A control revealed on hover is
   also revealed by focus, or offered another way on a touch screen: a message's actions
-  (`MessageActions`, icons at `ACTION_ICON`) sit at its corner on hover or focus where there is
-  a pointer, and on a touch-only device (`TOUCH_ONLY`) a long press on the message opens them in
+  (`MessageActions`, icons at `ACTION_ICON`) show on hover or focus where there is a pointer, in
+  a bar positioned out of the layout and rising over the message before (as far as the top of
+  the list or the row's container leaves room), so the header stays one line of text tall and
+  the body sits right under it, and on a touch-only device (`TOUCH_ONLY`) a long press on the message opens them in
   a popover beside the finger (`useLongPress` from `react-aria`, the one hook taken from it,
   since the components package has no long press; the popover is anchored to the point
   pressed, so on a long message it comes where the finger is, below it, or above it in the
