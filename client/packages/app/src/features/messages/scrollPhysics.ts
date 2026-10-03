@@ -83,24 +83,28 @@ export function spring(from: number, to: number, elapsedMs: number): number {
   return from + (to - from) * eased;
 }
 
-/** The finger's recent positions, for its speed when it lifts. */
+/**
+ * The finger's recent positions along one axis, for its speed when it lifts: the list feeds it
+ * the finger's height on the screen, a swipe its position across.
+ */
 export class VelocityTracker {
-  readonly #samples: { y: number; at: number }[] = [];
+  readonly #samples: { position: number; at: number }[] = [];
 
   reset(): void {
     this.#samples.length = 0;
   }
 
-  add(y: number, at: number): void {
-    this.#samples.push({ y, at });
+  add(position: number, at: number): void {
+    this.#samples.push({ position, at });
     while (this.#samples.length > 0 && at - (this.#samples[0]?.at ?? at) > VELOCITY_WINDOW_MS) {
       this.#samples.shift();
     }
   }
 
   /**
-   * The finger's speed over the window, in pixels per millisecond, positive when it moved down
-   * the screen; zero for a finger that rested before lifting.
+   * The finger's speed over the window, in pixels per millisecond, positive when its position
+   * grew (when it moved down the screen, for the list); zero for a finger that rested before
+   * lifting.
    */
   velocity(at: number): number {
     const first = this.#samples[0];
@@ -112,6 +116,6 @@ export class VelocityTracker {
       return 0;
     }
     const elapsed = last.at - first.at;
-    return elapsed <= 0 ? 0 : (last.y - first.y) / elapsed;
+    return elapsed <= 0 ? 0 : (last.position - first.position) / elapsed;
   }
 }

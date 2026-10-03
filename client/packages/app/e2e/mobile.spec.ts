@@ -69,6 +69,36 @@ async function swipe(page: Page, x: number, fromY: number, toY: number) {
   await client.detach();
 }
 
+/**
+ * Drags a finger across the screen at height `y` from `fromX` to `toX` (Chromium only). With
+ * `rest`, it comes to rest before it lifts, rather than being thrown.
+ */
+async function swipeAcross(
+  page: Page,
+  y: number,
+  fromX: number,
+  toX: number,
+  { rest = false } = {},
+) {
+  const client = await page.context().newCDPSession(page);
+  const steps = 8;
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: fromX, y }],
+  });
+  for (let i = 1; i <= steps; i++) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: fromX + ((toX - fromX) * i) / steps, y }],
+    });
+  }
+  if (rest) {
+    await page.waitForTimeout(200);
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await client.detach();
+}
+
 const channelList = (page: Page) => page.getByRole("grid", { name: "Channels" }).first();
 const rail = (page: Page) => page.getByRole("navigation", { name: "Communities" });
 const messageWith = (page: Page, text: string) =>
@@ -160,6 +190,61 @@ test.describe("on a phone", () => {
       });
       expect(lines).toBeLessThan(1.5);
     }
+  });
+
+  test("a swipe toward the start draws out the members, and a swipe back puts them away", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    await openChannel(page, "general");
+    await expect(messageWith(page, starterText)).toBeVisible();
+    const width = page.viewportSize()?.width ?? 0;
+    const height = page.viewportSize()?.height ?? 0;
+    const members = page.getByRole("dialog", { name: "Members" });
+    await swipeAcross(page, height / 2, width - 40, 40);
+    await expect(members).toBeVisible();
+    await expect(
+      members.getByRole("button", { name: /Bob With A Rather Long Display Name/ }),
+    ).toBeVisible();
+    await settleAnimations(page);
+    const box = await members.boundingBox();
+    expect(box?.x ?? 0).toBeGreaterThan(0);
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeCloseTo(width, 0);
+    await expectNoSidewaysScroll(page);
+    await swipeAcross(page, height / 2, (box?.x ?? 0) + 20, width - 10);
+    await expect(members).toBeHidden();
+    await expect(page.getByRole("heading", { name: "general" })).toBeVisible();
+  });
+
+  test("a swipe that comes to rest short of halfway springs back, and one up the list opens nothing", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    await openChannel(page, "general");
+    await expect(messageWith(page, starterText)).toBeVisible();
+    const width = page.viewportSize()?.width ?? 0;
+    const height = page.viewportSize()?.height ?? 0;
+    const members = page.getByRole("dialog", { name: "Members" });
+    await swipeAcross(page, height / 2, width - 40, width - 120, { rest: true });
+    await expect(members).toBeHidden();
+    await swipe(page, width / 2, height / 2 + 100, height / 2 - 100);
+    await expect(members).toBeHidden();
+  });
+
+  test("the channel's members button opens the members, and their X puts them away", async ({
+    page,
+  }) => {
+    await openChannel(page, "general");
+    await page.getByRole("button", { name: "Show members" }).click();
+    const members = page.getByRole("dialog", { name: "Members" });
+    await expect(members).toBeVisible();
+    await expect(members.getByRole("heading", { name: /Online/ })).toBeVisible();
+    await expectTouchable(members.getByRole("button", { name: "Close" }));
+    await members.getByRole("button", { name: "Close" }).click();
+    await expect(members).toBeHidden();
+    await expect(page.getByRole("button", { name: "Show members" })).toBeFocused();
   });
 
   test("a long press opens a message's actions beside the finger, and each action closes them", async ({

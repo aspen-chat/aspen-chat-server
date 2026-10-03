@@ -147,7 +147,8 @@ commit, as with comments.
   the render that made it, so a slow render does not use the animation up unseen); a message gone to flashing; reaction chips and mention badges
   popping as they grow (`useGrowthKey`); channels revealed by unfolding a category and
   communities of a folder opened here dropping in; rows gliding to new places when an order
-  changes (`useReorderGlide`); the thread panel and member list sliding in; call tiles, the
+  changes (`useReorderGlide`); the thread panel and member list sliding in, and the member
+  drawer sliding out and back; call tiles, the
   composer's files (with an upload progress bar, from `uploadAttachment`'s `onProgress`), the
   sync banner, and the Jump to latest pill appearing; speaking rings fading. Code that moves
   things itself reads `useMotion` (off, reduced, scale).
@@ -225,6 +226,16 @@ commit, as with comments.
   made in code use `useMediaQuery(MEDIUM_SCREEN)` (`src/features/layout/useMediaQuery.ts`) so they
   agree with the class names; `CommunityIndex`, for one, opens the first channel only on a wide
   screen, since on a narrow one the index is the channel list.
+  Below Tailwind's `lg` breakpoint, where there is no room for the member list beside a channel,
+  it is a drawer over the channel instead (`Drawer`, `src/features/layout/Drawer.tsx`, a modal
+  at the inline end): the channel header's members
+  button opens it, and a finger swiping across the channel toward the inline start draws it out
+  and back toward the end puts it away (`useSwipe`, `src/features/layout/useSwipe.ts`). It
+  follows the finger and, as the finger lifts, goes the way it was thrown or, if it came to
+  rest, whichever way it is more than half; where motion is reduced it fades in and out in
+  place. A finger moving mostly up or down, or across something that scrolls sideways, is left
+  to scroll, and a swipe's moves stop at the swipe, so the message list, which follows a
+  finger itself on iOS, does not move with one. The Android back button puts the drawer away.
 - Copy to the clipboard with `copyText` (`src/features/layout/clipboard.ts`), never
   `navigator.clipboard` directly: the Clipboard API is missing on a page served over plain HTTP,
   such as a dev server a phone reaches by address, and `copyText` falls back to a copy that
