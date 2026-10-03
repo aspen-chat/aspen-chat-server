@@ -45,6 +45,7 @@ pub mod markdown;
 pub mod media_store;
 pub mod mention;
 pub mod message;
+pub mod message_link;
 pub mod moderation_log;
 pub mod notification_setting;
 pub mod outbound;
@@ -57,12 +58,14 @@ pub mod rate_limit;
 pub mod react;
 pub mod read_state;
 pub mod registration_invite;
+pub mod report;
 pub mod role;
 pub mod search;
 pub mod system_account;
 pub mod thread;
 pub mod two_factor;
 pub mod user;
+pub mod user_ban;
 pub mod user_status;
 pub mod visibility;
 pub mod voice;
@@ -149,6 +152,34 @@ macro_rules! text_sql_traits {
     };
 }
 pub(crate) use text_sql_traits;
+
+/// Diesel's `FromSql` and `ToSql` for a serde type stored as `JSONB`, which Postgres sends and
+/// takes as a version byte, 1, followed by the JSON text.
+macro_rules! jsonb_sql_traits {
+    ($type_name:ty) => {
+        impl diesel::deserialize::FromSql<diesel::sql_types::Jsonb, diesel::pg::Pg> for $type_name {
+            fn from_sql(value: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
+                match value.as_bytes().split_first() {
+                    Some((1, json)) => Ok(serde_json::from_slice(json)?),
+                    _ => Err("unsupported jsonb encoding".into()),
+                }
+            }
+        }
+
+        impl diesel::serialize::ToSql<diesel::sql_types::Jsonb, diesel::pg::Pg> for $type_name {
+            fn to_sql<'b>(
+                &'b self,
+                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
+            ) -> diesel::serialize::Result {
+                use std::io::Write;
+                out.write_all(&[1])?;
+                serde_json::to_writer(out, self)?;
+                Ok(diesel::serialize::IsNull::No)
+            }
+        }
+    };
+}
+pub(crate) use jsonb_sql_traits;
 
 macro_rules! id_type {
     ($type_name:ident) => {
@@ -237,6 +268,9 @@ id_type!(DeploymentRoleId);
 id_type!(FederationKeyId);
 id_type!(PushKeyId);
 id_type!(PushSubscriptionId);
+id_type!(ReportCaseId);
+id_type!(ReportId);
+id_type!(ReportCategoryId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

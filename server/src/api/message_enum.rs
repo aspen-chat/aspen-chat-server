@@ -8,7 +8,7 @@ use crate::app::message::MessageKind;
 use crate::app::permissions::Permission;
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId, MessageId, PollId,
-    RoleId, UserId, VoiceServerId, VoiceSessionId,
+    ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
 };
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -82,6 +82,19 @@ enum MessageEnumSource {
     DeploymentAccessChanged {
         permissions: Vec<DeploymentPermission>,
     },
+    // The user was banned from the deployment: each of their event streams closes after this,
+    // and they cannot sign in again until `until` passes, or until the ban is lifted. See
+    // `app::user_ban`.
+    #[message_gen(custom_event)]
+    AccountBanned {
+        reason: Option<String>,
+        until: Option<chrono::DateTime<Utc>>,
+    },
+    // What awaits review changed: a report was made, or the case `case` was resolved,
+    // dismissed, or restored. Sent to each holder of Review reports, with how many cases are
+    // open now. See `app::report`.
+    #[message_gen(custom_event)]
+    ReportsChanged { case: ReportCaseId, open: i64 },
     // The user collapsed or expanded a category in their channel list, on one of their
     // devices; the others follow. See `app::category_collapse`.
     #[message_gen(custom_event)]
@@ -181,6 +194,16 @@ enum MessageEnumSource {
         // bot is gone.
         #[message_gen(server_authoritative)]
         command_bot: Option<UserId>,
+        // The messages of this deployment its text links to, in order, at most
+        // `app::message_link::MAX_LINKS`, which clients show beneath it; what each reader finds
+        // at each is read with `include=linked`. An edit that changes the text links afresh,
+        // announced by an `Update` event carrying the new set.
+        #[message_gen(server_authoritative = "mutable")]
+        linked_messages: Vec<MessageId>,
+        // For a `Warning`, what it warns about: the person warned, and the message or the
+        // profile as the reports found it. See `app::report`.
+        #[message_gen(server_authoritative)]
+        warning: Option<crate::app::report::Warning>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -526,6 +549,7 @@ mod tests {
             link_previews: None,
             thread: None,
             mentions: None,
+            linked_messages: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -545,6 +569,7 @@ mod tests {
             link_previews: None,
             thread: None,
             mentions: None,
+            linked_messages: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),

@@ -8,24 +8,37 @@ use std::sync::LazyLock;
 use url::Url;
 
 /// Extract up to [`MAX_LINK_PREVIEWS_PER_MESSAGE`] unique preview-worthy
-/// http(s) URLs from a markdown body.
+/// http(s) URLs from a markdown body. Links to messages of an Aspen
+/// deployment are left out: they are shown as the messages themselves
+/// (`app::message_link`), never as a page fetched from the web client.
+pub fn extract_preview_urls(content: &str) -> Vec<Url> {
+    extract_urls(content, MAX_LINK_PREVIEWS_PER_MESSAGE, |url| {
+        crate::app::message_link::message_of(url).is_none()
+    })
+}
+
+/// Extract up to `limit` unique http(s) URLs from a markdown body that `keep`
+/// accepts, in the order the text names them.
 ///
 /// Walks the `pulldown-cmark` event stream:
 /// - explicit links (`[text](url)`, `<url>` autolinks) contribute their
 ///   destination;
 /// - bare URLs inside `Event::Text` are scanned for a leading `http://` /
 ///   `https://` prefix so a user who types a raw link without bracketing
-///   it still gets a preview, matching how GitHub-flavoured markdown
-///   autolinks such text at render time;
+///   it still gets one, matching how GitHub-flavoured markdown autolinks
+///   such text at render time;
 /// - bare domains inside `Event::Text` whose last label is a TLD IANA
-///   delegates (`github.io/pages`) are previewed over `https`, under the
+///   delegates (`github.io/pages`) are taken over `https`, under the
 ///   same rule the client uses to render them as links;
 /// - URLs inside `Event::Code` or fenced code blocks are skipped so pasted
-///   example snippets don't generate spurious cards.
-pub fn extract_preview_urls(content: &str) -> Vec<Url> {
+///   example snippets don't count.
+pub fn extract_urls(content: &str, limit: usize, mut keep: impl FnMut(&Url) -> bool) -> Vec<Url> {
     let mut urls: Vec<Url> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut code_block_depth: u32 = 0;
+    let mut push = |urls: &mut Vec<Url>, raw: &str| {
+        push_url(urls, &mut seen, raw, &mut keep) && urls.len() >= limit
+    };
 
     for event in crate::app::markdown::parser(content) {
         match event {
@@ -35,27 +48,20 @@ pub fn extract_preview_urls(content: &str) -> Vec<Url> {
             }
             Event::Code(_) => {
                 // Explicitly skip inline code so "`curl https://…`" doesn't
-                // try to preview.
+                // count.
             }
             _ if code_block_depth > 0 => {}
-            Event::Start(Tag::Link { dest_url, .. })
-                if push_url(&mut urls, &mut seen, dest_url.as_ref())
-                    && urls.len() >= MAX_LINK_PREVIEWS_PER_MESSAGE =>
-            {
+            Event::Start(Tag::Link { dest_url, .. }) if push(&mut urls, dest_url.as_ref()) => {
                 return urls;
             }
             Event::Text(text) => {
                 for candidate in scan_bare_urls(text.as_ref()) {
-                    if push_url(&mut urls, &mut seen, candidate)
-                        && urls.len() >= MAX_LINK_PREVIEWS_PER_MESSAGE
-                    {
+                    if push(&mut urls, candidate) {
                         return urls;
                     }
                 }
                 for candidate in scan_bare_domains(text.as_ref()) {
-                    if push_url(&mut urls, &mut seen, &candidate)
-                        && urls.len() >= MAX_LINK_PREVIEWS_PER_MESSAGE
-                    {
+                    if push(&mut urls, &candidate) {
                         return urls;
                     }
                 }
@@ -66,11 +72,16 @@ pub fn extract_preview_urls(content: &str) -> Vec<Url> {
     urls
 }
 
-fn push_url(urls: &mut Vec<Url>, seen: &mut HashSet<String>, raw: &str) -> bool {
+fn push_url(
+    urls: &mut Vec<Url>,
+    seen: &mut HashSet<String>,
+    raw: &str,
+    keep: &mut impl FnMut(&Url) -> bool,
+) -> bool {
     let Ok(url) = Url::parse(raw) else {
         return false;
     };
-    if !matches!(url.scheme(), "http" | "https") {
+    if !matches!(url.scheme(), "http" | "https") || !keep(&url) {
         return false;
     }
     if !seen.insert(url.as_str().to_string()) {

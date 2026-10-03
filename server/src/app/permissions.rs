@@ -445,7 +445,7 @@ pub struct ChannelAccess {
     pub dm_moderator: bool,
     /// Whether this is a one-to-one DM with a block between its two people, either way
     /// (`app::block`): they may read it and take their own messages out of it, and nothing
-    /// else.
+    /// else. A holder of Message any user is never blocked.
     pub blocked: bool,
     /// Whether this is a one-to-one DM from the system account (`app::system_account`), whose
     /// notices the person reads and cannot answer.
@@ -676,7 +676,14 @@ async fn dm_peer(
         .await
         .optional()?;
     match other {
-        Some((other, system)) => Ok((app::block::any_between(conn, &[user, other]).await?, system)),
+        Some((other, system)) => {
+            // Message any user reaches anyone, past a block either way.
+            let blocked = app::block::any_between(conn, &[user, other]).await?
+                && !app::deployment::deployment_access(conn, user)
+                    .await?
+                    .has(app::deployment::DeploymentPermission::MessageAnyUser);
+            Ok((blocked, system))
+        }
         None => Ok((false, false)),
     }
 }

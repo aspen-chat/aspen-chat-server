@@ -1,6 +1,7 @@
 //! What people may do across the whole deployment, rather than in one community: open the
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
-//! own roles, bots, and federation with other deployments, and moderate any community.
+//! own roles, bots, federation with other deployments, and report categories, moderate any
+//! community, review reports, ban users from the deployment, and message anyone.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -41,15 +42,25 @@ bitflags::bitflags! {
         const MODERATE_COMMUNITIES = 1 << 4;
         const MANAGE_BOTS = 1 << 5;
         const MANAGE_FEDERATION = 1 << 6;
+        const REVIEW_REPORTS = 1 << 7;
+        const MANAGE_REPORT_CATEGORIES = 1 << 8;
+        const BAN_USERS = 1 << 9;
+        const MESSAGE_ANY_USER = 1 << 10;
     }
 }
 
 app::bigint_sql_traits!(DeploymentPermissions);
 
 impl DeploymentPermissions {
-    /// What the terminal's `admin grant` gives: everything but moderation, which is given
-    /// deliberately.
-    pub const ADMINISTRATOR: Self = Self::all().difference(Self::MODERATE_COMMUNITIES);
+    /// The powers over what people post and who may stay: given deliberately, never by `admin
+    /// grant` alone.
+    pub const MODERATION: Self = Self::MODERATE_COMMUNITIES
+        .union(Self::REVIEW_REPORTS)
+        .union(Self::BAN_USERS)
+        .union(Self::MESSAGE_ANY_USER);
+
+    /// What the terminal's `admin grant` gives: everything but moderation.
+    pub const ADMINISTRATOR: Self = Self::all().difference(Self::MODERATION);
 
     /// Every bit that names a permission, and no other.
     pub fn valid(self) -> Self {
@@ -82,6 +93,10 @@ pub enum DeploymentPermission {
     ModerateCommunities,
     ManageBots,
     ManageFederation,
+    ReviewReports,
+    ManageReportCategories,
+    BanUsers,
+    MessageAnyUser,
 }
 
 impl DeploymentPermission {
@@ -96,6 +111,10 @@ impl DeploymentPermission {
             Self::ModerateCommunities => DeploymentPermissions::MODERATE_COMMUNITIES,
             Self::ManageBots => DeploymentPermissions::MANAGE_BOTS,
             Self::ManageFederation => DeploymentPermissions::MANAGE_FEDERATION,
+            Self::ReviewReports => DeploymentPermissions::REVIEW_REPORTS,
+            Self::ManageReportCategories => DeploymentPermissions::MANAGE_REPORT_CATEGORIES,
+            Self::BanUsers => DeploymentPermissions::BAN_USERS,
+            Self::MessageAnyUser => DeploymentPermissions::MESSAGE_ANY_USER,
         }
     }
 
@@ -108,6 +127,10 @@ impl DeploymentPermission {
             Self::ModerateCommunities => t!("deploymentModerateCommunities"),
             Self::ManageBots => t!("deploymentManageBots"),
             Self::ManageFederation => t!("deploymentManageFederation"),
+            Self::ReviewReports => t!("deploymentReviewReports"),
+            Self::ManageReportCategories => t!("deploymentManageReportCategories"),
+            Self::BanUsers => t!("deploymentBanUsers"),
+            Self::MessageAnyUser => t!("deploymentMessageAnyUser"),
         }
     }
 }
@@ -254,8 +277,9 @@ mod tests {
             to_names(DeploymentPermissions::all()),
             DeploymentPermission::ALL.to_vec()
         );
-        // The number the migration gives existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 111);
+        // What `admin grant` gives: the first seven but moderation, and Manage report
+        // categories, as the migrations give existing administrators.
+        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 111 | 256);
     }
 
     #[test]

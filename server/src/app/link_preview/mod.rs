@@ -43,7 +43,7 @@ mod html_meta;
 mod urls;
 mod video;
 
-pub use urls::extract_preview_urls;
+pub use urls::{extract_preview_urls, extract_urls};
 
 use crate::api::link_preview::{LinkPreview, VideoEmbed, image_storage_key};
 use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
@@ -406,6 +406,7 @@ async fn run_preview_fetch(
                     link_previews: Some(wire_previews),
                     thread: None,
                     mentions: None,
+                    linked_messages: None,
                 });
                 app::publish_event(
                     state,

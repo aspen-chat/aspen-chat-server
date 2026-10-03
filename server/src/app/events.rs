@@ -149,7 +149,9 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::UserBlockChanged { .. }
         | ServerEvent::BotCommandInvoked { .. }
         | ServerEvent::CategoryCollapseChanged { .. }
-        | ServerEvent::DeploymentAccessChanged { .. } => ScopeKind::User,
+        | ServerEvent::DeploymentAccessChanged { .. }
+        | ServerEvent::AccountBanned { .. }
+        | ServerEvent::ReportsChanged { .. } => ScopeKind::User,
         ServerEvent::User(_) | ServerEvent::BotCommandsChanged { .. } => ScopeKind::UserEverywhere,
     }
 }

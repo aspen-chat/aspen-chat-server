@@ -109,6 +109,17 @@ pub struct FeedEvent {
     access: Option<Arc<CommunityModel>>,
     /// When it was published, on this process's clock.
     published: Instant,
+    /// On a user's own subject, that they were banned from the deployment: their connections
+    /// end once it is written to them.
+    ends_streams: bool,
+}
+
+impl FeedEvent {
+    /// Whether a connection that delivers this event closes after it: its user was banned from
+    /// the deployment (`app::user_ban`).
+    pub fn ends_streams(&self) -> bool {
+        self.ends_streams
+    }
 }
 
 /// What a connection receives, in order.
@@ -748,6 +759,8 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         }
         SubjectOwner::Community(_) => (None, None, None, ModelChange::read(payload.get())),
     };
+    let ends_streams = matches!(owner, SubjectOwner::User(_))
+        && payload.get().contains(r#""serverEvent":"accountBanned""#);
     let channel = message
         .headers
         .as_ref()
@@ -794,6 +807,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             change,
             access: None,
             published,
+            ends_streams,
         },
         info.pending,
     ))
@@ -1078,6 +1092,7 @@ mod tests {
             change: None,
             access: None,
             published: Instant::now(),
+            ends_streams: false,
         }
     }
 

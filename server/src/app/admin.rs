@@ -123,16 +123,23 @@ pub struct UserEntry {
     /// For a user of another deployment, that deployment.
     #[diesel(sql_type = Nullable<Text>)]
     pub home_domain: Option<String>,
-    /// Whether this deployment's moderators banned them (`ban_foreign_user`).
-    #[diesel(sql_type = diesel::sql_types::Bool)]
-    pub banned: bool,
+    /// The ban from the deployment standing now, if one does (`app::user_ban`): when it was
+    /// made, the reason they were given, and when it ends.
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub banned_at: Option<DateTime<Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub ban_reason: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub banned_until: Option<DateTime<Utc>>,
 }
 
-/// One page of the users whose username or display name contains `search`, in `sort` order:
-/// `limit` of them (at most `MAX_PAGE`) from `offset` (at most `MAX_OFFSET`).
+/// One page of the users whose username or display name contains `search`, and with
+/// `banned_only` only those banned from the deployment now, in `sort` order: `limit` of them
+/// (at most `MAX_PAGE`) from `offset` (at most `MAX_OFFSET`).
 pub async fn search_users(
     state: &GlobalServerContext,
     search: Option<&str>,
+    banned_only: bool,
     sort: Sort<UserColumn>,
     offset: i64,
     limit: i64,
@@ -145,18 +152,24 @@ pub async fn search_users(
     Ok(diesel::sql_query(format!(
         r#"
         SELECT id, name, display_name, icon, created_at, registered_with, bot, bot_owner,
-               home_domain, banned_at IS NOT NULL AS banned
+               home_domain,
+               CASE WHEN {banned} THEN banned_at END AS banned_at,
+               CASE WHEN {banned} THEN ban_reason END AS ban_reason,
+               CASE WHEN {banned} THEN banned_until END AS banned_until
         FROM "user"
         WHERE deleted_at IS NULL
           AND ($1::text IS NULL OR lower(name) LIKE $1 OR lower(display_name) LIKE $1)
-        ORDER BY {}
+          AND (NOT $4 OR {banned})
+        ORDER BY {order}
         OFFSET $2 LIMIT $3
         "#,
-        order_by(column, sort.descending, "id")
+        banned = app::user_ban::BANNED_SQL,
+        order = order_by(column, sort.descending, "id")
     ))
     .bind::<Nullable<Text>, _>(contains_pattern(search))
     .bind::<BigInt, _>(offset.clamp(0, MAX_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_PAGE))
+    .bind::<diesel::sql_types::Bool, _>(banned_only)
     .load(conn.as_mut())
     .await?)
 }
@@ -335,76 +348,6 @@ pub async fn growth(
     .load(conn.as_mut())
     .await?;
     Ok((unit, points))
-}
-
-/// Bans a user of another deployment from this one, or lifts the ban: a banned user's sessions
-/// here end, and they cannot sign in here again until it is lifted. Takes Moderate any
-/// community, and is written to the moderation log. Returns whether anything changed.
-pub async fn set_foreign_user_banned(
-    state: &GlobalServerContext,
-    access: &crate::app::deployment::DeploymentAccess,
-    target: UserId,
-    banned: bool,
-) -> app::Result<bool> {
-    use crate::app::deployment::DeploymentPermission;
-    use crate::app::moderation_log::{ModerationAction, log_moderation};
-    use diesel_async::AsyncConnection;
-    use diesel_async::scoped_futures::ScopedFutureExt;
-    access.require(DeploymentPermission::ModerateCommunities)?;
-    let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let (foreign, was_banned): (bool, bool) = user::table
-                .select((
-                    user::home_domain.is_not_null(),
-                    user::banned_at.is_not_null(),
-                ))
-                .filter(user::id.eq(target).and(user::deleted_at.is_null()))
-                .for_update()
-                .first(conn)
-                .await?;
-            if !foreign {
-                return Err(app::Error::Validation(crate::t!("banOnlyForeign")));
-            }
-            if was_banned == banned {
-                return Ok(false);
-            }
-            if banned {
-                diesel::update(user::table.find(target))
-                    .set((
-                        user::banned_at.eq(diesel::dsl::now),
-                        user::banned_by.eq(Some(access.user)),
-                    ))
-                    .execute(conn)
-                    .await?;
-                crate::app::login::revoke_all_sessions(conn, target).await?;
-            } else {
-                diesel::update(user::table.find(target))
-                    .set((
-                        user::banned_at.eq(None::<DateTime<Utc>>),
-                        user::banned_by.eq(None::<UserId>),
-                    ))
-                    .execute(conn)
-                    .await?;
-            }
-            log_moderation(
-                conn,
-                access.user,
-                if banned {
-                    ModerationAction::BanForeignUser
-                } else {
-                    ModerationAction::LiftForeignUserBan
-                },
-                None,
-                None,
-                Some(target.0.to_string()),
-            )
-            .await?;
-            Ok(true)
-        }
-        .scope_boxed()
-    })
-    .await
 }
 
 #[cfg(test)]

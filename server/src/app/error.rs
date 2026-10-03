@@ -89,6 +89,16 @@ pub enum Error {
     /// given to them, if one was.
     #[error("banned from the community")]
     Banned { reason: Option<String> },
+    /// The account is banned from the deployment (`app::user_ban`), with the reason given to
+    /// them and when the ban ends, if either.
+    #[error("banned from the deployment")]
+    DeploymentBanned {
+        reason: Option<String>,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    /// The caller has already reported this, and their report awaits review (`app::report`).
+    #[error("already reported")]
+    AlreadyReported,
     #[error("the session must verify its user again before changing security settings")]
     ReauthenticationRequired,
     #[error("the password or code presented was wrong")]

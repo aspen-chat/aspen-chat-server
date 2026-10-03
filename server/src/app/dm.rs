@@ -3,7 +3,10 @@
 //! happens in them is published to each recipient alone (`app::events`). Only recipients may
 //! read or write a DM, or a thread in one; to anyone else it does not exist. A DM may only be
 //! started with, or joined by, people who share a community with the one starting or adding,
-//! and never with two people who have a block between them (`app::block`).
+//! and never with two people who have a block between them (`app::block`). A holder of Message
+//! any user (`app::deployment`) is held to neither: they may start a DM with anyone, or add
+//! anyone, whatever communities they share and whoever blocked them, though two others with a
+//! block between them still cannot be brought together.
 
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::app::channel::ChannelType;
@@ -59,6 +62,14 @@ async fn ensure_shared_community(
     } else {
         Err(app::Error::Validation(t!("dmNeedsSharedCommunity")))
     }
+}
+
+/// Whether `user` holds Message any user, which reaches anyone past shared communities and
+/// blocks.
+async fn messages_anyone(conn: &mut AsyncPgConnection, user: UserId) -> app::Result<bool> {
+    Ok(app::deployment::deployment_access(conn, user)
+        .await?
+        .has(app::deployment::DeploymentPermission::MessageAnyUser))
 }
 
 /// Refuses a DM with the system account, whose notices are the only DMs it is in.
@@ -117,7 +128,10 @@ pub async fn open_dm(
     }
     let mut conn = state.connection_pool.get().await?;
     refuse_system_account(conn.as_mut(), &others).await?;
-    ensure_shared_community(conn.as_mut(), caller, &others).await?;
+    let anyone = messages_anyone(conn.as_mut(), caller).await?;
+    if !anyone {
+        ensure_shared_community(conn.as_mut(), caller, &others).await?;
+    }
     let mut everyone = others.clone();
     everyone.push(caller);
     // A DM is this deployment's to host only with one of its own users in it; people who all
@@ -131,7 +145,8 @@ pub async fn open_dm(
     if natives == 0 {
         return Err(app::Error::FederationRefused(t!("dmNeedsNative")));
     }
-    let blocked = app::block::any_between(conn.as_mut(), &everyone).await?;
+    let blocked =
+        app::block::any_between(conn.as_mut(), if anyone { &others } else { &everyone }).await?;
     let opened = conn
         .transaction(|conn| {
             async move {
@@ -294,7 +309,10 @@ pub async fn add_recipient(
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
     refuse_system_account(conn.as_mut(), &[user]).await?;
-    ensure_shared_community(conn.as_mut(), caller, &[user]).await?;
+    let anyone = messages_anyone(conn.as_mut(), caller).await?;
+    if !anyone {
+        ensure_shared_community(conn.as_mut(), caller, &[user]).await?;
+    }
     let added = conn
         .transaction(|conn| {
             async move {
@@ -311,6 +329,9 @@ pub async fn add_recipient(
                 }
                 let mut joined = recipients.clone();
                 joined.push(user);
+                if anyone {
+                    joined.retain(|person| *person != caller);
+                }
                 if app::block::any_between(conn.as_mut(), &joined).await? {
                     return Err(app::Error::Blocked);
                 }

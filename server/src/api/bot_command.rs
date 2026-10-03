@@ -122,7 +122,7 @@ pub async fn invoke_command(
         String::new(),
         attachments.clone(),
         false,
-        Some(invocation),
+        app::message::Posting::Command(invocation),
     )
     .await?;
     Ok(Created::new(

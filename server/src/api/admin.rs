@@ -41,6 +41,23 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
     }
 }
 
+/// Refuses a caller who may not browse the user and community directories: those who view the
+/// dashboard, and moderators, who browse them to find what to look at.
+fn require_directories(access: &DeploymentAccess) -> app::Result<()> {
+    if [
+        DeploymentPermission::ModerateCommunities,
+        DeploymentPermission::BanUsers,
+        DeploymentPermission::ReviewReports,
+    ]
+    .into_iter()
+    .any(|p| access.has(p))
+    {
+        Ok(())
+    } else {
+        access.require(DeploymentPermission::ViewDashboard)
+    }
+}
+
 /// What the caller may do across the deployment.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +174,10 @@ pub struct UserListQuery {
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
+    /// With `true`, only those banned from the deployment now.
+    #[serde(rename = "filter[banned]", default)]
+    #[param(rename = "filter[banned]")]
+    pub banned: bool,
     /// The order; newest first when absent. `name` sorts by display name, or username where
     /// there is none.
     #[serde(default)]
@@ -206,8 +227,21 @@ pub struct AdminUserEntry {
     pub bot_owner: Option<UserId>,
     /// For a user of another deployment, that deployment's domain.
     pub home_domain: Option<String>,
-    /// Whether this deployment's moderators banned them.
+    /// Whether a ban from the deployment stands now.
     pub banned: bool,
+    /// The ban standing now, if one does.
+    pub ban: Option<AdminUserBan>,
+}
+
+/// A ban from the deployment as the dashboard lists it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUserBan {
+    pub banned_at: DateTime<Utc>,
+    /// What they are told when they try to sign in.
+    pub reason: Option<String>,
+    /// When it ends; `null` until it is lifted.
+    pub until: Option<DateTime<Utc>>,
 }
 
 /// A page of the deployment's users, searched by name and sorted.
@@ -230,10 +264,7 @@ pub async fn list_users(
     AdminUser(_session, access): AdminUser,
     Query(query): Query<UserListQuery>,
 ) -> ApiResult<Json<Vec<AdminUserEntry>>> {
-    // Moderators browse the directories to find what to look at.
-    if !access.has(DeploymentPermission::ModerateCommunities) {
-        access.require(DeploymentPermission::ViewDashboard)?;
-    }
+    require_directories(&access)?;
     use app::admin::{Sort, UserColumn};
     let sort = match query.sort {
         UserSort::Name => Sort {
@@ -256,6 +287,7 @@ pub async fn list_users(
     let users = app::admin::search_users(
         &state,
         query.name.as_deref(),
+        query.banned,
         sort,
         query.offset.unwrap_or(0),
         query.limit.unwrap_or(DEFAULT_PAGE),
@@ -277,7 +309,12 @@ pub async fn list_users(
                 bot: u.bot,
                 bot_owner: u.bot_owner,
                 home_domain: u.home_domain,
-                banned: u.banned,
+                banned: u.banned_at.is_some(),
+                ban: u.banned_at.map(|banned_at| AdminUserBan {
+                    banned_at,
+                    reason: u.ban_reason,
+                    until: u.banned_until,
+                }),
             })
             .collect(),
     ))
@@ -314,10 +351,7 @@ pub async fn list_communities(
     AdminUser(_session, access): AdminUser,
     Query(query): Query<CommunityListQuery>,
 ) -> ApiResult<Json<Vec<AdminCommunityEntry>>> {
-    // Moderators browse the directories to find what to look at.
-    if !access.has(DeploymentPermission::ModerateCommunities) {
-        access.require(DeploymentPermission::ViewDashboard)?;
-    }
+    require_directories(&access)?;
     use app::admin::{CommunityColumn, Sort};
     let sort = |column, descending| Sort { column, descending };
     let sort = match query.sort {
@@ -696,21 +730,79 @@ pub async fn get_fleet(
     }))
 }
 
-/// Bans a user of another deployment from this one: their sessions here end, and they cannot
-/// sign in here until the ban is lifted. Takes Moderate any community; written to the
-/// moderation log.
+/// What a ban from the deployment asks for.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UserBanRequest {
+    /// What the banned person is told when they try to sign in; at most
+    /// `app::ban::REASON_MAX_CHARS` characters.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// How long the ban lasts, in seconds, at least a minute; absent or `null` until lifted.
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    /// How far back the person's messages anywhere on the deployment, DMs included, are
+    /// deleted with the ban: 3600 (the last hour) or 86400 (the last day); absent or `null` to
+    /// leave them. Takes Moderate any community.
+    #[serde(default)]
+    pub delete_messages_seconds: Option<u32>,
+    /// For a bot, ban its owner too, with the same reason, end, and deletion.
+    #[serde(default)]
+    pub with_owner: bool,
+}
+
+impl From<UserBanRequest> for app::user_ban::UserBanRequest {
+    fn from(request: UserBanRequest) -> Self {
+        Self {
+            ban: app::ban::BanRequest {
+                reason: request.reason,
+                duration_seconds: request.duration_seconds,
+                delete_messages_seconds: request.delete_messages_seconds,
+            },
+            with_owner: request.with_owner,
+        }
+    }
+}
+
+/// A ban from the deployment as made, with what it did.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserBanOutcome {
+    /// Who was banned: the person named, and a bot's owner when asked.
+    pub banned: Vec<UserId>,
+    /// How many of their messages the ban deleted.
+    pub deleted_messages: u32,
+}
+
+impl From<app::user_ban::UserBanned> for UserBanOutcome {
+    fn from(outcome: app::user_ban::UserBanned) -> Self {
+        Self {
+            banned: outcome.banned,
+            deleted_messages: u32::try_from(outcome.deleted_messages).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// Bans someone from the deployment: every sign-in of theirs ends, their event streams close,
+/// they leave every call, and signing in is refused with `deploymentBanned` and the reason until
+/// the ban ends or is lifted. A bot's token is refused while it stands. Asked to, their messages
+/// from the last hour or day are deleted everywhere. Takes Ban users, over someone whose highest
+/// deployment role is below the caller's, never the caller or the system account; deleting
+/// messages takes Moderate any community too. A ban standing already is replaced (`200`).
+/// Written to the moderation log.
 #[utoipa::path(
     put,
     path = "/admin/users/{user}/ban",
     tag = TAG_ADMIN,
     params(("user" = UserId, Path)),
+    request_body = UserBanRequest,
     security(("bearerAuth" = [])),
     responses(
-        (status = CREATED, description = "Banned"),
-        (status = OK, description = "Was banned already"),
-        (status = BAD_REQUEST, description = "`validation`: this deployment's own users are not banned this way", body = Problem),
+        (status = CREATED, description = "Banned", body = UserBanOutcome),
+        (status = OK, description = "A ban that stood was replaced", body = UserBanOutcome),
+        (status = BAD_REQUEST, description = "`validation`: the reason, duration, or deletion window, banning oneself or the system account, or `withOwner` for someone who is not a bot", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users (and Moderate any community to delete messages) or over someone of the caller's rank or above", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -719,16 +811,19 @@ pub async fn ban_user(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
-) -> ApiResult<axum::http::StatusCode> {
-    let changed = app::admin::set_foreign_user_banned(&state, &access, user, true).await?;
-    Ok(if changed {
-        axum::http::StatusCode::CREATED
-    } else {
+    Json(request): Json<UserBanRequest>,
+) -> ApiResult<(axum::http::StatusCode, Json<UserBanOutcome>)> {
+    let outcome = app::user_ban::ban_user(&state, &access, user, &request.into()).await?;
+    let status = if outcome.replaced {
         axum::http::StatusCode::OK
-    })
+    } else {
+        axum::http::StatusCode::CREATED
+    };
+    Ok((status, Json(outcome.into())))
 }
 
-/// Lifts a ban of a user of another deployment.
+/// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users; written
+/// to the moderation log.
 #[utoipa::path(
     delete,
     path = "/admin/users/{user}/ban",
@@ -739,7 +834,7 @@ pub async fn ban_user(
         (status = NO_CONTENT, description = "Not banned"),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -749,6 +844,6 @@ pub async fn lift_ban(
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
 ) -> ApiResult<NoContent> {
-    app::admin::set_foreign_user_banned(&state, &access, user, false).await?;
+    app::user_ban::lift_ban(&state, &access, user).await?;
     Ok(NoContent)
 }

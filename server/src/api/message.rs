@@ -65,6 +65,14 @@ pub enum MessageInclude {
     /// The channels the messages were posted in, as `included.channels`: what a search's
     /// results need to say where each was said, threads among them.
     Channels,
+    /// What the caller finds at the messages the messages link to, as `included.linkedMessages`,
+    /// with those they may read as `included.messages`. Their authors and attachments come
+    /// with the messages' own when those are asked for.
+    Linked,
+    /// The messages the messages that are warnings are about, deleted or not, as
+    /// `included.warnedMessages`; only the people of a warning's DM read it. Their authors and
+    /// attachments come with the messages' own when those are asked for.
+    Warnings,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -95,12 +103,69 @@ async fn sideload_messages(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let (users, attachments, polls, threads, channels, echoes, reactions) = tokio::try_join!(
+    // The other messages the read names come first, since their authors and attachments are
+    // sideloaded with the read's own.
+    let (echoes, linked, warned) = tokio::try_join!(
+        async {
+            if include.contains(MessageInclude::Echoes) {
+                let ids: Vec<MessageId> = messages.iter().filter_map(|m| m.echo_of).collect();
+                app::message::read_messages(state, caller, &ids)
+                    .await
+                    .map(|rows| Some(rows.into_iter().map(Message::from).collect::<Vec<_>>()))
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(MessageInclude::Linked) {
+                let links: Vec<MessageId> = messages
+                    .iter()
+                    .flat_map(|m| m.linked_messages.iter().copied())
+                    .collect();
+                app::message_link::read_linked(state, caller, &links)
+                    .await
+                    .map(|(linked, rows)| {
+                        Some((
+                            linked,
+                            rows.into_iter().map(Message::from).collect::<Vec<_>>(),
+                        ))
+                    })
+            } else {
+                Ok(None)
+            }
+        },
+        async {
+            if include.contains(MessageInclude::Warnings) {
+                app::report::warned_messages(state, messages)
+                    .await
+                    .map(|rows| {
+                        Some(
+                            rows.into_iter()
+                                .map(api::report::ReviewedMessage::from)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
+    let (linked_messages, linked_records) = match linked {
+        Some((linked, records)) => (Some(linked), records),
+        None => (None, Vec::new()),
+    };
+    let named: Vec<&Message> = messages
+        .iter()
+        .chain(echoes.iter().flatten())
+        .chain(linked_records.iter())
+        .chain(warned.iter().flatten().map(|w| &w.message))
+        .collect();
+    let (users, attachments, polls, threads, channels, reactions) = tokio::try_join!(
         async {
             let authors = include.contains(MessageInclude::Authors);
             let mentions = include.contains(MessageInclude::Mentions);
             if authors || mentions {
-                let users: Vec<UserId> = messages
+                let users: Vec<UserId> = named
                     .iter()
                     .flat_map(|m| {
                         let author = authors.then_some(m.author);
@@ -117,11 +182,8 @@ async fn sideload_messages(
         },
         async {
             if include.contains(MessageInclude::Attachments) {
-                let ids: Vec<AttachmentId> = messages
-                    .iter()
-                    .flat_map(|m| &m.attachments)
-                    .copied()
-                    .collect();
+                let ids: Vec<AttachmentId> =
+                    named.iter().flat_map(|m| &m.attachments).copied().collect();
                 app::attachment::read_attachments(state, &ids)
                     .await
                     .map(Some)
@@ -158,16 +220,6 @@ async fn sideload_messages(
                     .into_iter()
                     .collect();
                 app::channel::read_channels(state, &ids).await.map(Some)
-            } else {
-                Ok(None)
-            }
-        },
-        async {
-            if include.contains(MessageInclude::Echoes) {
-                let ids: Vec<MessageId> = messages.iter().filter_map(|m| m.echo_of).collect();
-                app::message::read_messages(state, caller, &ids)
-                    .await
-                    .map(|rows| Some(rows.into_iter().map(Message::from).collect()))
             } else {
                 Ok(None)
             }
@@ -218,7 +270,24 @@ async fn sideload_messages(
             }
             (threads, channels) => threads.or(channels),
         },
-        messages: echoes,
+        // Echoed replies and linked messages are both message records; one both echoed and
+        // linked is listed once.
+        messages: match (echoes, linked_messages.is_some()) {
+            (None, false) => None,
+            (echoes, _) => {
+                let mut records = echoes.unwrap_or_default();
+                let listed: HashSet<MessageId> = records.iter().map(|m| m.id).collect();
+                records.extend(
+                    linked_records
+                        .iter()
+                        .filter(|m| !listed.contains(&m.id))
+                        .cloned(),
+                );
+                Some(records)
+            }
+        },
+        linked_messages,
+        warned_messages: warned,
         reactions,
         ..Included::default()
     })
@@ -382,7 +451,7 @@ pub async fn create_message(
         request.content,
         request.attachments.clone(),
         request.echo_to_parent.unwrap_or(false),
-        None,
+        app::message::Posting::Text,
     )
     .await?;
     let location = format!("{API_PREFIX}/messages/{}", msg.id.0);

@@ -81,6 +81,11 @@ pub enum ProblemCode {
     Blocked,
     /// The caller is banned from the community (`app::ban`); `detail` carries the reason.
     Banned,
+    /// The account is banned from this deployment (`app::user_ban`) and cannot sign in;
+    /// `detail` carries the reason and when the ban ends, if it does.
+    DeploymentBanned,
+    /// Reporting: the caller has already reported this, and their report awaits review.
+    AlreadyReported,
     /// Password change: the current password did not match.
     OldPasswordIncorrect,
     /// Password change: the new password fails a requirement named in `requirement`.
@@ -121,7 +126,8 @@ impl ProblemCode {
             | ProblemCode::RegistrationInviteInvalid
             | ProblemCode::AdminRequired
             | ProblemCode::Blocked
-            | ProblemCode::Banned => StatusCode::FORBIDDEN,
+            | ProblemCode::Banned
+            | ProblemCode::DeploymentBanned => StatusCode::FORBIDDEN,
             ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
                 StatusCode::TOO_MANY_REQUESTS
             }
@@ -133,6 +139,7 @@ impl ProblemCode {
             | ProblemCode::UsernameTaken
             | ProblemCode::CustomEmojiNameTaken
             | ProblemCode::InviteCodeTaken
+            | ProblemCode::AlreadyReported
             | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
             ProblemCode::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
@@ -172,6 +179,8 @@ impl ProblemCode {
             ProblemCode::AdminRequired => t!("problemAdminRequired"),
             ProblemCode::Blocked => t!("problemBlocked"),
             ProblemCode::Banned => t!("problemBanned"),
+            ProblemCode::DeploymentBanned => t!("problemDeploymentBanned"),
+            ProblemCode::AlreadyReported => t!("problemAlreadyReported"),
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
@@ -301,6 +310,22 @@ impl From<app::Error> for ApiError {
                     None => t!("bannedNoReason"),
                 })
             }
+            app::Error::DeploymentBanned { reason, until } => {
+                let until = until.map(|until| until.format("%Y-%m-%d %H:%M UTC").to_string());
+                Self::new(ProblemCode::DeploymentBanned).with_detail(match (reason, until) {
+                    (Some(reason), Some(until)) => {
+                        t!(
+                            "deploymentBannedUntilWithReason",
+                            until = until,
+                            reason = reason
+                        )
+                    }
+                    (Some(reason), None) => t!("deploymentBannedWithReason", reason = reason),
+                    (None, Some(until)) => t!("deploymentBannedUntil", until = until),
+                    (None, None) => t!("deploymentBannedNoReason"),
+                })
+            }
+            app::Error::AlreadyReported => Self::new(ProblemCode::AlreadyReported),
             app::Error::DeploymentUnreachable(detail) => {
                 Self::new(ProblemCode::DeploymentUnreachable).with_detail(detail)
             }

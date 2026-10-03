@@ -16,7 +16,7 @@ pub use servers::{
     create_server, delete_server, join_offer, list_servers, report_failure, seed_servers,
     update_server,
 };
-pub use sessions::{kick_participant, mute_participant, spawn_report_listener};
+pub use sessions::{kick_everywhere, kick_participant, mute_participant, spawn_report_listener};
 
 use ring::clear_spent_rings;
 use servers::reap_silent_servers;

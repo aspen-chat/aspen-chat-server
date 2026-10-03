@@ -334,6 +334,18 @@ pub(crate) async fn update_user(
     if let Some(name) = &command.name {
         validate_username(name)?;
     }
+    drop(conn);
+    apply_profile_update(state, id, command).await
+}
+
+/// Writes a checked profile update to `id`'s account and announces it to everyone who shares a
+/// community with them: the owner's own update, or a moderator's reset (`app::report`).
+pub(crate) async fn apply_profile_update(
+    state: GlobalServerContext,
+    id: UserId,
+    command: UserUpdateRequest,
+) -> Result<User, app::Error> {
+    let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
             // A status is stored as its two columns; setting or clearing it writes both.
@@ -438,7 +450,7 @@ pub(crate) async fn retire(
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.
-/// `None` means the token is unknown, expired, or belongs to a deleted user.
+/// `None` means the token is unknown, expired, or belongs to a deleted or banned user.
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
@@ -462,7 +474,8 @@ pub async fn user_for_token(
                 .eq(&token)
                 .and(session::dsl::expires.ge(now))
                 .and(refresh_token::dsl::expires.ge(now))
-                .and(schema::user::deleted_at.is_null()),
+                .and(schema::user::deleted_at.is_null())
+                .and(diesel::dsl::not(app::user_ban::banned())),
         )
         .first::<(
             UserPg,

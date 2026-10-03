@@ -187,6 +187,26 @@ pub(crate) async fn read_community(
     Community::load_from_db(state, id).await
 }
 
+/// The communities named in `ids` that still exist, for a deployment reviewer who need not
+/// belong to them (`app::report`); the caller has decided who may.
+pub(crate) async fn read_communities(
+    state: &GlobalServerContext,
+    ids: &[CommunityId],
+) -> app::error::Result<Vec<Community>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(community::table
+        .select(Community::as_select())
+        .filter(
+            community::id
+                .eq_any(ids)
+                .and(community::deleted_at.is_null()),
+        )
+        .load(state.connection_pool.get().await?.as_mut())
+        .await?)
+}
+
 /// The community an invite leads to, which holding its code is enough to see.
 pub(crate) async fn read_invited_community(
     state: &GlobalServerContext,

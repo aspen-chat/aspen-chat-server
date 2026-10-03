@@ -13,17 +13,14 @@ use crate::app::events::{ChannelHome, channel_home, dm_recipients};
 use crate::app::permissions::{ChannelAccess, Permissions};
 use crate::app::{self, ChannelId, MessageId, RoleId, UserId};
 use crate::database::schema::{community_role, community_user, mention};
-use diesel::deserialize::{FromSql, FromSqlRow};
+use diesel::deserialize::FromSqlRow;
 use diesel::expression::AsExpression;
-use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
-use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::sql_types::Jsonb;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use pulldown_cmark::{Event, Tag, TagEnd};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -61,24 +58,7 @@ impl Mentions {
     }
 }
 
-// Postgres sends and takes `jsonb` as a version byte, 1, followed by the JSON text.
-impl FromSql<Jsonb, Pg> for Mentions {
-    fn from_sql(value: PgValue<'_>) -> diesel::deserialize::Result<Self> {
-        let bytes = value.as_bytes();
-        match bytes.split_first() {
-            Some((1, json)) => Ok(serde_json::from_slice(json)?),
-            _ => Err("unsupported jsonb encoding".into()),
-        }
-    }
-}
-
-impl ToSql<Jsonb, Pg> for Mentions {
-    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
-        out.write_all(&[1])?;
-        serde_json::to_writer(out, self)?;
-        Ok(IsNull::No)
-    }
-}
+app::jsonb_sql_traits!(Mentions);
 
 /// The tags a message's text asks for, before permissions and membership are applied.
 #[derive(Debug, Default, PartialEq, Eq)]

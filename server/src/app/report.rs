@@ -1,0 +1,1781 @@
+//! Reports of objectionable messages and profiles, and their review.
+//!
+//! Anyone may report a message they can read, or a person's profile, choosing what is wrong
+//! from the report categories (`report_category`): the built-in ones, and those the deployment
+//! added with Manage report categories, which may also hide any of them but Other. A profile
+//! report names the aspects it finds objectionable and keeps the profile as it stood, picture
+//! included. A person reports a thing once; nobody reports their own messages or profile, or the
+//! system account's.
+//!
+//! Reports of one message, or of one person's profile, gather in a case (`report_case`), of
+//! which at most one is unresolved at a time: `open` until a reviewer acts on it, or
+//! `dismissed`, hidden but kept, until it is restored or reported again, either of which opens
+//! it again. Holders of Review reports read the cases, and the messages around a reported
+//! message (logged once for a DM's). Acting on an open case resolves it for good, with any of:
+//! a warning, sent as a DM from the reviewer (`MessageKind::Warning`, which takes Message any
+//! user); a ban from the deployment (`app::user_ban`, which takes Ban users); deleting the
+//! reported message (which takes Moderate any community); and resetting the reported aspects of
+//! a profile (which takes Ban users). Nobody acts on a case about themselves, or about someone
+//! whose highest deployment role is not below theirs. Reports and cases are never deleted
+//! through the API. Every change to what awaits review is announced to each holder of Review
+//! reports as `reportsChanged`.
+
+use crate::api::message_enum::request::UserUpdateRequest;
+use crate::api::message_enum::server_event::ServerEvent;
+use crate::api::user::CustomStatus;
+use crate::app::context::GlobalServerContext;
+use crate::app::deployment::{DeploymentAccess, DeploymentPermission, DeploymentPermissions};
+use crate::app::events::{ChannelHome, channel_home, dm_recipients};
+use crate::app::message::{Message, MessageKind, MessageWithRelations, Posting, with_relations};
+use crate::app::moderation_log::{ModerationAction, log_moderation};
+use crate::app::user::UserPg;
+use crate::app::user_ban::{UserBanRequest, banned};
+use crate::app::{
+    self, ChannelId, EventScope, IconId, MessageId, ReportCaseId, ReportCategoryId, ReportId,
+    UserId, publish_event,
+};
+use crate::database::schema::{
+    deployment_role, message, moderation_log, report, report_case, report_category, user,
+    user_deployment_role,
+};
+use crate::t;
+use chrono::{DateTime, Utc};
+use diesel::deserialize::FromSql;
+use diesel::pg::{Pg, PgValue};
+use diesel::prelude::*;
+use diesel::serialize::{Output, ToSql};
+use diesel::sql_types::{Array, Nullable, Text};
+use diesel::{AsExpression, FromSqlRow};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use rand::RngExt;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use utoipa::ToSchema;
+
+/// How long a report's explanation may be, in characters.
+pub const EXPLANATION_MAX_CHARS: usize = 1000;
+/// How long a warning may be, in characters.
+pub const WARNING_MAX_CHARS: usize = 2000;
+/// How long a category's name and description may be, in characters.
+pub const CATEGORY_NAME_MAX_CHARS: usize = 64;
+pub const CATEGORY_DESCRIPTION_MAX_CHARS: usize = 200;
+/// How many messages either side of a reported one its context shows at a time.
+pub const CONTEXT_MESSAGES: i64 = 25;
+/// The most cases one page lists.
+pub const MAX_PAGE: i64 = 100;
+
+// ---------------------------------------------------------------------------------------------
+// Types
+
+/// Something on a profile a report may find objectionable.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ProfileAspect {
+    DisplayName,
+    Username,
+    Picture,
+    Status,
+    Bio,
+    Pronouns,
+}
+
+app::wire_name_traits!(ProfileAspect);
+
+/// The aspects a report names, stored as a `TEXT[]` of their wire names; a name this version
+/// does not know is left out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, FromSqlRow, AsExpression)]
+#[diesel(sql_type = Array<Nullable<Text>>)]
+pub struct ProfileAspects(pub Vec<ProfileAspect>);
+
+impl FromSql<Array<Nullable<Text>>, Pg> for ProfileAspects {
+    fn from_sql(value: PgValue<'_>) -> diesel::deserialize::Result<Self> {
+        let names = <Vec<Option<String>> as FromSql<Array<Nullable<Text>>, Pg>>::from_sql(value)?;
+        Ok(Self(
+            names
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.parse().ok())
+                .collect(),
+        ))
+    }
+}
+
+impl ToSql<Array<Nullable<Text>>, Pg> for ProfileAspects {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
+        let names: Vec<Option<String>> = self.0.iter().map(|a| Some(a.to_string())).collect();
+        <Vec<Option<String>> as ToSql<Array<Nullable<Text>>, Pg>>::to_sql(
+            &names,
+            &mut out.reborrow(),
+        )
+    }
+}
+
+/// A profile as a report found it.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = diesel::sql_types::Jsonb)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSnapshot {
+    pub name: String,
+    pub display_name: Option<String>,
+    /// The picture, which is kept while a report names it.
+    pub icon: Option<IconId>,
+    pub status: Option<CustomStatus>,
+    pub bio: Option<String>,
+    pub pronouns: Option<String>,
+}
+
+app::jsonb_sql_traits!(ProfileSnapshot);
+
+impl From<&UserPg> for ProfileSnapshot {
+    fn from(user: &UserPg) -> Self {
+        Self {
+            name: user.name.clone(),
+            display_name: user.display_name.clone(),
+            icon: user.icon.as_ref().map(|icon| *icon.id()),
+            status: user.status_text.clone().map(|text| CustomStatus {
+                text,
+                emoji: user.status_emoji.clone(),
+            }),
+            bio: user.bio.clone(),
+            pronouns: user.pronouns.clone(),
+        }
+    }
+}
+
+/// What a moderator's warning is about: the person warned, and the message reported, or their
+/// profile as the reports found it with the aspects they named. The message is shown to the
+/// people of the warning's DM even once deleted.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = diesel::sql_types::Jsonb)]
+#[serde(rename_all = "camelCase")]
+pub struct Warning {
+    pub subject: UserId,
+    pub message: Option<MessageId>,
+    pub profile: Option<ProfileSnapshot>,
+    #[serde(default)]
+    pub aspects: Vec<ProfileAspect>,
+}
+
+app::jsonb_sql_traits!(Warning);
+
+/// What a case is about.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = Text)]
+pub enum ReportKind {
+    Message,
+    Profile,
+}
+
+app::wire_name_traits!(ReportKind);
+app::text_sql_traits!(ReportKind);
+
+/// Where a case stands.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = Text)]
+pub enum ReportStatus {
+    /// Awaiting review.
+    Open,
+    /// Acted on, for good.
+    Resolved,
+    /// Hidden without action, until restored or reported again.
+    Dismissed,
+}
+
+app::wire_name_traits!(ReportStatus);
+app::text_sql_traits!(ReportStatus);
+
+/// The categories every deployment has, in the order they are offered; Other comes last,
+/// after the deployment's own.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = Text)]
+pub enum BuiltinCategory {
+    Spam,
+    Harassment,
+    HateSpeech,
+    Violence,
+    SelfHarm,
+    IllegalContent,
+    Impersonation,
+    /// Something no other category names; a report in it must explain itself.
+    Other,
+}
+
+app::wire_name_traits!(BuiltinCategory);
+app::text_sql_traits!(BuiltinCategory);
+
+impl BuiltinCategory {
+    fn name(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Spam => t!("reportCategorySpam"),
+            Self::Harassment => t!("reportCategoryHarassment"),
+            Self::HateSpeech => t!("reportCategoryHateSpeech"),
+            Self::Violence => t!("reportCategoryViolence"),
+            Self::SelfHarm => t!("reportCategorySelfHarm"),
+            Self::IllegalContent => t!("reportCategoryIllegalContent"),
+            Self::Impersonation => t!("reportCategoryImpersonation"),
+            Self::Other => t!("reportCategoryOther"),
+        }
+    }
+
+    fn description(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Spam => t!("reportCategorySpamDescription"),
+            Self::Harassment => t!("reportCategoryHarassmentDescription"),
+            Self::HateSpeech => t!("reportCategoryHateSpeechDescription"),
+            Self::Violence => t!("reportCategoryViolenceDescription"),
+            Self::SelfHarm => t!("reportCategorySelfHarmDescription"),
+            Self::IllegalContent => t!("reportCategoryIllegalContentDescription"),
+            Self::Impersonation => t!("reportCategoryImpersonationDescription"),
+            Self::Other => t!("reportCategoryOtherDescription"),
+        }
+    }
+
+    /// Where it is offered among the built-in categories.
+    fn rank(self) -> usize {
+        <Self as strum::VariantArray>::VARIANTS
+            .iter()
+            .position(|c| *c == self)
+            .unwrap_or(usize::MAX)
+    }
+}
+
+/// A report category as offered: a built-in one by its name in the reader's language, or the
+/// deployment's own by the name it was given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportCategory {
+    pub id: ReportCategoryId,
+    /// Which built-in category this is; `null` for one the deployment added.
+    pub builtin: Option<BuiltinCategory>,
+    pub name: String,
+    pub description: Option<String>,
+    /// Whether it is no longer offered; reports made with it keep it.
+    pub hidden: bool,
+}
+
+#[derive(Debug, Clone, Queryable, Selectable)]
+#[diesel(table_name = report_category)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+struct CategoryRow {
+    id: ReportCategoryId,
+    builtin: Option<BuiltinCategory>,
+    name: Option<String>,
+    description: Option<String>,
+    position: i32,
+    hidden: bool,
+    created_at: DateTime<Utc>,
+}
+
+impl From<&CategoryRow> for ReportCategory {
+    fn from(row: &CategoryRow) -> Self {
+        Self {
+            id: row.id,
+            builtin: row.builtin,
+            name: match row.builtin {
+                Some(builtin) => builtin.name().into_owned(),
+                None => row.name.clone().unwrap_or_default(),
+            },
+            description: match row.builtin {
+                Some(builtin) => Some(builtin.description().into_owned()),
+                None => row.description.clone(),
+            },
+            hidden: row.hidden,
+        }
+    }
+}
+
+/// What reviewing a case did.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = diesel::sql_types::Jsonb)]
+#[serde(rename_all = "camelCase")]
+pub struct Resolution {
+    /// The warning's words, and the message that carries them.
+    pub warning: Option<String>,
+    pub warning_message: Option<MessageId>,
+    pub ban: Option<BanGiven>,
+    /// Whether the reported message was deleted.
+    #[serde(default)]
+    pub deleted_message: bool,
+    /// The aspects of the profile reset.
+    #[serde(default)]
+    pub reset: Vec<ProfileAspect>,
+}
+
+app::jsonb_sql_traits!(Resolution);
+
+/// A ban given in reviewing a case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BanGiven {
+    pub reason: Option<String>,
+    pub duration_seconds: Option<u32>,
+    pub delete_messages_seconds: Option<u32>,
+    #[serde(default)]
+    pub with_owner: bool,
+}
+
+/// One person's report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Report {
+    pub id: ReportId,
+    pub reporter: UserId,
+    pub category: ReportCategoryId,
+    pub explanation: Option<String>,
+    /// For a profile report, what it finds objectionable, and the profile as it stood.
+    pub aspects: Vec<ProfileAspect>,
+    pub profile: Option<ProfileSnapshot>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A case as a reviewer reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportCase {
+    pub id: ReportCaseId,
+    pub kind: ReportKind,
+    pub status: ReportStatus,
+    /// Whose message or profile it is.
+    pub subject: UserId,
+    /// For a message case, the message reported.
+    pub message: Option<MessageId>,
+    /// Its reports, oldest first.
+    pub reports: Vec<Report>,
+    pub opened_at: DateTime<Utc>,
+    pub last_reported_at: DateTime<Utc>,
+    /// When it was resolved or dismissed, and by whom.
+    pub closed_at: Option<DateTime<Utc>>,
+    pub closed_by: Option<UserId>,
+    pub resolution: Option<Resolution>,
+    /// Whether the reader may act on it: it is not about them, nor about someone whose highest
+    /// deployment role is not below theirs.
+    pub may_act: bool,
+    /// Whether a ban from the deployment stands against its subject now.
+    pub subject_banned: bool,
+}
+
+#[derive(Debug, Clone, Queryable, Selectable, Insertable)]
+#[diesel(table_name = report_case)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+struct CaseRow {
+    id: ReportCaseId,
+    kind: ReportKind,
+    subject: UserId,
+    message: Option<MessageId>,
+    status: ReportStatus,
+    opened_at: DateTime<Utc>,
+    last_reported_at: DateTime<Utc>,
+    closed_at: Option<DateTime<Utc>>,
+    closed_by: Option<UserId>,
+    resolution: Option<Resolution>,
+}
+
+#[derive(Debug, Clone, Queryable, Selectable, Insertable)]
+#[diesel(table_name = report)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+struct ReportRow {
+    id: ReportId,
+    case: ReportCaseId,
+    reporter: UserId,
+    category: ReportCategoryId,
+    explanation: Option<String>,
+    aspects: ProfileAspects,
+    profile: Option<ProfileSnapshot>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<ReportRow> for Report {
+    fn from(row: ReportRow) -> Self {
+        Self {
+            id: row.id,
+            reporter: row.reporter,
+            category: row.category,
+            explanation: row.explanation,
+            aspects: row.aspects.0,
+            profile: row.profile,
+            created_at: row.created_at,
+        }
+    }
+}
+
+/// A message a case is about, or one around it, deleted or not.
+pub struct ReviewedMessage {
+    pub message: MessageWithRelations,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Cases with what they name: their messages, and every report category their reports used.
+pub struct CasePage {
+    pub cases: Vec<ReportCase>,
+    pub messages: Vec<ReviewedMessage>,
+    pub categories: Vec<ReportCategory>,
+}
+
+impl CasePage {
+    /// Everyone the page names: subjects, reporters, reviewers, and authors.
+    pub fn people(&self) -> Vec<UserId> {
+        let mut people: HashSet<UserId> = HashSet::new();
+        for case in &self.cases {
+            people.insert(case.subject);
+            people.extend(case.closed_by);
+            people.extend(case.reports.iter().map(|r| r.reporter));
+        }
+        people.extend(self.messages.iter().map(|m| *m.message.message.author.id()));
+        people.into_iter().collect()
+    }
+}
+
+/// How many cases await review, and how many are dismissed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportCounts {
+    pub open: i64,
+    pub dismissed: i64,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Categories
+
+/// The report categories, built-in ones first in their order, then the deployment's own in
+/// theirs, and Other last; hidden ones only with `with_hidden`.
+pub async fn categories(
+    state: &GlobalServerContext,
+    with_hidden: bool,
+) -> app::Result<Vec<ReportCategory>> {
+    let mut conn = state.connection_pool.get().await?;
+    let mut query = report_category::table
+        .select(CategoryRow::as_select())
+        .into_boxed();
+    if !with_hidden {
+        query = query.filter(report_category::hidden.eq(false));
+    }
+    let mut rows: Vec<CategoryRow> = query.load(conn.as_mut()).await?;
+    rows.sort_by_key(|row| match row.builtin {
+        Some(BuiltinCategory::Other) => (2, 0, 0, row.created_at),
+        Some(builtin) => (0, builtin.rank(), 0, row.created_at),
+        None => (1, 0, row.position, row.created_at),
+    });
+    Ok(rows.iter().map(ReportCategory::from).collect())
+}
+
+fn checked_category_text(
+    name: Option<&str>,
+    description: Option<Option<&str>>,
+) -> app::Result<(Option<String>, Option<Option<String>>)> {
+    let name = match name.map(str::trim) {
+        Some(name) if name.is_empty() || name.chars().count() > CATEGORY_NAME_MAX_CHARS => {
+            return Err(app::Error::Validation(t!(
+                "reportCategoryNameLength",
+                max = CATEGORY_NAME_MAX_CHARS
+            )));
+        }
+        name => name.map(str::to_string),
+    };
+    let description = match description {
+        Some(Some(text)) => {
+            let text = text.trim();
+            if text.chars().count() > CATEGORY_DESCRIPTION_MAX_CHARS {
+                return Err(app::Error::Validation(t!(
+                    "reportCategoryDescriptionLength",
+                    max = CATEGORY_DESCRIPTION_MAX_CHARS
+                )));
+            }
+            Some((!text.is_empty()).then(|| text.to_string()))
+        }
+        Some(None) => Some(None),
+        None => None,
+    };
+    Ok((name, description))
+}
+
+/// Adds a category of the deployment's own, after the others it added. Takes Manage report
+/// categories.
+pub async fn create_category(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    name: &str,
+    description: Option<&str>,
+) -> app::Result<ReportCategory> {
+    access.require(DeploymentPermission::ManageReportCategories)?;
+    let (name, description) = checked_category_text(Some(name), Some(description))?;
+    let mut conn = state.connection_pool.get().await?;
+    let last: Option<i32> = report_category::table
+        .select(diesel::dsl::max(report_category::position))
+        .filter(report_category::builtin.is_null())
+        .first(conn.as_mut())
+        .await?;
+    let row: CategoryRow = diesel::insert_into(report_category::table)
+        .values((
+            report_category::id.eq(ReportCategoryId::new()),
+            report_category::name.eq(name),
+            report_category::description.eq(description.flatten()),
+            report_category::position.eq(last.map_or(0, |last| last + 1)),
+        ))
+        .returning(CategoryRow::as_returning())
+        .get_result(conn.as_mut())
+        .await?;
+    Ok(ReportCategory::from(&row))
+}
+
+/// Renames, describes, hides, or shows a category. A built-in category's name and description
+/// are fixed, and Other is never hidden. Takes Manage report categories.
+pub async fn update_category(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCategoryId,
+    name: Option<&str>,
+    description: Option<Option<&str>>,
+    hidden: Option<bool>,
+) -> app::Result<ReportCategory> {
+    access.require(DeploymentPermission::ManageReportCategories)?;
+    let (name, description) = checked_category_text(name, description)?;
+    let mut conn = state.connection_pool.get().await?;
+    let builtin: Option<BuiltinCategory> = report_category::table
+        .select(report_category::builtin)
+        .find(id)
+        .first(conn.as_mut())
+        .await?;
+    if builtin.is_some() && (name.is_some() || description.is_some()) {
+        return Err(app::Error::Validation(t!("reportCategoryBuiltinFixed")));
+    }
+    if builtin == Some(BuiltinCategory::Other) && hidden == Some(true) {
+        return Err(app::Error::Validation(t!("reportCategoryOtherShown")));
+    }
+    #[derive(AsChangeset)]
+    #[diesel(table_name = report_category)]
+    struct Change {
+        name: Option<String>,
+        description: Option<Option<String>>,
+        hidden: Option<bool>,
+    }
+    let change = Change {
+        name,
+        description,
+        hidden,
+    };
+    let row: CategoryRow =
+        if change.name.is_none() && change.description.is_none() && change.hidden.is_none() {
+            report_category::table
+                .select(CategoryRow::as_select())
+                .find(id)
+                .first(conn.as_mut())
+                .await?
+        } else {
+            diesel::update(report_category::table.find(id))
+                .set(change)
+                .returning(CategoryRow::as_returning())
+                .get_result(conn.as_mut())
+                .await?
+        };
+    Ok(ReportCategory::from(&row))
+}
+
+/// Puts the deployment's own categories in the order given, which must name each of them once.
+/// Takes Manage report categories.
+pub async fn order_categories(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    order: &[ReportCategoryId],
+) -> app::Result<()> {
+    access.require(DeploymentPermission::ManageReportCategories)?;
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let own: HashSet<ReportCategoryId> = report_category::table
+                .select(report_category::id)
+                .filter(report_category::builtin.is_null())
+                .for_update()
+                .load::<ReportCategoryId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .collect();
+            let given: HashSet<ReportCategoryId> = order.iter().copied().collect();
+            if given.len() != order.len() || given != own {
+                return Err(app::Error::Validation(t!("reportCategoryOrder")));
+            }
+            for (position, id) in order.iter().enumerate() {
+                diesel::update(report_category::table.find(*id))
+                    .set(report_category::position.eq(position as i32))
+                    .execute(conn.as_mut())
+                    .await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reporting
+
+/// A report as its reporter writes it.
+#[derive(Debug, Clone)]
+pub struct ReportRequest {
+    pub category: ReportCategoryId,
+    pub explanation: Option<String>,
+}
+
+/// What a report was filed as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Filed {
+    pub id: ReportId,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Checks a report's category, which must be offered, and its explanation, which Other needs.
+async fn checked_request(
+    conn: &mut AsyncPgConnection,
+    request: &ReportRequest,
+) -> app::Result<Option<String>> {
+    let builtin: Option<Option<BuiltinCategory>> = report_category::table
+        .select(report_category::builtin)
+        .filter(report_category::id.eq(request.category))
+        .filter(report_category::hidden.eq(false))
+        .first(conn)
+        .await
+        .optional()?;
+    let Some(builtin) = builtin else {
+        return Err(app::Error::Validation(t!("reportCategoryUnknown")));
+    };
+    let explanation = request
+        .explanation
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if explanation.is_some_and(|text| text.chars().count() > EXPLANATION_MAX_CHARS) {
+        return Err(app::Error::Validation(t!(
+            "reportExplanationLength",
+            max = EXPLANATION_MAX_CHARS
+        )));
+    }
+    if explanation.is_none() && builtin == Some(BuiltinCategory::Other) {
+        return Err(app::Error::Validation(t!("reportExplanationRequired")));
+    }
+    Ok(explanation.map(str::to_string))
+}
+
+/// Refuses a report of `subject` by `reporter`: of themselves, or of the system account.
+async fn check_subject(
+    conn: &mut AsyncPgConnection,
+    reporter: UserId,
+    subject: UserId,
+) -> app::Result<()> {
+    if reporter == subject {
+        return Err(app::Error::Validation(t!("reportOwn")));
+    }
+    let system: bool = user::table
+        .select(user::system)
+        .filter(user::id.eq(subject).and(user::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    if system {
+        return Err(app::Error::Validation(t!("reportSystemAccount")));
+    }
+    Ok(())
+}
+
+/// Adds a report to the unresolved case of `kind` about `message` or `subject`, opening one or
+/// reopening a dismissed one, inside the caller's transaction.
+#[allow(clippy::too_many_arguments)]
+async fn file(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    kind: ReportKind,
+    subject: UserId,
+    message: Option<MessageId>,
+    reporter: UserId,
+    request: &ReportRequest,
+    explanation: Option<String>,
+    aspects: Vec<ProfileAspect>,
+    profile: Option<ProfileSnapshot>,
+) -> app::Result<Filed> {
+    let now = Utc::now();
+    // A first report opens the case; concurrent first reports make one, the second finding
+    // the first's.
+    diesel::insert_into(report_case::table)
+        .values(&CaseRow {
+            id: ReportCaseId::new(),
+            kind,
+            subject,
+            message,
+            status: ReportStatus::Open,
+            opened_at: now,
+            last_reported_at: now,
+            closed_at: None,
+            closed_by: None,
+            resolution: None,
+        })
+        .on_conflict_do_nothing()
+        .execute(conn)
+        .await?;
+    let unresolved = report_case::table
+        .select(CaseRow::as_select())
+        .filter(report_case::kind.eq(kind))
+        .filter(report_case::status.ne(ReportStatus::Resolved));
+    let case: CaseRow = match message {
+        Some(message) => {
+            unresolved
+                .filter(report_case::message.eq(message))
+                .for_update()
+                .first(conn)
+                .await?
+        }
+        None => {
+            unresolved
+                .filter(report_case::subject.eq(subject))
+                .for_update()
+                .first(conn)
+                .await?
+        }
+    };
+    let already: bool = diesel::select(diesel::dsl::exists(
+        report::table.filter(report::case.eq(case.id).and(report::reporter.eq(reporter))),
+    ))
+    .get_result(conn)
+    .await?;
+    if already {
+        return Err(app::Error::AlreadyReported);
+    }
+    let reopened = case.status == ReportStatus::Dismissed;
+    diesel::update(report_case::table.find(case.id))
+        .set((
+            report_case::status.eq(ReportStatus::Open),
+            report_case::last_reported_at.eq(now),
+            report_case::closed_at.eq(None::<DateTime<Utc>>),
+            report_case::closed_by.eq(None::<UserId>),
+        ))
+        .execute(conn)
+        .await?;
+    if reopened {
+        tracing::info!(case = %case.id.0, "a dismissed report case was reported again");
+    }
+    let row = ReportRow {
+        id: ReportId::new(),
+        case: case.id,
+        reporter,
+        category: request.category,
+        explanation,
+        aspects: ProfileAspects(aspects),
+        profile,
+        created_at: now,
+    };
+    diesel::insert_into(report::table)
+        .values(&row)
+        .execute(conn)
+        .await?;
+    announce(state, conn, case.id).await?;
+    Ok(Filed {
+        id: row.id,
+        created_at: now,
+    })
+}
+
+/// Reports a message the reporter can read. An echo is reported as the reply it shows.
+pub async fn report_message(
+    state: &GlobalServerContext,
+    reporter: UserId,
+    message_id: MessageId,
+    request: &ReportRequest,
+) -> app::Result<Filed> {
+    let mut conn = state.connection_pool.get().await?;
+    let (channel, author, kind, echo_of): (ChannelId, UserId, MessageKind, Option<MessageId>) =
+        message::table
+            .select((
+                message::channel,
+                message::author,
+                message::kind,
+                message::echo_of,
+            ))
+            .filter(
+                message::id
+                    .eq(message_id)
+                    .and(message::deleted_at.is_null()),
+            )
+            .first(conn.as_mut())
+            .await?;
+    app::permissions::channel_access(state, conn.as_mut(), reporter, channel).await?;
+    if kind == MessageKind::ThreadEcho
+        && let Some(reply) = echo_of
+    {
+        drop(conn);
+        return Box::pin(report_message(state, reporter, reply, request)).await;
+    }
+    check_subject(conn.as_mut(), reporter, author).await?;
+    let explanation = checked_request(conn.as_mut(), request).await?;
+    conn.transaction(|conn| {
+        async move {
+            file(
+                state,
+                conn.as_mut(),
+                ReportKind::Message,
+                author,
+                Some(message_id),
+                reporter,
+                request,
+                explanation,
+                Vec::new(),
+                None,
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Reports a person's profile, naming the aspects found objectionable; the profile is kept as
+/// it stands.
+pub async fn report_profile(
+    state: &GlobalServerContext,
+    reporter: UserId,
+    subject: UserId,
+    request: &ReportRequest,
+    aspects: Vec<ProfileAspect>,
+) -> app::Result<Filed> {
+    let mut aspects_named: Vec<ProfileAspect> = Vec::new();
+    for aspect in aspects {
+        if !aspects_named.contains(&aspect) {
+            aspects_named.push(aspect);
+        }
+    }
+    if aspects_named.is_empty() {
+        return Err(app::Error::Validation(t!("reportAspectsRequired")));
+    }
+    let mut conn = state.connection_pool.get().await?;
+    check_subject(conn.as_mut(), reporter, subject).await?;
+    let explanation = checked_request(conn.as_mut(), request).await?;
+    let profile: UserPg = user::table
+        .select(UserPg::as_select())
+        .find(subject)
+        .first(conn.as_mut())
+        .await?;
+    conn.transaction(|conn| {
+        async move {
+            file(
+                state,
+                conn.as_mut(),
+                ReportKind::Profile,
+                subject,
+                None,
+                reporter,
+                request,
+                explanation,
+                aspects_named,
+                Some(ProfileSnapshot::from(&profile)),
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review
+
+/// Tells each holder of Review reports that what awaits review changed, with how many cases
+/// are open now, inside the caller's transaction.
+async fn announce(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    case: ReportCaseId,
+) -> app::Result<()> {
+    let open: i64 = report_case::table
+        .filter(report_case::status.eq(ReportStatus::Open))
+        .count()
+        .get_result(conn)
+        .await?;
+    let reviewers: Vec<UserId> = user_deployment_role::table
+        .inner_join(deployment_role::table)
+        .select(user_deployment_role::user)
+        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
+            "deployment_role.permissions & {} <> 0",
+            DeploymentPermissions::REVIEW_REPORTS.bits()
+        )))
+        .distinct()
+        .load(conn)
+        .await?;
+    for reviewer in reviewers {
+        publish_event(
+            state,
+            conn,
+            EventScope::User(reviewer),
+            &ServerEvent::ReportsChanged { case, open },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// How many cases are open and dismissed. Takes Review reports.
+pub async fn counts(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+) -> app::Result<ReportCounts> {
+    access.require(DeploymentPermission::ReviewReports)?;
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<(ReportStatus, i64)> = report_case::table
+        .group_by(report_case::status)
+        .select((report_case::status, diesel::dsl::count_star()))
+        .filter(report_case::status.ne(ReportStatus::Resolved))
+        .load(conn.as_mut())
+        .await?;
+    let count = |status| {
+        rows.iter()
+            .find(|(s, _)| *s == status)
+            .map_or(0, |(_, n)| *n)
+    };
+    Ok(ReportCounts {
+        open: count(ReportStatus::Open),
+        dismissed: count(ReportStatus::Dismissed),
+    })
+}
+
+/// The highest deployment role position each of `users` holds, 0 with none.
+async fn ranks(
+    conn: &mut AsyncPgConnection,
+    users: &[UserId],
+) -> app::Result<HashMap<UserId, i32>> {
+    let rows: Vec<(UserId, i32)> = user_deployment_role::table
+        .inner_join(deployment_role::table)
+        .select((user_deployment_role::user, deployment_role::position))
+        .filter(user_deployment_role::user.eq_any(users))
+        .load(conn)
+        .await?;
+    let mut ranks = HashMap::new();
+    for (user, position) in rows {
+        let rank = ranks.entry(user).or_insert(0);
+        *rank = (*rank).max(position);
+    }
+    Ok(ranks)
+}
+
+/// Whether `access` may act on a case about `subject` of rank `subject_rank`.
+fn may_act(access: &DeploymentAccess, subject: UserId, subject_rank: i32) -> bool {
+    subject != access.user && subject_rank < access.rank()
+}
+
+/// The cases among `rows` with their reports, messages, and categories.
+async fn page_of(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    access: &DeploymentAccess,
+    rows: Vec<CaseRow>,
+) -> app::Result<CasePage> {
+    let ids: Vec<ReportCaseId> = rows.iter().map(|c| c.id).collect();
+    let subjects: Vec<UserId> = rows.iter().map(|c| c.subject).collect();
+    let mut reports: HashMap<ReportCaseId, Vec<Report>> = HashMap::new();
+    for row in report::table
+        .select(ReportRow::as_select())
+        .filter(report::case.eq_any(&ids))
+        .order(report::created_at.asc())
+        .load::<ReportRow>(conn)
+        .await?
+    {
+        reports.entry(row.case).or_default().push(Report::from(row));
+    }
+    let ranks = ranks(conn, &subjects).await?;
+    let banned_now: HashSet<UserId> = user::table
+        .select(user::id)
+        .filter(user::id.eq_any(&subjects))
+        .filter(banned())
+        .load::<UserId>(conn)
+        .await?
+        .into_iter()
+        .collect();
+    let message_ids: Vec<MessageId> = rows.iter().filter_map(|c| c.message).collect();
+    let messages = reviewed(state, conn, &message_ids).await?;
+    let used: HashSet<ReportCategoryId> = reports
+        .values()
+        .flatten()
+        .map(|report| report.category)
+        .collect();
+    let categories = categories(state, true)
+        .await?
+        .into_iter()
+        .filter(|category| used.contains(&category.id))
+        .collect();
+    let cases = rows
+        .into_iter()
+        .map(|row| ReportCase {
+            may_act: may_act(
+                access,
+                row.subject,
+                ranks.get(&row.subject).copied().unwrap_or(0),
+            ),
+            subject_banned: banned_now.contains(&row.subject),
+            reports: reports.remove(&row.id).unwrap_or_default(),
+            id: row.id,
+            kind: row.kind,
+            status: row.status,
+            subject: row.subject,
+            message: row.message,
+            opened_at: row.opened_at,
+            last_reported_at: row.last_reported_at,
+            closed_at: row.closed_at,
+            closed_by: row.closed_by,
+            resolution: row.resolution,
+        })
+        .collect();
+    Ok(CasePage {
+        cases,
+        messages,
+        categories,
+    })
+}
+
+/// The messages among `ids`, deleted or not, with their relations, oldest first.
+async fn reviewed(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    ids: &[MessageId],
+) -> app::Result<Vec<ReviewedMessage>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<Message> = message::table
+        .select(Message::as_select())
+        .filter(message::id.eq_any(ids))
+        .order(message::id.asc())
+        .load(conn)
+        .await?;
+    let deleted: HashMap<MessageId, Option<DateTime<Utc>>> =
+        rows.iter().map(|row| (row.id, row.deleted_at)).collect();
+    Ok(with_relations(state, conn, rows)
+        .await?
+        .into_iter()
+        .map(|message| ReviewedMessage {
+            deleted_at: deleted.get(&message.message.id).copied().flatten(),
+            message,
+        })
+        .collect())
+}
+
+/// A page of the cases in `status`, most recently reported first. Takes Review reports.
+pub async fn list_cases(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    status: ReportStatus,
+    offset: i64,
+    limit: i64,
+) -> app::Result<CasePage> {
+    access.require(DeploymentPermission::ReviewReports)?;
+    let mut conn = state.connection_pool.get().await?;
+    // Resolved cases read in the order they were closed; the others in the order reports came.
+    let mut query = report_case::table
+        .select(CaseRow::as_select())
+        .filter(report_case::status.eq(status))
+        .into_boxed();
+    query = if status == ReportStatus::Resolved {
+        query.order((report_case::closed_at.desc(), report_case::id.desc()))
+    } else {
+        query.order((report_case::last_reported_at.desc(), report_case::id.desc()))
+    };
+    let rows: Vec<CaseRow> = query
+        .offset(offset.clamp(0, app::admin::MAX_OFFSET))
+        .limit(limit.clamp(1, MAX_PAGE))
+        .load(conn.as_mut())
+        .await?;
+    page_of(state, conn.as_mut(), access, rows).await
+}
+
+/// One case. Takes Review reports.
+pub async fn read_case(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+) -> app::Result<CasePage> {
+    access.require(DeploymentPermission::ReviewReports)?;
+    let mut conn = state.connection_pool.get().await?;
+    let row: CaseRow = report_case::table
+        .select(CaseRow::as_select())
+        .find(id)
+        .first(conn.as_mut())
+        .await?;
+    page_of(state, conn.as_mut(), access, vec![row]).await
+}
+
+/// Where a context window starts.
+#[derive(Debug, Clone, Copy)]
+pub enum ContextAnchor {
+    /// Around the reported message.
+    Around,
+    /// The messages before this one.
+    Before(MessageId),
+    /// The messages after this one.
+    After(MessageId),
+}
+
+/// Messages around a reported one, deleted ones included, and whether there are more before
+/// and after them.
+pub struct ContextWindow {
+    pub channel: ChannelId,
+    pub messages: Vec<ReviewedMessage>,
+    pub more_before: bool,
+    pub more_after: bool,
+}
+
+/// The messages of a reported message's channel or thread around it, read for its review.
+/// Reading those of a DM is written to the moderation log, once for each reviewer and message.
+/// Takes Review reports.
+pub async fn case_context(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+    anchor: ContextAnchor,
+) -> app::Result<ContextWindow> {
+    access.require(DeploymentPermission::ReviewReports)?;
+    let mut conn = state.connection_pool.get().await?;
+    let reported: Option<MessageId> = report_case::table
+        .select(report_case::message)
+        .find(id)
+        .first(conn.as_mut())
+        .await?;
+    let Some(reported) = reported else {
+        return Err(app::Error::Validation(t!("reportNotMessage")));
+    };
+    let channel: ChannelId = message::table
+        .select(message::channel)
+        .find(reported)
+        .first(conn.as_mut())
+        .await?;
+    if let ChannelHome::Direct(dm) = channel_home(state, conn.as_mut(), channel).await?
+        && !dm_recipients(conn.as_mut(), dm)
+            .await?
+            .contains(&access.user)
+    {
+        let action: &'static str = ModerationAction::ReadReportContext.into();
+        let logged: bool = diesel::select(diesel::dsl::exists(
+            moderation_log::table.filter(
+                moderation_log::actor
+                    .eq(access.user)
+                    .and(moderation_log::action.eq(action))
+                    .and(moderation_log::subject.eq(reported.0.to_string())),
+            ),
+        ))
+        .get_result(conn.as_mut())
+        .await?;
+        if !logged {
+            log_moderation(
+                conn.as_mut(),
+                access.user,
+                ModerationAction::ReadReportContext,
+                None,
+                Some(channel),
+                Some(reported.0.to_string()),
+            )
+            .await?;
+        }
+    }
+    // Echoes show replies the thread's own context holds; they are left out.
+    let in_channel = || {
+        message::channel
+            .eq(channel)
+            .and(message::kind.ne(MessageKind::ThreadEcho))
+    };
+    let side = async |conn: &mut AsyncPgConnection,
+                      before: Option<MessageId>,
+                      after: Option<MessageId>| {
+        let mut query = message::table
+            .select(message::id)
+            .filter(in_channel())
+            .into_boxed();
+        if let Some(before) = before {
+            query = query
+                .filter(message::id.lt(before))
+                .order(message::id.desc());
+        }
+        if let Some(after) = after {
+            query = query.filter(message::id.gt(after)).order(message::id.asc());
+        }
+        let mut ids: Vec<MessageId> = query.limit(CONTEXT_MESSAGES + 1).load(conn).await?;
+        let more = ids.len() as i64 > CONTEXT_MESSAGES;
+        ids.truncate(CONTEXT_MESSAGES as usize);
+        Ok::<_, app::Error>((ids, more))
+    };
+    let (ids, more_before, more_after) = match anchor {
+        ContextAnchor::Around => {
+            let (mut before, more_before) = side(conn.as_mut(), Some(reported), None).await?;
+            let (after, more_after) = side(conn.as_mut(), None, Some(reported)).await?;
+            before.push(reported);
+            before.extend(after);
+            (before, more_before, more_after)
+        }
+        ContextAnchor::Before(id) => {
+            let (ids, more) = side(conn.as_mut(), Some(id), None).await?;
+            (ids, more, true)
+        }
+        ContextAnchor::After(id) => {
+            let (ids, more) = side(conn.as_mut(), None, Some(id)).await?;
+            (ids, true, more)
+        }
+    };
+    let messages = reviewed(state, conn.as_mut(), &ids).await?;
+    Ok(ContextWindow {
+        channel,
+        messages,
+        more_before,
+        more_after,
+    })
+}
+
+/// The actions a review takes on a case; at least one.
+#[derive(Debug, Clone, Default)]
+pub struct Actions {
+    /// The warning's words, sent as a DM from the reviewer.
+    pub warn: Option<String>,
+    pub ban: Option<UserBanRequest>,
+    pub delete_message: bool,
+    /// For a profile case, the aspects to reset.
+    pub reset: Vec<ProfileAspect>,
+}
+
+/// Loads a case to act on, refusing a reviewer who may not act on it.
+async fn actionable(
+    conn: &mut AsyncPgConnection,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+) -> app::Result<CaseRow> {
+    access.require(DeploymentPermission::ReviewReports)?;
+    let row: CaseRow = report_case::table
+        .select(CaseRow::as_select())
+        .find(id)
+        .for_update()
+        .first(conn)
+        .await?;
+    let rank = ranks(conn, &[row.subject])
+        .await?
+        .get(&row.subject)
+        .copied()
+        .unwrap_or(0);
+    if !may_act(access, row.subject, rank) {
+        return Err(app::Error::Forbidden(t!("reportConflictOfInterest")));
+    }
+    Ok(row)
+}
+
+/// Resolves an open case with `actions`, each taking its own permission. The case is resolved
+/// first, so two reviewers cannot both act on it; if an action then fails, it is opened again
+/// and the error returned, and the actions taken before it stand.
+pub async fn resolve(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+    actions: Actions,
+) -> app::Result<CasePage> {
+    let warn = match actions.warn.as_deref().map(str::trim) {
+        Some(text) if text.is_empty() || text.chars().count() > WARNING_MAX_CHARS => {
+            return Err(app::Error::Validation(t!(
+                "warningLength",
+                max = WARNING_MAX_CHARS
+            )));
+        }
+        text => text.map(str::to_string),
+    };
+    if warn.is_none()
+        && actions.ban.is_none()
+        && !actions.delete_message
+        && actions.reset.is_empty()
+    {
+        return Err(app::Error::Validation(t!("reportNoAction")));
+    }
+    if warn.is_some() {
+        access.require(DeploymentPermission::MessageAnyUser)?;
+    }
+    if actions.delete_message {
+        access.require(DeploymentPermission::ModerateCommunities)?;
+    }
+    if let Some(ban) = &actions.ban {
+        access.require(DeploymentPermission::BanUsers)?;
+        app::ban::validate(&ban.ban)?;
+        if ban.ban.delete_messages_seconds.is_some() {
+            access.require(DeploymentPermission::ModerateCommunities)?;
+        }
+    }
+    if !actions.reset.is_empty() {
+        access.require(DeploymentPermission::BanUsers)?;
+    }
+    let (deleting, resetting) = (actions.delete_message, !actions.reset.is_empty());
+    let mut conn = state.connection_pool.get().await?;
+    let case = conn
+        .transaction(|conn| {
+            async move {
+                let case = actionable(conn.as_mut(), access, id).await?;
+                if case.status != ReportStatus::Open {
+                    return Err(app::Error::Conflict(t!("reportCaseClosed")));
+                }
+                if deleting && case.kind != ReportKind::Message {
+                    return Err(app::Error::Validation(t!("reportDeleteNotMessage")));
+                }
+                if resetting {
+                    if case.kind != ReportKind::Profile {
+                        return Err(app::Error::Validation(t!("reportResetNotProfile")));
+                    }
+                    let foreign: bool = user::table
+                        .select(user::home_domain.is_not_null())
+                        .find(case.subject)
+                        .first(conn.as_mut())
+                        .await?;
+                    if foreign {
+                        return Err(app::Error::Validation(t!("reportResetForeign")));
+                    }
+                }
+                close(
+                    state,
+                    conn.as_mut(),
+                    access,
+                    id,
+                    ReportStatus::Resolved,
+                    None,
+                )
+                .await?;
+                Ok(case)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    drop(conn);
+    let mut resolution = Resolution::default();
+    let outcome = act(state, access, &case, warn, &actions, &mut resolution).await;
+    let mut conn = state.connection_pool.get().await?;
+    let reopened = outcome.is_err();
+    conn.transaction(|conn| {
+        let resolution = resolution.clone();
+        async move {
+            if reopened {
+                diesel::update(report_case::table.find(id))
+                    .set((
+                        report_case::status.eq(ReportStatus::Open),
+                        report_case::closed_at.eq(None::<DateTime<Utc>>),
+                        report_case::closed_by.eq(None::<UserId>),
+                    ))
+                    .execute(conn.as_mut())
+                    .await?;
+                announce(state, conn.as_mut(), id).await
+            } else {
+                diesel::update(report_case::table.find(id))
+                    .set(report_case::resolution.eq(Some(resolution)))
+                    .execute(conn.as_mut())
+                    .await
+                    .map(drop)
+                    .map_err(Into::into)
+            }
+        }
+        .scope_boxed()
+    })
+    .await?;
+    outcome?;
+    drop(conn);
+    read_case(state, access, id).await
+}
+
+/// Takes a resolved case's actions, recording each in `resolution` as it is done.
+async fn act(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    case: &CaseRow,
+    warn: Option<String>,
+    actions: &Actions,
+    resolution: &mut Resolution,
+) -> app::Result<()> {
+    if let Some(text) = warn {
+        let warning = warning_of(state, case).await?;
+        let message = send_warning(state, access, case.subject, text.clone(), warning).await?;
+        resolution.warning = Some(text);
+        resolution.warning_message = Some(message);
+    }
+    if actions.delete_message
+        && let Some(message) = case.message
+    {
+        match app::message::delete_message(state, access.user, message).await {
+            // Its author may have deleted it meanwhile.
+            Ok(()) | Err(app::Error::Diesel(diesel::result::Error::NotFound)) => {}
+            Err(e) => return Err(e),
+        }
+        resolution.deleted_message = true;
+    }
+    if !actions.reset.is_empty() {
+        reset_profile(state, access, case.subject, &actions.reset).await?;
+        resolution.reset = actions.reset.clone();
+    }
+    if let Some(ban) = &actions.ban {
+        app::user_ban::ban_user(state, access, case.subject, ban).await?;
+        resolution.ban = Some(BanGiven {
+            reason: ban.ban.reason.clone(),
+            duration_seconds: ban.ban.duration_seconds,
+            delete_messages_seconds: ban.ban.delete_messages_seconds,
+            with_owner: ban.with_owner,
+        });
+    }
+    Ok(())
+}
+
+/// What a warning about `case` names: the message, or the profile as the latest report found it
+/// with every aspect the reports named.
+async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> app::Result<Warning> {
+    let mut conn = state.connection_pool.get().await?;
+    let reports: Vec<ReportRow> = report::table
+        .select(ReportRow::as_select())
+        .filter(report::case.eq(case.id))
+        .order(report::created_at.asc())
+        .load(conn.as_mut())
+        .await?;
+    let mut aspects: Vec<ProfileAspect> = Vec::new();
+    for aspect in reports.iter().flat_map(|r| r.aspects.0.iter()) {
+        if !aspects.contains(aspect) {
+            aspects.push(*aspect);
+        }
+    }
+    Ok(Warning {
+        subject: case.subject,
+        message: case.message,
+        profile: reports.iter().rev().find_map(|r| r.profile.clone()),
+        aspects,
+    })
+}
+
+/// Sends `subject` a warning from the reviewer, in their DM, made on first use; Message any
+/// user reaches them whatever communities they share and whoever blocked whom. Returns the
+/// warning's message.
+async fn send_warning(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    subject: UserId,
+    text: String,
+    warning: Warning,
+) -> app::Result<MessageId> {
+    let (dm, _, _) = app::dm::open_dm(state, access.user, vec![subject]).await?;
+    let message = app::message::create_message(
+        state,
+        access.user,
+        dm.id,
+        text,
+        Vec::new(),
+        false,
+        Posting::Warning(warning),
+    )
+    .await?;
+    let mut conn = state.connection_pool.get().await?;
+    log_moderation(
+        conn.as_mut(),
+        access.user,
+        ModerationAction::WarnUser,
+        None,
+        Some(dm.id),
+        Some(subject.0.to_string()),
+    )
+    .await?;
+    Ok(message.id)
+}
+
+/// A username for an account whose own was reset: `user-` and eight random letters and digits.
+fn placeholder_username() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let suffix: String = crate::CHACHA_RNG.with(|rng| {
+        let mut rng = rng.borrow_mut();
+        (0..8)
+            .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
+            .collect()
+    });
+    format!("user-{suffix}")
+}
+
+/// Clears the named aspects of `subject`'s profile; a username becomes a placeholder, and the
+/// system account tells them to choose another. Written to the moderation log.
+async fn reset_profile(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    subject: UserId,
+    aspects: &[ProfileAspect],
+) -> app::Result<()> {
+    let mut request = UserUpdateRequest::default();
+    for aspect in aspects {
+        match aspect {
+            ProfileAspect::DisplayName => request.display_name = Some(None),
+            ProfileAspect::Picture => request.icon = Some(None),
+            ProfileAspect::Status => request.status = Some(None),
+            ProfileAspect::Bio => request.bio = Some(None),
+            ProfileAspect::Pronouns => request.pronouns = Some(None),
+            ProfileAspect::Username => {}
+        }
+    }
+    let renamed = aspects.contains(&ProfileAspect::Username);
+    // A placeholder that happens to be taken is drawn again.
+    let mut attempts = 0;
+    let updated = loop {
+        attempts += 1;
+        if renamed {
+            request.name = Some(placeholder_username());
+        }
+        match app::user::apply_profile_update(state.clone(), subject, request.clone()).await {
+            Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _,
+            ))) if renamed && attempts < 3 => continue,
+            outcome => break outcome?,
+        }
+    };
+    let mut conn = state.connection_pool.get().await?;
+    log_moderation(
+        conn.as_mut(),
+        access.user,
+        ModerationAction::ResetProfile,
+        None,
+        None,
+        Some(subject.0.to_string()),
+    )
+    .await?;
+    drop(conn);
+    if renamed {
+        app::system_account::notify(
+            state,
+            subject,
+            t!("usernameResetNotice", name = updated.user_pg.name).into_owned(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Marks a case resolved or dismissed by the reviewer, with what was done, inside the caller's
+/// transaction, and announces it.
+async fn close(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+    status: ReportStatus,
+    resolution: Option<Resolution>,
+) -> app::Result<()> {
+    diesel::update(report_case::table.find(id))
+        .set((
+            report_case::status.eq(status),
+            report_case::closed_at.eq(Some(Utc::now())),
+            report_case::closed_by.eq(Some(access.user)),
+            report_case::resolution.eq(resolution),
+        ))
+        .execute(conn)
+        .await?;
+    announce(state, conn, id).await
+}
+
+/// Dismisses an open case: it is hidden from review, kept, and opened again if restored or
+/// reported again. Takes Review reports, and a case the reviewer may act on.
+pub async fn dismiss(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+) -> app::Result<CasePage> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let case = actionable(conn.as_mut(), access, id).await?;
+            match case.status {
+                ReportStatus::Open => {
+                    close(
+                        state,
+                        conn.as_mut(),
+                        access,
+                        id,
+                        ReportStatus::Dismissed,
+                        None,
+                    )
+                    .await
+                }
+                ReportStatus::Dismissed => Ok(()),
+                ReportStatus::Resolved => Err(app::Error::Conflict(t!("reportCaseClosed"))),
+            }
+        }
+        .scope_boxed()
+    })
+    .await?;
+    drop(conn);
+    read_case(state, access, id).await
+}
+
+/// Restores a dismissed case to review. Takes Review reports, and a case the reviewer may act
+/// on.
+pub async fn restore(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: ReportCaseId,
+) -> app::Result<CasePage> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let case = actionable(conn.as_mut(), access, id).await?;
+            match case.status {
+                ReportStatus::Dismissed => {
+                    diesel::update(report_case::table.find(id))
+                        .set((
+                            report_case::status.eq(ReportStatus::Open),
+                            report_case::closed_at.eq(None::<DateTime<Utc>>),
+                            report_case::closed_by.eq(None::<UserId>),
+                        ))
+                        .execute(conn.as_mut())
+                        .await?;
+                    announce(state, conn.as_mut(), id).await
+                }
+                ReportStatus::Open => Ok(()),
+                ReportStatus::Resolved => Err(app::Error::Conflict(t!("reportCaseClosed"))),
+            }
+        }
+        .scope_boxed()
+    })
+    .await?;
+    drop(conn);
+    read_case(state, access, id).await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Warnings
+
+/// The messages the warnings among `messages` are about, deleted ones included, for the people
+/// of the warnings' DMs, who are the only ones to read a warning.
+pub async fn warned_messages(
+    state: &GlobalServerContext,
+    messages: &[crate::api::message_enum::Message],
+) -> app::Result<Vec<ReviewedMessage>> {
+    let ids: Vec<MessageId> = messages
+        .iter()
+        .filter(|m| m.kind == MessageKind::Warning)
+        .filter_map(|m| m.warning.as_ref().and_then(|w| w.message))
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    reviewed(state, conn.as_mut(), &ids).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn built_in_categories_are_offered_in_order_with_other_last() {
+        let all = <BuiltinCategory as strum::VariantArray>::VARIANTS;
+        assert_eq!(all.last(), Some(&BuiltinCategory::Other));
+        assert_eq!(BuiltinCategory::Spam.rank(), 0);
+        // The names the migration seeds are the wire names.
+        assert_eq!(BuiltinCategory::HateSpeech.to_string(), "hateSpeech");
+        assert_eq!(
+            "illegalContent".parse::<BuiltinCategory>().unwrap(),
+            BuiltinCategory::IllegalContent
+        );
+    }
+
+    #[test]
+    fn a_placeholder_username_is_user_and_eight_letters_or_digits() {
+        let name = placeholder_username();
+        let suffix = name.strip_prefix("user-").unwrap();
+        assert_eq!(suffix.len(), 8);
+        assert!(
+            suffix
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        );
+    }
+
+    #[test]
+    fn nobody_acts_on_their_own_case_or_one_about_their_equals() {
+        let access = DeploymentAccess {
+            user: UserId::new(),
+            positions: vec![2],
+            permissions: DeploymentPermissions::REVIEW_REPORTS,
+        };
+        assert!(may_act(&access, UserId::new(), 1));
+        assert!(!may_act(&access, UserId::new(), 2));
+        assert!(!may_act(&access, access.user, 0));
+    }
+}

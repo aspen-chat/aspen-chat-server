@@ -103,6 +103,15 @@ pub async fn notify(
         })
         .await?;
     drop(conn);
-    app::message::create_message(state, system, dm, content, Vec::new(), false, None).await?;
+    app::message::create_message(
+        state,
+        system,
+        dm,
+        content,
+        Vec::new(),
+        false,
+        app::message::Posting::Text,
+    )
+    .await?;
     Ok(())
 }
