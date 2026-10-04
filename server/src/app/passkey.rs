@@ -466,7 +466,8 @@ pub async fn complete(
                             .execute(conn)
                             .await?;
                         let codes =
-                            two_factor::factor_added(conn, user_id, &session_token, first).await?;
+                            two_factor::factor_added(state, conn, user_id, &session_token, first)
+                                .await?;
                         app::Result::Ok((summary, codes))
                     }
                     .scope_boxed()

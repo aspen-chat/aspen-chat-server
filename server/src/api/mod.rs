@@ -455,6 +455,22 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
     openapi
 }
 
+/// Handles a request inside `app::events::noting`, and settles what it published once it is
+/// done (`app::events::settle`): the calls its events changed access to are rechecked, and when
+/// it failed after publishing about communities, those are announced as possibly not having
+/// happened, since its transaction may have been rolled back after they were published.
+async fn settle_after_request(
+    axum::extract::State(state): axum::extract::State<GlobalServerContext>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let (response, noted) = app::events::noting(next.run(request)).await;
+    let status = response.status();
+    let failed = status.is_client_error() || status.is_server_error();
+    app::events::settle(&state, noted, failed).await;
+    response
+}
+
 pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
     if write_schema {
         schema::write_schemas_and_exit()?;
@@ -464,6 +480,10 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     // template.
     // Layers run outermost last-added first: metrics see every request, refused ones too.
     let v1 = api_routes()
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            settle_after_request,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             context.clone(),
             rate_limit::limit_requests,

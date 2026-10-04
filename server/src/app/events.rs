@@ -33,6 +33,7 @@
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::Permission;
+use crate::app::voice::Recheck;
 use crate::app::{self, CategoryId, ChannelId, CommunityId, MessageId, UserId, VoiceSessionId};
 use crate::database::schema::{
     category, channel, community_user, dm_recipient, invite, message, voice_session,
@@ -40,6 +41,8 @@ use crate::database::schema::{
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::future::try_join_all;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use uuid::Uuid;
 
 /// The subject prefix of every event; the stream captures `aspen.events.>`.
@@ -139,7 +142,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::CustomEmoji(_)
         | ServerEvent::CommunityBan(_)
         | ServerEvent::ChannelOverride(_)
-        | ServerEvent::CategoryOverride(_) => ScopeKind::Community,
+        | ServerEvent::CategoryOverride(_)
+        | ServerEvent::CommunityResync { .. } => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,
         ServerEvent::UserPreferencesChanged { .. }
         | ServerEvent::ChannelRead { .. }
@@ -151,6 +155,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::CategoryCollapseChanged { .. }
         | ServerEvent::DeploymentAccessChanged { .. }
         | ServerEvent::AccountBanned { .. }
+        | ServerEvent::SignInsEnded { .. }
         | ServerEvent::ReportsChanged { .. } => ScopeKind::User,
         ServerEvent::User(_) | ServerEvent::BotCommandsChanged { .. } => ScopeKind::UserEverywhere,
     }
@@ -220,22 +225,72 @@ pub enum ChannelHome {
     Direct(ChannelId),
 }
 
+/// What publishing events needs: the event stream, and where each channel belongs, which is
+/// kept as it is learned since a channel never moves. The server has it in its context; an
+/// operator command, which has no server context, makes a `Publisher`.
+pub trait Publishing: Sync {
+    fn nats(&self) -> &async_nats::jetstream::Context;
+    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>>;
+}
+
+impl Publishing for GlobalServerContext {
+    fn nats(&self) -> &async_nats::jetstream::Context {
+        &self.nats_context
+    }
+
+    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>> {
+        &self.channel_homes
+    }
+}
+
+/// Event publishing for an operator command run from the terminal, which changes the database
+/// as the server does and announces it the same way.
+pub struct Publisher {
+    nats: async_nats::jetstream::Context,
+    channel_homes: Mutex<HashMap<ChannelId, ChannelHome>>,
+}
+
+impl Publisher {
+    /// Connects to the event stream `config` names.
+    pub async fn connect(config: &crate::aspen_config::AspenConfig) -> app::Result<Self> {
+        let client = async_nats::connect_with_options(
+            &config.nats_url,
+            async_nats::ConnectOptions::new().token(config.nats_auth_token.clone()),
+        )
+        .await?;
+        Ok(Publisher {
+            nats: async_nats::jetstream::new(client),
+            channel_homes: Mutex::default(),
+        })
+    }
+}
+
+impl Publishing for Publisher {
+    fn nats(&self) -> &async_nats::jetstream::Context {
+        &self.nats
+    }
+
+    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>> {
+        &self.channel_homes
+    }
+}
+
 /// Where a channel belongs. It never changes, so the answer is kept for the process's life.
 pub async fn channel_home(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     channel_id: ChannelId,
 ) -> app::Result<ChannelHome> {
     let cached = |id: ChannelId| {
         state
-            .channel_homes
+            .channel_homes()
             .lock()
             .expect("channel home cache")
             .get(&id)
             .copied()
     };
     let remember = |ids: &[ChannelId], home: ChannelHome| {
-        let mut homes = state.channel_homes.lock().expect("channel home cache");
+        let mut homes = state.channel_homes().lock().expect("channel home cache");
         for id in ids {
             homes.insert(*id, home);
         }
@@ -300,7 +355,7 @@ async fn recipient_subjects(
 
 /// Where what happens in a channel is published.
 async fn channel_subjects(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     channel_id: ChannelId,
 ) -> app::Result<Vec<String>> {
@@ -335,7 +390,7 @@ async fn to_channel(conn: &mut AsyncPgConnection, scope: EventScope) -> app::Res
 /// The community channel whose View channel permission decides who receives an event with
 /// this scope, if it is about one.
 async fn governing_channel(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     scope: &EventScope,
 ) -> app::Result<Option<ChannelId>> {
@@ -403,7 +458,7 @@ fn for_community(event: &ServerEvent) -> Option<ServerEvent> {
 
 /// The subjects an event with this scope is published on.
 async fn subjects(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     scope: EventScope,
 ) -> app::Result<Vec<String>> {
@@ -454,11 +509,216 @@ async fn subjects(
     })
 }
 
+/// Whose calls an event may change who may be in, or what they may do there: the event's
+/// effect on access, which `publish_event` notes so the calls are rechecked once the work that
+/// published it is done (`settle`). No wildcard arm: a new event must say whether it changes
+/// access before it can be published.
+pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
+    use crate::api::message_enum::server_event::{
+        CategoryOverrideEvent, ChannelEvent, ChannelOverrideEvent, CommunityEvent, RoleEvent,
+        UserCommunityEvent, UserEvent,
+    };
+    let scoped_user = match scope {
+        EventScope::User(user) | EventScope::UserEverywhere(user) => Some(*user),
+        _ => None,
+    };
+    let scoped_community = match scope {
+        EventScope::Community(community) => Some(*community),
+        _ => None,
+    };
+    match event {
+        // A role's permissions reach every holder; a new role has none yet.
+        ServerEvent::Role(RoleEvent::Update { permissions, .. }) => match permissions {
+            Some(_) => scoped_community
+                .map(Recheck::Community)
+                .into_iter()
+                .collect(),
+            None => Vec::new(),
+        },
+        ServerEvent::Role(RoleEvent::Delete { .. }) => scoped_community
+            .map(Recheck::Community)
+            .into_iter()
+            .collect(),
+        ServerEvent::Role(RoleEvent::Create(_)) => Vec::new(),
+        ServerEvent::ChannelOverride(
+            ChannelOverrideEvent::Create(crate::api::message_enum::ChannelOverride {
+                channel, ..
+            })
+            | ChannelOverrideEvent::Update { channel, .. }
+            | ChannelOverrideEvent::Delete { channel, .. },
+        ) => vec![Recheck::Channel(*channel)],
+        ServerEvent::CategoryOverride(
+            CategoryOverrideEvent::Create(crate::api::message_enum::CategoryOverride {
+                category,
+                ..
+            })
+            | CategoryOverrideEvent::Update { category, .. }
+            | CategoryOverrideEvent::Delete { category, .. },
+        ) => vec![Recheck::Category(*category)],
+        // A move changes the overrides that apply; a group DM's recipients, who is in it; a
+        // deletion, everyone.
+        ServerEvent::Channel(ChannelEvent::Update {
+            id,
+            parent_category,
+            recipients,
+            ..
+        }) => {
+            if parent_category.is_some() || recipients.is_some() {
+                vec![Recheck::Channel(*id)]
+            } else {
+                Vec::new()
+            }
+        }
+        ServerEvent::Channel(ChannelEvent::Delete { id }) => vec![Recheck::Channel(*id)],
+        ServerEvent::Channel(ChannelEvent::Create(_)) => Vec::new(),
+        ServerEvent::Community(CommunityEvent::Update { id, owner, .. }) => match owner {
+            Some(_) => vec![Recheck::Community(*id)],
+            None => Vec::new(),
+        },
+        ServerEvent::Community(CommunityEvent::Delete { id }) => vec![Recheck::Community(*id)],
+        ServerEvent::Community(CommunityEvent::Create(_)) => Vec::new(),
+        ServerEvent::UserCommunity(UserCommunityEvent::Update { user, roles, .. }) => match roles {
+            Some(_) => vec![Recheck::User(*user)],
+            None => Vec::new(),
+        },
+        ServerEvent::UserCommunity(UserCommunityEvent::Delete { user, .. }) => {
+            vec![Recheck::User(*user)]
+        }
+        ServerEvent::UserCommunity(UserCommunityEvent::Create(_)) => Vec::new(),
+        // A block ends what either may do in their DM.
+        ServerEvent::UserBlockChanged { user, blocked } => match (blocked, scoped_user) {
+            (true, Some(blocker)) => vec![Recheck::User(blocker), Recheck::User(*user)],
+            _ => Vec::new(),
+        },
+        // Moderating the deployment reaches into calls; a ban or a deleted account ends them.
+        ServerEvent::DeploymentAccessChanged { .. } | ServerEvent::AccountBanned { .. } => {
+            scoped_user.map(Recheck::User).into_iter().collect()
+        }
+        ServerEvent::User(UserEvent::Delete { id }) => vec![Recheck::User(*id)],
+        ServerEvent::User(UserEvent::Create(_) | UserEvent::Update { .. }) => Vec::new(),
+        ServerEvent::Message(_)
+        | ServerEvent::Poll(_)
+        | ServerEvent::Pin(_)
+        | ServerEvent::React(_)
+        | ServerEvent::VoiceSession(_)
+        | ServerEvent::VoiceParticipant(_)
+        | ServerEvent::VoiceRing(_)
+        | ServerEvent::VoiceSessionEnded { .. }
+        | ServerEvent::VoiceSpeaking { .. }
+        | ServerEvent::Category(_)
+        | ServerEvent::Invite(_)
+        | ServerEvent::CustomEmoji(_)
+        | ServerEvent::CommunityBan(_)
+        | ServerEvent::CommunityResync { .. }
+        | ServerEvent::UserPreferencesChanged { .. }
+        | ServerEvent::ChannelRead { .. }
+        | ServerEvent::ChannelMuteChanged { .. }
+        | ServerEvent::NotificationSettingChanged { .. }
+        | ServerEvent::ForeignDmJoined { .. }
+        | ServerEvent::BotCommandInvoked { .. }
+        | ServerEvent::CategoryCollapseChanged { .. }
+        | ServerEvent::SignInsEnded { .. }
+        | ServerEvent::ReportsChanged { .. }
+        | ServerEvent::BotCommandsChanged { .. } => Vec::new(),
+    }
+}
+
+/// What the work in `noting` published that matters once it is done.
+#[derive(Debug, Default)]
+pub struct Noted {
+    /// The communities it published events about.
+    pub communities: HashSet<CommunityId>,
+    /// The calls its events may have changed access to (`rechecks_of`).
+    pub rechecks: HashSet<Recheck>,
+}
+
+tokio::task_local! {
+    /// What the work in `noting` has published.
+    static NOTED: std::cell::RefCell<Noted>;
+}
+
+/// Runs `work`, returning with its result what it published (`Noted`), for `settle` once it is
+/// done. Every request runs in one (`api::settle_after_request`), and so must any other work
+/// that publishes an event changing access; one published outside is logged as an error.
+pub async fn noting<T>(work: impl std::future::Future<Output = T>) -> (T, Noted) {
+    NOTED
+        .scope(std::cell::RefCell::new(Noted::default()), async move {
+            let result = work.await;
+            (result, NOTED.with(std::cell::RefCell::take))
+        })
+        .await
+}
+
+/// Finishes what `noting` recorded, once the work is done and its transactions have committed
+/// or rolled back: rechecks the calls its events may have changed access to
+/// (`app::voice::recheck`, which changes nothing where nothing changed), and when the work
+/// `failed`, announces that what it published may not have happened (`announce_resync`).
+pub async fn settle(state: &GlobalServerContext, noted: Noted, failed: bool) {
+    for which in noted.rechecks {
+        app::voice::recheck(state, which);
+    }
+    if failed && !noted.communities.is_empty() {
+        announce_resync(state, noted.communities).await;
+    }
+}
+
+/// `settle` for work with no server context, an operator command: on `conn`, waiting for each
+/// recheck, where `file_transfers` is `[voice] file_transfers`.
+pub async fn settle_in(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    file_transfers: bool,
+    noted: Noted,
+    failed: bool,
+) {
+    for which in noted.rechecks {
+        if let Err(e) = app::voice::recheck_in(state, conn, file_transfers, which).await {
+            tracing::error!(?which, "could not recheck who may stay in calls: {e}");
+        }
+    }
+    if failed && !noted.communities.is_empty() {
+        announce_resync_in(state, conn, noted.communities).await;
+    }
+}
+
+/// Tells everyone reading `communities` that what was announced about them may not have
+/// happened, for work that published events and then failed: events are published before
+/// their transaction commits, so a transaction rolled back after publishing leaves events in
+/// the stream that the database does not bear out. Each event feed drops what it holds of the
+/// community and the connections reading it, which resume with it loaded afresh, and clients
+/// read the community again.
+async fn announce_resync(state: &GlobalServerContext, communities: HashSet<CommunityId>) {
+    match state.connection_pool.get().await {
+        Ok(mut conn) => announce_resync_in(state, conn.as_mut(), communities).await,
+        Err(e) => tracing::error!("could not announce a resync of {communities:?}: {e}"),
+    }
+}
+
+/// `announce_resync` on `conn`.
+async fn announce_resync_in(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    communities: HashSet<CommunityId>,
+) {
+    for community in communities {
+        if let Err(e) = publish_event(
+            state,
+            conn,
+            EventScope::Community(community),
+            &ServerEvent::CommunityResync { community },
+        )
+        .await
+        {
+            tracing::error!(%community, "could not announce a resync: {e}");
+        }
+    }
+}
+
 /// Publishes an event to everyone its scope names, and waits for the stream to hold every
 /// copy. Called before the transaction that made the change commits, so the stream's order is
 /// the database's order and a refused publish rolls the change back.
 pub async fn publish_event(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     scope: EventScope,
     event: &ServerEvent,
@@ -484,7 +744,30 @@ pub async fn publish_event(
         )),
         _ => None,
     };
+    let rechecks = rechecks_of(event, &scope);
     let subjects = subjects(state, conn, scope).await?;
+    // Noted before publishing, since a failure may come after some copies are out.
+    let noted = NOTED.try_with(|noted| {
+        let mut noted = noted.borrow_mut();
+        noted
+            .communities
+            .extend(
+                subjects
+                    .iter()
+                    .filter_map(|subject| match subject_owner(subject) {
+                        Some(SubjectOwner::Community(community)) => Some(community),
+                        _ => None,
+                    }),
+            );
+        noted.rechecks.extend(rechecks.iter().copied());
+    });
+    if noted.is_err() && !rechecks.is_empty() {
+        tracing::error!(
+            ?rechecks,
+            "an event changing access was published outside `app::events::noting`, so no call \
+             is rechecked for it"
+        );
+    }
     let payload: bytes::Bytes = serde_json::to_string(event)?.into_bytes().into();
     let event_id = Uuid::now_v7().to_string();
     let mut headers = async_nats::HeaderMap::new();
@@ -510,7 +793,7 @@ pub async fn publish_event(
         Some(async move {
             let started = std::time::Instant::now();
             state
-                .nats_context
+                .nats()
                 .publish_with_headers(subject, headers, payload)
                 .await?
                 .await?;
@@ -553,6 +836,48 @@ mod tests {
             None
         );
         assert_eq!(subject_owner(&format!("aspen.voice.u.{}", user.0)), None);
+    }
+
+    #[test]
+    fn events_that_change_access_name_the_calls_to_recheck() {
+        use crate::api::message_enum::server_event::{ChannelOverrideEvent, RoleEvent};
+        let community = CommunityId::new();
+        let channel = ChannelId::new();
+        let (blocker, blocked) = (UserId::new(), UserId::new());
+        let role = crate::app::RoleId::new();
+        let renamed = ServerEvent::Role(RoleEvent::Update {
+            id: role,
+            name: Some("Renamed".to_string()),
+            position: None,
+            permissions: None,
+        });
+        assert!(rechecks_of(&renamed, &EventScope::Community(community)).is_empty());
+        assert_eq!(
+            rechecks_of(
+                &ServerEvent::Role(RoleEvent::Delete { id: role }),
+                &EventScope::Community(community)
+            ),
+            vec![Recheck::Community(community)]
+        );
+        let cleared = ServerEvent::ChannelOverride(ChannelOverrideEvent::Delete { channel, role });
+        assert_eq!(
+            rechecks_of(&cleared, &EventScope::Community(community)),
+            vec![Recheck::Channel(channel)]
+        );
+        let block = ServerEvent::UserBlockChanged {
+            user: blocked,
+            blocked: true,
+        };
+        assert_eq!(
+            rechecks_of(&block, &EventScope::User(blocker)),
+            vec![Recheck::User(blocker), Recheck::User(blocked)]
+        );
+        let message = ServerEvent::VoiceSpeaking {
+            channel,
+            user: blocker,
+            speaking: true,
+        };
+        assert!(rechecks_of(&message, &EventScope::Channel(channel)).is_empty());
     }
 
     #[test]

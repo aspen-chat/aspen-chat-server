@@ -109,24 +109,36 @@ pub struct MessageAttachment {
 }
 
 /// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
-/// NOT NULL`) row before linking it to a message. The `attachment` table
-/// admits half-uploaded reservations, and exposing them through a message
-/// would let a client publish a card pointing at bytes that may never
-/// arrive. Returns [`app::Error::Validation`] if any id is missing or
-/// pending.
+/// NOT NULL`) row that `author` uploaded, or that is already in `message`,
+/// before linking it to a message. The `attachment` table admits
+/// half-uploaded reservations, and exposing them through a message would let
+/// a client publish a card pointing at bytes that may never arrive; and an
+/// upload is its uploader's to send. Returns [`app::Error::Validation`] if
+/// any id is missing, pending, or someone else's.
 async fn ensure_attachments_ready(
     conn: &mut AsyncPgConnection,
+    author: UserId,
+    message: Option<MessageId>,
     attachments: &[AttachmentId],
 ) -> Result<(), app::Error> {
     if attachments.is_empty() {
         return Ok(());
     }
+    use diesel::NullableExpressionMethods;
+    let kept = message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.nullable().eq(message));
     let ready: Vec<AttachmentId> = attachment::table
         .select(attachment::id)
         .filter(
             attachment::id
                 .eq_any(attachments)
-                .and(attachment::ready_at.is_not_null()),
+                .and(attachment::ready_at.is_not_null())
+                .and(
+                    attachment::uploader
+                        .eq(author)
+                        .or(attachment::id.eq_any(kept)),
+                ),
         )
         .load(conn)
         .await?;
@@ -190,7 +202,7 @@ pub async fn create_message(
                         .await?
                         .require(Permissions::SEND_MESSAGES)?;
                 }
-                ensure_attachments_ready(conn.as_mut(), &attachments).await?;
+                ensure_attachments_ready(conn.as_mut(), author, None, &attachments).await?;
                 // A command's text is the command as sent, checked here, and it tags no one.
                 let invoked = match &command {
                     Some(invocation) => Some(
@@ -519,7 +531,8 @@ pub async fn update_message(
                 };
 
                 if let Some(ref new_attachments) = command.attachments {
-                    ensure_attachments_ready(conn.as_mut(), new_attachments).await?;
+                    ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments)
+                        .await?;
                     diesel::delete(message_attachment::table)
                         .filter(message_attachment::message_id.eq(id))
                         .execute(conn.as_mut())

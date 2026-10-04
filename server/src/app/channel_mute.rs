@@ -151,9 +151,28 @@ pub async fn unmute(
     .await
 }
 
+/// The user's mutes in force of the listed channels (DMs they are in).
+pub async fn read_channel_mutes(
+    state: &GlobalServerContext,
+    user: UserId,
+    channels: &[ChannelId],
+) -> app::Result<Vec<ChannelMute>> {
+    read_mutes(state, user, channels, &[]).await
+}
+
+/// The mutes in force of `visible`'s user of the channels they may view in its communities.
+pub async fn read_community_mutes(
+    state: &GlobalServerContext,
+    visible: &app::visibility::Visibility,
+) -> app::Result<Vec<ChannelMute>> {
+    let mut mutes = read_mutes(state, visible.user(), &[], visible.communities()).await?;
+    mutes.retain(|m| visible.can_view(m.channel));
+    Ok(mutes)
+}
+
 /// The user's mutes in force of the listed channels and of every channel in the listed
 /// communities, in one query.
-pub async fn read_mutes(
+async fn read_mutes(
     state: &GlobalServerContext,
     user: UserId,
     channels: &[ChannelId],

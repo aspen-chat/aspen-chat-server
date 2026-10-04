@@ -17,7 +17,7 @@
 
 import { DEFAULT_DEVICE, type DeviceChoice } from "./preferences";
 import type { components } from "./generated/openapi";
-import type { ServerMessage } from "./generated/voiceSignal";
+import type { Grants, ServerMessage } from "./generated/voiceSignal";
 import type { VoiceSessionEndReason } from "./generated/events";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError } from "./problem";
@@ -156,7 +156,7 @@ export interface VoiceCallState {
    * Set when the server ended the call for being idle, until `acknowledgeEnd`, so the UI can
    * tell the user why they were dropped.
    */
-  readonly endedReason: VoiceSessionEndReason | "kicked" | null;
+  readonly endedReason: VoiceSessionEndReason | "kicked" | "accessLost" | null;
 }
 
 /** A screen another participant is sharing, or their camera, as a playable video track. */
@@ -292,6 +292,7 @@ export class VoiceCall {
   #screenAudio: { producerId: string; audio: ExternalAudio } | null = null;
   #microphoneProducer: {
     replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
+    close(): void;
   } | null = null;
   #devices: { input: DeviceChoice; output: DeviceChoice; camera: DeviceChoice } = {
     input: DEFAULT_DEVICE,
@@ -1259,8 +1260,15 @@ export class VoiceCall {
         this.#generation += 1;
         this.#teardown();
         // Replaced means another of the user's own clients took the call over, which needs no
-        // notice; removed by a moderator does.
-        this.#set({ ...IDLE, endedReason: frame.reason === "kicked" ? "kicked" : null });
+        // notice; removed by a moderator, or for no longer being allowed in, does.
+        this.#set({
+          ...IDLE,
+          endedReason:
+            frame.reason === "kicked" || frame.reason === "accessLost" ? frame.reason : null,
+        });
+        break;
+      case "grantsChanged":
+        void this.#grantsChanged(frame.grants);
         break;
       case "participantState":
         // A moderator's mute arrives as the server's word on this client's own state.
@@ -1277,6 +1285,56 @@ export class VoiceCall {
         break;
       default:
         break;
+    }
+  }
+
+  /**
+   * Follows what the client may now do in the call, as the voice server says once the
+   * permissions behind it change: what it may no longer send stops (the server has already
+   * closed it), and a microphone it may now send starts.
+   */
+  async #grantsChanged(grants: Grants): Promise<void> {
+    this.#set({
+      canSpeak: grants.speak,
+      canShare: grants.shareScreen,
+      canCamera: grants.camera,
+      canTransfer: grants.transferFiles,
+    });
+    if (!grants.shareScreen) {
+      this.stopScreenShare();
+    }
+    if (!grants.camera) {
+      this.stopCamera();
+    }
+    if (!grants.speak) {
+      this.#microphoneProducer?.close();
+      this.#microphoneProducer = null;
+      this.#microphone?.stop();
+      this.#microphone = null;
+      return;
+    }
+    const transport = this.#sendTransport;
+    if (this.#microphoneProducer !== null || transport === null) {
+      return;
+    }
+    const generation = this.#generation;
+    try {
+      const microphone = this.#microphone ?? (await this.#media.getMicrophone(this.#devices.input));
+      if (generation !== this.#generation || this.#sendTransport !== transport) {
+        if (microphone !== this.#microphone) {
+          microphone.stop();
+        }
+        return;
+      }
+      this.#microphone = microphone;
+      this.#microphoneProducer = await transport.produce({
+        track: microphone,
+        appData: { source: "microphone" },
+        stopTracks: false,
+      });
+      this.#sendState();
+    } catch (error) {
+      this.#set({ error: new MicrophoneError(error).message });
     }
   }
 

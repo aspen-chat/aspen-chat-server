@@ -50,6 +50,8 @@ pub enum ModelChange {
         everyone: Option<bool>,
     },
     RoleDeleted(RoleId),
+    /// A channel deleted, and its overrides with it.
+    ChannelDeleted(ChannelId),
     /// A channel made or moved.
     ChannelCategory {
         channel: ChannelId,
@@ -66,6 +68,16 @@ pub enum ModelChange {
         role: RoleId,
         set: Option<(Permissions, Permissions)>,
     },
+}
+
+/// Deserializes a list of permission names, leaving out any this version does not know, so a
+/// change published by a newer server still applies what it can be understood to say.
+fn known_permissions<'de, D>(deserializer: D) -> Result<Option<Vec<Permission>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?
+        .map(|names| names.iter().filter_map(|name| name.parse().ok()).collect()))
 }
 
 /// Deserializes a field that may be absent (unchanged), `null`, or a value.
@@ -100,6 +112,7 @@ impl ModelChange {
             id: Option<uuid::Uuid>,
             #[serde(default, deserialize_with = "present")]
             owner: Option<Option<UserId>>,
+            #[serde(default, deserialize_with = "known_permissions")]
             permissions: Option<Vec<Permission>>,
             everyone: Option<bool>,
             #[serde(default, deserialize_with = "present")]
@@ -111,7 +124,9 @@ impl ModelChange {
             channel: Option<ChannelId>,
             category: Option<CategoryId>,
             role: Option<RoleId>,
+            #[serde(default, deserialize_with = "known_permissions")]
             allow: Option<Vec<Permission>>,
+            #[serde(default, deserialize_with = "known_permissions")]
             deny: Option<Vec<Permission>>,
         }
         let g: Glance = serde_json::from_str(payload).ok()?;
@@ -149,6 +164,7 @@ impl ModelChange {
                     "update" => g
                         .parent_category
                         .map(|category| ModelChange::ChannelCategory { channel, category }),
+                    "delete" => Some(ModelChange::ChannelDeleted(channel)),
                     _ => None,
                 }
             }
@@ -217,6 +233,10 @@ impl CommunityModel {
                     list.retain(|o| o.role != *id);
                 }
             }
+            ModelChange::ChannelDeleted(channel) => {
+                self.categories.remove(channel);
+                self.channel_overrides.remove(channel);
+            }
             ModelChange::ChannelCategory { channel, category } => {
                 self.categories.insert(*channel, *category);
             }
@@ -237,6 +257,12 @@ impl CommunityModel {
                 *set,
             ),
         }
+    }
+
+    /// Whether `channel` is a live channel of the community, as opposed to one not yet made (or
+    /// deleted), which nobody viewed.
+    pub fn knows(&self, channel: ChannelId) -> bool {
+        self.categories.contains_key(&channel)
     }
 
     /// Whether `user` owns the community, and so views every channel.
@@ -329,7 +355,8 @@ impl CommunityModel {
             .filter(
                 channel::community
                     .eq_any(ids.iter().map(|c| Some(*c)))
-                    .and(channel::parent_channel.is_null()),
+                    .and(channel::parent_channel.is_null())
+                    .and(channel::deleted_at.is_null()),
             )
             .load(conn)
             .await?;
@@ -350,7 +377,11 @@ impl CommunityModel {
                         channel_override::deny,
                     ),
                 ))
-                .filter(channel::community.eq_any(ids.iter().map(|c| Some(*c))))
+                .filter(
+                    channel::community
+                        .eq_any(ids.iter().map(|c| Some(*c)))
+                        .and(channel::deleted_at.is_null()),
+                )
                 .load(conn)
                 .await?;
         for (community, channel, entry) in channel_overrides {
@@ -373,7 +404,11 @@ impl CommunityModel {
                     category_override::deny,
                 ),
             ))
-            .filter(crate::database::schema::category::community.eq_any(&ids))
+            .filter(
+                crate::database::schema::category::community
+                    .eq_any(&ids)
+                    .and(crate::database::schema::category::deleted_at.is_null()),
+            )
             .load(conn)
             .await?;
         for (community, category, entry) in category_overrides {
@@ -415,9 +450,13 @@ pub async fn member_roles(
 }
 
 /// Which channels of some communities one user may view, loaded once for a read that lists
-/// several kinds of thing in them.
+/// several kinds of thing in them. Only `load` makes one, so a reader that takes a `Visibility`
+/// cannot be handed channels nobody checked; the readers of what lies in a community's channels
+/// take one and keep only what it lets the user see.
 pub struct Visibility {
     user: UserId,
+    /// The communities it was loaded for, which its readers read.
+    listed: Vec<CommunityId>,
     /// Whether the user moderates the deployment, and so views every channel.
     moderator: bool,
     models: HashMap<CommunityId, CommunityModel>,
@@ -436,17 +475,29 @@ impl Visibility {
         let models = CommunityModel::load(conn.as_mut(), communities).await?;
         let roles = member_roles(conn.as_mut(), user, communities).await?;
         let moderator = app::deployment::is_moderator(conn.as_mut(), user).await?;
+        let listed = communities.to_vec();
         let communities = models
             .iter()
             .flat_map(|(community, model)| model.categories.keys().map(|c| (*c, *community)))
             .collect();
         Ok(Visibility {
             user,
+            listed,
             moderator,
             models,
             roles,
             communities,
         })
+    }
+
+    /// The user whose view this is.
+    pub fn user(&self) -> UserId {
+        self.user
+    }
+
+    /// The communities it covers.
+    pub fn communities(&self) -> &[CommunityId] {
+        &self.listed
     }
 
     /// Every channel of the communities that the user may view, threads aside (each is viewed

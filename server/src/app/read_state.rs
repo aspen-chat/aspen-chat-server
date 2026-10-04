@@ -147,14 +147,15 @@ async fn read(
     Ok(rows.into_iter().map(ReadState::from).collect())
 }
 
-/// The user's read state of every channel in `communities`.
+/// The read state of every channel of `visible`'s communities that its user may view.
 pub async fn read_communities_read_states(
     state: &GlobalServerContext,
-    user: UserId,
-    communities: &[CommunityId],
+    visible: &app::visibility::Visibility,
 ) -> app::Result<Vec<ReadState>> {
     let mut conn = state.connection_pool.get().await?;
-    read(conn.as_mut(), user, &[], communities).await
+    let mut states = read(conn.as_mut(), visible.user(), &[], visible.communities()).await?;
+    states.retain(|s| visible.can_view(s.channel));
+    Ok(states)
 }
 
 /// The user's read state of each of `channels` they belong to.
@@ -167,13 +168,17 @@ pub async fn read_channels_read_states(
     read(conn.as_mut(), user, channels, &[]).await
 }
 
-/// The user's read state of one channel; not found for a channel they do not belong to, or a
-/// thread.
+/// The user's read state of one channel; not found for a channel they do not belong to or may
+/// not view, or a thread.
 pub async fn read_read_state(
     state: &GlobalServerContext,
     user: UserId,
     channel: ChannelId,
 ) -> app::Result<ReadState> {
+    {
+        let mut conn = state.connection_pool.get().await?;
+        app::permissions::channel_access(state, conn.as_mut(), user, channel).await?;
+    }
     read_channels_read_states(state, user, &[channel])
         .await?
         .into_iter()

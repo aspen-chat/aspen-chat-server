@@ -210,8 +210,21 @@ pub enum VoiceCommand {
         user: Uuid,
         muted: bool,
     },
-    /// Disconnect a user from the session.
-    Kick { session: Uuid, user: Uuid },
+    /// Disconnect a user from the session, telling them why: by a moderator when no reason is
+    /// given.
+    Kick {
+        session: Uuid,
+        user: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<crate::signal::KickReason>,
+    },
+    /// What a user may now do in the session: producers it no longer allows are closed and
+    /// offers withdrawn, and they are told.
+    Grant {
+        session: Uuid,
+        user: Uuid,
+        grants: crate::token::Grants,
+    },
 }
 
 #[cfg(test)]

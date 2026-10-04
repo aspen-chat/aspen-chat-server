@@ -617,12 +617,12 @@ pub async fn logout(
     _: EnrollingSessionUser,
     Json(request): Json<LogoutRequest>,
 ) -> ApiResult<NoContent> {
-    let conn = state
+    let mut conn = state
         .connection_pool
         .get()
         .await
         .map_err(app::Error::from)?;
-    app::login::try_logout(conn, &request.refresh_token).await?;
+    app::login::try_logout(&state, conn.as_mut(), &request.refresh_token).await?;
     Ok(NoContent)
 }
 

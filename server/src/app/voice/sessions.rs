@@ -10,9 +10,14 @@ use crate::api::message_enum::server_event::{
 use crate::api::voice::VoiceSessionEndReason;
 use crate::app;
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use crate::app::permissions::{Permissions, channel_access, missing};
-use crate::app::{ChannelId, EventScope, UserId, VoiceServerId, VoiceSessionId, publish_event};
-use crate::database::schema::{voice_participant, voice_server, voice_session};
+use crate::app::{
+    CategoryId, ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId,
+    publish_event,
+};
+use crate::database::schema::user as user_table;
+use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -21,6 +26,7 @@ use tracing::{info, warn};
 use voice_protocol::control::{
     ParticipantSnapshot, REPORT_PARTITIONS, VoiceCommand, VoiceReport, command_subject,
 };
+use voice_protocol::signal::KickReason;
 
 // ---------------------------------------------------------------------------------------------
 // Moderation
@@ -54,13 +60,15 @@ pub async fn kick_participant(
     command_participant(state, caller, channel, user, |session| VoiceCommand::Kick {
         session: session.0,
         user: user.0,
+        reason: None,
     })
     .await?;
     Ok(())
 }
 
 /// Removes `user` from every call they are in, as when they are banned from the deployment
-/// (`app::user_ban`). Each voice server disconnects them and reports their leaving.
+/// (`app::user_ban`) or their account ends. Each voice server disconnects them and reports
+/// their leaving; a join not yet reported is caught as its report is applied (`recheck_seat`).
 pub async fn kick_everywhere(state: &GlobalServerContext, user: UserId) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     let calls: Vec<(VoiceSessionId, VoiceServerId)> = voice_participant::table
@@ -73,6 +81,7 @@ pub async fn kick_everywhere(state: &GlobalServerContext, user: UserId) -> app::
         let payload = serde_json::to_vec(&VoiceCommand::Kick {
             session: session.0,
             user: user.0,
+            reason: Some(KickReason::AccessLost),
         })?;
         state
             .nats_context
@@ -122,6 +131,150 @@ async fn command_participant(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Who may stay
+
+/// Whose calls a recheck covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Recheck {
+    /// Everyone in a call in one of the community's channels.
+    Community(CommunityId),
+    /// Everyone in the channel's call.
+    Channel(ChannelId),
+    /// Everyone in a call in one of the category's channels.
+    Category(CategoryId),
+    /// Every call the user is in.
+    User(UserId),
+}
+
+/// Brings the calls `which` names in line with what their participants may now do, after a
+/// change to it has committed: whoever may no longer view the channel or join voice there (or
+/// is banned from the deployment, or gone) is removed, and everyone else's grants are sent to
+/// their voice server, which stops whatever they may no longer send. Runs on its own task, so
+/// the change that called for it does not wait; a failure is logged, and the next change or
+/// join brings the call in line.
+pub fn recheck(state: &GlobalServerContext, which: Recheck) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let rechecked = async {
+            let mut conn = state.connection_pool.get().await?;
+            let file_transfers = state.config.voice.file_transfers;
+            recheck_in(&state, conn.as_mut(), file_transfers, which).await
+        };
+        if let Err(e) = rechecked.await {
+            warn!(?which, error = %e, "could not recheck who may stay in calls");
+        }
+    });
+}
+
+/// `recheck` on `conn`, waiting for it, for an operator command, which has no server context.
+/// `file_transfers` is `[voice] file_transfers`.
+pub async fn recheck_in(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    file_transfers: bool,
+    which: Recheck,
+) -> app::Result<()> {
+    let seats = voice_participant::table
+        .inner_join(voice_session::table)
+        .select((
+            voice_session::id,
+            voice_session::voice_server,
+            voice_session::channel,
+            voice_participant::user,
+        ))
+        .into_boxed();
+    let seats = match which {
+        Recheck::Community(community) => seats.filter(
+            voice_session::channel.eq_any(
+                channel::table
+                    .select(channel::id)
+                    .filter(channel::community.eq(Some(community))),
+            ),
+        ),
+        Recheck::Channel(channel) => seats.filter(voice_session::channel.eq(channel)),
+        Recheck::Category(category) => seats.filter(
+            voice_session::channel.eq_any(
+                channel::table
+                    .select(channel::id)
+                    .filter(channel::parent_category.eq(Some(category))),
+            ),
+        ),
+        Recheck::User(user) => seats.filter(voice_participant::user.eq(user)),
+    };
+    let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
+    for (session, server, channel, user) in seats {
+        let seat = Seat {
+            session,
+            server,
+            channel,
+            user,
+        };
+        recheck_seat(state, conn, file_transfers, seat).await?;
+    }
+    Ok(())
+}
+
+/// One participant as the record has them.
+struct Seat {
+    session: VoiceSessionId,
+    server: VoiceServerId,
+    channel: ChannelId,
+    user: UserId,
+}
+
+/// Tells the seat's voice server what its participant may do in the call, or to remove them
+/// when they may no longer be there. A voice server leaves grants that did not change as they
+/// are.
+async fn recheck_seat(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    file_transfers: bool,
+    seat: Seat,
+) -> app::Result<()> {
+    let Seat {
+        session,
+        server,
+        channel,
+        user,
+    } = seat;
+    let present: bool = diesel::select(diesel::dsl::exists(
+        user_table::table.filter(
+            user_table::id
+                .eq(user)
+                .and(user_table::deleted_at.is_null()),
+        ),
+    ))
+    .get_result(conn)
+    .await?;
+    let removed = VoiceCommand::Kick {
+        session: session.0,
+        user: user.0,
+        reason: Some(KickReason::AccessLost),
+    };
+    let command = if !present || app::user_ban::standing(conn, user).await?.is_some() {
+        removed
+    } else {
+        match channel_access(state, conn, user, channel).await {
+            Ok(access) if access.has(Permissions::JOIN_VOICE) => VoiceCommand::Grant {
+                session: session.0,
+                user: user.0,
+                grants: super::servers::grants_of(file_transfers, &access),
+            },
+            Ok(_) | Err(app::Error::Diesel(diesel::result::Error::NotFound)) => removed,
+            Err(e) => return Err(e),
+        }
+    };
+    let payload = serde_json::to_vec(&command)?;
+    state
+        .nats()
+        .client()
+        .publish(command_subject(server.0), payload.into())
+        .await
+        .map_err(app::Error::VoiceCommand)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // Reports from voice servers
 
 /// Applies one report from a voice server, `published` being when the report stream took it.
@@ -156,6 +309,20 @@ pub(super) async fn apply_report(
         )
         .await;
     }
+    // Someone who joined on a token issued before a change to what they may do is brought in
+    // line with it once their joining is recorded.
+    let joined = match &report {
+        VoiceReport::ParticipantJoined {
+            session,
+            channel,
+            user,
+        } => Some((
+            VoiceSessionId::from(*session),
+            ChannelId::from(*channel),
+            UserId::from(*user),
+        )),
+        _ => None,
+    };
     conn.transaction(|conn| {
         async move {
             match report {
@@ -329,11 +496,38 @@ pub(super) async fn apply_report(
                         .await?;
                 }
             }
-            Ok(())
+            Ok::<_, app::Error>(())
         }
         .scope_boxed()
     })
-    .await
+    .await?;
+    if let Some((session, channel, user)) = joined {
+        let server: Option<VoiceServerId> = voice_session::table
+            .select(voice_session::voice_server)
+            .filter(voice_session::id.eq(session))
+            .first(conn.as_mut())
+            .await
+            .optional_not_found()?;
+        let file_transfers = state.config.voice.file_transfers;
+        if let Some(server) = server
+            && let Err(e) = recheck_seat(
+                state,
+                conn.as_mut(),
+                file_transfers,
+                Seat {
+                    session,
+                    server,
+                    channel,
+                    user,
+                },
+            )
+            .await
+        {
+            // The join is recorded; the next change to what they may do brings them in line.
+            warn!(session = %session.0, error = %e, "could not recheck a joiner");
+        }
+    }
+    Ok(())
 }
 
 /// Records the session a voice server started, or returns the one already recorded under its

@@ -11,7 +11,7 @@ import {
   Select,
   SelectValue,
 } from "react-aria-components";
-import { useCommunities, useMe, useStore, useSync, useUser } from "@/api/hooks";
+import { useAccess, useCommunitiesWhere, useMe, useSync, useUser } from "@/api/hooks";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { suggestedPermissions } from "@/features/bots/botLink";
 import { Avatar } from "@/features/communities/Avatar";
@@ -38,15 +38,15 @@ export function BotAddScreen({
 }) {
   const m = useMessages();
   const sync = useSync();
-  const store = useStore();
   const navigate = useNavigate();
   const me = useMe();
   const bot = useUser(botId);
   const suggested = suggestedPermissions(param);
-  const places = useCommunities().filter((c) => store.access(c.id)?.has("addBots") === true);
+  const places = useCommunitiesWhere("addBots");
   const [chosenCommunity, setChosenCommunity] = useState<string | null>(null);
   const communityId = chosenCommunity ?? places[0]?.id ?? null;
-  const access = communityId === null ? null : store.access(communityId);
+  const chosenAccess = useAccess(communityId ?? "");
+  const access = communityId === null ? null : chosenAccess;
   const mayGrant = access?.has("manageRoles") === true && access.has("assignRoles");
   const grantable = (p: Permission) => access !== null && mayGrant && access.has(p);
   const [left, setLeft] = useState<ReadonlySet<Permission>>(new Set());

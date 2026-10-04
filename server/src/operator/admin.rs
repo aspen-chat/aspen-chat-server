@@ -1,7 +1,8 @@
 //! `admin grant`, `revoke`, `list`, `allow`, and `deny`: who holds the deployment's top role and
 //! what it allows (`app::deployment_role`).
 
-use super::{database, operator};
+use super::{database, operator, publisher};
+use crate::app::events::{Publisher, noting, settle_in};
 use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
@@ -50,11 +51,29 @@ impl clap::ValueEnum for crate::app::deployment::DeploymentPermission {
 }
 
 pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
+    let mut conn = database(config).await?;
+    let publisher = publisher(config).await?;
+    let (result, noted) = noting(run(&publisher, &mut conn, command)).await;
+    settle_in(
+        &publisher,
+        &mut conn,
+        config.voice.file_transfers,
+        noted,
+        result.is_err(),
+    )
+    .await;
+    result
+}
+
+async fn run(
+    publisher: &Publisher,
+    conn: &mut diesel_async::AsyncPgConnection,
+    command: AdminCommand,
+) -> Result<()> {
     use crate::app::deployment_role;
     use crate::database::schema::user;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
-    let mut conn = database(config).await?;
     let find = |username: String| {
         user::table
             .select(user::id)
@@ -63,13 +82,13 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
     match command {
         AdminCommand::Grant { username } => {
             let Some(id) = find(username.clone())
-                .first::<crate::app::UserId>(&mut conn)
+                .first::<crate::app::UserId>(conn)
                 .await
                 .optional()?
             else {
                 bail!("no user is named {username:?}");
             };
-            let role = deployment_role::grant_top_role(&mut conn, id)
+            let role = deployment_role::grant_top_role(publisher, conn, id)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(%username, %role, operator = operator(), "granted the top deployment role");
@@ -77,22 +96,22 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
         }
         AdminCommand::Revoke { username } => {
             let Some(id) = find(username.clone())
-                .first::<crate::app::UserId>(&mut conn)
+                .first::<crate::app::UserId>(conn)
                 .await
                 .optional()?
             else {
                 bail!("no user is named {username:?}");
             };
-            let taken = deployment_role::revoke_all(&mut conn, id)
+            let taken = deployment_role::revoke_all(publisher, conn, id)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(%username, taken, operator = operator(), "revoked deployment roles");
             println!("{username} no longer holds any deployment role");
         }
-        AdminCommand::Allow { permission } => top_role(&mut conn, permission, true).await?,
-        AdminCommand::Deny { permission } => top_role(&mut conn, permission, false).await?,
+        AdminCommand::Allow { permission } => top_role(publisher, conn, permission, true).await?,
+        AdminCommand::Deny { permission } => top_role(publisher, conn, permission, false).await?,
         AdminCommand::List => {
-            let holders = deployment_role::holders(&mut conn)
+            let holders = deployment_role::holders(conn)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             if holders.is_empty() {
@@ -108,17 +127,18 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
 
 /// Allows `permission` to the deployment's top role, or denies it.
 async fn top_role(
+    publisher: &Publisher,
     conn: &mut diesel_async::AsyncPgConnection,
     permission: crate::app::deployment::DeploymentPermission,
     allow: bool,
 ) -> Result<()> {
     use crate::app::deployment_role;
-    let role = deployment_role::set_top_role_permission(conn, permission, allow)
+    let role = deployment_role::set_top_role_permission(publisher, conn, permission, allow)
         .await
         .map_err(|e| anyhow!("{e}"))?;
     tracing::info!(%permission, allow, %role, operator = operator(), "changed the top deployment role");
     println!(
-        "{role} {} {permission}; its holders see the change when their clients next load",
+        "{role} {} {permission}",
         if allow {
             "now allows"
         } else {

@@ -82,6 +82,9 @@ export const voice = {
     "The call sat with only you in it for a day, so it was ended to save server resources. Join again whenever you like.",
   kickedHeading: "You were removed from the call",
   kickedHint: "A moderator removed you from the call. You can join again if they let you.",
+  accessLostHeading: "You can no longer be in this call",
+  accessLostHint:
+    "You lost access to the call's channel, or left or were removed from where it is. Ask its moderators if you think that's a mistake.",
   participantActions: "Actions for {name}",
   serverMute: "Server mute",
   serverUnmute: "Server unmute",

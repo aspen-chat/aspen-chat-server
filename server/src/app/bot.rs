@@ -262,7 +262,8 @@ pub async fn read_owned(
     Ok(with_online_status(state, vec![row]).await?.remove(0))
 }
 
-/// Issues a new token for a bot `caller` owns; the old one stops working at once.
+/// Issues a new token for a bot `caller` owns; the old one stops working at once, and the event
+/// streams opened with it close.
 pub async fn rotate_token(
     state: &GlobalServerContext,
     caller: UserId,
@@ -271,16 +272,24 @@ pub async fn rotate_token(
     let mut conn = state.connection_pool.get().await?;
     owned_bot(conn.as_mut(), caller, bot).await?;
     let token = new_token();
-    diesel::insert_into(bot_token::table)
-        .values((bot_token::bot.eq(bot), bot_token::digest.eq(digest(&token))))
-        .on_conflict(bot_token::bot)
-        .do_update()
-        .set((
-            bot_token::digest.eq(digest(&token)),
-            bot_token::created_at.eq(diesel::dsl::now),
-        ))
-        .execute(conn.as_mut())
-        .await?;
+    let digested = digest(&token);
+    conn.transaction(|conn| {
+        async move {
+            diesel::insert_into(bot_token::table)
+                .values((bot_token::bot.eq(bot), bot_token::digest.eq(&digested)))
+                .on_conflict(bot_token::bot)
+                .do_update()
+                .set((
+                    bot_token::digest.eq(&digested),
+                    bot_token::created_at.eq(diesel::dsl::now),
+                ))
+                .execute(conn.as_mut())
+                .await?;
+            app::login::revoke_all_sessions(state, conn.as_mut(), bot).await
+        }
+        .scope_boxed()
+    })
+    .await?;
     Ok(token)
 }
 
@@ -351,8 +360,11 @@ pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) ->
                 .require(DeploymentPermission::ManageBots)?;
         }
     }
-    conn.transaction(|conn| app::user::retire(state, conn.as_mut(), bot).scope_boxed())
+    let retired = conn
+        .transaction(|conn| app::user::retire(state, conn.as_mut(), bot).scope_boxed())
         .await?;
+    drop(conn);
+    retired.finish(state).await;
     app::federation::notices::announce_deleted(state, bot);
     Ok(())
 }

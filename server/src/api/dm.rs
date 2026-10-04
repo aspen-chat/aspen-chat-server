@@ -143,7 +143,7 @@ pub async fn list_dms(
     let channel_mutes = if query.include.contains(DmInclude::Mutes) {
         let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
         Some(
-            app::channel_mute::read_mutes(&state, user.id, &ids, &[])
+            app::channel_mute::read_channel_mutes(&state, user.id, &ids)
                 .await?
                 .into_iter()
                 .map(crate::api::channel_mute::ChannelMute::from)
@@ -155,7 +155,7 @@ pub async fn list_dms(
     let notification_settings = if query.include.contains(DmInclude::Notifications) {
         let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
         Some(
-            app::notification_setting::read_settings(&state, user.id, &ids, &[])
+            app::notification_setting::read_channel_settings(&state, user.id, &ids)
                 .await?
                 .into_iter()
                 .map(crate::api::notification_setting::NotificationSetting::from)

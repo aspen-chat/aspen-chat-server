@@ -137,6 +137,40 @@ export function useUsers(ids: readonly string[]): readonly (User | undefined)[] 
   return users;
 }
 
+/**
+ * The caller's communities in which they hold `permission`, in their order, kept current as
+ * communities come and go and as what the caller may do in each changes.
+ */
+export function useCommunitiesWhere(permission: Permission): readonly Community[] {
+  const store = useStore();
+  const communities = useCommunities();
+  const cache = useRef<{ key: string; value: readonly Community[] } | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const unsubscribes = communities.map((c) =>
+        store.subscribe(`access:${c.id}`, () => {
+          cache.current = null;
+          listener();
+        }),
+      );
+      return () => {
+        for (const unsubscribe of unsubscribes) {
+          unsubscribe();
+        }
+      };
+    },
+    [store, communities],
+  );
+  return useSyncExternalStore(subscribe, () => {
+    const allowed = communities.filter((c) => store.access(c.id)?.has(permission) === true);
+    const key = allowed.map((c) => c.id).join("\n");
+    if (cache.current?.key !== key) {
+      cache.current = { key, value: allowed };
+    }
+    return cache.current.value;
+  });
+}
+
 /** Whether a channel the cache held has since been removed: deleted, or a DM the caller left. */
 export function useChannelRemoved(id: string): boolean {
   return useTopic(`channel:${id}`, (s) => s.channelRemoved(id));

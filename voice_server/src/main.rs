@@ -179,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         token_secret: config.token_secret.clone().into(),
         rooms: Arc::clone(&rooms),
         limits,
+        used_tokens: Arc::default(),
     };
     // The health check is what clients measure latency against, from any origin. The limits
     // run inside the CORS layer, so a refusal still reaches the page that asked.

@@ -11,7 +11,8 @@ use crate::api::message_enum::{self, server_event::*};
 use crate::app::context::GlobalServerContext;
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{
-    CommunityAccess, Permissions, missing, require_actual_member, require_member, to_names,
+    CommunityAccess, Permission, Permissions, from_names, missing, require_actual_member,
+    require_member, to_names,
 };
 use crate::app::{
     self, CategoryId, ChannelId, CommunityId, EventScope, RoleId, UserId, publish_event,
@@ -146,14 +147,16 @@ pub async fn read_roles(
         .collect())
 }
 
-/// Every override of the channels and categories of `communities`.
+/// Every override of the categories of `visible`'s communities, and of the channels in them its
+/// user may view.
 pub async fn read_communities_overrides(
     state: &GlobalServerContext,
-    communities: &[CommunityId],
+    visible: &app::visibility::Visibility,
 ) -> app::Result<(
     Vec<message_enum::ChannelOverride>,
     Vec<message_enum::CategoryOverride>,
 )> {
+    let communities = visible.communities();
     let mut conn = state.connection_pool.get().await?;
     let channels: Vec<(ChannelId, RoleId, Permissions, Permissions)> = channel_override::table
         .inner_join(channel::table)
@@ -182,6 +185,7 @@ pub async fn read_communities_overrides(
     Ok((
         channels
             .into_iter()
+            .filter(|(channel, ..)| visible.can_view(*channel))
             .map(
                 |(channel, role, allow, deny)| message_enum::ChannelOverride {
                     channel,
@@ -490,12 +494,9 @@ pub async fn delete_role(
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             access.require_above(role.position)?;
-            // Its holders' memberships change, and each is announced.
-            let holders: Vec<UserId> = community_member_role::table
-                .select(community_member_role::user)
-                .filter(community_member_role::role.eq(role_id))
-                .load(conn.as_mut())
-                .await?;
+            // Its holders lose it and its overrides go with it, by the foreign keys. The one
+            // event says so: readers of it (the event feed, clients) take the role from its
+            // holders and its overrides away themselves, however many there are.
             diesel::delete(community_role::table.filter(community_role::id.eq(role_id)))
                 .execute(conn.as_mut())
                 .await?;
@@ -506,9 +507,6 @@ pub async fn delete_role(
                 &ServerEvent::Role(RoleEvent::Delete { id: role_id }),
             )
             .await?;
-            for user in holders {
-                announce_member_roles(state, conn.as_mut(), role.community, user).await?;
-            }
             let order = load_roles(conn.as_mut(), role.community).await?;
             renumber(state, conn.as_mut(), role.community, &order).await?;
             Ok(())
@@ -670,32 +668,64 @@ pub async fn remove_member(
     member: UserId,
 ) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    {
-        let access = require_member(conn.as_mut(), caller, community_id).await?;
-        access.require(Permissions::REMOVE_MEMBERS)?;
-        if member == caller {
-            return Err(app::Error::Validation(t!("removeSelf")));
+    // Checked in the transaction that removes them, so a rank that changes meanwhile decides.
+    conn.transaction(|conn| {
+        async move {
+            let access = require_member(conn.as_mut(), caller, community_id).await?;
+            access.require(Permissions::REMOVE_MEMBERS)?;
+            if member == caller {
+                return Err(app::Error::Validation(t!("removeSelf")));
+            }
+            let their_rank = member_below(conn.as_mut(), &access, member).await?;
+            // Moderation when the community's own permissions would not have allowed it.
+            if access.moderator
+                && !(access
+                    .member_permissions
+                    .contains(Permissions::REMOVE_MEMBERS)
+                    && their_rank < access.role_rank())
+            {
+                log_moderation(
+                    conn.as_mut(),
+                    caller,
+                    ModerationAction::RemoveMember,
+                    Some(community_id),
+                    None,
+                    Some(member.0.to_string()),
+                )
+                .await?;
+            }
+            app::community::end_membership(state, conn.as_mut(), member, community_id).await
         }
-        let their_rank = member_below(conn.as_mut(), &access, member).await?;
-        // Moderation when the community's own permissions would not have allowed it.
-        if access.moderator
-            && !(access
-                .member_permissions
-                .contains(Permissions::REMOVE_MEMBERS)
-                && their_rank < access.role_rank())
-        {
-            log_moderation(
-                conn.as_mut(),
-                caller,
-                ModerationAction::RemoveMember,
-                Some(community_id),
-                None,
-                Some(member.0.to_string()),
-            )
-            .await?;
-        }
-    }
-    app::community::end_membership(state, conn.as_mut(), member, community_id).await
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Makes `owner` the community's owner, or leaves it with none, and announces it, in the
+/// caller's transaction, with no checks: the callers decide who may hand a community on and to
+/// whom.
+pub(crate) async fn set_owner(
+    state: &impl crate::app::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    community_id: CommunityId,
+    owner: Option<UserId>,
+) -> app::Result<()> {
+    diesel::update(community::table.filter(community::id.eq(community_id)))
+        .set(community::owner.eq(owner))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(community_id),
+        &ServerEvent::Community(CommunityEvent::Update {
+            id: community_id,
+            name: None,
+            icon: None,
+            owner: Some(owner),
+        }),
+    )
+    .await
 }
 
 /// Hands the community to another member. Only its owner may, and they stay a member.
@@ -713,23 +743,7 @@ pub async fn transfer_ownership(
                 return Err(app::Error::Forbidden(t!("permissionOwnerOnly")));
             }
             require_actual_member(conn.as_mut(), new_owner, community_id).await?;
-            diesel::update(community::table.filter(community::id.eq(community_id)))
-                .set(community::owner.eq(Some(new_owner)))
-                .execute(conn.as_mut())
-                .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Community(community_id),
-                &ServerEvent::Community(CommunityEvent::Update {
-                    id: community_id,
-                    name: None,
-                    icon: None,
-                    owner: Some(Some(new_owner)),
-                }),
-            )
-            .await?;
-            Ok(())
+            set_owner(state, conn.as_mut(), community_id, Some(new_owner)).await
         }
         .scope_boxed()
     })
@@ -741,6 +755,143 @@ pub async fn transfer_ownership(
 pub enum OverrideTarget {
     Channel(ChannelId),
     Category(CategoryId),
+}
+
+/// One role's override as a request names it before its channel exists (`overrides` on a new
+/// channel): what the role is allowed and denied there besides its own permissions.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleOverride {
+    pub role: RoleId,
+    pub allow: Vec<Permission>,
+    pub deny: Vec<Permission>,
+}
+
+/// An override checked for its caller and ready to write.
+#[derive(Debug, Clone, Copy)]
+pub struct GrantedOverride {
+    pub role: RoleId,
+    pub allow: Permissions,
+    pub deny: Permissions,
+}
+
+/// Refuses an override that names a community permission or both allows and denies one.
+fn check_override_permissions(allow: Permissions, deny: Permissions) -> app::Result<()> {
+    if !Permissions::CHANNEL.contains(allow | deny) {
+        return Err(app::Error::Validation(t!("overrideCommunityPermission")));
+    }
+    if allow & deny != Permissions::empty() {
+        return Err(app::Error::Validation(t!("overrideConflict")));
+    }
+    Ok(())
+}
+
+/// Refuses unless `access` may set `role`'s override to `allow` and `deny`: the role ranks
+/// below the caller's highest, and the caller holds every permission it names.
+fn check_grantable(
+    access: &CommunityAccess,
+    role: &RoleRow,
+    allow: Permissions,
+    deny: Permissions,
+) -> app::Result<()> {
+    access.require_above(role.position)?;
+    access.require_holds(allow | deny)
+}
+
+/// Checks the overrides a new channel of `access`'s community is to start with, on the terms
+/// setting each afterwards would be checked on, and with each role named at most once. One
+/// that allows and denies nothing is no override and is left out.
+pub(crate) async fn check_initial_overrides(
+    conn: &mut AsyncPgConnection,
+    access: &CommunityAccess,
+    overrides: &[RoleOverride],
+) -> app::Result<Vec<GrantedOverride>> {
+    if overrides.is_empty() {
+        return Ok(Vec::new());
+    }
+    let roles: HashMap<RoleId, RoleRow> = load_roles(conn, access.community)
+        .await?
+        .into_iter()
+        .map(|role| (role.id, role))
+        .collect();
+    let mut granted: Vec<GrantedOverride> = Vec::with_capacity(overrides.len());
+    for o in overrides {
+        let (allow, deny) = (from_names(&o.allow), from_names(&o.deny));
+        check_override_permissions(allow, deny)?;
+        let role = roles
+            .get(&o.role)
+            .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
+        check_grantable(access, role, allow, deny)?;
+        if granted.iter().any(|g| g.role == o.role) {
+            return Err(app::Error::Validation(t!("overrideRoleRepeated")));
+        }
+        if !(allow | deny).is_empty() {
+            granted.push(GrantedOverride {
+                role: o.role,
+                allow,
+                deny,
+            });
+        }
+    }
+    Ok(granted)
+}
+
+/// Writes a new channel's overrides and announces each, in the transaction that makes it and
+/// before the channel's own creation, so that creation reaches only those they let view it.
+pub(crate) async fn insert_initial_overrides(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    channel_id: ChannelId,
+    overrides: &[GrantedOverride],
+) -> app::Result<()> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    diesel::insert_into(channel_override::table)
+        .values(
+            overrides
+                .iter()
+                .map(|o| {
+                    (
+                        channel_override::channel.eq(channel_id),
+                        channel_override::role.eq(o.role),
+                        channel_override::allow.eq(o.allow),
+                        channel_override::deny.eq(o.deny),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .execute(conn)
+        .await?;
+    for o in overrides {
+        publish_event(
+            state,
+            conn,
+            EventScope::ChannelDefinition {
+                channel: channel_id,
+                departed: None,
+            },
+            &ServerEvent::ChannelOverride(ChannelOverrideEvent::Create(
+                message_enum::ChannelOverride {
+                    channel: channel_id,
+                    role: o.role,
+                    allow: to_names(o.allow),
+                    deny: to_names(o.deny),
+                },
+            )),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// What setting or clearing an override did.
@@ -764,12 +915,7 @@ pub async fn set_override(
     permissions: Option<(Permissions, Permissions)>,
 ) -> app::Result<OverrideOutcome> {
     if let Some((allow, deny)) = permissions {
-        if !Permissions::CHANNEL.contains(allow | deny) {
-            return Err(app::Error::Validation(t!("overrideCommunityPermission")));
-        }
-        if allow & deny != Permissions::empty() {
-            return Err(app::Error::Validation(t!("overrideConflict")));
-        }
+        check_override_permissions(allow, deny)?;
     }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -805,9 +951,8 @@ pub async fn set_override(
             if role.community != community_id {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            access.require_above(role.position)?;
             let (allow, deny) = permissions.unwrap_or((Permissions::empty(), Permissions::empty()));
-            access.require_holds(allow | deny)?;
+            check_grantable(&access, &role, allow, deny)?;
             let cleared = OverrideOutcome {
                 allow,
                 deny,
@@ -816,6 +961,12 @@ pub async fn set_override(
             let scope = EventScope::Community(community_id);
             match target {
                 OverrideTarget::Channel(channel_id) => {
+                    // The channel's own event, so it reaches those who may view the channel
+                    // before or after it, and no one else learns of the channel.
+                    let scope = EventScope::ChannelDefinition {
+                        channel: channel_id,
+                        departed: None,
+                    };
                     let existed: bool = diesel::select(diesel::dsl::exists(
                         channel_override::table.filter(
                             channel_override::channel

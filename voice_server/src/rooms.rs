@@ -26,6 +26,7 @@ use voice_protocol::signal::{
     KickReason, MediaKind as WireKind, MediaSource, ParticipantInfo, ProducerInfo, ServerMessage,
     TransportDirection,
 };
+use voice_protocol::token::Grants;
 
 /// What a transport assumes a participant can receive before it has measured, in bits per
 /// second: enough for a screen share at full quality from its first seconds. The voice server
@@ -98,6 +99,8 @@ struct Participant {
     muted: bool,
     deafened: bool,
     speaking: bool,
+    /// What they may send and offer, from their join token and then the API server.
+    grants: Grants,
 }
 
 impl Participant {
@@ -357,6 +360,7 @@ impl Rooms {
         channel: Uuid,
         user: Uuid,
         outbox: Outbox,
+        grants: Grants,
     ) -> Result<Connection, RoomError> {
         let connection = Connection(self.next_connection.fetch_add(1, Ordering::Relaxed));
         loop {
@@ -370,7 +374,7 @@ impl Rooms {
                 Some(room) => room,
                 None => self.start_room(channel).await?,
             };
-            if let Some(replaced) = self.enter(&room, user, connection, &outbox) {
+            if let Some(replaced) = self.enter(&room, user, connection, &outbox, grants) {
                 if !replaced {
                     self.reporter.report(VoiceReport::ParticipantJoined {
                         session: room.session,
@@ -399,6 +403,7 @@ impl Rooms {
         user: Uuid,
         connection: Connection,
         outbox: &Outbox,
+        grants: Grants,
     ) -> Option<bool> {
         let mut participants = room.participants.lock().expect("room lock");
         if room.closed.load(Ordering::Relaxed) {
@@ -433,6 +438,7 @@ impl Rooms {
             muted: false,
             deafened: false,
             speaking: false,
+            grants,
         };
         participant.send(ServerMessage::Ready {
             session: room.session,
@@ -874,6 +880,67 @@ impl Rooms {
         Ok(())
     }
 
+    /// What `user` may do in `channel`'s call; nothing when they are not in it.
+    pub fn grants(&self, channel: Uuid, user: Uuid) -> Grants {
+        self.room(channel)
+            .ok()
+            .and_then(|room| {
+                room.participants
+                    .lock()
+                    .expect("room lock")
+                    .get(&user)
+                    .map(|p| p.grants)
+            })
+            .unwrap_or_default()
+    }
+
+    /// Sets what `user` may do in `room`'s call, as the API server says: their producers of a
+    /// source no longer allowed close, their offers are withdrawn if they may no longer offer
+    /// files, and they are told. Nothing happens when nothing changed.
+    async fn set_grants(&self, room: &Arc<Room>, user: Uuid, grants: Grants) {
+        let (closing, state) = {
+            let mut participants = room.participants.lock().expect("room lock");
+            let Some(participant) = participants.get_mut(&user) else {
+                return;
+            };
+            if participant.grants == grants {
+                return;
+            }
+            participant.grants = grants;
+            let refused: Vec<ProducerId> = participant
+                .producers
+                .iter()
+                .filter(|(_, (_, source))| !grants.may_produce(*source))
+                .map(|(id, _)| *id)
+                .collect();
+            let mut closing = Vec::new();
+            let mut screen = false;
+            for id in refused {
+                if let Some((producer, source)) = participant.producers.remove(&id) {
+                    if participant.own_preview.remove(&id) {
+                        participant.rtp_transports.remove(&id);
+                    }
+                    screen |= source == MediaSource::Screen;
+                    closing.push(producer);
+                }
+            }
+            participant.send(ServerMessage::GrantsChanged { grants });
+            (
+                closing,
+                screen.then(|| Self::state_report(room, participant)),
+            )
+        };
+        for producer in closing {
+            self.drop_producer(room, producer).await;
+        }
+        if let Some(report) = state {
+            self.reporter.report(report);
+        }
+        if !grants.transfer_files {
+            self.withdraw_offers_of(room.channel, user);
+        }
+    }
+
     /// The participant's state as the API server records it.
     fn state_report(room: &Room, participant: &Participant) -> VoiceReport {
         VoiceReport::ParticipantState {
@@ -1078,10 +1145,23 @@ impl Rooms {
                     }
                 }
             }
-            VoiceCommand::Kick { session, user } => {
+            VoiceCommand::Kick {
+                session,
+                user,
+                reason,
+            } => {
                 if let Some(room) = self.room_of_session(session) {
-                    self.leave(room.channel, user, None, Some(KickReason::Kicked))
-                        .await;
+                    let reason = reason.unwrap_or(KickReason::Kicked);
+                    self.leave(room.channel, user, None, Some(reason)).await;
+                }
+            }
+            VoiceCommand::Grant {
+                session,
+                user,
+                grants,
+            } => {
+                if let Some(room) = self.room_of_session(session) {
+                    self.set_grants(&room, user, grants).await;
                 }
             }
         }

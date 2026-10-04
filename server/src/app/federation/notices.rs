@@ -345,8 +345,10 @@ async fn account_deleted(state: &GlobalServerContext, from: &Domain, sub: Uuid) 
     let Some(user_id) = found else {
         return Ok(());
     };
-    conn.transaction(|conn| app::user::retire(state, conn, user_id).scope_boxed())
+    let retired = conn
+        .transaction(|conn| app::user::retire(state, conn, user_id).scope_boxed())
         .await?;
+    retired.finish(state).await;
     tracing::info!(%from, user = %user_id.0, "retired a user whose home account was deleted");
     Ok(())
 }

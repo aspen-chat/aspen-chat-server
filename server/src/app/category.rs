@@ -1,15 +1,18 @@
 use crate::api::message_enum;
 use crate::api::message_enum::request::CategoryUpdateRequest;
-use crate::api::message_enum::server_event::{CategoryEvent, ServerEvent};
+use crate::api::message_enum::server_event::{
+    CategoryEvent, CategoryOverrideEvent, ChannelEvent, ServerEvent,
+};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{
-    CategoryId, CommunityId, EventScope, Loadable, MaybeLoaded, UserId, publish_event,
+    CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, RoleId, UserId,
+    publish_event,
 };
-use crate::database::schema::{category, channel};
+use crate::database::schema::{category, category_override, channel};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     Selectable, SelectableHelper,
@@ -55,34 +58,40 @@ pub(crate) async fn create_category(
 ) -> app::error::Result<Category> {
     let id = CategoryId::new();
     let mut conn = state.connection_pool.get().await?;
-    require_member(conn.as_mut(), caller, community)
-        .await?
-        .require(Permissions::MANAGE_CATEGORIES)?;
-    let category = Category {
-        id,
-        community: MaybeLoaded::NotLoaded(community),
-        name: name.clone(),
-        sort_index,
-        deleted_at: None,
-    };
-    diesel::insert_into(category::table)
-        .values(&category)
-        .execute(conn.as_mut())
-        .await?;
-    let event = ServerEvent::Category(CategoryEvent::Create(message_enum::Category {
-        id,
-        community,
-        name,
-        sort_index,
-    }));
-    app::publish_event(
-        state,
-        conn.as_mut(),
-        EventScope::Community(community),
-        &event,
-    )
-    .await?;
-    Ok(category)
+    conn.transaction(|conn| {
+        async move {
+            require_member(conn.as_mut(), caller, community)
+                .await?
+                .require(Permissions::MANAGE_CATEGORIES)?;
+            let category = Category {
+                id,
+                community: MaybeLoaded::NotLoaded(community),
+                name: name.clone(),
+                sort_index,
+                deleted_at: None,
+            };
+            diesel::insert_into(category::table)
+                .values(&category)
+                .execute(conn.as_mut())
+                .await?;
+            let event = ServerEvent::Category(CategoryEvent::Create(message_enum::Category {
+                id,
+                community,
+                name,
+                sort_index,
+            }));
+            app::publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Community(community),
+                &event,
+            )
+            .await?;
+            Ok(category)
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// The community of a live category, when `caller` is a member of it; not found otherwise.
@@ -230,7 +239,8 @@ pub(crate) async fn update_category(
     .await
 }
 
-/// Deletes a category, which takes Manage categories.
+/// Deletes a category, which takes Manage categories. Its channels are left in no category
+/// and its overrides are cleared.
 pub(crate) async fn delete_category(
     state: &GlobalServerContext,
     caller: UserId,
@@ -250,6 +260,56 @@ pub(crate) async fn delete_category(
                 .await?;
             if deleted == 0 {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            // Its channels leave it, each move announced to those who may view the channel on
+            // either side of it, and its overrides go with it, so nothing it decided outlives it.
+            let moved: Vec<ChannelId> = diesel::update(channel::table)
+                .set(channel::parent_category.eq(None::<CategoryId>))
+                .filter(
+                    channel::parent_category
+                        .eq(id)
+                        .and(channel::deleted_at.is_null()),
+                )
+                .returning(channel::id)
+                .get_results(conn.as_mut())
+                .await?;
+            for channel in moved {
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::ChannelDefinition {
+                        channel,
+                        departed: None,
+                    },
+                    &ServerEvent::Channel(ChannelEvent::Update {
+                        id: channel,
+                        parent_category: Some(None),
+                        community: None,
+                        name: None,
+                        sort_index: None,
+                        reply_count: None,
+                        last_reply_at: None,
+                        recipients: None,
+                    }),
+                )
+                .await?;
+            }
+            let cleared: Vec<RoleId> =
+                diesel::delete(category_override::table.filter(category_override::category.eq(id)))
+                    .returning(category_override::role)
+                    .get_results(conn.as_mut())
+                    .await?;
+            for role in cleared {
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::CommunityOfCategory(id),
+                    &ServerEvent::CategoryOverride(CategoryOverrideEvent::Delete {
+                        category: id,
+                        role,
+                    }),
+                )
+                .await?;
             }
             publish_event(
                 state,

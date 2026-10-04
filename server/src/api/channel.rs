@@ -15,7 +15,8 @@ pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
 }
 
 /// Creates a channel. A channel may belong to a community and optionally to a category within it;
-/// both references are set through the request body because either may be absent.
+/// both references are set through the request body because either may be absent. `overrides`
+/// sets who may use it from the start, which takes what setting each override takes.
 #[utoipa::path(
     post,
     path = "/channels",
@@ -25,8 +26,8 @@ pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
         (status = CREATED, body = message_enum::Channel, headers(("Location" = String, description = "URL of the new channel"))),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
-        (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing, or an override names a role not ranked below the caller's or a permission the caller lacks", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or the caller is not a member, or an override names a role the community lacks", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -35,16 +36,7 @@ pub async fn create_channel(
     SessionUser { user, .. }: SessionUser,
     Json(request): Json<ChannelCreateRequest>,
 ) -> ApiResult<Created<message_enum::Channel>> {
-    let c = app::channel::create_channel(
-        &state,
-        user.id,
-        request.name,
-        request.sort_index,
-        request.ty,
-        request.community,
-        request.parent_category,
-    )
-    .await?;
+    let c = app::channel::create_channel(&state, user.id, request).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/channels/{}", c.id.0),
         channel_to_api(c),

@@ -246,16 +246,24 @@ struct Payload {
     badge: Option<i64>,
 }
 
-/// The phones of each of `users`.
+/// The phones of each of `users`: those of their sign-ins still live, of accounts neither
+/// deleted nor banned from the deployment. A phone whose sign-in was revoked (a password
+/// change, a ban) is not woken, though its subscription stays until the sign-in is deleted.
 async fn phones_of(
     state: &GlobalServerContext,
     users: &[UserId],
 ) -> app::Result<HashMap<UserId, Vec<PushSubscription>>> {
+    use crate::database::schema::{refresh_token, user};
     let mut conn = state.connection_pool.get().await?;
     let mut phones: HashMap<UserId, Vec<PushSubscription>> = HashMap::new();
     for (user, subscription) in push_subscription::table
+        .inner_join(refresh_token::table)
+        .inner_join(user::table)
         .select((push_subscription::user, PushSubscription::as_select()))
         .filter(push_subscription::user.eq_any(users))
+        .filter(refresh_token::expires.gt(diesel::dsl::now))
+        .filter(user::deleted_at.is_null())
+        .filter(diesel::dsl::not(app::user_ban::banned()))
         .load::<(UserId, PushSubscription)>(conn.as_mut())
         .await?
     {
@@ -862,8 +870,9 @@ async fn badge_of(state: &GlobalServerContext, user: UserId) -> app::Result<i64>
         .load(conn.as_mut())
         .await?;
     drop(conn);
+    let visible = app::visibility::Visibility::load(state, user, &communities).await?;
     let (in_communities, in_dms) = tokio::try_join!(
-        app::read_state::read_communities_read_states(state, user, &communities),
+        app::read_state::read_communities_read_states(state, &visible),
         app::read_state::read_channels_read_states(state, user, &dms),
     )?;
     let tags: i64 = in_communities.iter().map(|s| i64::from(s.mentions)).sum();

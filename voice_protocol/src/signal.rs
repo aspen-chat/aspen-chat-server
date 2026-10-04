@@ -120,6 +120,8 @@ pub enum OfferEnd {
     Expired,
     /// Its sender left the call.
     Left,
+    /// Its sender may no longer offer files in the call.
+    NotPermitted,
 }
 
 /// A file offered to the others in the call.
@@ -421,6 +423,12 @@ pub enum ServerMessage {
         link: TransferLink,
         active: bool,
     },
+    /// What the client may now do in the call, which changed since it joined or since the
+    /// last of these. Its producers of a source no longer allowed are already closed, and its
+    /// file offers withdrawn when it may no longer transfer files; it stops sending them.
+    GrantsChanged {
+        grants: crate::token::Grants,
+    },
     /// A request could not be honoured; the connection stays open unless `fatal`.
     Error {
         detail: String,
@@ -442,6 +450,9 @@ pub enum KickReason {
     Replaced,
     /// The server is shutting down.
     ServerStopping,
+    /// The user may no longer be in the call: they lost access to its channel, or left or were
+    /// removed from where it is.
+    AccessLost,
 }
 
 /// The whole protocol, the root of `voice_signal_schema.json`.

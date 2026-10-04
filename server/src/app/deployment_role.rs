@@ -7,6 +7,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{
     DeploymentPermission, DeploymentPermissions, deployment_access, to_names,
 };
+use crate::app::events::Publishing;
 use crate::app::{self, DeploymentRoleId, EventScope, UserId, publish_event};
 use crate::database::schema::{deployment_role, user, user_deployment_role};
 use crate::t;
@@ -73,7 +74,7 @@ fn validate_name(name: &str) -> app::Result<String> {
 
 /// Tells each holder of `role` what they may now do.
 async fn announce_holders(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     role: DeploymentRoleId,
 ) -> app::Result<()> {
@@ -90,7 +91,7 @@ async fn announce_holders(
 
 /// Tells `user` what they may now do across the deployment.
 async fn announce(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     user: UserId,
 ) -> app::Result<()> {
@@ -341,9 +342,12 @@ pub async fn set_user_role(
 }
 
 /// The terminal's grant: gives `user` the top role, making an Administrator role (every
-/// permission but moderation) first when the deployment has none. Publishes nothing: the
-/// terminal has no event stream, and the user's clients learn at their next read.
-pub async fn grant_top_role(conn: &mut AsyncPgConnection, target: UserId) -> app::Result<String> {
+/// permission but moderation) first when the deployment has none, and tells them.
+pub async fn grant_top_role(
+    publisher: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    target: UserId,
+) -> app::Result<String> {
     conn.transaction(|conn| {
         async move {
             let roles = load_roles(conn).await?;
@@ -371,6 +375,7 @@ pub async fn grant_top_role(conn: &mut AsyncPgConnection, target: UserId) -> app
                 .on_conflict_do_nothing()
                 .execute(conn)
                 .await?;
+            announce(publisher, conn, target).await?;
             Ok(top.name)
         }
         .scope_boxed()
@@ -378,36 +383,59 @@ pub async fn grant_top_role(conn: &mut AsyncPgConnection, target: UserId) -> app
     .await
 }
 
-/// The terminal's change to the top role: allows `permission` to it, or denies it. Returns the
-/// role's name. Refused when the deployment has no roles yet (`admin grant` makes the first).
+/// The terminal's change to the top role: allows `permission` to it, or denies it, and tells
+/// its holders. Returns the role's name. Refused when the deployment has no roles yet (`admin
+/// grant` makes the first).
 pub async fn set_top_role_permission(
+    publisher: &impl Publishing,
     conn: &mut AsyncPgConnection,
     permission: DeploymentPermission,
     allow: bool,
 ) -> app::Result<String> {
-    let roles = load_roles(conn).await?;
-    let Some(top) = roles.last() else {
-        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-    };
-    let permissions = if allow {
-        top.permissions | permission.bits()
-    } else {
-        top.permissions.difference(permission.bits())
-    };
-    diesel::update(deployment_role::table.filter(deployment_role::id.eq(top.id)))
-        .set(deployment_role::permissions.eq(permissions))
-        .execute(conn)
-        .await?;
-    Ok(top.name.clone())
+    conn.transaction(|conn| {
+        async move {
+            let roles = load_roles(conn).await?;
+            let Some(top) = roles.last() else {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            };
+            let permissions = if allow {
+                top.permissions | permission.bits()
+            } else {
+                top.permissions.difference(permission.bits())
+            };
+            diesel::update(deployment_role::table.filter(deployment_role::id.eq(top.id)))
+                .set(deployment_role::permissions.eq(permissions))
+                .execute(conn)
+                .await?;
+            announce_holders(publisher, conn, top.id).await?;
+            Ok(top.name.clone())
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
-/// The terminal's revoke: takes every deployment role from `user`.
-pub async fn revoke_all(conn: &mut AsyncPgConnection, target: UserId) -> app::Result<usize> {
-    Ok(
-        diesel::delete(user_deployment_role::table.filter(user_deployment_role::user.eq(target)))
+/// The terminal's revoke: takes every deployment role from `user`, and tells them.
+pub async fn revoke_all(
+    publisher: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    target: UserId,
+) -> app::Result<usize> {
+    conn.transaction(|conn| {
+        async move {
+            let taken = diesel::delete(
+                user_deployment_role::table.filter(user_deployment_role::user.eq(target)),
+            )
             .execute(conn)
-            .await?,
-    )
+            .await?;
+            if taken > 0 {
+                announce(publisher, conn, target).await?;
+            }
+            Ok(taken)
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Everyone holding a deployment role, with the names of their roles, for the terminal.

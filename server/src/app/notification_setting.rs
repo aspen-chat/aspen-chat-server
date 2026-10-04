@@ -219,9 +219,29 @@ async fn check_target(
     Ok(())
 }
 
+/// The user's settings for the listed channels (DMs they are in).
+pub async fn read_channel_settings(
+    state: &GlobalServerContext,
+    user: UserId,
+    channels: &[ChannelId],
+) -> app::Result<Vec<NotificationSetting>> {
+    read_settings(state, user, channels, &[]).await
+}
+
+/// The settings of `visible`'s user for its communities and for the channels they may view in
+/// them.
+pub async fn read_community_settings(
+    state: &GlobalServerContext,
+    visible: &app::visibility::Visibility,
+) -> app::Result<Vec<NotificationSetting>> {
+    let mut settings = read_settings(state, visible.user(), &[], visible.communities()).await?;
+    settings.retain(|s| s.channel.is_none_or(|channel| visible.can_view(channel)));
+    Ok(settings)
+}
+
 /// The user's settings for the listed communities and every channel in them, and for the listed
 /// channels, in one query.
-pub async fn read_settings(
+async fn read_settings(
     state: &GlobalServerContext,
     user: UserId,
     channels: &[ChannelId],

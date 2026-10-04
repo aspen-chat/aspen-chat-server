@@ -87,11 +87,13 @@ export function InviteManager({ communityId }: { communityId: string }) {
   // "Expired" is judged against the moment the dialog opened; it is a label, not a timer.
   const [openedAt] = useState(() => Date.now());
 
+  // Read again when Manage invites is gained or lost, since it decides whose invites are shown
+  // and no event brings those made before it was gained.
   useEffect(() => {
     sync.loadInvites(communityId).catch((e: unknown) => {
       setLoadError(e instanceof ApiProblemError ? e.message : String(e));
     });
-  }, [sync, communityId]);
+  }, [sync, communityId, manageAll]);
 
   async function create() {
     setCreating(true);

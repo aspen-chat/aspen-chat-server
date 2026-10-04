@@ -198,7 +198,8 @@ Create an account from the web client, then, where the API server runs:
 aspen-chat-server admin grant <username>
 ```
 
-It gives that account the deployment's top role, making an Administrator role with every
+It needs the database and NATS, as the servers do: it announces the change to the account's open
+apps. It gives that account the deployment's top role, making an Administrator role with every
 permission but the moderation ones if there is none: `moderateCommunities` (reading and taking
 things out of any community or DM), `reviewReports` (the reports people make of messages and
 profiles), `banUsers` (banning accounts from the whole deployment), and `messageAnyUser`

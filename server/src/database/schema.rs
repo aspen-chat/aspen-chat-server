@@ -20,6 +20,7 @@ diesel::table! {
         ready_at -> Nullable<Timestamptz>,
         width -> Nullable<Int4>,
         height -> Nullable<Int4>,
+        uploader -> Nullable<Uuid>,
     }
 }
 
@@ -686,6 +687,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(attachment -> user (uploader));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));

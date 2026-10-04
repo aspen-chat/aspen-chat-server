@@ -6,17 +6,23 @@ import { useMessages } from "@/i18n/context";
 
 /**
  * Shown when the user's call ended in a way they need telling about: the server ended it for
- * being idle (a day alone in it), or a moderator removed them. Lost and removed servers are
- * rejoined on their own and need no dialog.
+ * being idle (a day alone in it), a moderator removed them, or they may no longer be in it.
+ * Lost and removed servers are rejoined on their own and need no dialog.
  */
 export function VoiceEndedDialog() {
   const m = useMessages();
   const sync = useSync();
   const call = useVoiceCall();
-  if (call.endedReason !== "idle" && call.endedReason !== "kicked") {
+  const reason = call.endedReason;
+  if (reason !== "idle" && reason !== "kicked" && reason !== "accessLost") {
     return null;
   }
-  const kicked = call.endedReason === "kicked";
+  const [heading, hint] =
+    reason === "kicked"
+      ? [m.voice.kickedHeading, m.voice.kickedHint]
+      : reason === "accessLost"
+        ? [m.voice.accessLostHeading, m.voice.accessLostHint]
+        : [m.voice.idleEndedHeading, m.voice.idleEndedHint];
   const dismiss = () => {
     sync.voice.acknowledgeEnd();
   };
@@ -33,10 +39,8 @@ export function VoiceEndedDialog() {
     >
       <Modal className={modalClass}>
         <Dialog role="alertdialog" className={dialogClass}>
-          <DialogHeading>{kicked ? m.voice.kickedHeading : m.voice.idleEndedHeading}</DialogHeading>
-          <p className="text-sm text-ink-muted">
-            {kicked ? m.voice.kickedHint : m.voice.idleEndedHint}
-          </p>
+          <DialogHeading>{heading}</DialogHeading>
+          <p className="text-sm text-ink-muted">{hint}</p>
         </Dialog>
       </Modal>
     </ModalOverlay>

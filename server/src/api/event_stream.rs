@@ -27,7 +27,7 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::app;
 use crate::app::UserId;
 use crate::app::context::GlobalServerContext;
-use crate::app::event_feed::{Delivery, FeedEvent, Subscription};
+use crate::app::event_feed::{Delivery, FeedEvent, StreamEnd, Subscription};
 use crate::app::user::UserPg;
 use crate::t;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
@@ -94,7 +94,8 @@ const ACTIVITY_GRACE: Duration = Duration::from_secs(5);
 pub enum EventStreamErrorCode {
     /// The first frame was not a well-formed `identify` message. Close code 4400.
     BadRequest,
-    /// The session token is missing, unknown, or expired. Close code 4401.
+    /// The session token is missing, unknown, or expired, or its sign-in ended while the stream
+    /// was open, which the `signInsEnded` event before this frame tells of. Close code 4401.
     Unauthorized,
     /// The server requires a second factor the account has not added yet; the session may only
     /// add one. Close code 4403.
@@ -244,15 +245,21 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
             return;
         }
     };
-    let subscription =
-        match app::event_feed::subscribe(&state, session.user.id, session.resume_after).await {
-            Ok(subscription) => subscription,
-            Err(e) => {
-                let Rejection(code) = e.into();
-                reject(&mut socket, code).await;
-                return;
-            }
-        };
+    let subscription = match app::event_feed::subscribe(
+        &state,
+        session.user.id,
+        session.sign_in,
+        session.resume_after,
+    )
+    .await
+    {
+        Ok(subscription) => subscription,
+        Err(e) => {
+            let Rejection(code) = e.into();
+            reject(&mut socket, code).await;
+            return;
+        }
+    };
     count_connect(if subscription.resumed {
         "resumed"
     } else {
@@ -279,6 +286,8 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
 
 struct Identified {
     user: UserPg,
+    /// The sign-in the session belongs to (`app::login::sign_in_id`).
+    sign_in: String,
     resume_after: Option<u64>,
 }
 
@@ -322,7 +331,11 @@ async fn identify(
         return Err(Rejection(EventStreamErrorCode::TwoFactorEnrollmentRequired));
     }
     app::user_status::mark_user_online(state, &user);
-    Ok(Identified { user, resume_after })
+    Ok(Identified {
+        user,
+        sign_in: app::login::sign_in_id(&caller.refresh_token),
+        resume_after,
+    })
 }
 
 /// Most frames written to the socket before it is flushed, so a burst goes out in few writes
@@ -342,7 +355,7 @@ fn event_frame(event: &FeedEvent) -> Result<Message, axum::Error> {
 /// What writing a delivery did: how many frames, and whether one of them ends the connection.
 struct Fed {
     written: usize,
-    ends: bool,
+    ends: Option<StreamEnd>,
 }
 
 /// Writes one delivery's frames without flushing.
@@ -354,14 +367,14 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
             }
             Ok(Fed {
                 written: events.len(),
-                ends: events.iter().any(|event| event.ends_streams()),
+                ends: events.iter().find_map(|event| event.ends()),
             })
         }
         Delivery::Live(event) => {
             socket.feed(event_frame(&event)?).await?;
             Ok(Fed {
                 written: 1,
-                ends: event.ends_streams(),
+                ends: event.ends(),
             })
         }
     }
@@ -394,7 +407,7 @@ async fn pump_events(
                         return;
                     }
                 };
-                while written < FLUSH_EVERY && !ends {
+                while written < FLUSH_EVERY && ends.is_none() {
                     let Ok(delivery) = subscription.deliveries.try_recv() else {
                         break;
                     };
@@ -414,8 +427,12 @@ async fn pump_events(
                     return;
                 }
                 metrics::counter!(aspen_metrics::api::EVENTS_DELIVERED).increment(written as u64);
-                if ends {
-                    reject(&mut socket, EventStreamErrorCode::Banned).await;
+                if let Some(end) = ends {
+                    let code = match end {
+                        StreamEnd::Banned => EventStreamErrorCode::Banned,
+                        StreamEnd::SignedOut => EventStreamErrorCode::Unauthorized,
+                    };
+                    reject(&mut socket, code).await;
                     return;
                 }
             },

@@ -22,13 +22,15 @@ pub use servers::{
     update_server,
 };
 use sessions::reap_idle_sessions;
-pub use sessions::{kick_everywhere, kick_participant, mute_participant};
+pub use sessions::{
+    Recheck, kick_everywhere, kick_participant, mute_participant, recheck, recheck_in,
+};
 
 use crate::api::message_enum;
 use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::channel_access;
-use crate::app::{ChannelId, CommunityId, UserId, VoiceServerId, VoiceSessionId};
+use crate::app::{ChannelId, UserId, VoiceServerId, VoiceSessionId};
 use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
 use chrono::{DateTime, Utc};
 use diesel::{
@@ -156,15 +158,16 @@ pub async fn read_channel_voice(
     ))
 }
 
-/// Every call in progress on the voice channels of `communities`, with their participants.
-/// Two queries however many communities there are.
+/// Every call in progress on the voice channels of `visible`'s communities that its user may
+/// view, with their participants. Two queries however many communities there are.
 pub async fn read_communities_voice(
     state: &GlobalServerContext,
-    communities: &[CommunityId],
+    visible: &crate::app::visibility::Visibility,
 ) -> app::Result<(
     Vec<message_enum::VoiceSession>,
     Vec<message_enum::VoiceParticipant>,
 )> {
+    let communities = visible.communities();
     if communities.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
@@ -173,8 +176,11 @@ pub async fn read_communities_voice(
         .inner_join(channel::table)
         .select(VoiceSession::as_select())
         .filter(channel::community.eq_any(communities.iter().map(|c| Some(*c))))
-        .load(conn.as_mut())
-        .await?;
+        .load::<VoiceSession>(conn.as_mut())
+        .await?
+        .into_iter()
+        .filter(|s| visible.can_view(s.channel))
+        .collect();
     records_of_sessions(conn.as_mut(), sessions).await
 }
 

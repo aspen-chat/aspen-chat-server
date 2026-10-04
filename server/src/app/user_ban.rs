@@ -156,13 +156,8 @@ pub async fn ban_user(
             .scope_boxed()
         })
         .await?;
-    drop(conn);
-    for user in &outcome.banned {
-        if let Err(e) = app::voice::kick_everywhere(state, *user).await {
-            // The ban stands either way; a call they stay in ends when their session does.
-            tracing::warn!(user = %user.0, error = %e, "could not take a banned user out of their calls");
-        }
-    }
+    // `accountBanned` takes each of them out of their calls once this settles
+    // (`app::events::rechecks_of`).
     Ok(outcome)
 }
 
@@ -200,7 +195,7 @@ async fn ban_one(
         ))
         .execute(conn)
         .await?;
-    app::login::revoke_all_sessions(conn, target).await?;
+    app::login::revoke_all_sessions(state, conn, target).await?;
     log_moderation(
         conn,
         access.user,

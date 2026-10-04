@@ -389,7 +389,7 @@ pub async fn confirm_totp(
                 // Replaced or confirmed by another request since it was read.
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            factor_added(conn, user_id, &session_token, first).await
+            factor_added(state, conn, user_id, &session_token, first).await
         }
         .scope_boxed()
     })
@@ -559,6 +559,7 @@ pub async fn regenerate_recovery_codes(
 /// before it; if so, two-factor sign-in has just turned on, so the account gets recovery codes
 /// and every other session is signed out, as a password change does.
 pub async fn factor_added(
+    state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
     session_token: &str,
@@ -568,7 +569,7 @@ pub async fn factor_added(
         return Ok(None);
     }
     let codes = replace_recovery_codes(conn, user_id).await?;
-    app::login::revoke_other_sessions(conn, user_id, session_token).await?;
+    app::login::revoke_other_sessions(state, conn, user_id, session_token).await?;
     Ok(Some(codes))
 }
 

@@ -1051,6 +1051,72 @@ describe("AspenSync", () => {
     expect(sync.store.unread(general.id)).toBe(false);
   });
 
+  it("looks up a channel it hears of but lacks, and reads its community again", async () => {
+    const hidden: Channel = { ...general, id: id(25), name: "staff" };
+    let communityReads = 0;
+    const { sync, calls } = makeSync(
+      {
+        ...bootstrapResponses(),
+        [`/api/v1/channels/${hidden.id}`]: () => json(hidden),
+        [`/api/v1/communities/${aspen.id}`]: () => {
+          communityReads += 1;
+          return json({ data: aspen, included: { channels: [general, hidden] } });
+        },
+      },
+      () => 0,
+      { random: () => 0 },
+    );
+    const socket = await goLive(sync);
+    // An override reaches the caller only when they may view its channel, before or after.
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: {
+        serverEvent: "channelOverride",
+        type: "create",
+        channel: hidden.id,
+        role: id(40),
+        allow: ["viewChannel"],
+        deny: [],
+      },
+    });
+    await settle();
+    expect(calls.filter((url) => url.pathname === `/api/v1/channels/${hidden.id}`)).toHaveLength(1);
+    expect(communityReads).toBe(1);
+    expect(sync.store.channel(hidden.id)?.name).toBe("staff");
+    // One it holds needs no lookup.
+    socket.frame({
+      type: "event",
+      sequence: 2,
+      event: { serverEvent: "channel", type: "update", id: general.id, parentCategory: null },
+    });
+    await settle();
+    expect(communityReads).toBe(1);
+  });
+
+  it("reads a community again when told something announced about it did not happen", async () => {
+    let communityReads = 0;
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        [`/api/v1/communities/${aspen.id}`]: () => {
+          communityReads += 1;
+          return json({ data: aspen, included: { channels: [general] } });
+        },
+      },
+      () => 0,
+      { random: () => 0 },
+    );
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "communityResync", community: aspen.id },
+    });
+    await settle();
+    expect(communityReads).toBe(1);
+  });
+
   it("renumbers only the communities and channels whose position changed", async () => {
     const birch: Community = { id: id(11), name: "Birch", icon: null };
     const dev: Channel = { ...general, id: id(21), name: "dev", sortIndex: 1 };
