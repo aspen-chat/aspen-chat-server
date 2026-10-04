@@ -125,7 +125,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugin's format, lints, tests, and build for `wasm32-wasip2` (`plugins/word_filter`, a workspace of its own); the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build, and builds and installs the example plugin, so running it locally needs `rustup target add wasm32-wasip2`. Clippy warnings fail the build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, and `plugins/calendar`, each a workspace of its own); the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build, and builds and installs the example plugins, so running it locally needs `rustup target add wasm32-wasip2`. Clippy warnings fail the build.
 
 ### CLI Flags
 
@@ -208,7 +208,7 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/reports.md` — reports of messages and profiles, their categories, cases and their review, warnings, and what deleting a message keeps
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
 - `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
-- `docs/architecture/plugins.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, and principals
+- `docs/architecture/plugins.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, principals, channel types and views, timers, notices, cards, and capability URLs
 
 ### Event Ordering Guarantee
 

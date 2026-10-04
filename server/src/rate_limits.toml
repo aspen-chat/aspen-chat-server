@@ -200,6 +200,19 @@ endpoints = [
 ]
 limits = { user_per_plugin = { requests = 120, per_seconds = 60, burst = 30, bucket = "plugin_routes" }, per_plugin = { requests = 6000, per_seconds = 60, burst = 600, bucket = "plugin_routes_all" } }
 
+# A card's button calls its plugin as the person who pressed it.
+[rate_limits.endpoints."POST /messages/{message}/card/buttons/{button}"]
+user = { requests = 60, per_seconds = 60, burst = 20, bucket = "plugin_routes" }
+
+# The files of plugins' views, which every frame showing one loads.
+[rate_limits.endpoints."GET /plugins/{plugin}/assets/{*path}"]
+ip = { requests = 600, per_seconds = 60, burst = 200 }
+
+# Private URLs that reach a plugin as their owner, such as a calendar app's feed, which polls.
+[rate_limits.endpoints."GET /plugins/{plugin}/capabilities/{secret}"]
+ip = { requests = 60, per_seconds = 60, burst = 20 }
+per_secret = { requests = 30, per_seconds = 60, burst = 10 }
+
 [rate_limits.endpoints."POST /auth/login"]
 # Guessing one account's password from many addresses.
 username = { requests = 10, per_seconds = 600, burst = 5 }

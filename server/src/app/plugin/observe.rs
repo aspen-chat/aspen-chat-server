@@ -332,7 +332,22 @@ async fn handle(
         wit::Observed::MessageDeleted(m) => m.place.community.clone(),
         wit::Observed::CommandInvoked(c) => c.place.community.clone(),
         wit::Observed::PluginEnabled(c) | wit::Observed::PluginDisabled(c) => Some(c.clone()),
+        wit::Observed::TimerFired(_) => None,
     };
+    deliver(state, &running, observed, community, event_id, shown).await
+}
+
+/// Hands `observed` to `running`'s plugin, with the community it happened in and that
+/// community's settings, and the attachments it may read; an error when its call failed, which
+/// is delivered again.
+pub(super) async fn deliver(
+    state: &GlobalServerContext,
+    running: &Running,
+    observed: wit::Observed,
+    community: Option<String>,
+    event_id: Option<&str>,
+    shown: Vec<app::AttachmentId>,
+) -> anyhow::Result<()> {
     let context = wit::Context {
         community,
         community_settings: running
@@ -345,7 +360,7 @@ async fn handle(
     let budget = Duration::from_millis(state.config.plugins.observe_millis);
     let mut instance = Instance::new(
         state,
-        plugin.clone(),
+        running.plugin.clone(),
         Phase::Observe,
         shown.into_iter().collect(),
         budget,

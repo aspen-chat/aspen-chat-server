@@ -57,13 +57,15 @@ jobs:
           cargo fmt --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml --check
           cargo clippy --locked --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml
-      # The example plugin is a workspace of its own, built for WebAssembly components.
-      - name: Example plugin
+      # The example plugins are workspaces of their own, built for WebAssembly components.
+      - name: Example plugins
         run: |
-          cargo fmt --manifest-path plugins/word_filter/Cargo.toml --check
-          cargo clippy --locked --manifest-path plugins/word_filter/Cargo.toml --target wasm32-wasip2 -- -D warnings
-          cargo test --locked --manifest-path plugins/word_filter/Cargo.toml
-          cargo build --locked --release --manifest-path plugins/word_filter/Cargo.toml --target wasm32-wasip2
+          for plugin in word_filter forum calendar; do
+            cargo fmt --manifest-path plugins/$plugin/Cargo.toml --check
+            cargo clippy --locked --manifest-path plugins/$plugin/Cargo.toml --target wasm32-wasip2 -- -D warnings
+            cargo test --locked --manifest-path plugins/$plugin/Cargo.toml
+            cargo build --locked --release --manifest-path plugins/$plugin/Cargo.toml --target wasm32-wasip2
+          done
       - name: Write the API and signalling schemas for the client
         run: |
           cargo run --locked -p aspen-chat-server -- --gen-openapi-schema

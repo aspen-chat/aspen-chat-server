@@ -10,6 +10,13 @@
       "format": "uint32",
       "minimum": 0
     },
+    "assets": {
+      "description": "The directory, relative to the manifest, whose files are its views' (`views`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "attachmentLimit": {
       "description": "The largest attachment it may read, in bytes, with `attachments.read`.",
       "type": [
@@ -24,6 +31,13 @@
         "string",
         "null"
       ]
+    },
+    "channelTypes": {
+      "description": "The kinds of channel it adds, by name (`channelTypes`).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ChannelTypeDecl"
+      }
     },
     "communitySettings": {
       "description": "What each community that turns it on configures.",
@@ -143,6 +157,29 @@
     "retention"
   ],
   "$defs": {
+    "ChannelTypeDecl": {
+      "description": "A kind of channel a plugin adds.",
+      "type": "object",
+      "properties": {
+        "glyph": {
+          "description": "What clients draw beside such a channel's name.",
+          "$ref": "#/$defs/Glyph",
+          "default": "board"
+        },
+        "name": {
+          "description": "A key of `messages` naming the kind.",
+          "type": "string"
+        },
+        "view": {
+          "description": "The page among its assets that shows a channel of the kind.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "view"
+      ]
+    },
     "ChoiceOption": {
       "description": "One option of a `choice`.",
       "type": "object",
@@ -207,6 +244,16 @@
           "type": "string",
           "const": "closed"
         }
+      ]
+    },
+    "Glyph": {
+      "description": "The pictures clients draw beside a plugin's channel.",
+      "type": "string",
+      "enum": [
+        "board",
+        "calendar",
+        "list",
+        "chat"
       ]
     },
     "Hooks": {
@@ -275,6 +322,11 @@
           "description": "A community turned it off.",
           "type": "string",
           "const": "plugin.disable"
+        },
+        {
+          "description": "One of its timers fell due.",
+          "type": "string",
+          "const": "timer.fire"
         }
       ]
     },
@@ -473,6 +525,31 @@
           "description": "Have an account of its own, its principal, and act through it.",
           "type": "string",
           "const": "act"
+        },
+        {
+          "description": "Serve pages of its own, its assets, to people's apps.",
+          "type": "string",
+          "const": "views"
+        },
+        {
+          "description": "Add the kinds of channel its manifest declares.",
+          "type": "string",
+          "const": "channelTypes"
+        },
+        {
+          "description": "Be called back at times it sets.",
+          "type": "string",
+          "const": "timers"
+        },
+        {
+          "description": "Tell people of something, as Aspen tells them of a message.",
+          "type": "string",
+          "const": "notify"
+        },
+        {
+          "description": "Give a person a private URL of their own to one of its routes.",
+          "type": "string",
+          "const": "capabilities"
         }
       ]
     },

@@ -1,0 +1,23 @@
+[package]
+name = "aspen_calendar"
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "An example Aspen plugin: an event calendar: a kind of channel of events, cards with a Going button, reminders, and a feed for calendar apps"
+publish = false
+
+# Its own workspace, built for `wasm32-wasip2`, as the word filter and the forum are.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.62.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

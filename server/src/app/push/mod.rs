@@ -21,8 +21,8 @@ use crate::app::notification_setting::{NotificationLevel, default_level};
 use crate::app::two_factor::Caller;
 use crate::app::visibility::viewers;
 use crate::app::{
-    self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, PushKeyId, PushSubscriptionId,
-    UserId,
+    self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, PluginNoticeId, PushKeyId,
+    PushSubscriptionId, UserId,
 };
 use crate::database::schema::{
     channel, channel_mute, community_member_role, community_user, dm_recipient, message,
@@ -216,6 +216,11 @@ pub enum Pointer {
         channel: ChannelId,
         message: MessageId,
     },
+    /// A plugin tells the person of something in the channel (`app::plugin::notice`).
+    Notice {
+        channel: ChannelId,
+        notice: PluginNoticeId,
+    },
 }
 
 impl Pointer {
@@ -223,7 +228,8 @@ impl Pointer {
         match self {
             Pointer::Message { channel, .. }
             | Pointer::Read { channel, .. }
-            | Pointer::Deleted { channel, .. } => *channel,
+            | Pointer::Deleted { channel, .. }
+            | Pointer::Notice { channel, .. } => *channel,
         }
     }
 
@@ -231,7 +237,7 @@ impl Pointer {
     /// which a relay whose app cannot hide a notification leaves undelivered (`spec/push.md`).
     fn urgency(&self) -> &'static str {
         match self {
-            Pointer::Message { .. } => "high",
+            Pointer::Message { .. } | Pointer::Notice { .. } => "high",
             Pointer::Read { .. } | Pointer::Deleted { .. } => "low",
         }
     }
@@ -372,6 +378,39 @@ async fn send(
         status,
         detail.chars().take(500).collect(),
     ))
+}
+
+/// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now, as
+/// for a message (`spec/push.md`).
+pub async fn notice(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel: ChannelId,
+    notice: PluginNoticeId,
+) {
+    if !state.config.push.enabled {
+        return;
+    }
+    let woken = async {
+        let active: Option<i64> = state.valkey.get(app::user_status::active_key(user)).await?;
+        if active.is_some() {
+            return Ok(());
+        }
+        let phones = phones_of(state, &[user]).await?;
+        let badge = badge_of(state, user).await.ok();
+        wake(
+            state,
+            phones.get(&user).map_or(&[], Vec::as_slice),
+            Pointer::Notice { channel, notice },
+            badge,
+        )
+        .await;
+        Ok::<_, app::Error>(())
+    }
+    .await;
+    if let Err(e) = woken {
+        tracing::warn!("waking phones for a plugin's notice failed: {e}");
+    }
 }
 
 /// Starts this server's share of handling events for push.

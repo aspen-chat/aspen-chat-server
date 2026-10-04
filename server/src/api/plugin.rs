@@ -12,9 +12,10 @@ use crate::app::context::GlobalServerContext;
 use crate::app::deployment::DeploymentPermission;
 use crate::app::permissions::Permission;
 use crate::app::plugin::manifest::Manifest;
+use crate::app::plugin::notice::NoticeRead;
 use crate::app::plugin::settings::{self, SettingField};
 use crate::app::plugin::{self, Mode, PluginPermission, install};
-use crate::app::{self, CommunityId, UserId};
+use crate::app::{self, CommunityId, MessageId, PluginNoticeId, UserId};
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
@@ -50,6 +51,22 @@ pub struct PluginInfo {
     pub community_settings: Vec<SettingField>,
     /// Its text in the reader's language, by key, with `%{name}` for what is filled in.
     pub messages: BTreeMap<String, String>,
+    /// The kinds of channel it adds.
+    pub channel_types: Vec<PluginChannelType>,
+}
+
+/// A kind of channel a plugin adds, as a client offers it and shows a channel of it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginChannelType {
+    /// What a channel of the kind names as its `pluginType`: the plugin's id and the kind's name
+    /// (`org.example.forums:board`).
+    pub plugin_type: String,
+    /// The kind's name, in the reader's language.
+    pub name: String,
+    pub glyph: crate::app::plugin::manifest::Glyph,
+    /// Where the page that shows a channel of the kind is served, beneath the API's origin.
+    pub view: String,
 }
 
 impl PluginInfo {
@@ -88,6 +105,21 @@ impl PluginInfo {
                 .unwrap_or_default(),
             community_settings: manifest.community_settings.clone(),
             messages: plugin::catalogue(&manifest.messages, &manifest.default_language, locale),
+            channel_types: manifest
+                .channel_types
+                .iter()
+                .map(|(kind, declared)| PluginChannelType {
+                    plugin_type: format!("{}:{kind}", manifest.id),
+                    name: text(&declared.name),
+                    glyph: declared.glyph,
+                    view: format!(
+                        "{}/plugins/{}/assets/{}",
+                        crate::api::API_PREFIX,
+                        manifest.id,
+                        declared.view
+                    ),
+                })
+                .collect(),
         }
     }
 }
@@ -508,19 +540,118 @@ pub async fn route(
         body: body.to_vec(),
     };
     match plugin::route::answer(&state, &plugin_id, user.id, request).await {
-        Ok(answer) => (
-            StatusCode::from_u16(answer.status).unwrap_or(StatusCode::OK),
-            [
-                (header::CONTENT_TYPE, answer.content_type),
-                (
-                    header::CONTENT_SECURITY_POLICY,
-                    "default-src 'none'; sandbox".to_string(),
-                ),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-            ],
-            answer.body,
-        )
-            .into_response(),
+        Ok(answer) => answered(answer),
         Err(e) => ApiError::from(e).into_response(),
     }
+}
+
+/// A file of a plugin's views, served to the frame that shows it, which holds no session, with a
+/// sandbox that gives the page an origin of its own (`app::plugin::asset::VIEW_POLICY`).
+pub async fn asset(
+    State(state): State<GlobalServerContext>,
+    axum::extract::Path((plugin_id, path)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let found = state
+        .plugins
+        .get(&plugin_id)
+        .filter(|p| p.holds(PluginPermission::Views))
+        .and_then(|p| p.assets.get(&path).cloned());
+    match found {
+        Some(asset) => (
+            [
+                (header::CONTENT_TYPE, asset.content_type),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    plugin::asset::VIEW_POLICY.to_string(),
+                ),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ],
+            asset.bytes,
+        )
+            .into_response(),
+        None => ApiError::new(ProblemCode::NotFound).into_response(),
+    }
+}
+
+/// Someone following a private URL a plugin gave them: the plugin answers as them.
+pub async fn capability(
+    State(state): State<GlobalServerContext>,
+    axum::extract::Path((plugin_id, secret)): axum::extract::Path<(String, String)>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    match plugin::capability::follow(&state, &plugin_id, &secret, query.unwrap_or_default()).await {
+        Ok(answer) => answered(answer),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// A plugin's answer, made safe to serve.
+fn answered(answer: plugin::route::Answer) -> Response {
+    (
+        StatusCode::from_u16(answer.status).unwrap_or(StatusCode::OK),
+        [
+            (header::CONTENT_TYPE, answer.content_type),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; sandbox".to_string(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        answer.body,
+    )
+        .into_response()
+}
+
+/// Presses a button of a message's card: the card's plugin answers as the caller, who must be
+/// able to read the message. The answer is the plugin's, as it gave it.
+#[utoipa::path(
+    post,
+    path = "/messages/{message}/card/buttons/{button}",
+    tag = TAG_PLUGINS,
+    params(("message" = MessageId, Path), ("button" = String, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, description = "The plugin's answer, as it gave it"),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: the caller may not read the message", body = Problem),
+        (status = NOT_FOUND, description = "No such message, card, or button, or its plugin does not run there", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`pluginUnavailable`: the plugin could not answer", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn press_card_button(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((message, button)): Path<(MessageId, String)>,
+) -> Response {
+    match plugin::card::press(&state, user.id, message, &button).await {
+        Ok(answer) => answered(answer),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// One of the caller's notices from a plugin, as their phone reads it when woken for it: the
+/// plugin's name and what it says, in the caller's language, while they may still view its
+/// channel.
+#[utoipa::path(
+    get,
+    path = "/users/@me/plugin-notices/{notice}",
+    tag = TAG_PLUGINS,
+    params(("notice" = PluginNoticeId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = NoticeRead),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: the caller may no longer view its channel", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn read_plugin_notice(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(notice): Path<PluginNoticeId>,
+) -> ApiResult<Json<NoticeRead>> {
+    Ok(Json(plugin::notice::read(&state, user.id, notice).await?))
 }

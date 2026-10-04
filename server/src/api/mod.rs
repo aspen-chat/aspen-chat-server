@@ -466,7 +466,15 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(plugin::list_admin_plugins))
         .routes(routes!(plugin::update_admin_plugin))
         .routes(routes!(plugin::order_plugins))
-        // A plugin's routes are its own, so they are not in the OpenAPI document.
+        .routes(routes!(plugin::press_card_button))
+        .routes(routes!(plugin::read_plugin_notice))
+        // A plugin's routes, its views' files, and its capability URLs are its own, so they are
+        // not in the OpenAPI document.
+        .route(rate_limit::PLUGIN_ASSET, axum::routing::get(plugin::asset))
+        .route(
+            rate_limit::PLUGIN_CAPABILITY,
+            axum::routing::get(plugin::capability),
+        )
         .route(
             rate_limit::PLUGIN_ROUTE,
             axum::routing::get(plugin::route)

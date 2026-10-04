@@ -8,8 +8,8 @@ plugin rides on a maintained Aspen and declares what it adds.
 
 This document is the design and the contract plugins and hosts keep. The interface between them
 is `spec/plugin.wit` (the WebAssembly component interface, package `aspen:plugin`), and a
-plugin's manifest is described by `spec/plugin_manifest.schema.json`. Phases 1 and 2, below,
-are built (`docs/architecture/plugins.md` describes how); phase 3 is not.
+plugin's manifest is described by `spec/plugin_manifest.schema.json`. Every phase below is
+built (`docs/architecture/plugins.md` describes how).
 
 ## Who is trusted with what
 
@@ -31,7 +31,7 @@ see.
 
 No plugin code runs in a client. Clients draw what plugins contribute from structured records
 (annotations, `alteredBy`, settings forms), and a plugin's own views run in sandboxed frames
-(phase 3). People of other deployments use this deployment's plugins through their own clients,
+(Views, below). People of other deployments use this deployment's plugins through their own clients,
 which is safe only because nothing a plugin sends a client is code the client runs with the
 person's session.
 
@@ -64,6 +64,11 @@ together with a manifest, a JSON file beside it:
 - `attachmentLimit`: the largest attachment it may read, when it holds `attachments.read`.
 - `principal`: its own account (below), when it holds `act`: the account's username, display
   name key, and the community permissions it asks for where it is turned on.
+- `assets`: a directory beside the manifest whose files (pages, scripts, styles, pictures)
+  are installed with it and served as its views' files, with `views`.
+- `channelTypes`: the kinds of channel it adds, with `channelTypes`, by name: each one's name (a
+  key of its `messages`), its `view` (a page among its assets), and its `glyph` (`board`,
+  `calendar`, `list`, or `chat`), which clients draw it with.
 - `retention`: a key of its `messages` saying what it keeps of what it sees and for how long,
   which the operator reads before installing, since deleting a message cannot reach a copy a
   plugin keeps.
@@ -108,7 +113,11 @@ it. A thread runs where its parent channel does.
 - `routes`: answer requests at `/api/v1/plugins/{id}/routes/…`.
 - `events`: publish the `pluginEvent` event.
 - `act`: have an account of its own, its principal, and act through it.
-- `channelTypes`, `views`: phase 3.
+- `views`: serve pages of its own, its `assets`, to people's apps (Views, below).
+- `channelTypes`: add the kinds of channel its manifest declares, each shown by one of its views.
+- `timers`: be called back at times it sets.
+- `notify`: tell people of something, as Aspen tells them of a message.
+- `capabilities`: give a person a private URL of their own to one of its routes.
 
 A manifest that asks for a permission this host does not know is refused at install, saying the
 plugin needs a newer Aspen.
@@ -253,21 +262,86 @@ community, or a user as the plugin says (`events`), and routed like any event, s
 channel decides who receives its plugin's events there. A plugin's events never change who may
 see or do anything.
 
-### Phase 3
+### Channel types
 
-- **Channel types**: a type named under the plugin's id (`org.example.forums:board`), whose
-  permissions are the ordinary channel permissions and whose contents are the plugin's. A client
-  shows a channel of a type it has no view for as needing that plugin.
-- **Views**: a plugin's user interface, served by the deployment from an origin of its own (not
-  the app's), run in a frame sandboxed without `allow-same-origin`, and talking to the app only
-  through a bridge of messages that offers what the manifest was granted: the person's name and
-  locale, the app's theme (colours, fonts, light or dark, direction), calls to the plugin's own
-  routes, its events. The frame never holds the person's session token.
+A type named under the plugin's id (`org.example.forums:board`), which someone who may manage
+channels makes like any channel where the plugin runs (`POST /channels` with `ty: "plugin"` and
+`pluginType`). Its permissions are the ordinary channel permissions: View channel decides who
+sees it and its contents, overrides apply, and a plugin decides what the others mean for it
+(Send messages, say, for posting to a board). Its contents are the plugin's, kept in storage
+scoped to the channel, so they go with it; it holds no messages of Aspen's own. A client shows it
+by its type's view, and one of a type no plugin running there declares as needing that plugin.
 
-Later, as features like an event calendar need them: timers (a durable callback at a given
-time), notifications (through Aspen's own, respecting mutes, to those who may view the channel
-when sent), typed cards in messages with buttons that call the plugin's routes, and capability
-URLs (a revocable secret per person, for a calendar feed).
+### Views
+
+A plugin's user interface: a page among its `assets`, served by the deployment at
+`/api/v1/plugins/{id}/assets/{path}`, with `Content-Security-Policy: sandbox allow-scripts
+allow-forms allow-popups` (and no `allow-same-origin`), which gives it an origin of its own, opaque
+and shared with nothing, however it is opened; it may load only its own assets and inline
+scripts and styles, and may connect nowhere. A client shows it in a frame sandboxed the same way.
+The frame never holds the person's session token; it talks to the app only through a bridge of
+`postMessage` messages, each an object with `"aspen": 1`:
+
+- The app says `hello` when the frame loads and again whenever the frame says `ready`: its
+  `context` is the plugin, the view, the channel (and its name) and community it shows, the
+  person (`id`, `name`, `displayName`), their `locale` and text direction (`dir`), the plugin's
+  `messages` in that language, `apiBase` (where the deployment's API is, for the capability URLs
+  it hands out), and the app's `theme`: its colours by token name
+  (`surface`, `ink`, `accent`, and the rest), its two font stacks, and whether it is light or
+  dark. It says `theme` again when any of that changes.
+- The frame asks `request` (`id`, `method`, `path`, `query`, `body`), which the app makes to
+  the plugin's route as the person and answers `response` (`id`, `status`, `contentType`,
+  `body` as text).
+- The frame asks `users` (`id`, `ids`), which the app answers `users` with each person's name,
+  display name, and avatar URL, as it already holds them or reads them.
+- The app passes on the plugin's `pluginEvent`s for the channel and community the view shows, as
+  `event`.
+- The frame may ask `open` with a channel or message the person may open, which the app opens.
+
+### Timers
+
+A plugin holding `timers` sets a timer by key (`set-timer`), due at a time with a payload of its
+own, and cancels it (`cancel-timer`); setting a key again replaces it. When it falls due, any one
+API server calls the plugin's `observe` with `timer-fired`, at least once: a call that fails is
+tried again a minute later, three times at most. A plugin keeps at most 10,000 timers.
+
+### Notices
+
+A plugin holding `notify` tells someone of something in a channel where it runs (`notify`), with
+text of its `messages` and optionally the message it is about. The host sends it only if they may
+view the channel now, and their settings would tell them of a message that tags them there (it is
+not muted, and their level for it is not "nothing"); it answers whether it did. They receive the
+`pluginNotice` event, which their apps show as a system notification and which opens the channel
+or message, and their phones are woken with the push pointer `notice` (`spec/push.md`). A notice
+is kept a week, for phones to read (`GET /users/@me/plugin-notices/{notice}`), and goes with the
+channel.
+
+### Cards
+
+A plugin's account may post a message with a card (`send-card`), and change or remove the card
+on a message it posted (`update-card`): an optional title and fields (each a label of its
+`messages` and a value: text, a time each client shows in its reader's time zone and language, a
+count, a person, or a link), and buttons (each an id of the plugin's, a label of its `messages`,
+and a style). A card is part of its message, which carries it as `card` (naming its plugin), and
+an update is announced as the message's. Pressing a button (`POST
+/messages/{message}/card/buttons/{button}`), which takes being able to read the message, calls
+the plugin's route `aspen/cards/{message}/{button}` as the person who pressed it. Nobody else's
+message carries a card.
+
+### Capability URLs
+
+A plugin holding `capabilities` gives the caller of one of its routes a private URL of theirs
+(`capability-path`, by a name of the plugin's, such as `feed:{channel}`), which reaches it
+without signing in, for a calendar app's feed and the like:
+`/api/v1/plugins/{id}/capabilities/{secret}`. A request to it calls the plugin's route
+`aspen/capabilities/{name}` as that person, so it answers only what they may still see, and stops
+answering at all once they are banned or their account is deleted. The person's URL for a name is
+the same each time the plugin asks for it, until the plugin revokes it (`revoke-capability`).
+
+Routes under `aspen/` are the host's to call: a person's own requests never reach them.
+
+Later: a view of a community's own, outside any channel, and plugins posting cards on messages
+other than their own, if a need for either appears.
 
 ## Federation
 
@@ -300,7 +374,8 @@ settings have a Plugins section under the community permission Manage plugins.
    counters, annotations of messages and people and their client rendering, the terminal
    commands and the dashboard. Enough for a word filter and a SynthID checker. Built.
 2. **The principal, storage, routes, events**. Enough for an automatic moderator. Built.
-3. **Views and channel types**, with a forum as the proof, and what an event calendar needs.
+3. **Views and channel types, timers, notices, cards, and capability URLs**, with a forum and
+   an event calendar as the proof. Built.
 
 ## Open questions
 

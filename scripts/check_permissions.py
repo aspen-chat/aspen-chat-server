@@ -408,19 +408,24 @@ def device_links(world: World, check: Checks) -> None:
     check("and once", claim(link) == 404)
 
 
-WORD_FILTER = REPO / "plugins" / "word_filter"
 WORD_FILTER_ID = "org.aspenchat.wordfilter"
+CALENDAR_ID = "org.aspenchat.calendar"
+
+
+def example(name: str) -> Path:
+    """An example plugin's manifest, its component built for `wasm32-wasip2` first."""
+    directory = REPO / "plugins" / name
+    built = subprocess.run(
+        ["cargo", "build", "--release", "--target", "wasm32-wasip2"],
+        cwd=directory, capture_output=True, text=True,
+    )
+    if built.returncode != 0:
+        raise Failed(f"the example plugin {name} did not build (rustup target add wasm32-wasip2?): {built.stderr[-800:]}")
+    return directory / "aspen-plugin.json"
 
 
 def word_filter() -> Path:
-    """The example plugin's manifest, its component built for `wasm32-wasip2` first."""
-    built = subprocess.run(
-        ["cargo", "build", "--release", "--target", "wasm32-wasip2"],
-        cwd=WORD_FILTER, capture_output=True, text=True,
-    )
-    if built.returncode != 0:
-        raise Failed(f"the example plugin did not build (rustup target add wasm32-wasip2?): {built.stderr[-800:]}")
-    return WORD_FILTER / "aspen-plugin.json"
+    return example("word_filter")
 
 
 def plugins(world: World, check: Checks) -> None:
@@ -483,8 +488,73 @@ def plugins(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", WORD_FILTER_ID)
 
 
+def calendar_channels(world: World, check: Checks) -> None:
+    say("a plugin's channel, its notices, its cards, and a private URL")
+    stack = world.stack
+    stack.command("plugins", "install", str(example("calendar")), "--yes")
+    stack.command("plugins", "enable", CALENDAR_ID)
+    time.sleep(1.5)
+    announce = world.channel("announcements")
+    world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
+                   {"settings": {"announceChannel": announce}, "grant": ["viewChannel", "sendMessages"]})
+    calendar = world.as_owner("POST", "/channels", {
+        "name": "events", "ty": "plugin", "pluginType": f"{CALENDAR_ID}:calendar",
+        "community": world.community, "sortIndex": 3})["id"]
+    events = f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/events"
+    check("a member reads the plugin's channel through its routes",
+          stack.status("GET", events, token=world.member["token"]) == 200)
+    feed = stack.api("POST", f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/feed", None,
+                     world.member["token"])["path"]
+    check("and follows their private URL without signing in",
+          stack.status("GET", f"{stack.base}{feed}") == 200)
+    soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+    world.as_owner("POST", events, {"title": "Planning", "start": soon})
+    time.sleep(1.0)
+    card = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]
+    press = f"/messages/{card['id']}/card/buttons/rsvp"
+    check("the event's card is posted by the plugin's account", card.get("card") is not None, card)
+    check("a member who reads it may press its button", stack.status("POST", press, token=world.member["token"]) == 200)
+
+    # An event whose reminder falls due in a few seconds, which the member says they go to.
+    later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600 + 8))
+    world.as_owner("POST", events, {"title": "Soon", "start": later})
+    time.sleep(0.5)
+    soon_card = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]
+    stack.api("POST", f"/messages/{soon_card['id']}/card/buttons/rsvp", None, world.member["token"])
+    owner_stream = stack.events(world.owner["token"])
+    owner_stream.gather(0.2)
+
+    world.as_owner("PUT", f"/channels/{calendar}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.as_owner("PUT", f"/channels/{announce}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    check("once they lose the plugin's channel, its routes answer them nothing of it",
+          stack.status("GET", events, token=world.member["token"]) == 404)
+    check("nor does their private URL", stack.status("GET", f"{stack.base}{feed}") == 404)
+    check("nor may they press a card they can no longer read",
+          stack.status("POST", press, token=world.member["token"]) in (403, 404))
+    got = world.stream.gather(12.0)
+    check("nor do its notices reach them, though they said they would go",
+          not of(got, "pluginNotice"), [e["serverEvent"] for e in got])
+    check("while someone who may still view it is told",
+          bool(of(owner_stream.gather(1.0), "pluginNotice", channel=calendar)))
+    world.as_owner("DELETE", f"/channels/{calendar}/overrides/{world.everyone}")
+    world.as_owner("DELETE", f"/channels/{announce}/overrides/{world.everyone}")
+    world.stream.gather(0.5)
+    check("given the channel back, their private URL answers again",
+          stack.status("GET", f"{stack.base}{feed}") == 200)
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "banUsers")
+    world.as_owner("PUT", f"/admin/users/{world.member['id']}/ban", {})
+    check("banned from the deployment, their private URL answers nothing",
+          stack.status("GET", f"{stack.base}{feed}") == 404)
+    world.as_owner("DELETE", f"/admin/users/{world.member['id']}/ban")
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+    stack.command("plugins", "disable", CALENDAR_ID)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             sign_ins, removal, dual_invites, device_links, plugins]
+             sign_ins, removal, dual_invites, device_links, plugins, calendar_channels]
 
 
 def main() -> None:

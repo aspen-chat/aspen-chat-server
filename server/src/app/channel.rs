@@ -50,6 +50,9 @@ pub struct Channel {
     pub last_reply_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The two people of a one-to-one DM, as `app::dm::pair_key` writes them; `None` otherwise.
     pub dm_key: Option<String>,
+    /// For a channel of a kind a plugin adds, the plugin and the kind
+    /// (`org.example.forums:board`); `None` otherwise.
+    pub plugin_type: Option<String>,
 }
 
 /// The channel's wire record. `recipients` are a DM's or group DM's people, empty for any other
@@ -67,6 +70,7 @@ pub fn record(c: &Channel, recipients: Vec<UserId>) -> message_enum::Channel {
         reply_count: c.reply_count,
         last_reply_at: c.last_reply_at,
         recipients,
+        plugin_type: c.plugin_type.clone(),
     }
 }
 
@@ -91,8 +95,9 @@ impl Loadable for Channel {
     }
 }
 
-/// Makes a text or voice channel in a community, which takes Manage channels there, with the
-/// overrides it starts with, each on the terms setting it afterwards would take.
+/// Makes a text or voice channel in a community, or one of a kind a plugin running there adds,
+/// which takes Manage channels there, with the overrides it starts with, each on the terms
+/// setting it afterwards would take.
 pub async fn create_channel(
     state: &GlobalServerContext,
     caller: UserId,
@@ -109,6 +114,10 @@ pub async fn create_channel(
             if let Some(category) = request.parent_category {
                 ensure_category_of(conn.as_mut(), category, community).await?;
             }
+            if let Some(plugin_type) = &request.plugin_type {
+                app::plugin::channel_type::check(state, conn.as_mut(), community, plugin_type)
+                    .await?;
+            }
             let overrides = app::role::check_initial_overrides(
                 conn.as_mut(),
                 &access,
@@ -121,6 +130,7 @@ pub async fn create_channel(
                 ty: request.ty,
                 community,
                 parent_category: request.parent_category,
+                plugin_type: request.plugin_type,
             };
             insert_channel(state, conn.as_mut(), new, &overrides).await
         }
@@ -149,13 +159,15 @@ async fn ensure_category_of(
     Ok(())
 }
 
-/// A text or voice channel to be made in a community.
+/// A text or voice channel, or one of a plugin's kinds, to be made in a community.
 pub struct NewChannel {
     pub name: String,
     pub sort_index: i32,
     pub ty: ChannelType,
     pub community: CommunityId,
     pub parent_category: Option<CategoryId>,
+    /// For `ChannelType::Plugin`, the plugin's kind, which the caller has checked.
+    pub plugin_type: Option<String>,
 }
 
 /// Writes a new text or voice channel with its overrides and announces it, inside the caller's
@@ -172,10 +184,16 @@ pub async fn insert_channel(
         ty,
         community,
         parent_category,
+        plugin_type,
     } = new;
-    // Threads, DMs, and group DMs have endpoints of their own, which set what they need.
-    if !matches!(ty, ChannelType::Text | ChannelType::Voice) {
-        return Err(app::Error::Validation(t!("channelTypeNotCreatable")));
+    // Threads, DMs, and group DMs have endpoints of their own, which set what they need; a
+    // plugin's channel names its kind, and nothing else does.
+    match (ty, &plugin_type) {
+        (ChannelType::Text | ChannelType::Voice, None) | (ChannelType::Plugin, Some(_)) => {}
+        (ChannelType::Plugin, None) => {
+            return Err(app::Error::Validation(t!("pluginTypeMissing")));
+        }
+        _ => return Err(app::Error::Validation(t!("channelTypeNotCreatable"))),
     }
     let channel = Channel {
         id: ChannelId::new(),
@@ -190,6 +208,7 @@ pub async fn insert_channel(
         reply_count: 0,
         last_reply_at: None,
         dm_key: None,
+        plugin_type,
     };
     diesel::insert_into(channel::table)
         .values(&channel)
@@ -666,6 +685,9 @@ pub enum ChannelType {
     Dm,
     /// A conversation among up to `app::dm::MAX_RECIPIENTS` people, outside any community.
     GroupDm,
+    /// A channel of a kind a plugin adds, which `pluginType` names; its contents are the
+    /// plugin's, shown by its view (`app::plugin::channel_type`).
+    Plugin,
 }
 
 impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
@@ -676,6 +698,7 @@ impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType 
             ChannelType::Thread => b"thread",
             ChannelType::Dm => b"dm",
             ChannelType::GroupDm => b"group_dm",
+            ChannelType::Plugin => b"plugin",
         })?;
         Ok(IsNull::No)
     }
@@ -691,6 +714,7 @@ impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelTyp
             b"thread" => Ok(ChannelType::Thread),
             b"dm" => Ok(ChannelType::Dm),
             b"group_dm" => Ok(ChannelType::GroupDm),
+            b"plugin" => Ok(ChannelType::Plugin),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())

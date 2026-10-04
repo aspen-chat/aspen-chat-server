@@ -12,6 +12,7 @@ use crate::app::mention::{self, Mentions};
 use crate::app::message_link::{self, MessageLinks};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::plugin::card::Card;
 use crate::app::plugin::intercept;
 use crate::app::plugin::manifest::InterceptHook;
 use crate::app::report::Warning;
@@ -69,6 +70,8 @@ pub struct Message {
     /// The plugins that rewrote its text as it was posted or last edited
     /// (`app::plugin::intercept`).
     pub altered_by: Vec<Option<String>>,
+    /// For a message of a plugin's account, the card it shows (`app::plugin::card`).
+    pub card: Option<Card>,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -96,6 +99,7 @@ pub fn record(
         linked_messages: row.linked_messages.0.clone(),
         warning: row.warning.clone(),
         altered_by: row.altered_by.iter().flatten().cloned().collect(),
+        card: row.card.clone(),
     }
 }
 
@@ -162,6 +166,8 @@ pub enum Posting {
     Command(Invocation),
     /// A moderator's warning, about what it names (`app::report`).
     Warning(Warning),
+    /// Text with a card beneath it, which only a plugin's account posts (`app::plugin::card`).
+    Card(Card),
 }
 
 /// Posts a message. In a thread it counts toward the thread's summary, and with
@@ -176,10 +182,11 @@ pub async fn create_message(
     echo_to_parent: bool,
     posting: Posting,
 ) -> Result<Message, app::Error> {
-    let (command, warning) = match posting {
-        Posting::Text => (None, None),
-        Posting::Command(invocation) => (Some(invocation), None),
-        Posting::Warning(warning) => (None, Some(warning)),
+    let (command, warning, card) = match posting {
+        Posting::Text => (None, None, None),
+        Posting::Command(invocation) => (Some(invocation), None, None),
+        Posting::Warning(warning) => (None, Some(warning), None),
+        Posting::Card(card) => (None, None, Some(card)),
     };
     let mut conn = state.connection_pool.get().await?;
     // Plugins decide text before the transaction that saves it opens, so a slow one holds no
@@ -228,6 +235,10 @@ pub async fn create_message(
                     )
                     .first(conn.as_mut())
                     .await?;
+                // A plugin's channel holds the plugin's contents, not messages.
+                if target.ty == ChannelType::Plugin {
+                    return Err(app::Error::Validation(t!("pluginChannelHasNoMessages")));
+                }
                 let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
                 access.require(access.send_permission())?;
                 if !attachments.is_empty() {
@@ -307,6 +318,7 @@ pub async fn create_message(
                     linked_messages,
                     warning,
                     altered_by: altered_by.into_iter().map(Some).collect(),
+                    card,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -661,6 +673,7 @@ pub async fn update_message(
                         mentions,
                         linked_messages: linked_messages.map(|links| links.0),
                         altered_by,
+                        card: None,
                     }),
                 )
                 .await?;
@@ -978,6 +991,7 @@ pub async fn remove_attachment(
                     mentions: None,
                     linked_messages: None,
                     altered_by: None,
+                    card: None,
                 }),
             )
             .await?;

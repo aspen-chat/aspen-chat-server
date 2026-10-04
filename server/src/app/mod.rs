@@ -275,6 +275,7 @@ id_type!(ReportCaseId);
 id_type!(ReportId);
 id_type!(ReportCategoryId);
 id_type!(AnnotationId);
+id_type!(PluginNoticeId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

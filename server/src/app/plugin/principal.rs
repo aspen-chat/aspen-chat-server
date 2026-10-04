@@ -54,6 +54,26 @@ pub(super) async fn act(
             )
             .await
             .map(|message| Some(message.id)),
+            Deferred::SendCard {
+                channel,
+                content,
+                card,
+            } => app::message::create_message(
+                state,
+                principal,
+                channel,
+                content,
+                Vec::new(),
+                false,
+                app::message::Posting::Card(card),
+            )
+            .await
+            .map(|message| Some(message.id)),
+            Deferred::UpdateCard { message, card } => {
+                super::card::update(state, principal, message, card)
+                    .await
+                    .map(|_| None)
+            }
             Deferred::Delete(id) => app::message::delete_message(state, principal, id)
                 .await
                 .map(|_| None),

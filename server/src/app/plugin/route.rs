@@ -73,8 +73,26 @@ fn renders(content_type: &str) -> bool {
         || essence.is_empty()
 }
 
-/// `plugin_id`'s answer to `request` from `caller`.
+/// The prefix of the routes only the host calls: a card's button pressed, a capability URL
+/// followed.
+pub const HOST_PREFIX: &str = "aspen/";
+
+/// `plugin_id`'s answer to `request` from `caller`, who asked for it themself; the host's own
+/// routes (`HOST_PREFIX`) are not theirs to reach.
 pub async fn answer(
+    state: &GlobalServerContext,
+    plugin_id: &str,
+    caller: UserId,
+    request: Request,
+) -> app::Result<Answer> {
+    if request.path.starts_with(HOST_PREFIX) {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    }
+    answer_host(state, plugin_id, caller, request).await
+}
+
+/// `plugin_id`'s answer to `request`, as `caller`, whichever route it names.
+pub async fn answer_host(
     state: &GlobalServerContext,
     plugin_id: &str,
     caller: UserId,

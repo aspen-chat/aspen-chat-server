@@ -103,6 +103,14 @@ interface types {
         refuse(text),
     }
 
+    /// A timer of the plugin's that fell due.
+    record timer {
+        key: string,
+        payload: string,
+        /// When it was due, in RFC 3339.
+        due: string,
+    }
+
     /// What an observing hook is told of.
     variant observed {
         message-created(message),
@@ -113,6 +121,8 @@ interface types {
         plugin-enabled(id),
         /// A community turned the plugin off.
         plugin-disabled(id),
+        /// One of its timers fell due.
+        timer-fired(timer),
     }
 
     /// Whom a call serves, and where.
@@ -142,6 +152,46 @@ interface types {
         detail: option<text>,
         /// An `https` link for more.
         link: option<string>,
+    }
+
+    /// What a card's field shows.
+    variant card-value {
+        /// Text as it is, not translated: what someone wrote, say.
+        plain(string),
+        /// A time, in RFC 3339, which each client shows in its reader's time zone and language.
+        time(string),
+        count(u64),
+        /// A person, by id, whom clients name.
+        person(id),
+        /// An `https` link, and the text it shows.
+        link(tuple<string, text>),
+    }
+
+    record card-field {
+        label: text,
+        value: card-value,
+    }
+
+    enum button-style {
+        primary,
+        secondary,
+        danger,
+    }
+
+    /// A button on a card, which calls the plugin's route `aspen/cards/{message}/{id}` as
+    /// whoever presses it.
+    record card-button {
+        /// The plugin's own name for it: 1 to 64 letters, digits, dots, hyphens, underscores.
+        id: string,
+        label: text,
+        style: button-style,
+    }
+
+    /// What a message of the plugin's account shows beneath its text.
+    record card {
+        title: option<text>,
+        fields: list<card-field>,
+        buttons: list<card-button>,
     }
 
     /// Where stored data lives, and so who may read it through a route and when it goes.
@@ -221,10 +271,17 @@ interface types {
 /// What the host offers. Each call is checked against the plugin's permissions, and reads are
 /// made as whoever the call serves: the caller of a route, and otherwise the plugin's principal.
 interface host {
-    use types.{id, level, annotation, scope, audience, http-request, http-response, message, error};
+    use types.{id, level, annotation, scope, audience, http-request, http-response, message, error, text, card, place};
 
     /// The deployment's settings for the plugin, as a JSON object.
     settings: func() -> string;
+
+    /// Where a channel the plugin runs in is (while answering a route, one the caller may view).
+    place-of: func(channel: id) -> result<place, error>;
+
+    /// A community's settings for the plugin, where it runs, with their defaults, as a JSON
+    /// object (while answering a route, a community the caller belongs to).
+    community-settings: func(community: id) -> result<string, error>;
 
     /// Writes to the server's log under the plugin's id.
     log: func(level: level, message: string);
@@ -261,6 +318,26 @@ interface host {
     /// Publishes a `pluginEvent` with this kind and JSON payload (`events`).
     publish: func(audience: audience, kind: string, payload: string) -> result<_, error>;
 
+    /// Whether whoever the call serves holds `permission` (a community permission's wire name,
+    /// such as `sendMessages`) in a channel where the plugin runs.
+    caller-may: func(channel: id, permission: string) -> result<bool, error>;
+
+    /// Sets the timer `key` to fall due at `due` (RFC 3339) with `payload`, replacing one of the
+    /// same key (`timers`).
+    set-timer: func(key: string, due: string, payload: string) -> result<_, error>;
+    cancel-timer: func(key: string) -> result<_, error>;
+
+    /// Tells `user` of something in `channel`, about `message` if given, as Aspen tells them of
+    /// a message that tags them (`notify`). Answers whether they were told: not when they may
+    /// not view the channel, or their settings would not tell them.
+    notify: func(user: id, channel: id, text: text, message: option<id>) -> result<bool, error>;
+
+    /// While answering a route, the caller's private path to the plugin's route
+    /// `aspen/capabilities/{name}`, made the first time it is asked for (`capabilities`).
+    capability-path: func(name: string) -> result<string, error>;
+    /// While answering a route, ends the caller's private path for `name`.
+    revoke-capability: func(name: string) -> result<_, error>;
+
     /// Acts as the plugin's principal (`act`), with its permissions where it acts. While
     /// intercepting, an action is run once the hook has answered, and returns nothing.
     send-message: func(channel: id, content: string) -> result<option<id>, error>;
@@ -268,6 +345,10 @@ interface host {
     add-reaction: func(message: id, emoji: string) -> result<_, error>;
     remove-member: func(community: id, user: id) -> result<_, error>;
     ban-member: func(community: id, user: id, reason: option<string>, seconds: option<u64>) -> result<_, error>;
+    /// Posts a message with a card as the principal.
+    send-card: func(channel: id, content: string, card: card) -> result<option<id>, error>;
+    /// Changes or removes the card of a message the principal posted.
+    update-card: func(message: id, card: option<card>) -> result<_, error>;
 }
 
 /// What a plugin exports. The host calls only the hooks its manifest names.
@@ -280,7 +361,9 @@ interface hooks {
     /// Is told of something that happened. An error is logged, and the event delivered again.
     observe: func(event: observed, context: context) -> result<_, string>;
 
-    /// Answers a request to one of its routes.
+    /// Answers a request to one of its routes. The host's own calls come under `aspen/`: a
+    /// card's button pressed (`aspen/cards/{message}/{button}`), and a capability URL followed
+    /// (`aspen/capabilities/{name}`).
     route: func(request: request, context: context) -> response;
 }
 

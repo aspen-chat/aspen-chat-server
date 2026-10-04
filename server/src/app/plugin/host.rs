@@ -117,6 +117,15 @@ pub(super) enum Deferred {
         channel: ChannelId,
         content: String,
     },
+    SendCard {
+        channel: ChannelId,
+        content: String,
+        card: super::card::Card,
+    },
+    UpdateCard {
+        message: MessageId,
+        card: Option<super::card::Card>,
+    },
     Delete(MessageId),
     React {
         message: MessageId,
@@ -958,6 +967,177 @@ impl Call {
         .await
         .map(|_| ())
     }
+
+    async fn place_of(&mut self, channel_id: String) -> Result<wit::Place, wit::Error> {
+        let channel_id = ChannelId(parse_id(&channel_id)?);
+        let mut conn = self.conn().await?;
+        self.running_at(conn.as_mut(), channel_id).await?;
+        if let Phase::Route { caller } = self.phase {
+            channel_access(&self.server, conn.as_mut(), caller, channel_id)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        place(conn.as_mut(), channel_id)
+            .await
+            .map_err(|e| self.fail(e))
+    }
+
+    async fn community_settings(&mut self, community: String) -> Result<String, wit::Error> {
+        let community = CommunityId(parse_id(&community)?);
+        let mut conn = self.conn().await?;
+        if let Phase::Route { caller } = self.phase {
+            app::permissions::require_member(conn.as_mut(), caller, community)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        let running = self
+            .server
+            .plugins
+            .running_in_community(conn.as_mut(), community)
+            .await
+            .map_err(|e| self.fail(e))?;
+        let found = running
+            .into_iter()
+            .find(|r| r.plugin.id == self.plugin.id)
+            .ok_or(wit::Error::NotFound)?;
+        Ok(
+            serde_json::to_string(&found.community_settings.unwrap_or_default())
+                .unwrap_or_else(|_| "{}".into()),
+        )
+    }
+
+    async fn caller_may(
+        &mut self,
+        channel_id: String,
+        permission: String,
+    ) -> Result<bool, wit::Error> {
+        let channel_id = ChannelId(parse_id(&channel_id)?);
+        let permission: crate::app::permissions::Permission = permission
+            .parse()
+            .map_err(|_| wit::Error::Invalid(format!("{permission:?} is not a permission")))?;
+        let reader = self.reader()?;
+        let mut conn = self.conn().await?;
+        self.running_at(conn.as_mut(), channel_id).await?;
+        Ok(
+            match channel_access(&self.server, conn.as_mut(), reader, channel_id).await {
+                Ok(access) => access.has(permission.bits()),
+                Err(_) => false,
+            },
+        )
+    }
+
+    async fn set_timer(
+        &mut self,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.require(PluginPermission::Timers)?;
+        let mut conn = self.conn().await?;
+        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload).await
+    }
+
+    async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
+        self.require(PluginPermission::Timers)?;
+        let mut conn = self.conn().await?;
+        super::timer::cancel(conn.as_mut(), &self.plugin.id, &key)
+            .await
+            .map_err(|e| self.fail(e))
+    }
+
+    async fn notify(
+        &mut self,
+        user: String,
+        channel_id: String,
+        text: wit::Text,
+        message_id: Option<String>,
+    ) -> Result<bool, wit::Error> {
+        self.require(PluginPermission::Notify)?;
+        let user = UserId(parse_id(&user)?);
+        let channel_id = ChannelId(parse_id(&channel_id)?);
+        let message_id = message_id
+            .map(|m| parse_id(&m).map(MessageId))
+            .transpose()?;
+        let text = PluginText::from(text);
+        if text.key.is_empty() || text.key.len() > 64 {
+            return Err(wit::Error::Invalid("a text's key is 1 to 64 bytes".into()));
+        }
+        {
+            let mut conn = self.conn().await?;
+            self.running_at(conn.as_mut(), channel_id).await?;
+        }
+        super::notice::notify(
+            &self.server,
+            &self.plugin.id,
+            user,
+            channel_id,
+            text,
+            message_id,
+        )
+        .await
+        .map_err(|e| self.fail(e))
+    }
+
+    async fn capability_path(&mut self, name: String) -> Result<String, wit::Error> {
+        self.require(PluginPermission::Capabilities)?;
+        let Phase::Route { caller } = self.phase else {
+            return Err(wit::Error::Denied(
+                "a capability is given to the caller of a route".into(),
+            ));
+        };
+        let mut conn = self.conn().await?;
+        super::capability::path(conn.as_mut(), &self.plugin.id, caller, &name)
+            .await
+            .map_err(|e| self.fail(e))
+    }
+
+    async fn revoke_capability(&mut self, name: String) -> Result<(), wit::Error> {
+        self.require(PluginPermission::Capabilities)?;
+        let Phase::Route { caller } = self.phase else {
+            return Err(wit::Error::Denied(
+                "a capability is revoked for the caller of a route".into(),
+            ));
+        };
+        let mut conn = self.conn().await?;
+        super::capability::revoke(conn.as_mut(), &self.plugin.id, caller, &name)
+            .await
+            .map_err(|e| self.fail(e))
+    }
+
+    async fn send_card(
+        &mut self,
+        channel_id: String,
+        content: String,
+        card: wit::Card,
+    ) -> Result<Option<String>, wit::Error> {
+        let channel = ChannelId(parse_id(&channel_id)?);
+        let card = super::card::Card::from_wit(&self.plugin.id, card)?;
+        {
+            let mut conn = self.conn().await?;
+            self.running_at(conn.as_mut(), channel).await?;
+        }
+        self.act(Deferred::SendCard {
+            channel,
+            content,
+            card,
+        })
+        .await
+        .map(|id| id.map(|id| id.0.to_string()))
+    }
+
+    async fn update_card(
+        &mut self,
+        message_id: String,
+        card: Option<wit::Card>,
+    ) -> Result<(), wit::Error> {
+        let message = MessageId(parse_id(&message_id)?);
+        let card = card
+            .map(|card| super::card::Card::from_wit(&self.plugin.id, card))
+            .transpose()?;
+        self.act(Deferred::UpdateCard { message, card })
+            .await
+            .map(|_| ())
+    }
 }
 
 impl aspen::plugin::host::Host for CallState {
@@ -1090,6 +1270,70 @@ impl aspen::plugin::host::Host for CallState {
         seconds: Option<u64>,
     ) -> Result<(), wit::Error> {
         self.call.ban_member(community, user, reason, seconds).await
+    }
+
+    async fn caller_may(
+        &mut self,
+        channel: String,
+        permission: String,
+    ) -> Result<bool, wit::Error> {
+        self.call.caller_may(channel, permission).await
+    }
+
+    async fn place_of(&mut self, channel: String) -> Result<wit::Place, wit::Error> {
+        self.call.place_of(channel).await
+    }
+
+    async fn community_settings(&mut self, community: String) -> Result<String, wit::Error> {
+        self.call.community_settings(community).await
+    }
+
+    async fn set_timer(
+        &mut self,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.call.set_timer(key, due, payload).await
+    }
+
+    async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
+        self.call.cancel_timer(key).await
+    }
+
+    async fn notify(
+        &mut self,
+        user: String,
+        channel: String,
+        text: wit::Text,
+        message: Option<String>,
+    ) -> Result<bool, wit::Error> {
+        self.call.notify(user, channel, text, message).await
+    }
+
+    async fn capability_path(&mut self, name: String) -> Result<String, wit::Error> {
+        self.call.capability_path(name).await
+    }
+
+    async fn revoke_capability(&mut self, name: String) -> Result<(), wit::Error> {
+        self.call.revoke_capability(name).await
+    }
+
+    async fn send_card(
+        &mut self,
+        channel: String,
+        content: String,
+        card: wit::Card,
+    ) -> Result<Option<String>, wit::Error> {
+        self.call.send_card(channel, content, card).await
+    }
+
+    async fn update_card(
+        &mut self,
+        message: String,
+        card: Option<wit::Card>,
+    ) -> Result<(), wit::Error> {
+        self.call.update_card(message, card).await
     }
 }
 

@@ -76,6 +76,11 @@ fn explain(permission: PluginPermission) -> &'static str {
         PluginPermission::Routes => "answer requests at routes of its own",
         PluginPermission::Events => "send events to people's apps",
         PluginPermission::Act => "act through an account of its own where communities let it",
+        PluginPermission::Views => "show pages of its own in people's apps",
+        PluginPermission::ChannelTypes => "add kinds of channel, shown by its pages",
+        PluginPermission::Timers => "be called back at times it sets",
+        PluginPermission::Notify => "tell people of things, as messages that tag them do",
+        PluginPermission::Capabilities => "give people private links to what it answers",
     }
 }
 
@@ -211,6 +216,14 @@ async fn run(
                 .join(&manifest.component);
             let component = std::fs::read(&component_path)
                 .with_context(|| format!("could not read the component, {component_path:?}"))?;
+            let assets = match &manifest.assets {
+                Some(dir) => {
+                    let dir = path.parent().unwrap_or(std::path::Path::new(".")).join(dir);
+                    crate::app::plugin::asset::read_dir(&manifest, &dir)
+                        .map_err(|e| anyhow!("its views' files are not fit to serve: {e}"))?
+                }
+                None => Vec::new(),
+            };
             crate::app::plugin::Plugins::new()
                 .map_err(|e| anyhow!("{e}"))?
                 .check_component(&component)
@@ -240,9 +253,11 @@ async fn run(
             if !yes && !confirm("Install it, granting what it asks?")? {
                 bail!("not installed");
             }
-            let outcome = install::install(publisher, conn, &manifest, &component, mode, grant_dms)
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+            let outcome = install::install(
+                publisher, conn, &manifest, &component, &assets, mode, grant_dms,
+            )
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
             announce(publisher).await?;
             tracing::info!(
                 plugin = manifest.id,

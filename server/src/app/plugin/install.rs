@@ -140,11 +140,13 @@ pub enum Outcome {
 /// permissions it asks for (`dms` only with `grant_dms`). A new plugin is installed off, in
 /// `mode`, after every other; an upgrade keeps its mode, order, whether it is on, and the
 /// settings it still has. Its principal is made, or renamed, and its commands published.
+#[allow(clippy::too_many_arguments)]
 pub async fn install(
     publisher: &impl Publishing,
     conn: &mut AsyncPgConnection,
     manifest: &Manifest,
     component: &[u8],
+    assets: &[(String, String, Vec<u8>)],
     mode: Mode,
     grant_dms: bool,
 ) -> app::Result<Outcome> {
@@ -211,6 +213,7 @@ pub async fn install(
                         }
                     }
                 };
+                super::asset::replace(conn, &manifest.id, assets).await?;
                 match &manifest.principal {
                     Some(principal) => {
                         ensure_principal(publisher, conn, manifest, principal).await?
@@ -491,6 +494,7 @@ pub async fn remove(
             diesel::delete(user_annotation::table.filter(user_annotation::plugin.eq(id)))
                 .execute(conn)
                 .await?;
+            super::asset::replace(conn, id, &[]).await?;
             retire_principal(publisher, conn, id).await
         }
         .scope_boxed()

@@ -99,6 +99,7 @@ pub(crate) async fn create_community(
                     ty,
                     community: community.id,
                     parent_category: None,
+                    plugin_type: None,
                 };
                 app::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
             }

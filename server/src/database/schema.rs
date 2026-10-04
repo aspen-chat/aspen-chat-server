@@ -105,6 +105,7 @@ diesel::table! {
         reply_count -> Int4,
         last_reply_at -> Nullable<Timestamptz>,
         dm_key -> Nullable<Text>,
+        plugin_type -> Nullable<Text>,
     }
 }
 
@@ -344,6 +345,7 @@ diesel::table! {
         linked_messages -> Array<Nullable<Uuid>>,
         warning -> Nullable<Jsonb>,
         altered_by -> Array<Nullable<Text>>,
+        card -> Nullable<Jsonb>,
     }
 }
 
@@ -449,12 +451,54 @@ diesel::table! {
 }
 
 diesel::table! {
+    plugin_asset (plugin, path) {
+        plugin -> Text,
+        path -> Text,
+        content_type -> Text,
+        bytes -> Bytea,
+    }
+}
+
+diesel::table! {
+    plugin_capability (secret) {
+        secret -> Text,
+        plugin -> Text,
+        user -> Uuid,
+        name -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    plugin_notice (id) {
+        id -> Uuid,
+        plugin -> Text,
+        user -> Uuid,
+        channel -> Uuid,
+        message -> Nullable<Uuid>,
+        text -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     plugin_storage (plugin, scope_kind, scope, key) {
         plugin -> Text,
         scope_kind -> Text,
         scope -> Uuid,
         key -> Text,
         value -> Bytea,
+    }
+}
+
+diesel::table! {
+    plugin_timer (plugin, key) {
+        plugin -> Text,
+        key -> Text,
+        due -> Timestamptz,
+        payload -> Text,
+        attempts -> Int4,
+        claimed_until -> Nullable<Timestamptz>,
     }
 }
 
@@ -819,7 +863,15 @@ diesel::joinable!(notification_setting -> user (user));
 diesel::joinable!(passkey -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
+diesel::joinable!(plugin_asset -> plugin (plugin));
+diesel::joinable!(plugin_capability -> plugin (plugin));
+diesel::joinable!(plugin_capability -> user (user));
+diesel::joinable!(plugin_notice -> channel (channel));
+diesel::joinable!(plugin_notice -> message (message));
+diesel::joinable!(plugin_notice -> plugin (plugin));
+diesel::joinable!(plugin_notice -> user (user));
 diesel::joinable!(plugin_storage -> plugin (plugin));
+diesel::joinable!(plugin_timer -> plugin (plugin));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
 diesel::joinable!(poll_option -> poll (poll));
@@ -898,7 +950,11 @@ diesel::allow_tables_to_appear_in_same_query!(
     passkey,
     pin,
     plugin,
+    plugin_asset,
+    plugin_capability,
+    plugin_notice,
     plugin_storage,
+    plugin_timer,
     poll,
     poll_option,
     poll_vote,

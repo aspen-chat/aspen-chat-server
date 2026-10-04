@@ -1,0 +1,87 @@
+/* The board takes the app's colours and fonts from the bridge (`--aspen-*`). */
+:root {
+  color-scheme: light dark;
+  font-family: var(--aspen-font-sans, system-ui, sans-serif);
+  color: var(--aspen-ink, CanvasText);
+  background: var(--aspen-surface, Canvas);
+}
+body {
+  margin: 0;
+  padding: 16px;
+  max-width: 48rem;
+  margin-inline: auto;
+}
+h1,
+h2 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+button {
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--aspen-line, GrayText);
+  background: var(--aspen-surface-raised, ButtonFace);
+  color: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--aspen-accent, Highlight);
+  color: var(--aspen-accent-contrast, HighlightText);
+  border-color: transparent;
+}
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--aspen-surface-raised, Field);
+  border: 1px solid var(--aspen-line, GrayText);
+  border-radius: 6px;
+  padding: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-block: 12px;
+}
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.post {
+  border: 1px solid var(--aspen-line, GrayText);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--aspen-surface-raised, Canvas);
+}
+.post button.title {
+  all: unset;
+  font-weight: 600;
+  cursor: pointer;
+}
+.post button.title:focus-visible {
+  outline: 2px solid var(--aspen-accent, Highlight);
+}
+.meta,
+.hint {
+  color: var(--aspen-ink-muted, GrayText);
+  font-size: 0.85rem;
+}
+.body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.error {
+  color: var(--aspen-danger, red);
+}

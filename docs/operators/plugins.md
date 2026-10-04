@@ -44,6 +44,12 @@ mode, and whether it is on; it asks again when the new version asks for more. Ad
 accept without being asked (in scripts), and `--mode everywhere` to install a plugin that runs
 in every community (below).
 
+A plugin may also add pages of its own (its views) and kinds of channel shown by them, such as
+a forum's boards or a calendar. Their files are installed with it, from the directory its
+manifest names, and served by your API servers to people's apps, sandboxed so a page reaches
+nothing of the app's: there is nothing more to set up. Someone who may manage channels makes a
+channel of such a kind like any other, where the plugin runs.
+
 ## Where it runs
 
 - **`optIn`** (the default): it runs in the communities that turn it on. A member with the

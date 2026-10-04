@@ -37,6 +37,10 @@ pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
 
 /// Plugins' own routes (`api::plugin::route`), which are not in the OpenAPI document.
 pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
+/// The files of plugins' views (`api::plugin::asset`), served to frames that hold no session.
+pub const PLUGIN_ASSET: &str = "/plugins/{plugin}/assets/{*path}";
+/// People's private URLs to plugins' routes (`api::plugin::capability`).
+pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
 /// The methods plugins' routes answer.
 const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
@@ -57,6 +61,8 @@ pub fn routes() -> Vec<Route> {
     for method in PLUGIN_ROUTE_METHODS {
         routes.push(Route::new(method, PLUGIN_ROUTE, Access::Authenticated));
     }
+    routes.push(Route::new("GET", PLUGIN_ASSET, Access::Anonymous));
+    routes.push(Route::new("GET", PLUGIN_CAPABILITY, Access::Anonymous));
     routes
 }
 

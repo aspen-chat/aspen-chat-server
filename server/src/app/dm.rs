@@ -99,6 +99,7 @@ fn new_dm(ty: ChannelType, dm_key: Option<String>) -> Channel {
         reply_count: 0,
         last_reply_at: None,
         dm_key,
+        plugin_type: None,
     }
 }
 

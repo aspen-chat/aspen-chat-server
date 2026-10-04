@@ -18,17 +18,23 @@
 //! runs. No plugin reaches credentials, sessions, sign-in, deployment roles, or federation.
 
 pub mod annotation;
+pub mod asset;
+pub mod capability;
+pub mod card;
+pub mod channel_type;
 pub mod community;
 mod host;
 pub mod install;
 pub mod intercept;
 pub mod manifest;
+pub mod notice;
 pub mod observe;
 pub mod principal;
 pub mod registry;
 pub mod route;
 pub mod settings;
 pub mod storage;
+pub mod timer;
 
 use crate::app;
 use schemars::JsonSchema;
@@ -99,6 +105,21 @@ pub enum PluginPermission {
     /// Have an account of its own, its principal, and act through it.
     #[serde(rename = "act")]
     Act,
+    /// Serve pages of its own, its assets, to people's apps.
+    #[serde(rename = "views")]
+    Views,
+    /// Add the kinds of channel its manifest declares.
+    #[serde(rename = "channelTypes")]
+    ChannelTypes,
+    /// Be called back at times it sets.
+    #[serde(rename = "timers")]
+    Timers,
+    /// Tell people of something, as Aspen tells them of a message.
+    #[serde(rename = "notify")]
+    Notify,
+    /// Give a person a private URL of their own to one of its routes.
+    #[serde(rename = "capabilities")]
+    Capabilities,
 }
 
 app::wire_name_traits!(PluginPermission);

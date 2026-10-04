@@ -172,7 +172,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::DeploymentAccessChanged { .. }
         | ServerEvent::AccountBanned { .. }
         | ServerEvent::SignInsEnded { .. }
-        | ServerEvent::ReportsChanged { .. } => ScopeKind::User,
+        | ServerEvent::ReportsChanged { .. }
+        | ServerEvent::PluginNotice { .. } => ScopeKind::User,
         ServerEvent::User(_)
         | ServerEvent::BotCommandsChanged { .. }
         | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
@@ -649,7 +650,8 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::MessageAnnotation(_)
         | ServerEvent::UserAnnotation(_)
         | ServerEvent::CommunityPlugin(_)
-        | ServerEvent::PluginEvent { .. } => Vec::new(),
+        | ServerEvent::PluginEvent { .. }
+        | ServerEvent::PluginNotice { .. } => Vec::new(),
     }
 }
 

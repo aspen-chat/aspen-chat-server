@@ -229,6 +229,11 @@ enum MessageEnumSource {
         // an edit announces the new set with its `Update` event.
         #[message_gen(server_authoritative = "mutable")]
         altered_by: Vec<String>,
+        // For a message of a plugin's account, the card it shows beneath its text: fields and
+        // buttons, drawn from the plugin's catalogue. Only the plugin changes it, announced
+        // by the message's `Update` event. See `app::plugin::card`.
+        #[message_gen(server_authoritative = "mutable")]
+        card: Option<crate::app::plugin::card::Card>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -319,6 +324,11 @@ enum MessageEnumSource {
         // would be; they are then the channel's overrides like any other.
         #[message_gen(secret)]
         overrides: Option<Vec<crate::app::role::RoleOverride>>,
+        // For a channel of `ty` `plugin`, the kind a plugin adds (`org.example.forums:board`),
+        // which a plugin running in the community must declare; its contents are the plugin's,
+        // which clients show by its view. See `app::plugin::channel_type`.
+        #[message_gen(permanent)]
+        plugin_type: Option<String>,
     },
     Category {
         #[message_gen(id)]
@@ -560,6 +570,20 @@ enum MessageEnumSource {
     // A plugin's own event: `kind` and `payload` are the plugin's, published to whoever may
     // view `channel`, to `community`'s members, or with neither to one user. See
     // `spec/plugins.md`.
+    // A plugin told the person of something in `channel`, about `message` if given; only they
+    // receive it, and their apps show it as a notification. `text` is the plugin's, drawn from
+    // its catalogue. See `app::plugin::notice`.
+    #[message_gen(custom_event)]
+    PluginNotice {
+        id: crate::app::PluginNoticeId,
+        plugin: String,
+        channel: ChannelId,
+        community: Option<CommunityId>,
+        // For a notice in a thread, the channel the thread is in.
+        parent_channel: Option<ChannelId>,
+        text: PluginText,
+        message: Option<MessageId>,
+    },
     #[message_gen(custom_event)]
     PluginEvent {
         plugin: String,
@@ -653,6 +677,7 @@ mod tests {
             mentions: None,
             linked_messages: None,
             altered_by: None,
+            card: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -674,6 +699,7 @@ mod tests {
             mentions: None,
             linked_messages: None,
             altered_by: None,
+            card: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),

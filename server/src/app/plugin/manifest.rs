@@ -69,6 +69,12 @@ pub struct Manifest {
     /// Its own account, with `act`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<Principal>,
+    /// The directory, relative to the manifest, whose files are its views' (`views`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets: Option<String>,
+    /// The kinds of channel it adds, by name (`channelTypes`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_types: BTreeMap<String, ChannelTypeDecl>,
     /// A key of `messages` saying what it keeps of what it sees, and for how long.
     pub retention: String,
 }
@@ -116,6 +122,9 @@ pub enum ObserveHook {
     /// A community turned it off.
     #[serde(rename = "plugin.disable")]
     PluginDisable,
+    /// One of its timers fell due.
+    #[serde(rename = "timer.fire")]
+    TimerFire,
 }
 
 /// How an intercepting hook fails.
@@ -133,6 +142,32 @@ pub enum Failure {
     Open,
     /// As if it refused it.
     Closed,
+}
+
+/// A kind of channel a plugin adds.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelTypeDecl {
+    /// A key of `messages` naming the kind.
+    pub name: String,
+    /// The page among its assets that shows a channel of the kind.
+    pub view: String,
+    /// What clients draw beside such a channel's name.
+    #[serde(default)]
+    pub glyph: Glyph,
+}
+
+/// The pictures clients draw beside a plugin's channel.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum Glyph {
+    #[default]
+    Board,
+    Calendar,
+    List,
+    Chat,
 }
 
 /// A plugin's own account.
@@ -194,6 +229,9 @@ impl Manifest {
                 principal.display_name.as_str(),
                 "principal.displayName".to_string(),
             ));
+        }
+        for (name, kind) in &self.channel_types {
+            keys.push((kind.name.as_str(), format!("channelTypes.{name}.name")));
         }
         keys
     }
@@ -292,6 +330,9 @@ impl Manifest {
                     needs(PluginPermission::Act, &mut wrong, "observing commands")
                 }
                 ObserveHook::PluginEnable | ObserveHook::PluginDisable => {}
+                ObserveHook::TimerFire => {
+                    needs(PluginPermission::Timers, &mut wrong, "observing timers")
+                }
             }
         }
         if self.asks(PluginPermission::Network) == self.hosts.is_empty() {
@@ -322,6 +363,30 @@ impl Manifest {
                 wrong.push("attachmentLimit needs the permission attachments.read".into())
             }
             (false, None) => {}
+        }
+        if self.asks(PluginPermission::Views) != self.assets.is_some() {
+            wrong.push("views and assets go together: name the directory of its pages".into());
+        }
+        if self.asks(PluginPermission::ChannelTypes) == self.channel_types.is_empty() {
+            wrong.push("channelTypes needs the kinds of channel it adds, and they it".into());
+        }
+        if !self.channel_types.is_empty() && !self.asks(PluginPermission::Views) {
+            wrong.push(
+                "a kind of channel is shown by a view, which needs the permission views".into(),
+            );
+        }
+        for (name, kind) in &self.channel_types {
+            if !valid_label(name) {
+                wrong.push(format!(
+                    "channel kind {name:?} must be lowercase letters, digits, and hyphens"
+                ));
+            }
+            if !valid_asset_path(&kind.view) {
+                wrong.push(format!(
+                    "channel kind {name}'s view {:?} is not a path",
+                    kind.view
+                ));
+            }
         }
         match (&self.principal, self.asks(PluginPermission::Act)) {
             (Some(principal), true) => {
@@ -401,6 +466,19 @@ fn valid_label(label: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Whether `path` names a file beneath the assets directory: relative, with no `..` or empty
+/// segment, of the characters a URL path carries plainly.
+pub fn valid_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 200
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
+}
+
 fn valid_host(host: &str) -> bool {
     host.len() <= 253 && host.split('.').count() >= 2 && host.split('.').all(valid_label)
 }
@@ -432,22 +510,29 @@ mod tests {
     }
 
     #[test]
-    fn the_example_plugin_is_valid() {
+    fn the_example_plugins_are_valid() {
         assert_eq!(word_filter().check(), Vec::<String>::new());
+        for manifest in [
+            include_str!("../../../../plugins/forum/aspen-plugin.json"),
+            include_str!("../../../../plugins/calendar/aspen-plugin.json"),
+        ] {
+            let manifest: Manifest = serde_json::from_str(manifest).expect("it parses");
+            assert_eq!(manifest.check(), Vec::<String>::new(), "{}", manifest.id);
+        }
     }
 
     #[test]
     fn what_a_newer_aspen_offers_is_named() {
         let manifest = serde_json::json!({
-            "permissions": ["messages.read", "views"],
-            "hooks": {"intercept": {"message.create": {}, "poll.create": {}}, "observe": ["timer"]}
+            "permissions": ["messages.read", "telepathy"],
+            "hooks": {"intercept": {"message.create": {}, "poll.create": {}}, "observe": ["dream"]}
         });
         assert_eq!(
             unknown_names(&manifest),
             vec![
-                "the permission views",
+                "the permission telepathy",
                 "the hook poll.create",
-                "the hook timer"
+                "the hook dream"
             ]
         );
     }

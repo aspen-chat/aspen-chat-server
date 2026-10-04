@@ -40,6 +40,8 @@ pub struct LoadedPlugin {
     digest: Vec<u8>,
     /// The compiled component, ready to instantiate.
     pub(super) pre: host::PluginPre<CallState>,
+    /// The files its views are served from, by path.
+    pub assets: HashMap<String, super::asset::Asset>,
 }
 
 impl LoadedPlugin {
@@ -369,6 +371,7 @@ impl Plugins {
                     }
                 }
             };
+            let assets = super::asset::load(conn.as_mut(), &id).await?;
             let granted = granted
                 .into_iter()
                 .flatten()
@@ -388,6 +391,7 @@ impl Plugins {
                 revision,
                 digest,
                 pre,
+                assets,
             }));
         }
         drop(conn);
@@ -416,7 +420,14 @@ impl Plugins {
             keep
         });
         for plugin in loaded.iter() {
-            if plugin.manifest.hooks.observe.is_empty() || observers.contains_key(&plugin.id) {
+            // Timers are handed out apart from the event stream (`timer`).
+            let streams = plugin
+                .manifest
+                .hooks
+                .observe
+                .iter()
+                .any(|hook| *hook != super::manifest::ObserveHook::TimerFire);
+            if !streams || observers.contains_key(&plugin.id) {
                 continue;
             }
             let task = tokio::spawn(super::observe::run(state.clone(), plugin.clone()));
@@ -430,6 +441,7 @@ impl Plugins {
 pub async fn start(state: &GlobalServerContext) -> app::Result<()> {
     host::start_ticker(state.plugins.engine.clone());
     state.plugins.reload(state).await?;
+    super::timer::spawn(state.clone());
     let client = state.nats_context.client();
     let state = state.clone();
     tokio::spawn(async move {

@@ -182,6 +182,11 @@ each subscription's keys beside the session it registered them with.
     device; the app removes that channel's notifications up to it. It shows nothing.
   - `deleted` (`channel`, `message`): the message is gone; the app removes its notification. It
     shows nothing.
+  - `notice` (`channel`, `notice`): one of the deployment's plugins tells the person of
+    something in the channel (`spec/plugins.md`, Notices). The app fetches it
+    (`GET /api/v1/users/@me/plugin-notices/{notice}`, which answers the plugin's name as `title`,
+    its text as `body`, both in the person's language, and the channel's `community` and
+    `parentChannel`, and the `message` it is about, if any) and shows the title and body.
 - `badge`: how many unread messages tag the person on this deployment (the sum of their
   `ReadState.mentions`), and how many of their DMs are unread; absent when a message wakes so
   many people that working it out for each would cost too much. The app keeps each account's
@@ -247,7 +252,8 @@ For a push, the notification code:
    `refreshToken`, and keeps it), and shows who wrote it, where, and what it says (tags as
    names), grouped by channel, with the message id as the notification's identifier;
 3. for `read`, removes that channel's notifications up to `message`; for `deleted`, that one;
-   either shows nothing;
+   either shows nothing; for `notice`, fetches it as the message is fetched and shows its title
+   and body, with the notice id as the notification's identifier;
 4. sets the badge to the sum of every account's latest `badge`.
 
 A notification it posts carries `{ origin, channel, message, community, parentChannel }`, the

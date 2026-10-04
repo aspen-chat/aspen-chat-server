@@ -80,3 +80,4 @@ pub mod m20261003_233932_deleted_category_leftovers;
 pub mod m20261004_001047_attachment_uploader;
 pub mod m20261004_044609_dual_invites;
 pub mod m20261004_072804_plugins;
+pub mod m20261004_091749_plugin_views;
