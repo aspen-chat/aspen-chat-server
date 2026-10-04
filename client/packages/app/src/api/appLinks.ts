@@ -6,11 +6,12 @@ import { aspenLinkRoute } from "@/features/qr/openLink";
 import { router } from "@/router";
 
 /**
- * In the mobile apps, opens the `aspen://app/…` links that invites and sign-in codes are shared as
- * when the deployment names no web client (`shareUrl`), whether the system hands one over while
- * the app runs or launches the app with it. `onServer` hears a sign-in code's server, for an app
- * that has none chosen yet. Other `aspen:` addresses (the passkey hand-off's return) are left to
- * whatever is waiting for them.
+ * In the desktop and mobile apps, opens the `aspen://app/…` links that invites and sign-in codes
+ * are shared as when the deployment names no web client (`shareUrl`), whether the system hands
+ * one over while the app runs or launches the app with it: on the desktop through the preload
+ * bridge (`appLinks`), on a phone through Capacitor's `App`. `onServer` hears a sign-in code's
+ * server, for an app that has none chosen yet. Other `aspen:` addresses (the passkey hand-off's
+ * return on a phone) are left to whatever is waiting for them.
  */
 export function useOpenAppLinks(onServer: (link: AspenLink & { kind: "deviceLink" }) => void) {
   const latest = useRef(onServer);
@@ -18,9 +19,6 @@ export function useOpenAppLinks(onServer: (link: AspenLink & { kind: "deviceLink
     latest.current = onServer;
   });
   useEffect(() => {
-    if (detectShell() !== "mobile") {
-      return;
-    }
     const open = (url: string) => {
       if (!url.startsWith(APP_LINK_BASE + "/")) {
         return;
@@ -34,6 +32,17 @@ export function useOpenAppLinks(onServer: (link: AspenLink & { kind: "deviceLink
       }
       void router.navigate(aspenLinkRoute(link, null));
     };
+    const desktop = window.aspenDesktop?.appLinks;
+    if (desktop !== undefined) {
+      const stop = desktop.onOpen(open);
+      void desktop.ready().then((waiting) => {
+        waiting.forEach(open);
+      });
+      return stop;
+    }
+    if (detectShell() !== "mobile") {
+      return;
+    }
     let removed = false;
     let remove: (() => void) | null = null;
     void import("@capacitor/app").then(async ({ App }) => {

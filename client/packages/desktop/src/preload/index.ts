@@ -35,6 +35,21 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       ipcRenderer.send("passkey:dispose", id);
     },
   },
+  // `aspen://app/…` links the system handed the app: those that waited, then each as it comes.
+  appLinks: {
+    ready: () => ipcRenderer.invoke("app-link:ready"),
+    onOpen: (listener: (url: string) => void) => {
+      const handler = (_event: unknown, url: unknown) => {
+        if (typeof url === "string") {
+          listener(url);
+        }
+      };
+      ipcRenderer.on("app-link:open", handler);
+      return () => {
+        ipcRenderer.off("app-link:open", handler);
+      };
+    },
+  },
   // Game capture through libobs; the main process owns the helper that captures and sends it.
   gameCapture: {
     kinds: () => ipcRenderer.invoke("voice:capture-kinds"),

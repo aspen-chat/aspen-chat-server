@@ -53,9 +53,21 @@ function SignedOut() {
   const inviteAt =
     pathname.startsWith("/invite/") && typeof search.at === "string" ? search.at : null;
   const invite = typeof search.invite === "string" ? search.invite : undefined;
-  const [screen, setScreen] = useState<"login" | "register">(
-    pathname === "/register" || invite !== undefined ? "register" : "login",
+  // The screen a link opens on, until the reader switches; a link opened later (one the desktop
+  // or mobile app is handed while it runs) opens on its own screen again.
+  const opened = `${pathname}?${invite ?? ""}`;
+  const [switched, setSwitched] = useState<{ on: string; screen: "login" | "register" } | null>(
+    null,
   );
+  const screen =
+    switched?.on === opened
+      ? switched.screen
+      : pathname === "/register" || invite !== undefined
+        ? "register"
+        : "login";
+  const setScreen = (next: "login" | "register") => {
+    setSwitched({ on: opened, screen: next });
+  };
   // A sign-in code scanned or opened here signs this device in when the other one confirms it.
   if (pathname === "/device-link") {
     return (
@@ -74,6 +86,8 @@ function SignedOut() {
       <DeploymentWelcome serverUrl={serverUrl} onChangeServer={changeServer} />
       {screen === "register" ? (
         <RegisterForm
+          // A new link's code fills the form afresh.
+          key={invite ?? ""}
           initialInvite={invite}
           onSwitchToLogin={() => {
             setScreen("login");

@@ -30,5 +30,13 @@
   code, a registration invite, or a community invite, under whatever address it was shared)
   and answers a code that is not Aspen's, or not the kind wanted there, without closing; the
   join form scans invites, and Sign-in and security, the sign-in screen, and the server form
-  scan sign-in codes. In the mobile apps `useOpenAppLinks` (`src/api/appLinks.ts`) opens the
-  `aspen://app/…` links the system hands over, at launch or while running, the same way.
+  scan sign-in codes. In the desktop and mobile apps `useOpenAppLinks` (`src/api/appLinks.ts`) opens
+  the `aspen://app/…` links the system hands over, at launch or while running, the same way.
+  The desktop installers register the scheme (`protocols` in `electron-builder.yml`), a
+  packaged app claims it again at run time (a development build does not, which would make a
+  bare Electron the system's handler), and one instance runs at a time: a link opened while it
+  runs comes as the second launch's command line on Windows and Linux, or `open-url` on macOS,
+  and the main process (`packages/desktop/src/main/appLinks.ts`) passes only `aspen://app/…`
+  links to the page, holding them until it asks (`appLinks` on the preload bridge). A link
+  arriving while signed out opens on its own screen, a registration link on the create-account
+  form with its code.

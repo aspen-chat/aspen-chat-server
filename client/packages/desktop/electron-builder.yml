@@ -24,6 +24,13 @@ extraResources:
   - from: build/icons/512x512.png
     to: icon.png
 asar: true
+# The `aspen://app/…` links invites and sign-in codes are shared as where a deployment names no
+# web client: registered with the system by each installer (the Linux packages' desktop entry,
+# macOS's Info.plist, and Windows's registry), and claimed again at run time (`appLinks.ts`).
+protocols:
+  - name: Aspen
+    schemes:
+      - aspen
 npmRebuild: false
 linux:
   # The package's own name, `@aspen/desktop`, is no file name.
