@@ -840,7 +840,7 @@ pub(crate) async fn read_authors_memberships(
         SELECT DISTINCT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon,
                u.created_at, u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio,
                u.status_text, u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public,
-               u.home_domain, u.home_id, u.home_icon, u.name_hue
+               u.home_domain, u.home_id, u.home_icon, u.name_hue, u.plugin
         FROM unnest($1::uuid[], $2::uuid[]) AS written(channel, author)
         JOIN channel c ON c.id = written.channel
         JOIN community_user cu ON cu.community = c.community AND cu."user" = written.author
