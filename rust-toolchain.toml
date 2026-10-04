@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.99.0"
 profile = "default"
+# The example plugins (`plugins/`) are WebAssembly components, which the permissions check builds.
+targets = ["wasm32-wasip2"]

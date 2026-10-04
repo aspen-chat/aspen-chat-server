@@ -379,7 +379,8 @@ def build_env(paths: Paths) -> dict[str, str]:
 
 def setup(paths: Paths) -> None:
     require_tools()
-    subprocess.run(["rustup", "target", "add", RUST_TARGET], check=True)
+    # Run from the checkout so the target goes to the toolchain rust-toolchain.toml pins.
+    subprocess.run(["rustup", "target", "add", RUST_TARGET], cwd=REPO, check=True)
     make_sysroot(paths)
     write_toolchain(paths)
     paths.ready.write_text("")
