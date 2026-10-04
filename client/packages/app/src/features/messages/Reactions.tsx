@@ -23,6 +23,7 @@ import {
   ToggleButton,
 } from "react-aria-components";
 import {
+  useChannel,
   useChannelCan,
   useCustomEmoji,
   useMe,
@@ -502,6 +503,7 @@ function Reactor({
   const user = useUser(userId);
   const me = useMe();
   const channelId = useMessage(messageId)?.channelId ?? "";
+  const community = useChannel(channelId)?.community;
   const moderate = useChannelCan(channelId, "manageMessages") && me?.id !== userId;
   const name = user === undefined ? m.unknownUser : displayNameOf(user);
   const label = format(m.removeReactor, { name });
@@ -509,7 +511,7 @@ function Reactor({
     <li className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">
       <PersonAvatar id={userId} size="sm" />
       <span className="min-w-0 flex-1 truncate">
-        <PersonName id={userId} />
+        <PersonName id={userId} community={community} />
       </span>
       {moderate && (
         <Tooltip text={label}>

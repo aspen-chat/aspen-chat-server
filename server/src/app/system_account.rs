@@ -47,6 +47,7 @@ pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> ap
             system: true,
             bot_owner: None,
             bot_public: false,
+            name_hue: None,
             home_domain: None,
             home_id: None,
             home_icon: None,

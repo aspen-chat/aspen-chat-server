@@ -129,7 +129,7 @@ function PinnedMessage({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
         <div className="flex items-baseline gap-2">
           <span className="truncate font-medium">
-            <PersonName id={message?.author} />
+            <PersonName id={message?.author} community={home.community} />
           </span>
           {message !== undefined && (
             <span className="shrink-0 text-xs text-ink-faint">

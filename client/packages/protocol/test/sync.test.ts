@@ -12,6 +12,7 @@ import {
   type Channel,
   type Community,
   type Message,
+  type ServerEvent,
   type ServerMessage,
   type Session,
   type User,
@@ -429,7 +430,7 @@ describe("AspenSync", () => {
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/messages`]: (url) => {
         expect(url.searchParams.get("include")).toBe(
-          "authors,attachments,polls,threads,echoes,reactions,linked,warnings",
+          "authors,memberships,attachments,polls,threads,echoes,reactions,linked,warnings",
         );
         if (url.searchParams.get("before") !== null) {
           return json({ data: [message(50)], included: { users: [], attachments: [] } });
@@ -449,6 +450,102 @@ describe("AspenSync", () => {
     expect(window?.hasOlder).toBe(false);
     const olderRead = calls.find((u) => u.searchParams.has("before"));
     expect(olderRead?.searchParams.get("before")).toBe(message(100).id);
+  });
+
+  it("notes the roles of a window's authors without making them its member sample", async () => {
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/messages`]: () =>
+        json({
+          data: [message(1, bob.id)],
+          included: {
+            users: [bob],
+            userCommunities: [{ community: aspen.id, user: bob.id, roles: [id(41)] }],
+          },
+        }),
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    expect(sync.store.memberRoles(aspen.id, bob.id)).toEqual([id(41)]);
+    expect(sync.store.members(aspen.id).map((u) => u.id)).toEqual([me.id]);
+    sync.stop();
+  });
+
+  it("reads the member sample again when roles shown apart change, and only then", async () => {
+    const role = (n: number, hoist: boolean) => ({
+      id: id(n),
+      community: aspen.id,
+      name: `role ${String(n)}`,
+      position: n - 40,
+      permissions: [],
+      everyone: n === 40,
+      hoist,
+    });
+    let sampleReads = 0;
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/communities": () =>
+          json({
+            data: [aspen],
+            included: {
+              channels: [general],
+              users: [me, bob],
+              userCommunities: [
+                { community: aspen.id, user: me.id, sortIndex: 0 },
+                { community: aspen.id, user: bob.id, roles: [] },
+              ],
+              roles: [role(40, false), role(41, true), role(42, false)],
+            },
+          }),
+        [`/api/v1/communities/${aspen.id}/members`]: () => {
+          sampleReads += 1;
+          return json({
+            data: [me, bob],
+            included: {
+              userCommunities: [
+                { community: aspen.id, user: me.id },
+                { community: aspen.id, user: bob.id, roles: [id(41)] },
+              ],
+            },
+          });
+        },
+      },
+      () => 0,
+      { random: () => 0 },
+    );
+    const socket = await goLive(sync);
+    let sequence = 0;
+    const hear = async (event: ServerEvent) => {
+      sequence += 1;
+      socket.frame({ type: "event", sequence, event });
+      await settle();
+    };
+    await hear({ serverEvent: "role", type: "update", id: id(42), name: "renamed" });
+    await hear({ serverEvent: "role", type: "update", id: id(42), position: 3 });
+    expect(sampleReads).toBe(0);
+    await hear({ serverEvent: "role", type: "update", id: id(42), hoist: true });
+    expect(sampleReads).toBe(1);
+    await hear({ serverEvent: "role", type: "update", id: id(41), position: 4 });
+    expect(sampleReads).toBe(2);
+    await hear({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      roles: [id(41)],
+    });
+    // The sample already said Bob holds that role, so nothing changed.
+    expect(sampleReads).toBe(2);
+    await hear({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      roles: [id(41), id(42)],
+    });
+    expect(sampleReads).toBe(3);
+    sync.stop();
   });
 
   it("extends a window forwards and reaches the latest on a short page", async () => {

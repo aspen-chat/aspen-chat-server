@@ -850,6 +850,8 @@ mod tests {
             name: Some("Renamed".to_string()),
             position: None,
             permissions: None,
+            hue: None,
+            hoist: None,
         });
         assert!(rechecks_of(&renamed, &EventScope::Community(community)).is_empty());
         assert_eq!(

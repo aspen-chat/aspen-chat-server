@@ -91,6 +91,8 @@ pub fn message_enum_source(
         let mut server_mutable_fields = Vec::new();
         // Basically exists just for the user password.
         let mut secret_fields = Vec::new();
+        // Fields a create request may leave out, taking their type's default.
+        let mut create_defaults = Vec::new();
         populate_field_types(
             fields,
             &mut id_fields,
@@ -100,6 +102,7 @@ pub fn message_enum_source(
             &mut server_authoritative_fields,
             &mut server_mutable_fields,
             &mut secret_fields,
+            &mut create_defaults,
         );
         if id_fields.is_empty() && commands && !custom_event {
             abort!(
@@ -116,6 +119,23 @@ pub fn message_enum_source(
             .map(|id_field| id_field.field.clone())
             .collect::<Vec<_>>();
         let variant_ident = &variant.ident.clone();
+        // Client-settable fields as the record and the create request declare them: a field marked
+        // `default` may be absent, in a request from a client that predates it and in a record
+        // from a deployment that does, and is then its type's default.
+        let defaulted_other_fields = other_fields
+            .iter()
+            .map(|f| {
+                let defaulted = f
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| create_defaults.contains(ident));
+                if defaulted {
+                    quote!(#[serde(default)] pub #f)
+                } else {
+                    quote!(pub #f)
+                }
+            })
+            .collect::<Vec<_>>();
         // Create request: everything the client may set at creation time. Identifiers and parent
         // references arrive via the URL path, server authoritative fields are never accepted.
         if commands
@@ -128,7 +148,7 @@ pub fn message_enum_source(
                 #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
                 #[serde(rename_all = "camelCase")]
                 pub struct #create_request_ident {
-                    #(pub #other_fields,)*
+                    #(#defaulted_other_fields,)*
                     #(pub #other_permanent_fields,)*
                     #(pub #secret_fields,)*
                 }
@@ -249,7 +269,7 @@ pub fn message_enum_source(
                 #(pub #id_fields_all,)*
                 #(pub #parent_fields,)*
                 #(pub #server_authoritative_fields,)*
-                #(pub #other_fields,)*
+                #(#defaulted_other_fields,)*
                 #(pub #other_permanent_fields,)*
             }
         });
@@ -326,6 +346,7 @@ fn populate_field_types(
     server_authoritative_fields: &mut Vec<Field>,
     server_mutable_fields: &mut Vec<Field>,
     secret_fields: &mut Vec<Field>,
+    create_defaults: &mut Vec<syn::Ident>,
 ) {
     for field in fields.named {
         let mut is_id = false;
@@ -391,6 +412,15 @@ fn populate_field_types(
                             server_authoritative_fields.push(stripped);
                             is_other = false;
                             is_server_authoritative = true;
+                        }
+                        // `default`: a create request, or a record from a deployment that
+                        // predates the field, may leave it out, which then takes its type's
+                        // default, so a field added later refuses no request and breaks no
+                        // reader of an older deployment's records.
+                        "default" => {
+                            if let Some(ident) = &field.ident {
+                                create_defaults.push(ident.clone());
+                            }
                         }
                         "secret" => {
                             secret_fields.push(Field {
@@ -460,7 +490,10 @@ fn populate_field_types(
             )
         }
         if is_other {
-            other_fields.push(field);
+            other_fields.push(Field {
+                attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
+                ..field
+            });
         }
     }
 }

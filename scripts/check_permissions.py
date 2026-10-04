@@ -406,10 +406,39 @@ def device_links(world: World, check: Checks) -> None:
     check("as the giver", got.get("userId") == world.member["id"], got)
     check("and once", claim(link) == 404)
 
+def name_colours(world: World, check: Checks) -> None:
+    say("name colours, from a community role and a deployment role")
+    stack = world.stack
+    outsider = world.account("outsider")
+    tinted = world.as_owner("POST", f"/communities/{world.community}/roles",
+                            {"name": "Tinted", "permissions": [], "hue": 200, "hoist": True})
+    world.give(tinted["id"])
+    got = world.stream.gather(1.0)
+    check("a community role's hue reaches its members", bool(of(got, "role", id=tinted["id"], hue=200)), got)
+    check("but no one outside the community reads it",
+          stack.status("GET", f"/communities/{world.community}/roles", token=outsider["token"]) == 404)
+    check("nor does it colour the member's name anywhere else",
+          stack.api("GET", f"/users/{world.member['id']}", token=outsider["token"]).get("nameHue") is None)
+    stack.command("admin", "grant", world.member["name"])
+    world.stream.gather(0.5)
+    staff = stack.api("POST", "/admin/roles", {"name": f"Staff{world.run}", "permissions": [], "hue": 120},
+                      world.member["token"])["id"]
+    stack.api("PUT", f"/admin/users/{world.owner['id']}/roles/{staff}", token=world.member["token"])
+    got = world.stream.gather(1.0)
+    check("giving a deployment role with a hue announces the holder's new name colour",
+          bool(of(got, "user", id=world.owner["id"], nameHue=120)), got)
+    check("which shows to someone who shares nothing with them",
+          stack.api("GET", f"/users/{world.owner['id']}", token=outsider["token"]).get("nameHue") == 120)
+    stack.api("DELETE", f"/admin/roles/{staff}", token=world.member["token"])
+    got = world.stream.gather(1.0)
+    check("deleting the role takes the colour away, announced",
+          any("nameHue" in e and e["nameHue"] is None for e in of(got, "user", id=world.owner["id"]))
+          and stack.api("GET", f"/users/{world.owner['id']}", token=outsider["token"]).get("nameHue") is None, got)
+    stack.command("admin", "revoke", world.member["name"])
+    world.stream.gather(0.5)
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             sign_ins, removal, dual_invites, device_links]
-
+             sign_ins, removal, name_colours, dual_invites, device_links]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check that changes to access reach everything already open.")

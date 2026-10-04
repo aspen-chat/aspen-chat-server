@@ -7,6 +7,7 @@
 //! Roles keep dense positions: everyone's at 0 and the rest at 1 and up, renumbered whenever
 //! one is made, deleted, or moved, each renumbered role announced by its update.
 
+use crate::api::message_enum::request::{RoleCreateRequest, RoleUpdateRequest};
 use crate::api::message_enum::{self, server_event::*};
 use crate::app::context::GlobalServerContext;
 use crate::app::moderation_log::{ModerationAction, log_moderation};
@@ -42,6 +43,20 @@ pub struct RoleRow {
     pub everyone: bool,
     /// The bot this role was made for when it was added, whose alone it is.
     pub bot: Option<UserId>,
+    /// The hue holders' names are drawn in, 0 to 359.
+    pub hue: Option<i16>,
+    /// Whether holders are shown apart in the member list and come first in its sample.
+    pub hoist: bool,
+}
+
+/// A role to make, before it has an id or a place.
+pub(crate) struct NewRole {
+    pub name: String,
+    pub permissions: Permissions,
+    pub hue: Option<i16>,
+    pub hoist: bool,
+    /// The bot it is made for, whose alone it then is.
+    pub bot: Option<UserId>,
 }
 
 impl From<&RoleRow> for message_enum::Role {
@@ -54,6 +69,8 @@ impl From<&RoleRow> for message_enum::Role {
             permissions: to_names(row.permissions),
             everyone: row.everyone,
             bot: row.bot,
+            hue: row.hue,
+            hoist: row.hoist,
         }
     }
 }
@@ -84,6 +101,8 @@ pub async fn create_default_roles(
             permissions,
             everyone,
             bot: None,
+            hue: None,
+            hoist: false,
         })
         .collect();
     diesel::insert_into(community_role::table)
@@ -249,6 +268,29 @@ fn validate_name(name: &str) -> app::Result<String> {
     Ok(name.to_string())
 }
 
+/// The highest hue, of 0 to 359 around the colour wheel.
+pub const MAX_HUE: i16 = 359;
+
+/// Checks that `hue`, when there is one, is on the colour wheel. Deployment roles' hues are
+/// checked here too.
+pub fn validate_hue(hue: Option<i16>) -> app::Result<()> {
+    match hue {
+        Some(hue) if !(0..=MAX_HUE).contains(&hue) => {
+            Err(app::Error::Validation(t!("roleHueRange", max = MAX_HUE)))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Refuses a hue or showing apart for everyone's role: a colour every member shares marks
+/// nobody, and showing everyone apart shows nobody apart.
+fn check_everyone_plain(everyone: bool, hue: Option<i16>, hoist: bool) -> app::Result<()> {
+    if everyone && (hue.is_some() || hoist) {
+        return Err(app::Error::Validation(t!("everyoneRolePlain")));
+    }
+    Ok(())
+}
+
 /// Gives the roles of a community dense positions in the order `order` lists them (everyone's
 /// first, at 0), announcing each whose position changed.
 async fn renumber(
@@ -275,6 +317,8 @@ async fn renumber(
                 name: None,
                 position: Some(position),
                 permissions: None,
+                hue: None,
+                hoist: None,
             }),
         )
         .await?;
@@ -287,18 +331,25 @@ pub async fn create_role(
     state: &GlobalServerContext,
     caller: UserId,
     community_id: CommunityId,
-    name: &str,
-    permissions: Permissions,
+    request: &RoleCreateRequest,
 ) -> app::Result<message_enum::Role> {
-    let name = validate_name(name)?;
+    let name = validate_name(&request.name)?;
+    validate_hue(request.hue)?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_ROLES)?;
-            let permissions = permissions.valid();
+            let permissions = from_names(&request.permissions).valid();
             access.require_holds(permissions)?;
-            insert_role(state, conn.as_mut(), community_id, name, permissions, None).await
+            let role = NewRole {
+                name,
+                permissions,
+                hue: request.hue,
+                hoist: request.hoist,
+                bot: None,
+            };
+            insert_role(state, conn.as_mut(), community_id, role).await
         }
         .scope_boxed()
     })
@@ -306,24 +357,24 @@ pub async fn create_role(
 }
 
 /// Makes a role just above everyone's, inside the caller's transaction, and announces it; the
-/// caller has checked who may. `bot` names the bot it is made for, whose alone it then is.
+/// caller has checked who may.
 pub(crate) async fn insert_role(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     community_id: CommunityId,
-    name: String,
-    permissions: Permissions,
-    bot: Option<UserId>,
+    role: NewRole,
 ) -> app::Result<message_enum::Role> {
     let mut roles = load_roles(conn, community_id).await?;
     let row = RoleRow {
         id: RoleId::new(),
         community: community_id,
-        name,
+        name: role.name,
         position: 1,
-        permissions,
+        permissions: role.permissions,
         everyone: false,
-        bot,
+        bot: role.bot,
+        hue: role.hue,
+        hoist: role.hoist,
     };
     diesel::insert_into(community_role::table)
         .values(&row)
@@ -380,16 +431,18 @@ pub(crate) async fn delete_bot_role(
     Ok(())
 }
 
-/// Renames a role or changes its permissions. The role must rank below the caller, and any
-/// permission given or taken must be one the caller holds.
+/// Renames a role, or changes its permissions, hue, or whether it is shown apart. The role must
+/// rank below the caller, and any permission given or taken must be one the caller holds.
 pub async fn update_role(
     state: &GlobalServerContext,
     caller: UserId,
     role_id: RoleId,
-    name: Option<&str>,
-    permissions: Option<Permissions>,
+    request: &RoleUpdateRequest,
 ) -> app::Result<message_enum::Role> {
-    let name = name.map(validate_name).transpose()?;
+    let name = request.name.as_deref().map(validate_name).transpose()?;
+    if let Some(hue) = request.hue {
+        validate_hue(hue)?;
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -397,10 +450,18 @@ pub async fn update_role(
             if role.everyone && name.is_some() {
                 return Err(app::Error::Validation(t!("everyoneRoleFixed")));
             }
+            check_everyone_plain(
+                role.everyone,
+                request.hue.flatten(),
+                request.hoist.unwrap_or(false),
+            )?;
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             access.require_above(role.position)?;
-            let permissions = permissions.map(Permissions::valid);
+            let permissions = request
+                .permissions
+                .as_deref()
+                .map(|names| from_names(names).valid());
             if let Some(permissions) = permissions {
                 // What changes must be the caller's to give or take.
                 access.require_holds(permissions.symmetric_difference(role.permissions))?;
@@ -409,10 +470,18 @@ pub async fn update_role(
             if let Some(name) = &name {
                 role.name = name.clone();
             }
+            if let Some(hue) = request.hue {
+                role.hue = hue;
+            }
+            if let Some(hoist) = request.hoist {
+                role.hoist = hoist;
+            }
             diesel::update(community_role::table.filter(community_role::id.eq(role_id)))
                 .set((
                     community_role::name.eq(&role.name),
                     community_role::permissions.eq(role.permissions),
+                    community_role::hue.eq(role.hue),
+                    community_role::hoist.eq(role.hoist),
                 ))
                 .execute(conn.as_mut())
                 .await?;
@@ -425,6 +494,8 @@ pub async fn update_role(
                     name,
                     position: None,
                     permissions: permissions.map(to_names),
+                    hue: request.hue,
+                    hoist: request.hoist,
                 }),
             )
             .await?;
@@ -469,6 +540,8 @@ pub(crate) async fn take_from_everyone(
             name: None,
             position: None,
             permissions: Some(to_names(permissions)),
+            hue: None,
+            hoist: None,
         }),
     )
     .await?;
@@ -1131,4 +1204,26 @@ pub async fn set_override(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hues_lie_on_the_colour_wheel() {
+        assert!(validate_hue(None).is_ok());
+        assert!(validate_hue(Some(0)).is_ok());
+        assert!(validate_hue(Some(MAX_HUE)).is_ok());
+        assert!(validate_hue(Some(MAX_HUE + 1)).is_err());
+        assert!(validate_hue(Some(-1)).is_err());
+    }
+
+    #[test]
+    fn everyones_role_stays_plain() {
+        assert!(check_everyone_plain(true, None, false).is_ok());
+        assert!(check_everyone_plain(true, Some(10), false).is_err());
+        assert!(check_everyone_plain(true, None, true).is_err());
+        assert!(check_everyone_plain(false, Some(10), true).is_ok());
+    }
 }

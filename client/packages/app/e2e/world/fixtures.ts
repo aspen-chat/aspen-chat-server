@@ -41,6 +41,7 @@ export const roles = [
     position: 0,
     permissions: [...channelPermissions, "createInvites"],
     everyone: true,
+    hoist: false,
   },
   {
     id: organiserRole,
@@ -64,6 +65,9 @@ export const roles = [
       ...channelPermissions,
     ],
     everyone: false,
+    // Coloured and shown apart, so every audit sees a coloured name and a role's group.
+    hue: 280,
+    hoist: true,
   },
 ];
 export const general = "0190f0a0-0000-7000-8000-000000000011";

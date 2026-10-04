@@ -408,9 +408,14 @@ export class AdminApi {
     );
   }
 
+  /** Changes a deployment role as a merge patch; a `hue` of `null` takes its colour away. */
   async updateDeploymentRole(
     roleId: string,
-    patch: { name?: string; permissions?: readonly DeploymentPermission[] },
+    patch: {
+      name?: string;
+      permissions?: readonly DeploymentPermission[];
+      hue?: number | null;
+    },
   ): Promise<DeploymentRole> {
     return adminRead(
       await this.#client.api.PATCH("/api/v1/admin/roles/{role}", {
@@ -418,6 +423,7 @@ export class AdminApi {
         body: {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.permissions !== undefined ? { permissions: [...patch.permissions] } : {}),
+          ...(patch.hue !== undefined ? { hue: patch.hue } : {}),
         },
       }),
     );

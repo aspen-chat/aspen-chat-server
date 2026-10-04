@@ -34,7 +34,7 @@ import {
 } from "./preferences";
 import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
-import type { Invocation, NotificationLevel } from "./storeTypes";
+import type { Included, Invocation, NotificationLevel } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type UploadTarget, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
@@ -207,6 +207,12 @@ export const MEMBER_SEARCH_PAGE = 20;
 /** How long a read after a change to the caller's access may wait, at most. */
 export const ACCESS_RELOAD_SPREAD_MS = 2000;
 
+/**
+ * How long a read of a community's member sample after a change to its roles shown apart may
+ * wait, at most. Every member hears the change, so their reads are spread wide.
+ */
+export const MEMBER_RESAMPLE_SPREAD_MS = 10_000;
+
 export class AspenSync {
   readonly store: RecordStore;
   /** The Administration Dashboard's calls. */
@@ -249,6 +255,7 @@ export class AspenSync {
   readonly #random: () => number;
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
+  readonly #memberResamples = new Set<string>();
   /** Channels heard of but not held, waiting to be looked up (`#scheduleDiscovery`). */
   readonly #discoveries = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
@@ -793,6 +800,7 @@ export class AspenSync {
         query: {
           include: [
             "authors",
+            "memberships",
             "attachments",
             "polls",
             "threads",
@@ -806,7 +814,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ ...result.data.included, messages: [result.data.data] });
+    this.#ingestMessageRead(result.data.included, [result.data.data]);
     this.store.setReactions([result.data.data.id], result.data.included.reactions ?? []);
     return result.data.data;
   }
@@ -825,14 +833,14 @@ export class AspenSync {
       .GET("/api/v1/messages/{message}", {
         params: {
           path: { message: messageId },
-          query: { include: ["linked", "warnings", "authors", "attachments"] },
+          query: { include: ["linked", "warnings", "authors", "memberships", "attachments"] },
         },
       })
       .then((result) => {
         if (result.data === undefined) {
           throw new ApiProblemError(problemOf(result.error, result.response));
         }
-        this.store.ingest(result.data.included);
+        this.#ingestMessageRead(result.data.included);
       })
       .finally(() => {
         this.#linkLoads.delete(messageId);
@@ -1837,15 +1845,26 @@ export class AspenSync {
   }
 
   /** Renames a role or sets its permissions; its update event changes the cache. */
+  /**
+   * Changes a role as a merge patch: what `patch` leaves out is unchanged, and a `hue` of `null`
+   * takes the role's colour away.
+   */
   async updateRole(
     roleId: string,
-    patch: { name?: string; permissions?: readonly Permission[] },
+    patch: {
+      name?: string;
+      permissions?: readonly Permission[];
+      hue?: number | null;
+      hoist?: boolean;
+    },
   ): Promise<void> {
     const result = await this.#client.api.PATCH("/api/v1/roles/{role}", {
       params: { path: { role: roleId } },
       body: {
         ...(patch.name !== undefined ? { name: patch.name } : {}),
         ...(patch.permissions !== undefined ? { permissions: [...patch.permissions] } : {}),
+        ...(patch.hue !== undefined ? { hue: patch.hue } : {}),
+        ...(patch.hoist !== undefined ? { hoist: patch.hoist } : {}),
       },
     });
     if (result.error !== undefined) {
@@ -1912,6 +1931,20 @@ export class AspenSync {
     this.store.ingest({ users: result.data.data });
     this.store.noteMemberRoles(result.data.included.userCommunities ?? []);
     return result.data.data;
+  }
+
+  /** Reads a community's member sample again, replacing the one the store holds. */
+  async loadMemberSample(communityId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
+      params: { path: { community: communityId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({
+      users: result.data.data,
+      userCommunities: result.data.included.userCommunities ?? [],
+    });
   }
 
   /**
@@ -2113,14 +2146,14 @@ export class AspenSync {
           ...(search.channel === undefined ? {} : { "filter[channel]": search.channel }),
           ...(search.before === undefined ? {} : { before: search.before }),
           limit: SEARCH_PAGE,
-          include: ["authors", "attachments", "polls", "channels", "reactions"],
+          include: ["authors", "memberships", "attachments", "polls", "channels", "reactions"],
         },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ ...result.data.included, messages: result.data.data });
+    this.#ingestMessageRead(result.data.included, result.data.data);
     this.store.setReactions(
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],
@@ -2571,6 +2604,7 @@ export class AspenSync {
         ? this.store.channelsLastMessaged(event.id)
         : [];
     const widens = this.#mayWidenAccess(event);
+    const resamples = this.#mayResampleMembers(event);
     const unheld = this.#unheldChannelIn(event);
     const moderates =
       event.serverEvent === "deploymentAccessChanged" &&
@@ -2594,6 +2628,9 @@ export class AspenSync {
     }
     if (widens !== null) {
       this.#scheduleAccessReload(widens);
+    }
+    if (resamples !== null) {
+      this.#scheduleMemberResample(resamples);
     }
     if (unheld !== null) {
       this.#scheduleDiscovery(unheld);
@@ -2754,6 +2791,63 @@ export class AspenSync {
   }
 
   /**
+   * The community whose member sample `event` may change, before it is applied: the server puts
+   * connected holders of roles shown apart first, by their rank, so a role coming to be shown
+   * apart or not, one shown apart moving or going, or one given or taken, may change who is in
+   * it.
+   */
+  #mayResampleMembers(event: ServerEvent): string | null {
+    switch (event.serverEvent) {
+      case "role": {
+        const community = this.#communityOfRole(event.id);
+        if (community === undefined) {
+          return null;
+        }
+        const shownApart =
+          this.store.roles(community).find((r) => r.id === event.id)?.hoist === true;
+        const changes =
+          event.type === "delete"
+            ? shownApart
+            : event.type === "update" &&
+              ((event.hoist != null && event.hoist !== shownApart) ||
+                (shownApart && event.position != null));
+        return changes ? community : null;
+      }
+      case "userCommunity": {
+        if (event.type !== "update" || event.roles == null) {
+          return null;
+        }
+        const before = new Set(this.store.memberRoles(event.community, event.user) ?? []);
+        const after = new Set(event.roles);
+        const shownApart = this.store
+          .roles(event.community)
+          .some((r) => r.hoist && before.has(r.id) !== after.has(r.id));
+        return shownApart ? event.community : null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Reads a community's member sample again soon, at a random moment within
+   * `MEMBER_RESAMPLE_SPREAD_MS`, once however many changes ask meanwhile.
+   */
+  #scheduleMemberResample(communityId: string): void {
+    if (this.#memberResamples.has(communityId)) {
+      return;
+    }
+    this.#memberResamples.add(communityId);
+    const generation = this.#generation;
+    this.#setTimeout(() => {
+      this.#memberResamples.delete(communityId);
+      if (generation === this.#generation) {
+        void this.loadMemberSample(communityId).catch(() => undefined);
+      }
+    }, this.#random() * MEMBER_RESAMPLE_SPREAD_MS);
+  }
+
+  /**
    * Reads a community again soon, at a random moment within `ACCESS_RELOAD_SPREAD_MS` so that a
    * change reaching every member does not bring every member's read at once.
    */
@@ -2769,6 +2863,17 @@ export class AspenSync {
         void this.loadCommunity(communityId).catch(() => undefined);
       }
     }, this.#random() * ACCESS_RELOAD_SPREAD_MS);
+  }
+
+  /**
+   * Takes in what a message read sideloaded, with `messages` when the read's own are to be
+   * stored too. Its memberships say which roles the authors hold, for drawing their names in
+   * their roles' colours; they are not the community's member sample, which they leave alone.
+   */
+  #ingestMessageRead(included: Included, messages?: readonly Message[]): void {
+    const { userCommunities, ...rest } = included;
+    this.store.ingest(messages === undefined ? rest : { ...rest, messages: [...messages] });
+    this.store.noteMemberRoles(userCommunities ?? []);
   }
 
   async #reloadReactions(messageId: string): Promise<void> {
@@ -2837,6 +2942,7 @@ export class AspenSync {
           ...query,
           include: [
             "authors",
+            "memberships",
             "attachments",
             "polls",
             "threads",
@@ -2851,7 +2957,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest(result.data.included);
+    this.#ingestMessageRead(result.data.included);
     this.store.setReactions(
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],

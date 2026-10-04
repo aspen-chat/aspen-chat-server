@@ -311,13 +311,18 @@ export function compileValidator(): ValidateFunction<ServerMessage> {
     const ajv = new Ajv2020({ allErrors: false, strict: false });
     addFormats(ajv);
     // schemars emits these formats for Rust's unsigned integers (JetStream sequence numbers,
-    // vote counts, player dimensions) and ajv-formats has no entry for them.
+    // vote counts, player dimensions) and its small ones (role hues), and ajv-formats has no
+    // entry for them.
     const unsigned = {
       type: "number" as const,
       validate: (n: number) => Number.isInteger(n) && n >= 0,
     };
     ajv.addFormat("uint64", unsigned);
     ajv.addFormat("uint32", unsigned);
+    ajv.addFormat("int16", {
+      type: "number" as const,
+      validate: (n: number) => Number.isInteger(n) && n >= -32_768 && n <= 32_767,
+    });
     ajv.addSchema(eventSchema, "protocol");
     const validator = ajv.getSchema<ServerMessage>("protocol#/$defs/ServerMessage");
     if (validator === undefined) {

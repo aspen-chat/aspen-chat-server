@@ -403,7 +403,7 @@ function SearchResult({
       >
         <span className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-medium">
-            <PersonName id={message.author} />
+            <PersonName id={message.author} community={home.community} />
           </span>
           <span className="text-xs text-ink-faint">{time.format(new Date(message.timestamp))}</span>
         </span>

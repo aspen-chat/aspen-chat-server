@@ -216,6 +216,7 @@ pub async fn create(
                         system: false,
                         bot_owner: Some(owner),
                         bot_public: false,
+                        name_hue: None,
                         home_domain: None,
                         home_id: None,
                         home_icon: None,
@@ -401,6 +402,7 @@ pub async fn set_public(
                         status: None,
                         bot_owner: None,
                         bot_public: Some(public),
+                        name_hue: None,
                     }),
                 )
                 .await?;
@@ -475,9 +477,13 @@ pub async fn add_to_community(
                         state,
                         conn.as_mut(),
                         community,
-                        name,
-                        permissions,
-                        Some(bot),
+                        app::role::NewRole {
+                            name,
+                            permissions,
+                            hue: None,
+                            hoist: false,
+                            bot: Some(bot),
+                        },
                     )
                     .await?;
                     roles.push(role.id);
@@ -540,6 +546,7 @@ async fn publish_owner(
             status: None,
             bot_owner: Some(owner),
             bot_public: None,
+            name_hue: None,
         }),
     )
     .await

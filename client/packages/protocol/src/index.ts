@@ -253,6 +253,7 @@ export {
   type TransferStatus,
 } from "./transfers";
 export { browserVoiceMedia, canChooseOutput } from "./browserMedia";
+export { nameHueOf, shownApartRole } from "./nameHue";
 export {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
@@ -261,6 +262,7 @@ export {
   NOTIFICATION_OUTPUT,
   DESKTOP_NOTIFICATIONS,
   NOTIFICATION_SOUNDS,
+  NAME_COLORS,
   DEVELOPER_MODE,
   ID_WIZARD,
   LANGUAGE,

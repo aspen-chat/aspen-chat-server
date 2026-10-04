@@ -11,7 +11,7 @@ use diesel_async::{
     pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
 };
 use fred::prelude::ClientLike;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +29,9 @@ pub struct GlobalServerContext {
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
     /// Each channel's recent count of who is online in it (`app::channel_presence`).
-    pub channel_presence: Arc<app::channel_presence::PresenceCounts>,
+    pub channel_presence: Arc<app::recent::Recent<app::ChannelId, u32>>,
+    /// Each community's recent set of members with a connection (`app::user_status`).
+    pub connected_members: Arc<app::recent::Recent<app::CommunityId, Arc<HashSet<app::UserId>>>>,
     /// The server's one reading of the event stream, which every event stream connection
     /// registers with.
     pub event_feed: app::event_feed::EventFeed,
@@ -92,6 +94,7 @@ impl GlobalServerContext {
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
             channel_presence: Arc::default(),
+            connected_members: Arc::default(),
             connection_pool: {
                 let conn_manager =
                     AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);

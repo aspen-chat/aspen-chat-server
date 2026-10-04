@@ -45,3 +45,27 @@
   `PinsButton` in the channel and DM headers, each pin with its author's picture and drawn by
   `MessageBody`, the same body the channel draws (text, tags, pictures, files, poll, link
   cards), with Unpin for those who may pin.
+- Names are drawn in their roles' colours (`src/features/users/nameColor.ts`). A role carries
+  only a hue around HSV's wheel; `src/theme/nameColors.ts` draws it in OKLCH at the hue of
+  HSV's fully saturated colour, from one lightness for light grounds and one for dark, lowering
+  the chroma where sRGB cannot show it and then darkening or lightening until it reaches 4.6:1
+  against the hardest ground a name sits on, and gives both as one `light-dark()` colour; its
+  test checks every hue against every palette's surfaces and `accent-soft` in `styles.css`.
+  `nameHueOf` (`packages/protocol/src/nameHue.ts`) chooses the hue: the user's `nameHue`, a
+  deployment role's, anywhere; otherwise, inside a community, its highest held role that has
+  one. `useNameColor(userId, communityId)` applies it, and nothing at all while the device
+  preference `NAME_COLORS` (Settings, Appearance) is off. Message authors and their tags, the
+  member list (an offline row keeps the plain ink, since the row is dimmed), the profile card,
+  call participants, reactors, pins, search results, embeds, and `PersonName` given a
+  `community` are coloured; a role tag takes its role's colour, and `RoleSwatch` puts a dot of
+  it beside a role's name. Message reads ask for `memberships`, the authors' roles where the
+  messages were posted, which `AspenSync` notes without adding anyone to the member sample, so
+  an author outside it is coloured too. The role editors offer `HuePicker`: whether the role
+  has a colour, a hue slider (React Aria's `ColorSlider`), and the name previewed on a light
+  ground and a dark one, each a box whose `color-scheme` makes the palette's tokens resolve as
+  in that scheme. A community role may also be shown apart (`hoist`): the member list puts
+  online holders under their highest such role, highest first, above Online and Offline
+  (`shownApartRole`), and since the server puts connected holders first in the member sample,
+  `AspenSync` reads the sample again (`loadMemberSample`, after a random pause of at most
+  `MEMBER_RESAMPLE_SPREAD_MS`) when a role comes to be shown apart or not, one shown apart
+  moves or is deleted, or one is given or taken.

@@ -218,6 +218,7 @@ export const en = {
   showMembers: "Show members",
   hideMembers: "Hide members",
   channelOnline: "{count} online",
+  roleGroup: "{role} — {count}",
   onlineGroup: "Online — {count}",
   offlineGroup: "Offline — {count}",
   status,

@@ -19,6 +19,7 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
+import { useNameColor } from "@/features/users/nameColor";
 import { MessageMedia } from "@/features/messages/Attachments";
 import { Markdown } from "@/features/messages/Markdown";
 import { MessageBody } from "@/features/messages/MessageBody";
@@ -440,6 +441,7 @@ function MessageHeader({
 }) {
   const timeFormat = useDateFormat(TIME);
   const m = useMessages();
+  const nameColor = useNameColor(author?.id, home.community);
   // A thread's messages link to the thread; elsewhere a message links to itself in its history.
   const permalink =
     parentId === null
@@ -461,6 +463,7 @@ function MessageHeader({
           <Button
             aria-label={format(m.profile.show, { name: displayNameOf(author) })}
             className="rounded font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+            style={{ color: nameColor }}
           >
             {displayNameOf(author)}
           </Button>
@@ -472,7 +475,7 @@ function MessageHeader({
         <span className="flex items-center gap-1 text-xs text-ink-muted">
           <RobotIcon size={12} aria-hidden="true" />
           {formatNodes(m.commands.sentTo, {
-            bot: <UserMention id={message.commandBot} chip />,
+            bot: <UserMention id={message.commandBot} chip communityId={home.community} />,
           })}
         </span>
       )}

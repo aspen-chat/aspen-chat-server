@@ -3,6 +3,7 @@ import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useLinkedMessage, useMessage, useSync, useUser } from "@/api/hooks";
+import { useNameColor } from "@/features/users/nameColor";
 import { Avatar } from "@/features/communities/Avatar";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { MessageBody } from "@/features/messages/MessageBody";
@@ -38,6 +39,7 @@ export function EmbeddedMessage({
   const author = useUser(message.author);
   const timeFormat = useDateFormat(TIME);
   const name = author === undefined ? m.unknownUser : displayNameOf(author);
+  const nameColor = useNameColor(message.author, community);
   const time = (
     <time dateTime={message.timestamp}>{timeFormat.format(new Date(message.timestamp))}</time>
   );
@@ -45,7 +47,9 @@ export function EmbeddedMessage({
     <div className={embedClass}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <Avatar name={name} iconId={author?.icon ?? null} size="sm" />
-        <span className="font-medium">{name}</span>
+        <span className="font-medium" style={{ color: nameColor }}>
+          {name}
+        </span>
         {author?.bot === true && <BotBadge />}
         {author?.system === true && <SystemBadge />}
         {deletedAt === null && community !== undefined ? (

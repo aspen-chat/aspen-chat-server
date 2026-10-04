@@ -79,3 +79,4 @@ pub mod m20261003_203845_username_ignores_case;
 pub mod m20261003_233932_deleted_category_leftovers;
 pub mod m20261004_001047_attachment_uploader;
 pub mod m20261004_044609_dual_invites;
+pub mod m20261004_062257_role_colors;
