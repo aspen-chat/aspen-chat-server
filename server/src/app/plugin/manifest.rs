@@ -351,6 +351,40 @@ impl Manifest {
     }
 }
 
+/// The permissions and hooks a manifest's JSON names that this host does not know, which a
+/// plugin built for a newer Aspen may ask for; empty when it names none.
+pub fn unknown_names(manifest: &serde_json::Value) -> Vec<String> {
+    let strings = |value: Option<&serde_json::Value>| -> Vec<String> {
+        match value {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|i| i.as_str().map(str::to_string))
+                .collect(),
+            Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    };
+    let mut unknown = Vec::new();
+    for name in strings(manifest.get("permissions")) {
+        if name.parse::<PluginPermission>().is_err() {
+            unknown.push(format!("the permission {name}"));
+        }
+    }
+    let hooks = manifest.get("hooks");
+    for name in strings(hooks.and_then(|h| h.get("intercept"))) {
+        if serde_json::from_value::<InterceptHook>(serde_json::Value::String(name.clone())).is_err()
+        {
+            unknown.push(format!("the hook {name}"));
+        }
+    }
+    for name in strings(hooks.and_then(|h| h.get("observe"))) {
+        if serde_json::from_value::<ObserveHook>(serde_json::Value::String(name.clone())).is_err() {
+            unknown.push(format!("the hook {name}"));
+        }
+    }
+    unknown
+}
+
 /// Whether `id` is a reversed domain: two or more labels of lowercase letters, digits, and
 /// hyphens, none starting or ending with a hyphen.
 pub fn valid_id(id: &str) -> bool {
@@ -400,6 +434,22 @@ mod tests {
     #[test]
     fn the_example_plugin_is_valid() {
         assert_eq!(word_filter().check(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn what_a_newer_aspen_offers_is_named() {
+        let manifest = serde_json::json!({
+            "permissions": ["messages.read", "views"],
+            "hooks": {"intercept": {"message.create": {}, "poll.create": {}}, "observe": ["timer"]}
+        });
+        assert_eq!(
+            unknown_names(&manifest),
+            vec![
+                "the permission views",
+                "the hook poll.create",
+                "the hook timer"
+            ]
+        );
     }
 
     #[test]

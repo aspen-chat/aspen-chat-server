@@ -188,10 +188,19 @@ async fn run(
             yes,
         } => {
             let mode = parse_mode(&mode)?;
-            let manifest: Manifest = serde_json::from_slice(
+            let json: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(&path).with_context(|| format!("could not read {path:?}"))?,
             )
-            .with_context(|| format!("{path:?} is not a plugin manifest"))?;
+            .with_context(|| format!("{path:?} is not JSON"))?;
+            let unknown = crate::app::plugin::manifest::unknown_names(&json);
+            if !unknown.is_empty() {
+                bail!(
+                    "the plugin asks for {}, which this Aspen does not know; it needs a newer Aspen",
+                    unknown.join(", ")
+                );
+            }
+            let manifest: Manifest = serde_json::from_value(json)
+                .with_context(|| format!("{path:?} is not a plugin manifest"))?;
             let wrong = manifest.check();
             if !wrong.is_empty() {
                 bail!("the manifest is not valid:\n  {}", wrong.join("\n  "));

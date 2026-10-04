@@ -40,7 +40,6 @@ pub struct SettingField {
     pub required: bool,
     /// Its value until one is given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>)]
     pub default: Option<Value>,
     /// For a `text` field, kept out of every read and log: only the plugin receives it.
     #[serde(default)]
@@ -56,6 +55,7 @@ pub struct SettingField {
 )]
 pub enum FieldKind {
     Boolean,
+    #[serde(rename_all = "camelCase")]
     Integer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min: Option<i64>,
@@ -63,27 +63,32 @@ pub enum FieldKind {
         max: Option<i64>,
     },
     /// One line of text.
+    #[serde(rename_all = "camelCase")]
     Text {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_length: Option<u32>,
     },
     /// Text of several lines.
+    #[serde(rename_all = "camelCase")]
     LongText {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_length: Option<u32>,
     },
     /// Lines of text, one entry each.
+    #[serde(rename_all = "camelCase")]
     TextList {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_items: Option<u32>,
     },
     /// One of `options`.
+    #[serde(rename_all = "camelCase")]
     Choice {
         options: Vec<ChoiceOption>,
     },
     /// One of the community's roles (community settings only).
     Role,
     /// Some of the community's roles (community settings only).
+    #[serde(rename_all = "camelCase")]
     RoleList {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_items: Option<u32>,
@@ -91,6 +96,7 @@ pub enum FieldKind {
     /// One of the community's channels (community settings only).
     Channel,
     /// Some of the community's channels (community settings only).
+    #[serde(rename_all = "camelCase")]
     ChannelList {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_items: Option<u32>,

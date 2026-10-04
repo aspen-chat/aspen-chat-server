@@ -279,16 +279,8 @@ async fn handle(
         };
         let mut conn = state.connection_pool.get().await?;
         let place = host::place(conn.as_mut(), channel).await?;
-        let community = running
-            .community_settings
-            .as_ref()
-            .and(seen.community.or_else(|| {
-                place
-                    .community
-                    .as_deref()
-                    .and_then(|c| uuid::Uuid::parse_str(c).ok())
-                    .map(CommunityId)
-            }));
+        // The invoker's roles are those of the community the command was sent in.
+        let community = seen.community;
         let invoker = host::person(conn.as_mut(), invoker, community).await?;
         (
             wit::Observed::CommandInvoked(wit::Command {

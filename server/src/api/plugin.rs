@@ -159,7 +159,7 @@ pub async fn list_community_plugins(
 pub struct CommunityPluginEnableRequest {
     /// Its settings there, laid over any it had (`null` restores a setting's default).
     #[serde(default)]
-    #[schema(value_type = Object)]
+    #[schema(value_type = HashMap<String, serde_json::Value>)]
     pub settings: Map<String, Value>,
     /// What its account is given, on a role of its own; only permissions it asks for. Granting
     /// any takes Add bots, Manage roles, and Assign roles, and each must be held by the caller.
@@ -217,7 +217,7 @@ pub async fn enable_community_plugin(
     path = "/communities/{community}/plugins/{plugin}",
     tag = TAG_PLUGINS,
     params(("community" = CommunityId, Path), ("plugin" = String, Path)),
-    request_body(content = Object, description = "Settings by name; `null` restores a setting's default"),
+    request_body(content = HashMap<String, serde_json::Value>, description = "Settings by name; `null` restores a setting's default"),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = CommunityPlugin),
@@ -300,7 +300,7 @@ pub struct AdminPlugin {
     /// What the operator configures, labelled by keys of `plugin.messages`.
     pub settings_fields: Vec<SettingField>,
     /// The deployment's settings, without their secrets.
-    #[schema(value_type = Object)]
+    #[schema(value_type = HashMap<String, serde_json::Value>)]
     pub settings: Value,
     /// The secret settings that are set, whose values are never read back.
     pub secrets_set: Vec<String>,
@@ -391,7 +391,7 @@ pub struct AdminPluginUpdateRequest {
     pub enabled: Option<bool>,
     pub mode: Option<Mode>,
     /// Its settings, laid over them (`null` restores a setting's default).
-    #[schema(value_type = Option<Object>)]
+    #[schema(value_type = Option<HashMap<String, serde_json::Value>>)]
     pub settings: Option<Map<String, Value>>,
 }
 
