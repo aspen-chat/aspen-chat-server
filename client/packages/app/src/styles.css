@@ -98,7 +98,7 @@
   --palette-code-keyword: light-dark(#7c3aed, #c4b5fd);
   --palette-code-string: light-dark(#047857, #6ee7b7);
   --palette-code-comment: light-dark(#696969, #909090);
-  --palette-code-number: light-dark(#b45309, #fbbf24);
+  --palette-code-number: light-dark(#92400e, #fbbf24);
   --palette-code-type: light-dark(#1d4ed8, #93c5fd);
   --palette-code-attr: light-dark(#0f766e, #5eead4);
 }
@@ -122,11 +122,271 @@
   --palette-online: light-dark(#0d9488, #2dd4bf);
   --palette-away: light-dark(#ca8a04, #fde047);
   --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
-  --palette-code-string: light-dark(#0f766e, #5eead4);
+  --palette-code-string: light-dark(#0d6e66, #5eead4);
   --palette-code-comment: light-dark(#63607e, #8e8aa9);
-  --palette-code-number: light-dark(#b45309, #fcd34d);
+  --palette-code-number: light-dark(#92400e, #fcd34d);
   --palette-code-type: light-dark(#1e40af, #a5b4fc);
   --palette-code-attr: light-dark(#9d174d, #f9a8d4);
+}
+
+/* Ember: smouldering charcoal and warm ash, with an orange glow. */
+:root[data-theme="ember"] {
+  --palette-surface: light-dark(#faf7f5, #120e0c);
+  --palette-surface-raised: light-dark(#ffffff, #1c1714);
+  --palette-surface-sunken: light-dark(#f2ece8, #0b0807);
+  --palette-surface-hover: light-dark(#ece4de, #2a221d);
+  --palette-ink: light-dark(#1f1814, #f7efe9);
+  --palette-ink-muted: light-dark(#5e514a, #b3a59c);
+  --palette-ink-faint: light-dark(#6b5d55, #9a8b82);
+  --palette-line: light-dark(#e0d4cc, #3a2f28);
+  --palette-accent: light-dark(#b63d0a, #fb923c);
+  --palette-accent-strong: light-dark(#9a3412, #fdba74);
+  --palette-accent-soft: light-dark(#ffedd5, #431407);
+  --palette-accent-contrast: light-dark(#ffffff, #1c0a03);
+  --palette-danger: light-dark(#be123c, #fda4af);
+  --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
+  --palette-online: light-dark(#16a34a, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#9d174d, #f9a8d4);
+  --palette-code-string: light-dark(#44700c, #bef264);
+  --palette-code-comment: light-dark(#6b5d55, #9a8b82);
+  --palette-code-number: light-dark(#92400e, #fcd34d);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#0e726a, #5eead4);
+}
+
+/* Sakura: blossom-blush surfaces with a cherry accent. */
+:root[data-theme="sakura"] {
+  --palette-surface: light-dark(#fdf6f8, #160d11);
+  --palette-surface-raised: light-dark(#ffffff, #21141a);
+  --palette-surface-sunken: light-dark(#f8e9ee, #0e080b);
+  --palette-surface-hover: light-dark(#f3dfe6, #2f1d25);
+  --palette-ink: light-dark(#2a1520, #fbeef3);
+  --palette-ink-muted: light-dark(#6b4a58, #c2a3b0);
+  --palette-ink-faint: light-dark(#7a5866, #a68794);
+  --palette-line: light-dark(#ecd3dc, #3d2730);
+  --palette-accent: light-dark(#be185d, #f472b6);
+  --palette-accent-strong: light-dark(#9d174d, #f9a8d4);
+  --palette-accent-soft: light-dark(#fce7f3, #500724);
+  --palette-accent-contrast: light-dark(#ffffff, #2a0414);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#059669, #34d399);
+  --palette-away: light-dark(#ca8a04, #fde047);
+  --palette-code-keyword: light-dark(#7e22ce, #d8b4fe);
+  --palette-code-string: light-dark(#027051, #6ee7b7);
+  --palette-code-comment: light-dark(#7a5866, #a68794);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#a21caf, #f0abfc);
+}
+
+/* Orchid: petal-pale and plum-dark surfaces with a magenta accent. */
+:root[data-theme="orchid"] {
+  --palette-surface: light-dark(#fcf7fc, #140b15);
+  --palette-surface-raised: light-dark(#ffffff, #1f1221);
+  --palette-surface-sunken: light-dark(#f5e9f5, #0c060d);
+  --palette-surface-hover: light-dark(#efdef0, #2d1b30);
+  --palette-ink: light-dark(#2a1030, #fbeefc);
+  --palette-ink-muted: light-dark(#654a6b, #c3a5c8);
+  --palette-ink-faint: light-dark(#735879, #a98aae);
+  --palette-line: light-dark(#e8d3eb, #3d2641);
+  --palette-accent: light-dark(#a21caf, #e879f9);
+  --palette-accent-strong: light-dark(#86198f, #f0abfc);
+  --palette-accent-soft: light-dark(#fae8ff, #4a044e);
+  --palette-accent-contrast: light-dark(#ffffff, #2e0533);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#16a34a, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-string: light-dark(#027051, #6ee7b7);
+  --palette-code-comment: light-dark(#735879, #a98aae);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#be185d, #f9a8d4);
+}
+
+/* Lagoon: sea-glass surfaces with a teal accent. */
+:root[data-theme="lagoon"] {
+  --palette-surface: light-dark(#f3faf9, #071413);
+  --palette-surface-raised: light-dark(#ffffff, #0d1e1d);
+  --palette-surface-sunken: light-dark(#e4f2f0, #040c0b);
+  --palette-surface-hover: light-dark(#d9ece9, #16302d);
+  --palette-ink: light-dark(#0f2624, #e8f7f5);
+  --palette-ink-muted: light-dark(#3f5e5a, #94b8b3);
+  --palette-ink-faint: light-dark(#4d6b67, #7fa29d);
+  --palette-line: light-dark(#c7e0dc, #1f3c39);
+  --palette-accent: light-dark(#0e726a, #2dd4bf);
+  --palette-accent-strong: light-dark(#115e59, #5eead4);
+  --palette-accent-soft: light-dark(#ccfbf1, #042f2e);
+  --palette-accent-contrast: light-dark(#ffffff, #022c22);
+  --palette-danger: light-dark(#be123c, #fda4af);
+  --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
+  --palette-online: light-dark(#16a34a, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-string: light-dark(#0d708b, #67e8f9);
+  --palette-code-comment: light-dark(#4d6b67, #7fa29d);
+  --palette-code-number: light-dark(#92400e, #fcd34d);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#be185d, #f9a8d4);
+}
+
+/* Glacier: frost-blue surfaces with a cold sky accent. */
+:root[data-theme="glacier"] {
+  --palette-surface: light-dark(#f5f9fc, #0a1118);
+  --palette-surface-raised: light-dark(#ffffff, #111b25);
+  --palette-surface-sunken: light-dark(#e8f0f7, #060b10);
+  --palette-surface-hover: light-dark(#dde8f2, #1b2a38);
+  --palette-ink: light-dark(#0f1d2b, #eef5fb);
+  --palette-ink-muted: light-dark(#46596b, #9fb3c6);
+  --palette-ink-faint: light-dark(#536678, #879cb0);
+  --palette-line: light-dark(#cfdde9, #22344a);
+  --palette-accent: light-dark(#0369a1, #7dd3fc);
+  --palette-accent-strong: light-dark(#075985, #bae6fd);
+  --palette-accent-soft: light-dark(#e0f2fe, #082f49);
+  --palette-accent-contrast: light-dark(#ffffff, #082f49);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#0d9488, #2dd4bf);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-string: light-dark(#037454, #6ee7b7);
+  --palette-code-comment: light-dark(#536678, #879cb0);
+  --palette-code-number: light-dark(#92400e, #fcd34d);
+  --palette-code-type: light-dark(#1e40af, #a5b4fc);
+  --palette-code-attr: light-dark(#0d708b, #67e8f9);
+}
+
+/* Harbor: navy and sailcloth, with a polished brass accent. */
+:root[data-theme="harbor"] {
+  --palette-surface: light-dark(#f6f7fa, #0b1220);
+  --palette-surface-raised: light-dark(#ffffff, #121b2e);
+  --palette-surface-sunken: light-dark(#eaedf3, #070c16);
+  --palette-surface-hover: light-dark(#e0e5ee, #1c2740);
+  --palette-ink: light-dark(#0f1a33, #f1f3f8);
+  --palette-ink-muted: light-dark(#47536b, #a3adc2);
+  --palette-ink-faint: light-dark(#556079, #8b96ad);
+  --palette-line: light-dark(#d3d9e4, #26324d);
+  --palette-accent: light-dark(#8a5a00, #e8b84a);
+  --palette-accent-strong: light-dark(#6b4500, #f5d27a);
+  --palette-accent-soft: light-dark(#fdf0d3, #3a2803);
+  --palette-accent-contrast: light-dark(#ffffff, #1a1200);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#15803d, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-string: light-dark(#037454, #6ee7b7);
+  --palette-code-comment: light-dark(#556079, #8b96ad);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-attr: light-dark(#0e726a, #5eead4);
+}
+
+/* Parchment: sepia paper by day, a candlelit library by night, with a sienna accent. */
+:root[data-theme="parchment"] {
+  --palette-surface: light-dark(#f7f1e3, #17120c);
+  --palette-surface-raised: light-dark(#fdf9ee, #201911);
+  --palette-surface-sunken: light-dark(#efe6d2, #100c08);
+  --palette-surface-hover: light-dark(#ebe2ce, #2c2318);
+  --palette-ink: light-dark(#2b2116, #f3e9d6);
+  --palette-ink-muted: light-dark(#5f5040, #bfae94);
+  --palette-ink-faint: light-dark(#6b5b49, #a6957c);
+  --palette-line: light-dark(#ddd0b5, #3b3022);
+  --palette-accent: light-dark(#8b4513, #e0a46a);
+  --palette-accent-strong: light-dark(#6b3410, #f0c597);
+  --palette-accent-soft: light-dark(#f6e3cf, #3b2210);
+  --palette-accent-contrast: light-dark(#ffffff, #241205);
+  --palette-danger: light-dark(#b91c1c, #fca5a5);
+  --palette-danger-soft: light-dark(#fee2e2, #450a0a);
+  --palette-online: light-dark(#4d7c0f, #a3e635);
+  --palette-away: light-dark(#a16207, #facc15);
+  --palette-code-keyword: light-dark(#9d174d, #f9a8d4);
+  --palette-code-string: light-dark(#3f6212, #bef264);
+  --palette-code-comment: light-dark(#6b5b49, #a6957c);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#1e40af, #93c5fd);
+  --palette-code-attr: light-dark(#0d6e66, #5eead4);
+}
+
+/* Citrus: zesty, lime-tinted surfaces with a lime accent. */
+:root[data-theme="citrus"] {
+  --palette-surface: light-dark(#fafcf3, #0e1108);
+  --palette-surface-raised: light-dark(#ffffff, #161a0e);
+  --palette-surface-sunken: light-dark(#f0f4e2, #080a04);
+  --palette-surface-hover: light-dark(#e7edd3, #232a17);
+  --palette-ink: light-dark(#1a2410, #f3f8e6);
+  --palette-ink-muted: light-dark(#4d5a3c, #aebb98);
+  --palette-ink-faint: light-dark(#5a6848, #95a27f);
+  --palette-line: light-dark(#d8e0c1, #2f3820);
+  --palette-accent: light-dark(#47740d, #a3e635);
+  --palette-accent-strong: light-dark(#3f6212, #d9f99d);
+  --palette-accent-soft: light-dark(#ecfccb, #1a2e05);
+  --palette-accent-contrast: light-dark(#ffffff, #1a2e05);
+  --palette-danger: light-dark(#be123c, #fda4af);
+  --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
+  --palette-online: light-dark(#15803d, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#7e22ce, #d8b4fe);
+  --palette-code-string: light-dark(#47740d, #bef264);
+  --palette-code-comment: light-dark(#5a6848, #95a27f);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#0369a1, #7dd3fc);
+  --palette-code-attr: light-dark(#be185d, #f9a8d4);
+}
+
+/* Arcade: midnight purple with neon cyan, after hours at the arcade. */
+:root[data-theme="arcade"] {
+  --palette-surface: light-dark(#f7f5fd, #0f0a1f);
+  --palette-surface-raised: light-dark(#ffffff, #191230);
+  --palette-surface-sunken: light-dark(#ece8f8, #080514);
+  --palette-surface-hover: light-dark(#e5e0f5, #251b45);
+  --palette-ink: light-dark(#1a1433, #f1edff);
+  --palette-ink-muted: light-dark(#504a70, #b0a8d6);
+  --palette-ink-faint: light-dark(#5c5680, #968dbe);
+  --palette-line: light-dark(#d6d0ec, #322656);
+  --palette-accent: light-dark(#0c6c86, #22d3ee);
+  --palette-accent-strong: light-dark(#155e75, #67e8f9);
+  --palette-accent-soft: light-dark(#cffafe, #083344);
+  --palette-accent-contrast: light-dark(#ffffff, #0f0a1f);
+  --palette-danger: light-dark(#be123c, #fda4af);
+  --palette-danger-soft: light-dark(#ffe4e6, #4c0519);
+  --palette-online: light-dark(#059669, #4ade80);
+  --palette-away: light-dark(#ca8a04, #facc15);
+  --palette-code-keyword: light-dark(#be185d, #ff79c6);
+  --palette-code-string: light-dark(#027051, #6ee7b7);
+  --palette-code-comment: light-dark(#5c5680, #968dbe);
+  --palette-code-number: light-dark(#92400e, #fcd34d);
+  --palette-code-type: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-attr: light-dark(#0c6c86, #8be9fd);
+}
+
+/* Graphite: pure greys at the highest contrast, with an ink-black accent. */
+:root[data-theme="graphite"] {
+  --palette-surface: light-dark(#f7f7f7, #0d0d0d);
+  --palette-surface-raised: light-dark(#ffffff, #1a1a1a);
+  --palette-surface-sunken: light-dark(#ededed, #000000);
+  --palette-surface-hover: light-dark(#e3e3e3, #2b2b2b);
+  --palette-ink: light-dark(#000000, #ffffff);
+  --palette-ink-muted: light-dark(#3d3d3d, #c7c7c7);
+  --palette-ink-faint: light-dark(#4f4f4f, #ababab);
+  --palette-line: light-dark(#bdbdbd, #4a4a4a);
+  --palette-accent: light-dark(#262626, #e5e5e5);
+  --palette-accent-strong: light-dark(#000000, #ffffff);
+  --palette-accent-soft: light-dark(#e6e6e6, #3a3a3a);
+  --palette-accent-contrast: light-dark(#ffffff, #000000);
+  --palette-danger: light-dark(#b00020, #ff8a80);
+  --palette-danger-soft: light-dark(#fde0e0, #3d0a0a);
+  --palette-online: light-dark(#15803d, #4ade80);
+  --palette-away: light-dark(#a16207, #facc15);
+  --palette-code-keyword: light-dark(#6d28d9, #c4b5fd);
+  --palette-code-string: light-dark(#027051, #6ee7b7);
+  --palette-code-comment: light-dark(#4f4f4f, #ababab);
+  --palette-code-number: light-dark(#9a3412, #fdba74);
+  --palette-code-type: light-dark(#1d4ed8, #93c5fd);
+  --palette-code-attr: light-dark(#0d6e66, #5eead4);
 }
 
 :root {

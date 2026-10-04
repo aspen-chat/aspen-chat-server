@@ -5,7 +5,20 @@
  * pair. This module only chooses and remembers both, per browser.
  */
 
-export const PALETTES = ["aspen", "dusk"] as const;
+export const PALETTES = [
+  "aspen",
+  "dusk",
+  "ember",
+  "sakura",
+  "orchid",
+  "lagoon",
+  "glacier",
+  "harbor",
+  "parchment",
+  "citrus",
+  "arcade",
+  "graphite",
+] as const;
 export type Palette = (typeof PALETTES)[number];
 
 const STORAGE_KEY = "aspen.palette";

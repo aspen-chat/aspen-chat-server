@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { PALETTES } from "../src/theme/palettes";
 import { helper, signInToWorld, settleAnimations } from "./world";
 
 /**
@@ -50,12 +51,9 @@ async function openChannel(page: Page, name: string) {
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
 }
 
-const combinations = [
-  { palette: "aspen", scheme: "light" },
-  { palette: "aspen", scheme: "dark" },
-  { palette: "dusk", scheme: "light" },
-  { palette: "dusk", scheme: "dark" },
-] as const;
+const combinations = PALETTES.flatMap((palette) =>
+  (["light", "dark"] as const).map((scheme) => ({ palette, scheme })),
+);
 
 for (const { palette, scheme } of combinations) {
   test.describe(`${palette}, ${scheme}`, () => {
