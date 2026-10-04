@@ -5,6 +5,9 @@ export const settings = {
   motionTimes: "{speed}×",
   motionHint:
     "All your devices share this. At the far left, nothing animates. Where a device is set to reduce motion, things fade in place rather than move.",
+  nameColors: "Colour names by role",
+  nameColorsHint:
+    "Draws people's names in their roles' colours. Only this device follows this setting.",
   title: "Settings",
   account: "Account",
   audio: "Audio and video",

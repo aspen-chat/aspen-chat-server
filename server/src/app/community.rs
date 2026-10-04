@@ -8,7 +8,8 @@ use crate::app::icon::Icon;
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, community_access, missing, require_member};
 use crate::app::{
-    CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId, publish_event,
+    ChannelId, CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId,
+    publish_event,
 };
 use crate::database::schema::community;
 use crate::database::schema::community_member_role;
@@ -20,6 +21,8 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use futures_util::future::try_join_all;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = community)]
@@ -493,8 +496,8 @@ pub(crate) async fn end_membership(
     .await
 }
 
-/// Members a single community read returns: the most recently seen users, capped so a large
-/// community cannot make its member list unbounded.
+/// Members a single community read returns, capped so a large community cannot make its member
+/// list unbounded; which ones is [`read_community_members`].
 pub const MEMBERS_PER_COMMUNITY: i64 = 100;
 
 /// One row of [`read_community_members`]: a member together with the community the row was
@@ -520,12 +523,15 @@ pub struct Membership {
     pub roles: Vec<RoleId>,
 }
 
-/// The most recently seen members of each of `communities`, at most [`MEMBERS_PER_COMMUNITY`]
-/// per community, grouped by community and ordered most recently seen first within each group.
-/// The caller's own membership of each community is always among them, however long ago they
-/// were seen, because their memberships carry the order of their own community list. One query
-/// serves any number of communities: the per-community cap is a window function rather than a
-/// `LIMIT`, so sideloading members for a user's whole community list costs one round trip.
+/// The member sample of each of `communities`, at most [`MEMBERS_PER_COMMUNITY`] per community,
+/// grouped by community and in order of priority within each group. Those with a connection
+/// (online or away, `app::user_status::connected_members`) come first, and among them those
+/// holding a role shown apart, by the rank of their highest such role, even when they fill the
+/// whole sample; then the rest, connected before not, each by when they last came online. The
+/// caller's own membership of each community is always among them, wherever they rank, because
+/// their memberships carry the order of their own community list. One query serves any number of
+/// communities: the per-community cap is a window function rather than a `LIMIT`, so sideloading
+/// members for a user's whole community list costs one round trip.
 pub(crate) async fn read_community_members(
     state: &GlobalServerContext,
     caller: UserId,
@@ -536,26 +542,52 @@ pub(crate) async fn read_community_members(
     if communities.is_empty() {
         return Ok(Vec::new());
     }
+    // Presence is anyone's, whichever community they were found connected through.
+    let connected: HashSet<UserId> = try_join_all(
+        communities
+            .iter()
+            .map(|community| app::user_status::connected_members(state, *community)),
+    )
+    .await?
+    .iter()
+    .flat_map(|members| members.iter().copied())
+    .collect();
     let mut conn = state.connection_pool.get().await?;
+    // The rank of a member's highest role shown apart is looked up only for those connected,
+    // since it orders no one else.
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
         SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
                deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
-               bot_owner, bot_public, home_domain, home_id, home_icon
+               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue
         FROM (
             SELECT cu.community, cu.sort_index, u.*,
-                   ROW_NUMBER() OVER (PARTITION BY cu.community ORDER BY u.last_seen_at DESC) AS recency_rank
+                   ROW_NUMBER() OVER (
+                       PARTITION BY cu.community
+                       ORDER BY connected.id IS NOT NULL DESC,
+                                CASE WHEN connected.id IS NOT NULL THEN (
+                                    SELECT max(r.position)
+                                    FROM community_member_role mr
+                                    JOIN community_role r ON r.id = mr.role
+                                    WHERE mr.community = cu.community AND mr."user" = cu."user"
+                                      AND r.hoist
+                                ) END DESC NULLS LAST,
+                                u.last_seen_at DESC,
+                                u.id
+                   ) AS priority
             FROM community_user cu
             JOIN "user" u ON u.id = cu."user"
+            LEFT JOIN unnest($4::uuid[]) AS connected(id) ON connected.id = u.id
             WHERE cu.community = ANY($1) AND u.deleted_at IS NULL
         ) ranked
-        WHERE recency_rank <= $2 OR id = $3
-        ORDER BY community, last_seen_at DESC
+        WHERE priority <= $2 OR id = $3
+        ORDER BY community, priority
         "#,
     )
     .bind::<Array<Uuid>, _>(communities.iter().map(|c| c.0).collect::<Vec<_>>())
     .bind::<BigInt, _>(MEMBERS_PER_COMMUNITY)
     .bind::<Uuid, _>(caller.0)
+    .bind::<Array<Uuid>, _>(connected.iter().map(|u| u.0).collect::<Vec<_>>())
     .load(conn.as_mut())
     .await?;
     memberships_of(state, conn.as_mut(), caller, rows).await
@@ -649,7 +681,7 @@ pub(crate) async fn search_community_members(
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon
+               u.home_id, u.home_icon, u.name_hue
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
@@ -682,6 +714,44 @@ pub(crate) async fn read_community_sample(
     read_community_members(state, caller, &[community]).await
 }
 
+/// The memberships of the people who wrote messages, each of the community its channel is in (a
+/// thread's included), with the roles they hold there: what a reader needs to draw an author's
+/// name in their roles' colour, whether or not they are in the member sample. `written` pairs
+/// each channel with an author; whoever reads a channel's messages may see the roles of those
+/// who wrote them, so the caller's having read them is the check. Authors of DMs, and those who
+/// have since left, have none.
+pub(crate) async fn read_authors_memberships(
+    state: &GlobalServerContext,
+    caller: UserId,
+    written: &[(ChannelId, UserId)],
+) -> app::Result<Vec<Membership>> {
+    use diesel::sql_types::{Array, Uuid};
+    if written.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (channels, authors): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) =
+        written.iter().map(|(c, u)| (c.0, u.0)).unzip();
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<CommunityMember> = diesel::sql_query(
+        r#"
+        SELECT DISTINCT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon,
+               u.created_at, u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio,
+               u.status_text, u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public,
+               u.home_domain, u.home_id, u.home_icon, u.name_hue
+        FROM unnest($1::uuid[], $2::uuid[]) AS written(channel, author)
+        JOIN channel c ON c.id = written.channel
+        JOIN community_user cu ON cu.community = c.community AND cu."user" = written.author
+        JOIN "user" u ON u.id = cu."user"
+        WHERE u.deleted_at IS NULL
+        "#,
+    )
+    .bind::<Array<Uuid>, _>(channels)
+    .bind::<Array<Uuid>, _>(authors)
+    .load(conn.as_mut())
+    .await?;
+    memberships_of(state, conn.as_mut(), caller, rows).await
+}
+
 /// One member of `community`, with their roles, for a member of it (or a deployment moderator):
 /// who reads someone's messages there may see what roles they hold, whether or not they are in
 /// the member sample. Someone who is not a member is not found.
@@ -699,7 +769,7 @@ pub(crate) async fn read_community_member(
         SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon
+               u.home_id, u.home_icon, u.name_hue
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND cu."user" = $2 AND u.deleted_at IS NULL

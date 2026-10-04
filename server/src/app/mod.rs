@@ -58,6 +58,7 @@ pub mod push;
 pub mod rate_limit;
 pub mod react;
 pub mod read_state;
+pub mod recent;
 pub mod registration_invite;
 pub mod report;
 pub mod role;

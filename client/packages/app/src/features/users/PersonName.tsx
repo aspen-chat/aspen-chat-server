@@ -1,29 +1,36 @@
 import { useUser, useUserLoading } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { useNameColor } from "@/features/users/nameColor";
 import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 
 /**
  * A person's name as text: what they are called (or their handle, with `handle`) once their
  * record is here, a word-sized skeleton while it is on its way, and "Unknown user" only once
- * the server says there is no such person.
+ * the server says there is no such person. A name is drawn in its colour: a deployment role's
+ * anywhere, and a community role's where `community` names the community it is shown in.
  */
 export function PersonName({
   id,
   handle = false,
   width = "w-20",
+  community,
 }: {
   id: string | undefined;
   handle?: boolean;
   /** How wide the skeleton is, a guess at the name's length. */
   width?: string;
+  /** The community the name is shown in, if any. */
+  community?: string | null | undefined;
 }) {
   const m = useMessages();
   const user = useUser(id);
   const loading = useUserLoading(id);
+  const color = useNameColor(id, community);
   if (user !== undefined) {
-    return <>{handle ? handleOf(user) : displayNameOf(user)}</>;
+    const text = handle ? handleOf(user) : displayNameOf(user);
+    return color === undefined ? <>{text}</> : <span style={{ color }}>{text}</span>;
   }
   if (loading) {
     return (

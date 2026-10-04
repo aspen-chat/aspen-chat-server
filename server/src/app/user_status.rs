@@ -2,7 +2,8 @@
 //!
 //! - `user:{uuid}:online` exists while the user has a connection: it is set with a short expiry
 //!   when they connect the event stream (or make any authenticated request) and refreshed by the
-//!   stream's pings, so it expires shortly after their last connection goes.
+//!   stream's pings, so it expires shortly after their last connection goes. Setting it when it
+//!   was not set is their coming online, which writes their `last_seen_at`.
 //! - `user:{uuid}:active` exists while they are using Aspen: a client sends an `activity` frame
 //!   on its event stream while its user interacts with it, and each sets the key to expire after
 //!   `[presence] away_after_seconds`.
@@ -16,14 +17,15 @@
 //! Nothing announces a change: clients ask for the status of the users they show
 //! (`GET /users/statuses`) when they need it.
 //!
-//! To count who is online among a community's members without reading every member's keys, each
+//! To find who is online among a community's members without reading every member's keys, each
 //! community has a sorted set, `community:{uuid}:online`, of the members who may be online, each
-//! scored with the Unix time their listing runs out. Setting a user's `active` key lists them in
-//! all their communities, to run out `ttl / 2` after the key itself can, and `user:{uuid}:listed`,
-//! which lives those `ttl / 2` seconds, keeps that fan-out to once per margin however often the
-//! key is set: whenever the key is alive, so is a listing made since it was last set. Joining a
-//! community lists the joiner there too. A listing says only that someone may be online; the
-//! counts confirm each one by their keys (`app::channel_presence`).
+//! scored with the Unix time their listing runs out. Setting either key lists them in all their
+//! communities for the longer of the two keys' lives and half as long again, and
+//! `user:{uuid}:listed`, which lives that half, keeps the fan-out to once per margin however
+//! often the keys are set: whenever a key is alive, so is a listing made since it was last set.
+//! Joining a community lists the joiner there too. A listing says only that someone may be
+//! online; the channel counts (`app::channel_presence`) and the member sample
+//! (`connected_members`) confirm each one by their keys.
 
 use crate::api::user::UserOnlineStatus;
 use crate::app;
@@ -35,6 +37,8 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 const KEY_PREFIX: &str = "user:";
 const ONLINE_KEY_SUFFIX: &str = ":online";
@@ -69,11 +73,17 @@ fn listing_margin(ttl: i64) -> i64 {
     ttl / 2
 }
 
-/// How long a community's set lives after its last listing: as long as the longest listing, a
-/// person's, so it lasts while any listing in it does and goes once nobody is listed.
-fn community_set_lifetime(state: &GlobalServerContext) -> i64 {
+/// How long a listing covers before its margin: the longer of the two keys' lives, so a
+/// listing outlives either key set when it was made.
+fn listing_ttl(state: &GlobalServerContext) -> i64 {
     let away = i64::try_from(state.config.presence.away_after_seconds).unwrap_or(i64::MAX / 2);
-    let ttl = away.max(ONLINE_TTL_SECONDS);
+    away.max(ONLINE_TTL_SECONDS)
+}
+
+/// How long a community's set lives after its last listing: as long as a listing, so it lasts
+/// while any listing in it does and goes once nobody is listed.
+fn community_set_lifetime(state: &GlobalServerContext) -> i64 {
+    let ttl = listing_ttl(state);
     ttl.saturating_add(listing_margin(ttl))
 }
 
@@ -100,11 +110,11 @@ pub fn mark_active(state: &GlobalServerContext, user: UserId) {
             tracing::warn!(error = %e, "failed to record the user as active");
         }
     });
-    list_in_communities(state, user, ttl);
+    list_in_communities(state, user, listing_ttl(state));
 }
 
 /// Lists `user` in each of their communities' sets as someone who may be online for as long as
-/// an `active` key just set to live `ttl` seconds can, unless a listing made within the margin
+/// a key just set to live `ttl` seconds can, unless a listing made within the margin
 /// already covers it. Fire and forget, like the keys.
 fn list_in_communities(state: &GlobalServerContext, user: UserId, ttl: i64) {
     let state = state.clone();
@@ -213,6 +223,58 @@ pub async fn online_candidates(
         .collect())
 }
 
+/// How many people's presence keys one read asks for.
+const STATUS_BATCH: usize = 1_000;
+
+/// Which of `users` have a status `keep` accepts, by their presence keys, a batch at a time.
+async fn having_status(
+    state: &GlobalServerContext,
+    users: Vec<UserId>,
+    keep: impl Fn(UserOnlineStatus) -> bool,
+) -> app::Result<HashSet<UserId>> {
+    let mut kept = HashSet::new();
+    for batch in users.chunks(STATUS_BATCH) {
+        kept.extend(
+            users_online_status(state, batch.to_vec())
+                .await?
+                .into_iter()
+                .filter(|(_, status)| keep(*status))
+                .map(|(user, _)| user),
+        );
+    }
+    Ok(kept)
+}
+
+/// Which of `users` are online, not away.
+pub async fn online_among(
+    state: &GlobalServerContext,
+    users: Vec<UserId>,
+) -> app::Result<HashSet<UserId>> {
+    having_status(state, users, |status| {
+        matches!(status, UserOnlineStatus::Online)
+    })
+    .await
+}
+
+/// The members of `community` who are online or away: everyone with a connection. Each server
+/// reuses a recent answer (`app::recent`), since a community's member sample asks on every read.
+pub async fn connected_members(
+    state: &GlobalServerContext,
+    community: CommunityId,
+) -> app::Result<Arc<HashSet<UserId>>> {
+    state
+        .connected_members
+        .get_or_work(community, || async {
+            let candidates = online_candidates(state, community).await?;
+            let connected = having_status(state, candidates, |status| {
+                !matches!(status, UserOnlineStatus::Offline)
+            })
+            .await?;
+            Ok(Arc::new(connected))
+        })
+        .await
+}
+
 pub async fn user_online_status(
     state: &GlobalServerContext,
     user_id: UserId,
@@ -262,31 +324,51 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// As `mark_user_online`, for a user known by id. A bot is never away: it uses Aspen through
 /// the API rather than as a person does, so being connected is being active, and both of its
 /// keys are set together.
+///
+/// When the `online` key was not already set, the user has just come online, and their
+/// `last_seen_at` is written: it is when they last came online.
 pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool) {
-    let valkey = state.valkey.clone();
-    let mut keys = vec![app::user_status::online_key(user)];
-    if bot {
-        keys.push(app::user_status::active_key(user));
-    }
+    let state_for_task = state.clone();
     tokio::spawn(async move {
-        for key in keys {
-            if let Err(e) = valkey
-                .set::<(), _, i64>(
-                    key,
-                    1,
-                    Some(fred::types::Expiration::EX(ONLINE_TTL_SECONDS)),
-                    None,
-                    false,
-                )
-                .await
-            {
+        let state = state_for_task;
+        let expiry = Some(Expiration::EX(ONLINE_TTL_SECONDS));
+        // Setting the key answers its previous value, which says whether they were online.
+        let previous: Option<i64> = match state
+            .valkey
+            .set(online_key(user), 1, expiry.clone(), None, true)
+            .await
+        {
+            Ok(previous) => previous,
+            Err(e) => {
                 tracing::warn!(error = %e, "failed to record the user as online");
+                return;
             }
+        };
+        if bot
+            && let Err(e) = state
+                .valkey
+                .set::<(), _, i64>(active_key(user), 1, expiry, None, false)
+                .await
+        {
+            tracing::warn!(error = %e, "failed to record the user as online");
+        }
+        if previous.is_none()
+            && let Err(e) = record_seen(&state, user).await
+        {
+            tracing::warn!(error = %e, "failed to record when the user came online");
         }
     });
-    if bot {
-        list_in_communities(state, user, ONLINE_TTL_SECONDS);
-    }
+    list_in_communities(state, user, listing_ttl(state));
+}
+
+/// Writes `user`'s `last_seen_at` as now.
+async fn record_seen(state: &GlobalServerContext, user: UserId) -> app::Result<()> {
+    use crate::database::schema::user;
+    diesel::update(user::table.filter(user::id.eq(user)))
+        .set(user::last_seen_at.eq(diesel::dsl::now))
+        .execute(state.connection_pool.get().await?.as_mut())
+        .await?;
+    Ok(())
 }
 
 /// How long a presence key lives; the event stream refreshes it while the user is connected.

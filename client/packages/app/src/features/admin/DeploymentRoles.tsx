@@ -22,6 +22,8 @@ import { dangerButtonClass, secondaryButtonClass } from "@/features/invites/dial
 import { ChoiceCheckbox, UNIFORM_CHOICE_CLASS } from "@/features/layout/choices";
 import { useUniformHeight } from "@/features/layout/useUniformHeight";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { HuePicker } from "@/features/users/HuePicker";
+import { RoleSwatch } from "@/features/users/RoleSwatch";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
@@ -104,6 +106,7 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
                   textValue={role.name}
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 selected:bg-accent-soft selected:text-accent-strong"
                 >
+                  <RoleSwatch role={role} />
                   <span className="min-w-0 flex-1 truncate">{role.name}</span>
                   {manage && index >= 0 && (
                     <>
@@ -165,7 +168,7 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
         </div>
         {current !== undefined && data !== undefined && (
           <DeploymentRoleEditor
-            key={current.id + current.name + current.permissions.join()}
+            key={`${current.id}${current.name}${current.permissions.join()}${String(current.hue)}`}
             role={current}
             editable={manage && current.position < rank}
             held={new Set(data.mine.permissions)}
@@ -200,6 +203,7 @@ function DeploymentRoleEditor({
   const [permissions, setPermissions] = useState<ReadonlySet<DeploymentPermission>>(
     () => new Set(role.permissions),
   );
+  const [hue, setHue] = useState<number | null>(role.hue ?? null);
   const permissionList = useUniformHeight();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -208,6 +212,7 @@ function DeploymentRoleEditor({
   const permissionsChanged =
     permissions.size !== role.permissions.length ||
     role.permissions.some((p) => !permissions.has(p));
+  const hueChanged = hue !== (role.hue ?? null);
 
   function save() {
     setSaving(true);
@@ -216,6 +221,7 @@ function DeploymentRoleEditor({
       .updateDeploymentRole(role.id, {
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(permissionsChanged ? { permissions: Array.from(permissions) } : {}),
+        ...(hueChanged ? { hue } : {}),
       })
       .then(onChanged, (e: unknown) => {
         setError(problemText(e));
@@ -244,6 +250,13 @@ function DeploymentRoleEditor({
         <Input className={inputClass} />
       </TextField>
       {!editable && <p className={hintClass}>{m.roles.aboveYou}</p>}
+      <HuePicker
+        hue={hue}
+        onChange={setHue}
+        sample={name.trim() === "" ? role.name : name.trim()}
+        hint={m.admin.deploymentRoleColorHint}
+        isDisabled={!editable}
+      />
       <div ref={permissionList} className="grid gap-2 sm:grid-cols-2">
         {DEPLOYMENT_PERMISSIONS.map((permission) => (
           <ChoiceCheckbox
@@ -274,7 +287,7 @@ function DeploymentRoleEditor({
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="submit"
-            isDisabled={saving || !(nameChanged || permissionsChanged)}
+            isDisabled={saving || !(nameChanged || permissionsChanged || hueChanged)}
             className={primaryButtonClass}
           >
             {saving ? m.roles.saving : m.roles.save}

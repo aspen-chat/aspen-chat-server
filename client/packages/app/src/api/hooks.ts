@@ -609,6 +609,26 @@ export function useMemberRoles(communityId: string, userId: string): readonly st
   return useTopic(`roles:${communityId}`, (s) => s.memberRoles(communityId, userId));
 }
 
+/** A community's roles, lowest first, and what each member holds besides everyone's. */
+export interface RolesOfMembers {
+  roles: readonly Role[];
+  /** The roles a member holds besides everyone's, or `undefined` while unknown. */
+  of: (userId: string) => readonly string[] | undefined;
+}
+
+/**
+ * A community's roles and who holds them, for reading many members' at once. What members hold
+ * is announced on the roles' own topic, so this changes whenever any of it does.
+ */
+export function useRolesOfMembers(communityId: string): RolesOfMembers {
+  const store = useStore();
+  const roles = useRoles(communityId);
+  return useMemo(
+    () => ({ roles, of: (userId: string) => store.memberRoles(communityId, userId) }),
+    [store, communityId, roles],
+  );
+}
+
 /** What the caller may do across a community; `null` while that is unknown. */
 export function useAccess(communityId: string): CommunityPermissions | null {
   return useTopic(`access:${communityId}`, (s) => s.access(communityId));

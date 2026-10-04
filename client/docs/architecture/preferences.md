@@ -18,5 +18,7 @@
   mid-call and re-routes playback with `setSinkId` where the browser has it. `SettingsDialog`
   (`src/features/settings`, the gear in the user footer) is where preferences are edited; its
   device lists come from `useAudioDevices`, which asks for the microphone once so devices are
-  named and follows `devicechange`. The palette, light or dark, and the fonts (`fonts.md`) are
+  named and follows `devicechange`. `NAME_COLORS`, whether names are drawn in their roles'
+  colours, is device-scoped too, for a reader to whom coloured text on one screen is harder to
+  read (`roles-and-permissions.md`). The palette, light or dark, and the fonts (`fonts.md`) are
   kept per install outside `PreferenceStore`, since they apply on the sign-in screen too.

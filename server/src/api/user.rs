@@ -27,7 +27,17 @@ pub struct CustomStatus {
     pub emoji: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    utoipa::ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum UserOnlineStatus {
     Online,
@@ -94,6 +104,7 @@ impl From<app::user::User> for User {
             bot_public: user.user_pg.bot_public,
             home_domain: user.user_pg.home_domain.map(String::from),
             home_id: user.user_pg.home_id,
+            name_hue: user.user_pg.name_hue,
         }
     }
 }
@@ -145,6 +156,7 @@ pub async fn create_user(
             bot_public: false,
             home_domain: None,
             home_id: None,
+            name_hue: None,
         },
     ))
 }

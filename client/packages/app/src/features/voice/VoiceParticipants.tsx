@@ -9,7 +9,15 @@ import {
 } from "@phosphor-icons/react";
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "react-aria-components";
-import { useBlocked, useChannelVoice, useMe, usePreference, useUser } from "@/api/hooks";
+import {
+  useBlocked,
+  useChannel,
+  useChannelVoice,
+  useMe,
+  usePreference,
+  useUser,
+} from "@/api/hooks";
+import { useNameColor } from "@/features/users/nameColor";
 import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { displayNameOf } from "@/features/users/profile";
@@ -103,7 +111,7 @@ function ParticipantRow({
       }}
       className="group/participant flex items-center gap-1.5 rounded-md px-2 py-0.5 text-sm text-ink-muted"
     >
-      <Identity user={user} name={name} avatar={avatar} anchorRef={row} />
+      <Identity user={user} name={name} avatar={avatar} channelId={channelId} anchorRef={row} />
       {muted && (
         <MicrophoneSlashIcon
           size={14}
@@ -162,22 +170,29 @@ function ParticipantRow({
   );
 }
 
-/** Avatar and name; a click shows the person's profile beside them, and a second click hides it. */
+/**
+ * Avatar and name, the name in its colour where the call's channel is; a click shows the
+ * person's profile beside them, and a second click hides it.
+ */
 export function Identity({
   user,
   name,
   avatar,
+  channelId,
   className,
   anchorRef,
 }: {
   user: User | undefined;
   name: string;
   avatar: ReactNode;
+  /** The call's channel, a community's or a DM's. */
+  channelId: string;
   className?: string;
   /** The row or tile the profile card opens beside. */
   anchorRef: RefObject<HTMLElement | null>;
 }) {
   const m = useMessages();
+  const nameColor = useNameColor(user?.id, useChannel(channelId)?.community);
   const button = (
     <Button
       aria-label={format(m.profile.show, { name })}
@@ -187,7 +202,9 @@ export function Identity({
       }
     >
       {avatar}
-      <span className="truncate">{name}</span>
+      <span className="truncate" style={{ color: nameColor }}>
+        {name}
+      </span>
     </Button>
   );
   if (user === undefined) {

@@ -164,6 +164,8 @@ diesel::table! {
         permissions -> Int8,
         everyone -> Bool,
         bot -> Nullable<Uuid>,
+        hue -> Nullable<Int2>,
+        hoist -> Bool,
     }
 }
 
@@ -201,6 +203,7 @@ diesel::table! {
         name -> Text,
         position -> Int4,
         permissions -> Int8,
+        hue -> Nullable<Int2>,
     }
 }
 
@@ -598,6 +601,7 @@ diesel::table! {
         system -> Bool,
         ban_reason -> Nullable<Text>,
         banned_until -> Nullable<Timestamptz>,
+        name_hue -> Nullable<Int2>,
     }
 }
 

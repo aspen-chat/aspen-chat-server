@@ -375,6 +375,7 @@ async fn arrive(
                         system: false,
                         bot_owner: None,
                         bot_public: false,
+                        name_hue: None,
                         home_domain: Some(home.clone()),
                         home_id: Some(claims.sub),
                         home_icon: None,
@@ -418,6 +419,7 @@ async fn arrive(
                 status: None,
                 bot_owner: None,
                 bot_public: None,
+                name_hue: None,
             };
             if let UserEvent::Update {
                 name: None,
@@ -506,6 +508,7 @@ async fn copy_avatar(
                     status: None,
                     bot_owner: None,
                     bot_public: None,
+                    name_hue: None,
                 }),
             )
             .await

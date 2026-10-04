@@ -3,8 +3,8 @@ use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::include::{IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::api::link_preview::LinkPreview;
-use crate::api::message_enum::Message;
 use crate::api::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
+use crate::api::message_enum::{Message, UserCommunity};
 use crate::api::poll::{OwnWriteIn, PollVote};
 
 /// The polls on a page of messages, with the caller's own votes and write-ins on them.
@@ -73,6 +73,10 @@ pub enum MessageInclude {
     /// `included.warnedMessages`; only the people of a warning's DM read it. Their authors and
     /// attachments come with the messages' own when those are asked for.
     Warnings,
+    /// The authors' memberships of the communities the messages were posted in, with the roles
+    /// each holds there, as `included.userCommunities`, so a reader can draw each author's name
+    /// in their roles' colour. Authors of DMs, and those who have left, have none.
+    Memberships,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -160,7 +164,7 @@ async fn sideload_messages(
         .chain(linked_records.iter())
         .chain(warned.iter().flatten().map(|w| &w.message))
         .collect();
-    let (users, attachments, polls, threads, channels, reactions) = tokio::try_join!(
+    let (users, attachments, polls, threads, channels, reactions, memberships) = tokio::try_join!(
         async {
             let authors = include.contains(MessageInclude::Authors);
             let mentions = include.contains(MessageInclude::Mentions);
@@ -240,6 +244,21 @@ async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::Memberships) {
+                let written: Vec<(ChannelId, UserId)> = named
+                    .iter()
+                    .map(|m| (m.channel_id, m.author))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                app::community::read_authors_memberships(state, caller, &written)
+                    .await
+                    .map(|rows| Some(rows.iter().map(UserCommunity::from).collect()))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes, own_write_ins) = match polls {
         Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
@@ -289,6 +308,7 @@ async fn sideload_messages(
         linked_messages,
         warned_messages: warned,
         reactions,
+        user_communities: memberships,
         ..Included::default()
     })
 }

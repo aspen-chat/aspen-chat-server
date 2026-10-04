@@ -1,8 +1,14 @@
 //! The deployment's own roles (`deployment_role`, `user_deployment_role`), ranked by
 //! `position` like a community's: making, editing, reordering, deleting, giving, and taking them,
 //! from the dashboard within the caller's rank, and the terminal's changes to the top role.
+//!
+//! A role may have a hue, and each user's `name_hue` is the hue of the highest role they hold
+//! that has one, which clients draw their name in everywhere. Every change that can move it (a
+//! hue edited, roles reordered or deleted, a role given or taken) recomputes it for those it
+//! touches in the same transaction and announces each change as an update of the user
+//! (`refresh_name_hues`).
 
-use crate::api::message_enum::server_event::ServerEvent;
+use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{
     DeploymentPermission, DeploymentPermissions, deployment_access, to_names,
@@ -24,6 +30,8 @@ pub struct DeploymentRoleRow {
     pub name: String,
     pub position: i32,
     pub permissions: DeploymentPermissions,
+    /// The hue its holders' names are drawn in, 0 to 359.
+    pub hue: Option<i16>,
 }
 
 /// The longest a deployment role's name may be, in characters.
@@ -72,18 +80,100 @@ fn validate_name(name: &str) -> app::Result<String> {
     Ok(name.to_string())
 }
 
+/// Everyone holding `role`.
+async fn holders_of(
+    conn: &mut AsyncPgConnection,
+    role: DeploymentRoleId,
+) -> app::Result<Vec<UserId>> {
+    Ok(user_deployment_role::table
+        .select(user_deployment_role::user)
+        .filter(user_deployment_role::role.eq(role))
+        .load(conn)
+        .await?)
+}
+
+/// Everyone holding any role.
+async fn all_holders(conn: &mut AsyncPgConnection) -> app::Result<Vec<UserId>> {
+    Ok(user_deployment_role::table
+        .select(user_deployment_role::user)
+        .distinct()
+        .load(conn)
+        .await?)
+}
+
+/// A user whose `name_hue` [`refresh_name_hues`] changed.
+#[derive(QueryableByName)]
+struct NameHue {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    id: UserId,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::SmallInt>)]
+    name_hue: Option<i16>,
+}
+
+/// Sets each of `users`' `name_hue` to the hue of the highest role they hold that has one, and
+/// announces it to everyone who sees them for each whose hue changed.
+async fn refresh_name_hues(
+    publisher: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    users: &[UserId],
+) -> app::Result<()> {
+    if users.is_empty() {
+        return Ok(());
+    }
+    let changed: Vec<NameHue> = diesel::sql_query(
+        r#"
+        WITH wanted AS (
+            SELECT u.id,
+                   (SELECT r.hue
+                    FROM user_deployment_role ur
+                    JOIN deployment_role r ON r.id = ur.role
+                    WHERE ur."user" = u.id AND r.hue IS NOT NULL
+                    ORDER BY r.position DESC
+                    LIMIT 1) AS hue
+            FROM "user" u
+            WHERE u.id = ANY($1) AND u.deleted_at IS NULL
+        )
+        UPDATE "user" u SET name_hue = wanted.hue
+        FROM wanted
+        WHERE u.id = wanted.id AND u.name_hue IS DISTINCT FROM wanted.hue
+        RETURNING u.id, u.name_hue
+        "#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(
+        users.iter().map(|u| u.0).collect::<Vec<_>>(),
+    )
+    .load(conn)
+    .await?;
+    for user in changed {
+        publish_event(
+            publisher,
+            conn,
+            EventScope::UserEverywhere(user.id),
+            &ServerEvent::User(UserEvent::Update {
+                id: user.id,
+                name: None,
+                icon: None,
+                display_name: None,
+                pronouns: None,
+                bio: None,
+                status: None,
+                bot_owner: None,
+                bot_public: None,
+                name_hue: Some(user.name_hue),
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// Tells each holder of `role` what they may now do.
 async fn announce_holders(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     role: DeploymentRoleId,
 ) -> app::Result<()> {
-    let holders: Vec<UserId> = user_deployment_role::table
-        .select(user_deployment_role::user)
-        .filter(user_deployment_role::role.eq(role))
-        .load(conn)
-        .await?;
-    for holder in holders {
+    for holder in holders_of(conn, role).await? {
         announce(state, conn, holder).await?;
     }
     Ok(())
@@ -125,8 +215,10 @@ pub async fn create_role(
     caller: UserId,
     name: &str,
     permissions: DeploymentPermissions,
+    hue: Option<i16>,
 ) -> app::Result<DeploymentRoleRow> {
     let name = validate_name(name)?;
+    app::role::validate_hue(hue)?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -144,6 +236,7 @@ pub async fn create_role(
                 name,
                 position: 1,
                 permissions,
+                hue,
             };
             diesel::insert_into(deployment_role::table)
                 .values(&row)
@@ -158,16 +251,20 @@ pub async fn create_role(
     .await
 }
 
-/// Renames a role below the caller's highest, or changes its permissions; what is given or
-/// taken must be the caller's.
+/// Renames a role below the caller's highest, or changes its permissions or hue (`Some(None)`
+/// clears it); what is given or taken must be the caller's.
 pub async fn update_role(
     state: &GlobalServerContext,
     caller: UserId,
     role_id: DeploymentRoleId,
     name: Option<&str>,
     permissions: Option<DeploymentPermissions>,
+    hue: Option<Option<i16>>,
 ) -> app::Result<DeploymentRoleRow> {
     let name = name.map(validate_name).transpose()?;
+    if let Some(hue) = hue {
+        app::role::validate_hue(hue)?;
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -186,15 +283,23 @@ pub async fn update_role(
             if let Some(name) = name {
                 role.name = name;
             }
+            if let Some(hue) = hue {
+                role.hue = hue;
+            }
             diesel::update(deployment_role::table.filter(deployment_role::id.eq(role_id)))
                 .set((
                     deployment_role::name.eq(&role.name),
                     deployment_role::permissions.eq(role.permissions),
+                    deployment_role::hue.eq(role.hue),
                 ))
                 .execute(conn.as_mut())
                 .await?;
             if permissions.is_some() {
                 announce_holders(state, conn.as_mut(), role_id).await?;
+            }
+            if hue.is_some() {
+                let holders = holders_of(conn.as_mut(), role_id).await?;
+                refresh_name_hues(state, conn.as_mut(), &holders).await?;
             }
             Ok(role)
         }
@@ -220,11 +325,7 @@ pub async fn delete_role(
                 .first(conn.as_mut())
                 .await?;
             access.require_above(position)?;
-            let holders: Vec<UserId> = user_deployment_role::table
-                .select(user_deployment_role::user)
-                .filter(user_deployment_role::role.eq(role_id))
-                .load(conn.as_mut())
-                .await?;
+            let holders = holders_of(conn.as_mut(), role_id).await?;
             diesel::delete(deployment_role::table.filter(deployment_role::id.eq(role_id)))
                 .execute(conn.as_mut())
                 .await?;
@@ -234,9 +335,10 @@ pub async fn delete_role(
                 .map(|r| r.id)
                 .collect();
             renumber(conn.as_mut(), &order).await?;
-            for holder in holders {
+            for &holder in &holders {
                 announce(state, conn.as_mut(), holder).await?;
             }
+            refresh_name_hues(state, conn.as_mut(), &holders).await?;
             Ok(())
         }
         .scope_boxed()
@@ -272,6 +374,8 @@ pub async fn reorder_roles(
                 .chain(fixed.iter().map(|r| r.id))
                 .collect();
             renumber(conn.as_mut(), &sequence).await?;
+            let holders = all_holders(conn.as_mut()).await?;
+            refresh_name_hues(state, conn.as_mut(), &holders).await?;
             load_roles(conn.as_mut()).await
         }
         .scope_boxed()
@@ -333,6 +437,7 @@ pub async fn set_user_role(
             };
             if changed > 0 {
                 announce(state, conn.as_mut(), target).await?;
+                refresh_name_hues(state, conn.as_mut(), &[target]).await?;
             }
             Ok(changed > 0)
         }
@@ -359,6 +464,7 @@ pub async fn grant_top_role(
                         name: t!("deploymentAdministratorRole").to_string(),
                         position: 1,
                         permissions: DeploymentPermissions::ADMINISTRATOR,
+                        hue: None,
                     };
                     diesel::insert_into(deployment_role::table)
                         .values(&row)
@@ -376,6 +482,7 @@ pub async fn grant_top_role(
                 .execute(conn)
                 .await?;
             announce(publisher, conn, target).await?;
+            refresh_name_hues(publisher, conn, &[target]).await?;
             Ok(top.name)
         }
         .scope_boxed()
@@ -430,6 +537,7 @@ pub async fn revoke_all(
             .await?;
             if taken > 0 {
                 announce(publisher, conn, target).await?;
+                refresh_name_hues(publisher, conn, &[target]).await?;
             }
             Ok(taken)
         }

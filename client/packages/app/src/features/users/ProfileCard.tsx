@@ -39,6 +39,8 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
+import { RoleSwatch } from "@/features/users/RoleSwatch";
+import { useNameColor } from "@/features/users/nameColor";
 import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -67,6 +69,7 @@ export function ProfileCard({ user }: { user: User }) {
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
   const messagesAnyone = useDeploymentCan("messageAnyUser");
   const name = displayNameOf(user);
+  const nameColor = useNameColor(user.id, communityId);
   return (
     <div className="flex w-72 flex-col gap-2 p-2">
       <div className={planeClass}>
@@ -74,7 +77,9 @@ export function ProfileCard({ user }: { user: User }) {
           <Avatar name={name} iconId={user.icon} size="lg" />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="truncate text-base font-semibold">{name}</span>
+              <span className="truncate text-base font-semibold" style={{ color: nameColor }}>
+                {name}
+              </span>
               {user.bot && <BotBadge />}
               {user.system && <SystemBadge />}
             </div>
@@ -290,10 +295,11 @@ function CommunityRoles({
           <li
             key={role.id}
             className={
-              "flex items-center gap-0.5 rounded-full border border-line py-0.5 text-xs " +
+              "flex items-center gap-1 rounded-full border border-line py-0.5 text-xs " +
               (removable.has(role.id) ? "ps-2 pe-0.5" : "px-2")
             }
           >
+            <RoleSwatch role={role} />
             {role.name}
             {removable.has(role.id) && (
               <Tooltip text={format(m.profile.removeRole, { role: role.name, name })}>

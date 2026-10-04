@@ -29,6 +29,17 @@ impl From<app::community::Community> for message_enum::Community {
     }
 }
 
+impl From<&app::community::Membership> for UserCommunity {
+    fn from(membership: &app::community::Membership) -> Self {
+        UserCommunity {
+            community: membership.community,
+            user: membership.user.user_pg.id,
+            sort_index: membership.sort_index,
+            roles: membership.roles.clone(),
+        }
+    }
+}
+
 /// Relationships a community read can sideload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -275,12 +286,7 @@ pub async fn sideload_communities(
         let mut memberships = Vec::with_capacity(members.len());
         for membership in members {
             let user_id = membership.user.user_pg.id;
-            memberships.push(UserCommunity {
-                community: membership.community,
-                user: user_id,
-                sort_index: membership.sort_index,
-                roles: membership.roles,
-            });
+            memberships.push(UserCommunity::from(&membership));
             if seen.insert(user_id) {
                 users.push(User::from(membership.user));
             }
@@ -460,12 +466,7 @@ pub async fn list_community_members(
     let mut users = Vec::with_capacity(members.len());
     let mut memberships = Vec::with_capacity(members.len());
     for membership in members {
-        memberships.push(UserCommunity {
-            community: membership.community,
-            user: membership.user.user_pg.id,
-            sort_index: membership.sort_index,
-            roles: membership.roles,
-        });
+        memberships.push(UserCommunity::from(&membership));
         users.push(User::from(membership.user));
     }
     Ok(Json(MemberList::new(
@@ -502,12 +503,7 @@ pub async fn get_community_member(
     let member = user.resolve(&session);
     let membership =
         app::community::read_community_member(&state, session.user.id, community, member).await?;
-    Ok(Json(UserCommunity {
-        community: membership.community,
-        user: membership.user.user_pg.id,
-        sort_index: membership.sort_index,
-        roles: membership.roles,
-    }))
+    Ok(Json(UserCommunity::from(&membership)))
 }
 
 /// Top-level channels of the community (those not filed under a category), in sort order.

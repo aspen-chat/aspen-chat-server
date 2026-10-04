@@ -138,6 +138,17 @@ export const NOTIFICATION_SOUNDS: PreferenceDefinition<boolean> = {
   parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
 };
 
+/**
+ * Whether this install draws people's names in their roles' colours. On unless the user turns it
+ * off, for whom coloured text is harder to read.
+ */
+export const NAME_COLORS: PreferenceDefinition<boolean> = {
+  key: "look.nameColors",
+  scope: "device",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
 /** How loud one other person is to this user: a gain, 1 being as sent, up to double. */
 export const MAX_USER_VOLUME = 2;
 

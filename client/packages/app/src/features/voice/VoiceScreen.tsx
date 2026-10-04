@@ -367,6 +367,7 @@ function ParticipantTile({
         user={user}
         name={name}
         avatar={avatar}
+        channelId={channelId}
         className={"flex-col" + (camera === null ? "" : " w-full")}
         anchorRef={tile}
       />

@@ -4,7 +4,7 @@
 
 use crate::api::admin::AdminUser;
 use crate::api::error::{ApiResult, Problem};
-use crate::api::extract::{Created, Json, NoContent, Path, Query};
+use crate::api::extract::{Created, Json, NoContent, Path, Query, double_option};
 use crate::api::{API_PREFIX, TAG_ADMIN};
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment::{DeploymentPermission, from_names, to_names};
@@ -26,6 +26,9 @@ pub struct DeploymentRole {
     /// Its rank: higher outranks lower, from 1.
     pub position: i32,
     pub permissions: Vec<DeploymentPermission>,
+    /// The hue, 0 to 359, that holders' names are drawn in everywhere, over any community
+    /// role's, when this is the highest role they hold that has one.
+    pub hue: Option<i16>,
 }
 
 impl From<DeploymentRoleRow> for DeploymentRole {
@@ -35,6 +38,7 @@ impl From<DeploymentRoleRow> for DeploymentRole {
             name: row.name,
             position: row.position,
             permissions: to_names(row.permissions),
+            hue: row.hue,
         }
     }
 }
@@ -70,6 +74,9 @@ pub async fn list_deployment_roles(
 pub struct DeploymentRoleCreateRequest {
     pub name: String,
     pub permissions: Vec<DeploymentPermission>,
+    /// 0 to 359; absent for none.
+    #[serde(default)]
+    pub hue: Option<i16>,
 }
 
 /// Makes a deployment role, placed lowest. Takes Manage deployment roles; only permissions the
@@ -98,6 +105,7 @@ pub async fn create_deployment_role(
         session.user.id,
         &request.name,
         from_names(&request.permissions),
+        request.hue,
     )
     .await?;
     Ok(Created::new(
@@ -111,10 +119,15 @@ pub async fn create_deployment_role(
 pub struct DeploymentRoleUpdateRequest {
     pub name: Option<String>,
     pub permissions: Option<Vec<DeploymentPermission>>,
+    /// 0 to 359, or `null` to take the hue away.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(nullable)]
+    pub hue: Option<Option<i16>>,
 }
 
-/// Renames a deployment role below the caller's highest, or changes its permissions; every
-/// permission given or taken must be one the caller holds.
+/// Renames a deployment role below the caller's highest, or changes its permissions or hue;
+/// every permission given or taken must be one the caller holds. A hue changed reaches its
+/// holders' `nameHue`, announced as an update of each.
 #[utoipa::path(
     patch,
     path = "/admin/roles/{role}",
@@ -143,6 +156,7 @@ pub async fn update_deployment_role(
         role,
         request.name.as_deref(),
         request.permissions.as_deref().map(from_names),
+        request.hue,
     )
     .await?;
     Ok(Json(DeploymentRole::from(role)))

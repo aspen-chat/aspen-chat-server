@@ -18,7 +18,10 @@ import {
   planeSurfaceClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { ChoiceCheckbox } from "@/features/layout/choices";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { HuePicker } from "@/features/users/HuePicker";
+import { RoleSwatch } from "@/features/users/RoleSwatch";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -98,6 +101,7 @@ export function RolesPanel({ communityId }: { communityId: string }) {
                 textValue={role.name}
                 className="flex items-center gap-1 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 selected:bg-accent-soft selected:text-accent-strong"
               >
+                <RoleSwatch role={role} />
                 <span className="min-w-0 flex-1 truncate">
                   {role.everyone ? m.roles.everyone : role.name}
                 </span>
@@ -165,8 +169,9 @@ export function RolesPanel({ communityId }: { communityId: string }) {
 }
 
 /**
- * One role's name and permissions, edited as a draft and saved together. The draft follows the
- * role when someone else changes it and nothing is changed here yet.
+ * One role's name, permissions, colour, and whether it is shown apart, edited as a draft and
+ * saved together. The draft follows the role when someone else changes it and nothing is
+ * changed here yet.
  */
 function RoleEditor({
   role,
@@ -182,16 +187,22 @@ function RoleEditor({
   const editable = access.has("manageRoles") && access.outranks(role.position);
   // The draft is `null` until something is changed here, and the role as saved shows until
   // then, whoever changes it.
-  const [draft, setDraft] = useState<{ name: string; permissions: ReadonlySet<Permission> } | null>(
-    null,
-  );
-  const name = draft?.name ?? role.name;
-  const permissions = draft?.permissions ?? new Set(role.permissions);
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
+  const current: RoleDraft = draft ?? {
+    name: role.name,
+    permissions: new Set(role.permissions),
+    hue: role.hue ?? null,
+    hoist: role.hoist ?? false,
+  };
+  const { name, permissions, hue, hoist } = current;
+  const change = (next: Partial<RoleDraft>) => {
+    setDraft({ ...current, ...next });
+  };
   const setName = (next: string) => {
-    setDraft({ name: next, permissions });
+    change({ name: next });
   };
   const setPermissions = (next: ReadonlySet<Permission>) => {
-    setDraft({ name, permissions: next });
+    change({ permissions: next });
   };
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -200,7 +211,9 @@ function RoleEditor({
   const permissionsChanged =
     permissions.size !== role.permissions.length ||
     role.permissions.some((p) => !permissions.has(p));
-  const dirty = nameChanged || permissionsChanged;
+  const hueChanged = hue !== (role.hue ?? null);
+  const hoistChanged = hoist !== (role.hoist ?? false);
+  const dirty = nameChanged || permissionsChanged || hueChanged || hoistChanged;
 
   async function save() {
     setSaving(true);
@@ -209,6 +222,8 @@ function RoleEditor({
       await sync.updateRole(role.id, {
         ...(nameChanged ? { name: name.trim() } : {}),
         ...(permissionsChanged ? { permissions: Array.from(permissions) } : {}),
+        ...(hueChanged ? { hue } : {}),
+        ...(hoistChanged ? { hoist } : {}),
       });
       setDraft(null);
     } catch (e) {
@@ -265,6 +280,28 @@ function RoleEditor({
         </TextField>
       )}
       {!editable && <p className={hintClass}>{m.roles.aboveYou}</p>}
+      {!role.everyone && (
+        <>
+          <HuePicker
+            hue={hue}
+            onChange={(next) => {
+              change({ hue: next });
+            }}
+            sample={name.trim() === "" ? role.name : name.trim()}
+            hint={m.roles.colorHint}
+            isDisabled={!editable}
+          />
+          <ChoiceCheckbox
+            isSelected={hoist}
+            onChange={(next) => {
+              change({ hoist: next });
+            }}
+            isDisabled={!editable}
+            label={m.roles.hoistLabel}
+            hint={m.roles.hoistHint}
+          />
+        </>
+      )}
       {editable && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-ink-muted">{m.roles.templatesLabel}</span>
@@ -332,6 +369,14 @@ function RoleEditor({
       )}
     </form>
   );
+}
+
+/** A role as the editor holds it while it is being changed. */
+interface RoleDraft {
+  name: string;
+  permissions: ReadonlySet<Permission>;
+  hue: number | null;
+  hoist: boolean;
 }
 
 /** Says whose a bot's role is: it cannot be given to anyone else, and goes when the bot does. */

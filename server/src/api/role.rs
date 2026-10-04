@@ -69,23 +69,16 @@ pub async fn create_role(
     Path(community): Path<CommunityId>,
     Json(request): Json<RoleCreateRequest>,
 ) -> ApiResult<Created<Role>> {
-    let role = app::role::create_role(
-        &state,
-        user.id,
-        community,
-        &request.name,
-        from_names(&request.permissions),
-    )
-    .await?;
+    let role = app::role::create_role(&state, user.id, community, &request).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/roles/{}", role.id.0),
         role,
     ))
 }
 
-/// Renames a role or changes its permissions. The role must rank below the caller's highest,
-/// and every permission given or taken must be one the caller holds. Everyone's role keeps its
-/// name.
+/// Renames a role, or changes its permissions, its hue, or whether it is shown apart. The role
+/// must rank below the caller's highest, and every permission given or taken must be one the
+/// caller holds. Everyone's role keeps its name and has no hue and is never shown apart.
 #[utoipa::path(
     patch,
     path = "/roles/{role}",
@@ -108,14 +101,7 @@ pub async fn update_role(
     Json(request): Json<RoleUpdateRequest>,
 ) -> ApiResult<Json<Role>> {
     Ok(Json(
-        app::role::update_role(
-            &state,
-            user.id,
-            role,
-            request.name.as_deref(),
-            request.permissions.as_deref().map(from_names),
-        )
-        .await?,
+        app::role::update_role(&state, user.id, role, &request).await?,
     ))
 }
 

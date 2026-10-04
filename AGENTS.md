@@ -236,6 +236,7 @@ This ensures that if JetStream rejects or fails to acknowledge the event, the da
 - `#[message_gen(permanent)]` — Field is set at creation and cannot be updated. Included in `CreateRequest` but not `UpdateRequest`.
 - `#[message_gen(server_authoritative)]` — Server controls this field entirely. Clients cannot set or modify it (e.g., timestamps, author IDs).
 - `#[message_gen(server_authoritative = "mutable")]` — As above, but the server may change the field after creation (e.g., `Message.edited_at`), so the `Update` server event carries it as an `Option<T>` alongside the client-updatable fields. Set it in the event only when it changed.
+- `#[message_gen(default)]` — The field may be absent from a create request and from the record (in the schemas), and is then its type's default (`Role.hoist`). A non-nullable field added to an entity that already exists needs it, since the API changes only by addition: clients that predate it create without it, and newer clients read records from deployments that predate it.
 - `#[message_gen(secret)]` — Accepted on create but excluded from records and events. Used for genuinely secret inputs (passwords, invite codes) and for inputs the server transforms rather than stores (`Poll.duration_seconds`, which becomes `closes_at`).
 
 ### Entity-Level Annotations

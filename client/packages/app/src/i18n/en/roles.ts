@@ -18,4 +18,11 @@ export const roles = {
   members: "{count} members",
   oneMember: "1 member",
   unsaved: "Unsaved changes",
+  colorLabel: "Colour names",
+  colorHint:
+    "Names of members with this role are drawn in its colour in this community, unless a higher role of theirs has one. Aspen sets how light it is, so every colour stays readable.",
+  hueLabel: "Hue",
+  hoistLabel: "Show members separately",
+  hoistHint:
+    "Online members with this role are listed under it in the member list, and are among the first the list shows.",
 } as const;

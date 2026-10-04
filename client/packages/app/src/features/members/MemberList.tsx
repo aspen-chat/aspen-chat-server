@@ -1,11 +1,12 @@
-import type { User, UserOnlineStatus } from "@aspen/protocol";
+import { shownApartRole, type Role, type User, type UserOnlineStatus } from "@aspen/protocol";
 import { PaneEdge } from "@/features/layout/ResizablePane";
 import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
-import { useBlocked, useMembers } from "@/api/hooks";
+import { useBlocked, useMembers, useRolesOfMembers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
+import { useNameColor } from "@/features/users/nameColor";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -28,10 +29,12 @@ export function MemberList({ communityId }: { communityId: string }) {
 }
 
 /**
- * Who is in the community, online members first. The server samples the most recently seen
- * members, so in a large community this is the active part of the roster rather than all of it.
- * People the user blocked are marked. Each group is headed at `headingLevel`: a level below
- * whatever titles the list.
+ * Who is in the community, online members first: those holding a role shown apart under the
+ * highest such role, highest first, then the rest, then everyone offline whatever their roles.
+ * The server samples the members, connected ones and holders of roles shown apart first, so in
+ * a large community this is the active part of the roster rather than all of it. People the
+ * user blocked are marked. Each group is headed at `headingLevel`: a level below whatever titles
+ * the list.
  */
 export function MemberGroups({
   communityId,
@@ -42,19 +45,47 @@ export function MemberGroups({
 }) {
   const m = useMessages();
   const members = useMembers(communityId);
-  const online = members.filter((u) => u.onlineStatus !== "offline").sort(byName);
-  const offline = members.filter((u) => u.onlineStatus === "offline").sort(byName);
+  const { roles, of } = useRolesOfMembers(communityId);
+  const apart = new Map<string, { role: Role; users: User[] }>();
+  const online: User[] = [];
+  const offline: User[] = [];
+  for (const user of members) {
+    if (user.onlineStatus === "offline") {
+      offline.push(user);
+      continue;
+    }
+    const role = shownApartRole(roles, of(user.id));
+    if (role === undefined) {
+      online.push(user);
+    } else {
+      const group = apart.get(role.id) ?? { role, users: [] };
+      group.users.push(user);
+      apart.set(role.id, group);
+    }
+  }
+  const groups = Array.from(apart.values()).sort((a, b) => b.role.position - a.role.position);
   return (
     <>
+      {groups.map(({ role, users }) => (
+        <MemberGroup
+          key={role.id}
+          heading={format(m.roleGroup, { role: role.name, count: String(users.length) })}
+          headingLevel={headingLevel}
+          users={users.sort(byName)}
+          communityId={communityId}
+        />
+      ))}
       <MemberGroup
         heading={format(m.onlineGroup, { count: String(online.length) })}
         headingLevel={headingLevel}
-        users={online}
+        users={online.sort(byName)}
+        communityId={communityId}
       />
       <MemberGroup
         heading={format(m.offlineGroup, { count: String(offline.length) })}
         headingLevel={headingLevel}
-        users={offline}
+        users={offline.sort(byName)}
+        communityId={communityId}
       />
     </>
   );
@@ -68,10 +99,12 @@ function MemberGroup({
   heading,
   headingLevel,
   users,
+  communityId,
 }: {
   heading: string;
   headingLevel: 2 | 3;
   users: readonly User[];
+  communityId: string;
 }) {
   if (users.length === 0) {
     return null;
@@ -84,18 +117,21 @@ function MemberGroup({
       </Heading>
       <ul className="flex flex-col gap-0.5">
         {users.map((user) => (
-          <MemberRow key={user.id} user={user} />
+          <MemberRow key={user.id} user={user} communityId={communityId} />
         ))}
       </ul>
     </section>
   );
 }
 
-function MemberRow({ user }: { user: User }) {
+function MemberRow({ user, communityId }: { user: User; communityId: string }) {
   const m = useMessages();
   const offline = user.onlineStatus === "offline";
   const blocked = useBlocked(user.id);
   const name = displayNameOf(user);
+  // An offline row is dimmed, and a dimmed colour would no longer read against the list, so an
+  // offline name keeps the plain ink, which reads dimmed.
+  const nameColor = useNameColor(user.id, communityId);
   return (
     <li className={offline ? "opacity-60" : ""}>
       <ProfilePopover user={user}>
@@ -109,7 +145,9 @@ function MemberRow({ user }: { user: User }) {
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-sm">{name}</span>
+              <span className="truncate text-sm" style={{ color: offline ? undefined : nameColor }}>
+                {name}
+              </span>
               {user.bot && <BotBadge />}
             </span>
             {user.status != null && (

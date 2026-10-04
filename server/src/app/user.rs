@@ -48,6 +48,8 @@ pub struct UserPg {
     pub home_id: Option<uuid::Uuid>,
     /// For a foreign user, the home's id of the avatar `icon` is this deployment's copy of.
     pub home_icon: Option<uuid::Uuid>,
+    /// The hue of the highest deployment role they hold that has one (`app::deployment_role`).
+    pub name_hue: Option<i16>,
 }
 
 impl UserPg {
@@ -241,6 +243,7 @@ pub async fn create_user(
                     system: false,
                     bot_owner: None,
                     bot_public: false,
+                    name_hue: None,
                     home_domain: None,
                     home_id: None,
                     home_icon: None,
@@ -405,6 +408,7 @@ pub(crate) async fn apply_profile_update(
                     status: command.status,
                     bot_owner: None,
                     bot_public: None,
+                    name_hue: None,
                 }),
             )
             .await?;

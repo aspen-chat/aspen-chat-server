@@ -55,6 +55,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { PlaneColumns } from "@/features/layout/PlaneColumns";
 import { useMessages } from "@/i18n/context";
 import { ThemePicker } from "@/theme/ThemePicker";
+import { NameColorsCheckbox } from "@/features/settings/NameColorsCheckbox";
 import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
 
 /**
@@ -94,6 +95,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                     </h3>
                     <ThemePicker />
                     <MotionSpeedSlider />
+                    <NameColorsCheckbox />
                   </section>
                   <FontsSection />
                   <NotificationsSection />

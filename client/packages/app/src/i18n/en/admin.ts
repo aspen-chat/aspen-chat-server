@@ -106,6 +106,8 @@ export const admin = {
   openCommunity: "Open",
   openCommunityLabel: "Open {community}",
   deploymentRoles: "Deployment roles",
+  deploymentRoleColorHint:
+    "Names of people with this role are drawn in its colour everywhere, over any community role's colour, unless a higher deployment role of theirs has one. Aspen sets how light it is, so every colour stays readable.",
   deploymentRolesHint:
     "What people may do across this server. Holders of Manage deployment roles change roles below their own highest.",
   deploymentRoleOf: "Deployment roles of {name}",

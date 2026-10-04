@@ -60,6 +60,11 @@ enum MessageEnumSource {
         // as clients need to hold a block across deployments; `None` for this deployment's own.
         #[message_gen(server_authoritative)]
         home_id: Option<uuid::Uuid>,
+        // The hue of the highest deployment role they hold that has one, which clients draw
+        // their name in everywhere, over any community role's; `None` without one. See
+        // `app::deployment_role`.
+        #[message_gen(server_authoritative = "mutable")]
+        name_hue: Option<i16>,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.
@@ -362,6 +367,14 @@ enum MessageEnumSource {
         // given to anyone else or deleted, and goes when the bot leaves.
         #[message_gen(server_authoritative)]
         bot: Option<UserId>,
+        // The hue, 0 to 359, that holders' names are drawn in within the community when this is
+        // the highest role they hold that has one; clients choose the saturation and lightness so
+        // that every hue reads. Everyone's role has none.
+        hue: Option<i16>,
+        // Whether holders are shown under this role, apart from other members, in the member
+        // list, and come first in the member sample. Everyone's role is never shown apart.
+        #[message_gen(default)]
+        hoist: bool,
     },
     // One role's channel permissions allowed or denied in one channel, over what the role
     // grants across the community.
