@@ -498,18 +498,37 @@ pub async fn remove(
     .await
 }
 
-/// Deletes a removed plugin's row and everything it kept. Its principal, if it had one, stays
-/// as a bot no one owns, which a holder of Manage bots may delete.
+/// Deletes everything a removed plugin kept: its storage, its communities' settings for it,
+/// and its deployment settings. Its row stays, as the record that it was installed, and so does
+/// its account, both of which a later install of the same plugin takes up again.
 pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> app::Result<()> {
-    let purged = diesel::delete(
-        plugin::table.filter(plugin::id.eq(id).and(plugin::removed_at.is_not_null())),
-    )
-    .execute(conn)
-    .await?;
-    if purged == 0 {
-        return Err(app::Error::Validation(
-            format!("{id} is not a removed plugin; remove it first").into(),
-        ));
-    }
-    Ok(())
+    use crate::database::schema::{community_plugin, plugin_storage};
+    conn.transaction(|conn| {
+        async move {
+            let removed = diesel::update(
+                plugin::table.filter(plugin::id.eq(id).and(plugin::removed_at.is_not_null())),
+            )
+            .set((
+                plugin::settings.eq(Value::Object(Map::new())),
+                plugin::storage_bytes.eq(0),
+                plugin::updated_at.eq(diesel::dsl::now),
+            ))
+            .execute(conn)
+            .await?;
+            if removed == 0 {
+                return Err(app::Error::Validation(
+                    format!("{id} is not a removed plugin; remove it first").into(),
+                ));
+            }
+            diesel::delete(plugin_storage::table.filter(plugin_storage::plugin.eq(id)))
+                .execute(conn)
+                .await?;
+            diesel::delete(community_plugin::table.filter(community_plugin::plugin.eq(id)))
+                .execute(conn)
+                .await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }

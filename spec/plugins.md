@@ -286,7 +286,8 @@ commands, since running code is a power too strong for a web API
 disable | remove | purge`). Installing shows the manifest's permissions, hosts, and retention,
 which the operator accepts; `dms` is accepted by name. An upgrade that asks for more asks again.
 The component and its settings are kept in the database, so every API server runs the same
-version and picks up a change without a restart.
+version and picks up a change without a restart. Removing a plugin stops it and takes its
+account out of every community; its data stays until the operator purges it.
 
 The Administration Dashboard lists installed plugins and, under the deployment permission
 Manage plugins, changes their settings, mode, order, and whether they are on. A community's

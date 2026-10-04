@@ -52,7 +52,8 @@ pub enum PluginsCommand {
         #[clap(long)]
         yes: bool,
     },
-    /// Delete everything a removed plugin kept.
+    /// Delete everything a removed plugin kept: its data, and its settings, the deployment's
+    /// and every community's.
     Purge {
         id: String,
         #[clap(long)]
@@ -246,9 +247,10 @@ async fn run(
                      `plugins enable {}`",
                     manifest.id, manifest.id
                 ),
-                install::Outcome::Restored => {
-                    println!("installed {} again, with what it kept", manifest.id)
-                }
+                install::Outcome::Restored => println!(
+                    "installed {} again, with whatever it kept; turn it on with `plugins enable {}`",
+                    manifest.id, manifest.id
+                ),
                 install::Outcome::Upgraded { from } => {
                     println!(
                         "upgraded {} from {from} to {}",

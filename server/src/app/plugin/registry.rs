@@ -34,8 +34,10 @@ pub struct LoadedPlugin {
     pub settings: Map<String, Value>,
     /// Its account, when it has one.
     pub principal: Option<UserId>,
-    /// When it was last changed, which tells a reload whether to compile it again.
+    /// When it was last changed, which tells a reload whether to read it again.
     pub revision: DateTime<Utc>,
+    /// The SHA-256 of its component, which tells a reload whether to compile it again.
+    digest: Vec<u8>,
     /// The compiled component, ready to instantiate.
     pub(super) pre: host::PluginPre<CallState>,
 }
@@ -285,6 +287,7 @@ impl Plugins {
             String,
             Value,
             DateTime<Utc>,
+            Option<Vec<u8>>,
         );
         let rows: Vec<Row> = plugin::table
             .select((
@@ -294,6 +297,9 @@ impl Plugins {
                 plugin::mode,
                 plugin::settings,
                 plugin::updated_at,
+                diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Bytea>>(
+                    "sha256(component)",
+                ),
             ))
             .filter(plugin::enabled.and(plugin::removed_at.is_null()))
             .order((plugin::position.asc(), plugin::id.asc()))
@@ -309,7 +315,10 @@ impl Plugins {
             .collect();
         let previous = self.loaded();
         let mut next = Vec::with_capacity(rows.len());
-        for (id, manifest, granted, mode, stored, revision) in rows {
+        for (id, manifest, granted, mode, stored, revision, digest) in rows {
+            let Some(digest) = digest else {
+                continue;
+            };
             if let Some(same) = previous
                 .iter()
                 .find(|p| p.id == id && p.revision == revision)
@@ -327,25 +336,37 @@ impl Plugins {
                     continue;
                 }
             };
-            let bytes: Option<Vec<u8>> = plugin::table
-                .select(plugin::component)
-                .filter(plugin::id.eq(&id))
-                .first(conn.as_mut())
-                .await?;
-            let Some(bytes) = bytes else {
-                continue;
-            };
-            let engine = self.engine.clone();
-            let linker = self.linker.clone();
-            let compiled =
-                tokio::task::spawn_blocking(move || host::prepare(&engine, &linker, &bytes))
+            // A change to its settings, mode, or order leaves the component as it was, and
+            // what was compiled of it serves still.
+            let reused = previous
+                .iter()
+                .find(|p| p.id == id && p.digest == digest)
+                .map(|p| p.pre.clone());
+            let pre = match reused {
+                Some(pre) => pre,
+                None => {
+                    let bytes: Option<Vec<u8>> = plugin::table
+                        .select(plugin::component)
+                        .filter(plugin::id.eq(&id))
+                        .first(conn.as_mut())
+                        .await?;
+                    let Some(bytes) = bytes else {
+                        continue;
+                    };
+                    let engine = self.engine.clone();
+                    let linker = self.linker.clone();
+                    let compiled = tokio::task::spawn_blocking(move || {
+                        host::prepare(&engine, &linker, &bytes)
+                    })
                     .await
                     .map_err(|e| app::Error::Plugin(e.to_string()))?;
-            let pre = match compiled {
-                Ok(pre) => pre,
-                Err(e) => {
-                    tracing::error!(plugin = id, "could not compile its component: {e:#}");
-                    continue;
+                    match compiled {
+                        Ok(pre) => pre,
+                        Err(e) => {
+                            tracing::error!(plugin = id, "could not compile its component: {e:#}");
+                            continue;
+                        }
+                    }
                 }
             };
             let granted = granted
@@ -365,6 +386,7 @@ impl Plugins {
                 manifest,
                 granted,
                 revision,
+                digest,
                 pre,
             }));
         }

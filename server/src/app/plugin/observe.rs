@@ -139,7 +139,10 @@ async fn first_copy(
     subject: &str,
 ) -> app::Result<bool> {
     use fred::prelude::KeysInterface;
-    let Some(event_id) = event_id else {
+    // Only what is published to each of a DM's people comes in copies.
+    let (Some(event_id), Some(app::events::SubjectOwner::User(_))) =
+        (event_id, app::events::subject_owner(subject))
+    else {
         return Ok(true);
     };
     let key = format!("plugin:{plugin}:seen:{event_id}");

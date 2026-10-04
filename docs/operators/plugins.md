@@ -69,7 +69,7 @@ one before left.
 | `plugins order <id>…` | The order plugins decide messages in. |
 | `plugins enable <id>` / `disable <id>` | Turn it on or off everywhere. Turning it on needs every required setting. |
 | `plugins remove <id> [--yes]` | Stop it: it no longer runs, its notes beside messages and on profiles go, and its account leaves every community. What it kept stays. |
-| `plugins purge <id> [--yes]` | Delete everything a removed plugin kept. Its account stays as a bot no one owns, which a holder of Manage bots may delete. |
+| `plugins purge <id> [--yes]` | Delete everything a removed plugin kept: its data, and its settings, yours and every community's. `plugins list` still shows it as removed, and its account stays, unused, for if you install it again. |
 
 Holders of the deployment permission **Manage plugins** can turn plugins on and off, change
 their mode, order, and settings from the Administration Dashboard. Installing, upgrading,
