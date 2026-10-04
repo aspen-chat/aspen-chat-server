@@ -59,7 +59,9 @@ test("the fleet names each server's state in words", async ({ page }) => {
   await expect(voice.getByRole("row").filter({ hasText: "voice-spare" })).toContainText("Disabled");
 });
 
-test("an administrator makes an invite, copies it, and revokes it", async ({ page }) => {
+test("an administrator makes an invite, sees its QR code, copies it, and revokes it", async ({
+  page,
+}) => {
   const invites = await openSection(page, "Registration invites");
   await expect(invites.getByRole("row").filter({ hasText: standingInvite })).toContainText(
     "1 of 2",
@@ -67,6 +69,12 @@ test("an administrator makes an invite, copies it, and revokes it", async ({ pag
   await invites.getByRole("textbox", { name: "Uses" }).fill("3");
   await invites.getByRole("textbox", { name: "Note" }).fill("for grandma");
   await invites.getByRole("button", { name: "Create invite" }).click();
+  // The invite just made shows its link's QR code at once.
+  const shown = page.getByRole("dialog", { name: /^QR code for invite / });
+  await expect(shown.getByRole("img", { name: /^QR code for invite / })).toBeVisible();
+  await expect(shown).toContainText("/register?invite=");
+  await expect(shown.getByRole("button", { name: "Download" })).toBeVisible();
+  await shown.getByRole("button", { name: "Close" }).click();
   const made = invites.getByRole("row").filter({ hasText: "for grandma" });
   await expect(made).toContainText("0 of 3");
   await expect(made).toContainText("Usable");

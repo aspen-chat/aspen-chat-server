@@ -1,5 +1,6 @@
 import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell } from "electron";
 import { join } from "node:path";
+import { claimAppLinks, serveAppLinks } from "./appLinks";
 import { serveGameCapture } from "./gameCapture";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 
@@ -20,6 +21,12 @@ if (process.env.ASPEN_DESKTOP_FAKE_MEDIA === "1") {
   app.commandLine.appendSwitch("use-fake-device-for-media-stream");
   app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
   app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+}
+
+// A second launch that only carried a link has handed it to the running app.
+const firstInstance = claimAppLinks();
+if (!firstInstance) {
+  app.quit();
 }
 
 function isDevelopment(): boolean {
@@ -184,6 +191,10 @@ function askRenderer(
 app
   .whenReady()
   .then(() => {
+    if (!firstInstance) {
+      return;
+    }
+    serveAppLinks();
     serveDisplayMedia();
     serveGameCapture();
     servePasskeyHandoff();

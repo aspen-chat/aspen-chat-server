@@ -21,6 +21,8 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `reauthenticationRequired` | A security change needs a password or code given within `[auth] reverify_seconds`. | The app asks for it. |
 | `passkeysUnavailable` | `[auth.passkeys]` is not set. | Set it (see [Configuration](configuration.md#authpasskeys)) to offer passkeys. |
 | `passkeyRejected` | The passkey's answer did not verify. Most often the page's origin is not in `[auth.passkeys] origins`, or `rp_id` changed since the passkey was made. | Check both settings against the address in the browser. |
+| `deviceLinkExpired` | A sign-in code (the QR code one device shows another) is older than a minute unscanned, was declined or already used, or the signed-in device that confirmed it signed out or changed its password before the other claimed it. | Make a new code. If codes expire before anyone can scan them, check the clocks are not the problem: the code's minute is counted on the server. |
+| `deviceLinkUsed` | Another device scanned the sign-in code first. | The person makes a new code and must not confirm the device that scanned the old one. If they did not scan it themselves, someone photographed their screen. |
 | `registrationInviteRequired`, `registrationInviteInvalid` | Registration takes an invite here, and none, or one that is used up, expired, or revoked, was given. | Make one in the dashboard or with `aspen-chat-server invites create`. |
 | `usernameTaken` | Someone already has that name, in some mix of capitals: usernames are unique regardless of case. | Pick another. |
 | `adminRequired` | The dashboard is only for holders of a deployment role. | Grant one with `aspen-chat-server admin grant`, or a role in the dashboard. |

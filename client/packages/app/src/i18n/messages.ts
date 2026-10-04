@@ -8,6 +8,7 @@ import { commands } from "./en/commands";
 import { communitySettings } from "./en/communitySettings";
 import { crop } from "./en/crop";
 import { deploymentPermissionNames } from "./en/deploymentPermissionNames";
+import { deviceLink } from "./en/deviceLink";
 import { deployments } from "./en/deployments";
 import { dms } from "./en/dms";
 import { emoji } from "./en/emoji";
@@ -28,6 +29,7 @@ import { permissionNames } from "./en/permissionNames";
 import { pins } from "./en/pins";
 import { poll } from "./en/poll";
 import { profile } from "./en/profile";
+import { qr } from "./en/qr";
 import { reports } from "./en/reports";
 import { roles } from "./en/roles";
 import { search } from "./en/search";
@@ -82,6 +84,8 @@ export const en = {
   deployments,
   twoFactor,
   security,
+  qr,
+  deviceLink,
   crop,
   changeCommunityIcon: "Change community icon",
   settings,

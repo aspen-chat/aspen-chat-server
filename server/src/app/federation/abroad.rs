@@ -18,7 +18,7 @@ use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, 
 use crate::app::login::{Session, SignInMethod, issue_session};
 use crate::app::two_factor::Caller;
 use crate::app::user::UserPg;
-use crate::app::{self, EventScope, IconId, UserId, publish_event};
+use crate::app::{self, CommunityId, EventScope, IconId, UserId, publish_event};
 use crate::database::schema::{icon, user, user_foreign_deployment};
 use crate::t;
 use chrono::{DateTime, Duration, Utc};
@@ -275,7 +275,7 @@ pub async fn sign_in(
         Subject::Bots => &config.bots,
     };
     let mut conn = state.connection_pool.get().await?;
-    let (user, previous_icon) = arrive(
+    let (user, previous_icon, joined) = arrive(
         state,
         &mut conn,
         &home,
@@ -284,6 +284,9 @@ pub async fn sign_in(
         invite_code,
     )
     .await?;
+    if let Some(community) = joined {
+        app::everyone_limit::after_join(state, community).await;
+    }
     let session = issue_session(state, &mut conn, user, claims.method, true).await?;
     if claims.profile.icon != previous_icon {
         let state = state.clone();
@@ -309,7 +312,8 @@ fn check_profile(profile: &Profile) -> app::Result<()> {
 }
 
 /// The foreign user `claims` names, made on their first arrival and otherwise brought up to
-/// date with their profile, and the home avatar their local one copies.
+/// date with their profile, the home avatar their local one copies, and the community a first
+/// arrival with a dual invite joined.
 async fn arrive(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -317,7 +321,7 @@ async fn arrive(
     claims: &Assertion,
     invite_required: bool,
     invite_code: Option<&str>,
-) -> app::Result<(UserId, Option<Uuid>)> {
+) -> app::Result<(UserId, Option<Uuid>, Option<CommunityId>)> {
     let invite_code = invite_code.map(str::trim).filter(|code| !code.is_empty());
     conn.transaction(|conn| {
         async move {
@@ -345,13 +349,15 @@ async fn arrive(
                 }
                 // As at registration, an invite that works is recorded, and where invites are
                 // optional one that does not is ignored.
-                let registered_with = match invite_code {
+                let (registered_with, community_invite) = match invite_code {
                     Some(code) => match app::registration_invite::redeem(conn, code).await {
-                        Ok(()) => Some(code.to_string()),
-                        Err(app::Error::RegistrationInviteInvalid) if !invite_required => None,
+                        Ok(community_invite) => (Some(code.to_string()), community_invite),
+                        Err(app::Error::RegistrationInviteInvalid) if !invite_required => {
+                            (None, None)
+                        }
                         Err(e) => return Err(e),
                     },
-                    None => None,
+                    None => (None, None),
                 };
                 let id = UserId::new();
                 let now = Utc::now();
@@ -388,8 +394,15 @@ async fn arrive(
                     ))
                     .execute(conn)
                     .await?;
+                let joined = match community_invite {
+                    Some(community_invite) => {
+                        app::registration_invite::join_invited(state, conn, id, &community_invite)
+                            .await?
+                    }
+                    None => None,
+                };
                 tracing::info!(%home, user = %id.0, "a foreign user arrived");
-                return Ok((id, None));
+                return Ok((id, None, joined));
             };
             if existing.deleted_at.is_some() {
                 return Err(app::Error::FederationRefused(t!("federationAccountClosed")));
@@ -427,7 +440,7 @@ async fn arrive(
                 ..
             } = event
             {
-                return Ok((existing.id, existing.home_icon));
+                return Ok((existing.id, existing.home_icon, None));
             }
             diesel::update(user::table.find(existing.id))
                 .set((
@@ -445,7 +458,7 @@ async fn arrive(
                 &ServerEvent::User(event),
             )
             .await?;
-            Ok((existing.id, existing.home_icon))
+            Ok((existing.id, existing.home_icon, None))
         }
         .scope_boxed()
     })

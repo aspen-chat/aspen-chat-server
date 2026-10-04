@@ -1,5 +1,4 @@
 import {
-  Navigate,
   Outlet,
   createBrowserHistory,
   createHashHistory,
@@ -18,6 +17,8 @@ import { ChannelScreen } from "@/features/messages/ChannelScreen";
 import { NotFound } from "@/features/layout/NotFound";
 import { ForeignScope } from "@/api/deployments";
 import { BotAddScreen } from "@/features/bots/BotAddScreen";
+import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
+import { RegisterLanding } from "@/features/auth/RegisterLanding";
 
 /**
  * URL scheme, shared by every shell so a link copied from one opens in another:
@@ -37,7 +38,11 @@ import { BotAddScreen } from "@/features/bots/BotAddScreen";
  *                                                       one other than the home redirects to
  *                                                       `/at/{domain}/invite/{code}`
  *   /register?invite={code}                             create an account with a registration
- *                                                       invite; signed in, the home screen
+ *                                                       invite; signed in, the community a dual
+ *                                                       invite joins, or the home screen
+ *   /device-link?server={origin}#{id}                   a sign-in code scanned or opened: sign in
+ *                                                       this device, or confirm another; the
+ *                                                       app's own scanner passes `link={id}`
  *   /admin, /admin/{tab}                                the Administration Dashboard, at its first
  *                                                       tab the caller may open, or at one
  *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
@@ -68,8 +73,22 @@ export const registerRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { invite?: string } =>
     typeof search.invite === "string" ? { invite: search.invite } : {},
   // Signed out, the root layout shows the create-account screen; signed in, there is nothing
-  // to register.
-  component: () => <Navigate to="/" replace />,
+  // to register, but a dual invite has a community to go on to.
+  component: function Register() {
+    const { invite } = registerRoute.useSearch();
+    return <RegisterLanding invite={invite} />;
+  },
+});
+
+/** What a sign-in code's QR code opens: `?server=` and the link's id after `#` (or as `link`). */
+export const deviceLinkRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/device-link",
+  validateSearch: (search: Record<string, unknown>): { server?: string; link?: string } => ({
+    ...(typeof search.server === "string" ? { server: search.server } : {}),
+    ...(typeof search.link === "string" ? { link: search.link } : {}),
+  }),
+  component: DeviceLinkRoute,
 });
 
 export const adminRoute = createRoute({
@@ -262,6 +281,7 @@ const foreignDmThreadRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   registerRoute,
+  deviceLinkRoute,
   adminRoute,
   adminTabRoute,
   botAddRoute,

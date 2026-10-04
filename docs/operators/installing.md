@@ -136,6 +136,9 @@ Serving the web client from another origin works too: list that origin in
 [`[cors] allowed_origins`](configuration.md#cors), and build the client with
 `VITE_ASPEN_SERVER_URL=https://api.example.org` so it knows where the API is.
 
+Either way, set [`[web_client] url`](configuration.md#web_client) to the web client's address,
+so the invite links and QR codes the desktop and mobile apps share open in a browser too.
+
 ## 6. Voice servers
 
 Each voice server is its own machine (or container) with its own `voice_server.toml`. First

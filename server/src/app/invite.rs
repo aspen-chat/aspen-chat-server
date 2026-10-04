@@ -3,6 +3,7 @@ use crate::api::message_enum;
 use crate::api::message_enum::server_event::{InviteEvent, ServerEvent};
 use crate::app;
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::invite;
@@ -32,6 +33,18 @@ pub struct Invite {
     pub created_at: chrono::DateTime<Utc>,
     pub expires_at: Option<chrono::DateTime<Utc>>,
     pub deleted_at: Option<chrono::DateTime<Utc>>,
+}
+
+impl From<&Invite> for message_enum::Invite {
+    fn from(invite: &Invite) -> Self {
+        message_enum::Invite {
+            code: invite.code.clone(),
+            created_by: invite.created_by,
+            created_at: invite.created_at,
+            community: invite.community,
+            expires_at: invite.expires_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, AsChangeset)]
@@ -71,7 +84,28 @@ pub(crate) async fn create_invite(
     expires_at: Option<chrono::DateTime<Utc>>,
 ) -> app::Result<Invite> {
     let mut conn = state.connection_pool.get().await?;
-    require_member(conn.as_mut(), user, community)
+    insert(
+        state,
+        conn.as_mut(),
+        user,
+        community,
+        custom_code,
+        expires_at,
+    )
+    .await
+}
+
+/// Makes an invite to `community` from `user`, who needs Create invites there, on `conn`, and
+/// announces it. Inside a transaction, the invite and its announcement go with it.
+pub(crate) async fn insert(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    community: CommunityId,
+    custom_code: Option<String>,
+    expires_at: Option<chrono::DateTime<Utc>>,
+) -> app::Result<Invite> {
+    require_member(conn, user, community)
         .await?
         .require(Permissions::CREATE_INVITES)?;
 
@@ -93,19 +127,13 @@ pub(crate) async fn create_invite(
     };
     diesel::insert_into(invite::table)
         .values(&invite)
-        .execute(conn.as_mut())
+        .execute(conn)
         .await?;
     publish_event(
         state,
-        conn.as_mut(),
+        conn,
         EventScope::Community(community),
-        &ServerEvent::Invite(InviteEvent::Create(message_enum::Invite {
-            code: invite.code.clone(),
-            created_by: invite.created_by,
-            created_at: invite.created_at,
-            community: invite.community,
-            expires_at: invite.expires_at,
-        })),
+        &ServerEvent::Invite(InviteEvent::Create(message_enum::Invite::from(&invite))),
     )
     .await?;
     Ok(invite)
@@ -208,23 +236,39 @@ pub(crate) async fn revoke_invite(
 
     conn.transaction(|conn| {
         async move {
-            diesel::update(invite::table)
-                .set(invite::deleted_at.eq(diesel::dsl::now))
-                .filter(invite::code.eq(&code).and(invite::deleted_at.is_null()))
-                .execute(conn)
-                .await?;
-            publish_event(
-                state,
-                conn,
-                EventScope::CommunityOfInvite(code.clone()),
-                &ServerEvent::Invite(InviteEvent::Delete { code }),
-            )
-            .await?;
+            delete(state, conn, &code).await?;
             Ok(())
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Revokes the invite `code`, on `conn`, which must be inside a transaction, and announces it.
+/// `false` when no unrevoked invite has that code. Who may is the caller's to decide.
+pub(crate) async fn delete(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    code: &str,
+) -> app::Result<bool> {
+    let revoked = diesel::update(invite::table)
+        .set(invite::deleted_at.eq(diesel::dsl::now))
+        .filter(invite::code.eq(code).and(invite::deleted_at.is_null()))
+        .execute(conn)
+        .await?;
+    if revoked == 0 {
+        return Ok(false);
+    }
+    publish_event(
+        state,
+        conn,
+        EventScope::CommunityOfInvite(code.to_string()),
+        &ServerEvent::Invite(InviteEvent::Delete {
+            code: code.to_string(),
+        }),
+    )
+    .await?;
+    Ok(true)
 }
 
 /// The invite with this code, whether or not it has expired, so a caller can tell the user an

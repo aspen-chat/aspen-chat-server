@@ -1,4 +1,5 @@
 import { CopyIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
+import { saveFile } from "@/features/layout/saveFile";
 import { useState } from "react";
 import { Button, Dialog, Heading, Modal, ModalOverlay } from "react-aria-components";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -63,11 +64,10 @@ export function RecoveryCodesDialog({
               </Button>
               <Button
                 onPress={() => {
-                  const link = document.createElement("a");
-                  link.href = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
-                  link.download = m.security.downloadName;
-                  link.click();
-                  URL.revokeObjectURL(link.href);
+                  void saveFile(
+                    new Blob([text + "\n"], { type: "text/plain" }),
+                    m.security.downloadName,
+                  );
                 }}
                 className={secondaryButtonClass + " flex items-center gap-1.5"}
               >

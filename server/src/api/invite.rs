@@ -10,20 +10,8 @@ use crate::app::{self, CommunityId};
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use diesel::result::DatabaseErrorKind;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
-
-impl From<&app::invite::Invite> for message_enum::Invite {
-    fn from(invite: &app::invite::Invite) -> Self {
-        message_enum::Invite {
-            code: invite.code.clone(),
-            created_by: invite.created_by,
-            created_at: invite.created_at,
-            community: invite.community,
-            expires_at: invite.expires_at,
-        }
-    }
-}
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -225,4 +213,93 @@ fn membership_required(e: app::Error) -> ApiError {
         app::Error::Validation(reason) => ApiError::new(ProblemCode::Forbidden).with_detail(reason),
         other => other.into(),
     }
+}
+
+/// A usable registration invite, as someone about to register with it sees it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrationInvitePreview {
+    pub code: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    /// For a dual invite whose community invite still works, that invite's code: the account
+    /// joins its community as it is made, and someone who already has an account joins with
+    /// it instead. `null` for a plain registration invite.
+    pub community_invite: Option<String>,
+    /// The community `communityInvite` opens; `null` with it.
+    pub community: Option<CommunityId>,
+}
+
+/// Relationships a registration invite read can sideload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RegistrationInviteInclude {
+    /// The community a dual invite joins, as `included.communities`.
+    Community,
+}
+
+/// Body of a registration invite read; a named alias for the same reason as
+/// `api::community::CommunityRead`.
+pub type RegistrationInviteRead = Sideloaded<RegistrationInvitePreview>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RegistrationInviteReadQuery {
+    /// Related records to return alongside the invite, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<RegistrationInviteInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<RegistrationInviteInclude>,
+}
+
+/// Reads a registration invite by its code, so the page a registration link opens can say which
+/// community the account will join, and send someone already signed in to join it instead.
+/// Unauthenticated, like registering. An invite that is unknown, revoked, expired, or used up
+/// is `404`.
+#[utoipa::path(
+    get,
+    path = "/registration-invites/{code}",
+    tag = TAG_INVITES,
+    params(("code" = String, Path), RegistrationInviteReadQuery),
+    responses(
+        (status = OK, body = RegistrationInviteRead),
+        (status = BAD_REQUEST, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_registration_invite(
+    State(state): State<GlobalServerContext>,
+    Path(code): Path<String>,
+    Query(query): Query<RegistrationInviteReadQuery>,
+) -> ApiResult<Json<RegistrationInviteRead>> {
+    let invite = app::registration_invite::read_usable(&state, &code).await?;
+    let community = {
+        let mut conn = state
+            .connection_pool
+            .get()
+            .await
+            .map_err(app::Error::from)?;
+        app::registration_invite::invited_communities(conn.as_mut(), std::slice::from_ref(&invite))
+            .await?
+            .into_values()
+            .next()
+            .filter(|community| community.usable)
+    };
+    let mut included = Included::default();
+    if let Some(community) = &community
+        && query.include.contains(RegistrationInviteInclude::Community)
+    {
+        let record = app::community::read_invited_community(&state, community.id).await?;
+        included.communities = Some(vec![message_enum::Community::from(record)]);
+    } else if query.include.contains(RegistrationInviteInclude::Community) {
+        included.communities = Some(Vec::new());
+    }
+    Ok(Json(RegistrationInviteRead::new(
+        RegistrationInvitePreview {
+            code: invite.code,
+            expires_at: invite.expires_at,
+            community_invite: community.as_ref().map(|c| c.invite.clone()),
+            community: community.map(|c| c.id),
+        },
+        included,
+    )))
 }

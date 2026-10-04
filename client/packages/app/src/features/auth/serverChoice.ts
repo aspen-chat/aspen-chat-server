@@ -5,6 +5,11 @@ export interface ServerChoice {
   serverUrl: string;
   /** Back to the server picker; `null` on the web, whose server is the one serving the page. */
   changeServer: (() => void) | null;
+  /**
+   * Signs in to `url` from now on without asking, as when a scanned sign-in code names its
+   * server; `null` on the web, like `changeServer`.
+   */
+  switchServer: ((url: string) => void) | null;
 }
 
 export const ServerChoiceContext = createContext<ServerChoice | null>(null);

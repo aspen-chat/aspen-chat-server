@@ -53,6 +53,14 @@ interface AspenDesktopBridge {
     open(id: string, url: string): Promise<{ ceremony: string; outcome: "done" | "cancelled" }>;
     dispose(id: string): void;
   };
+  /**
+   * `aspen://app/…` links the system handed the app (`packages/desktop/src/main/appLinks.ts`):
+   * `ready` returns those that waited, and `onOpen` hears each later one.
+   */
+  readonly appLinks: {
+    ready(): Promise<string[]>;
+    onOpen(listener: (url: string) => void): () => void;
+  };
   /** Game capture through libobs; the shape is `GameCaptureBridge` in `features/voice/gameCapture.ts`. */
   readonly gameCapture: {
     kinds(): Promise<{

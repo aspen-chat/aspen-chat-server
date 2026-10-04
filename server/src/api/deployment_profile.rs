@@ -22,6 +22,9 @@ pub struct DeploymentProfile {
     pub display_name: Option<String>,
     /// Its picture; `null` when it has none.
     pub icon: Option<Icon>,
+    /// Where its web client is served (`[web_client] url`), which links and QR codes for
+    /// invites and signing in name; `null` when it has not said.
+    pub web_client_url: Option<String>,
 }
 
 impl DeploymentProfile {
@@ -29,6 +32,7 @@ impl DeploymentProfile {
         Self {
             display_name: profile.display_name,
             icon: profile.icon.map(|icon| icon_to_api(state, icon)),
+            web_client_url: state.config.web_client.url.clone(),
         }
     }
 }

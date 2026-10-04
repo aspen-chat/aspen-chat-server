@@ -4,14 +4,25 @@ import { Button, Form, Input, Label, TextField } from "react-aria-components";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { AspenIcon } from "./AspenIcon";
-import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
+import { detectShell } from "@/config";
+import { ScanCodeButton } from "@/features/qr/ScanCode";
+import { router } from "@/router";
+import {
+  fieldClass,
+  inputClass,
+  labelClass,
+  linkButtonClass,
+  outlineButtonClass,
+  primaryButtonClass,
+} from "./styles";
 
 /**
  * Asks which Aspen deployment to connect to, under Aspen's icon, in the desktop and mobile
  * shells, which have no server of their own: on first launch, and when the user changes it.
  * The field starts empty. Whatever follows the host in the address (a path, a query, a
  * fragment) is dropped, since a deployment is named by its origin (`normalizeServerUrl`).
- * `onCancel`, given when a server is already chosen, goes back to it.
+ * `onCancel`, given when a server is already chosen, goes back to it. On a phone, a sign-in code
+ * scanned from a computer answers instead: it names its server, and its screen opens there.
  */
 export function ServerForm({
   onSubmit,
@@ -63,6 +74,24 @@ export function ServerForm({
       <Button type="submit" className={primaryButtonClass}>
         {m.continue}
       </Button>
+      {detectShell() === "mobile" && (
+        <ScanCodeButton
+          label={m.deviceLink.scan}
+          hint={m.deviceLink.scanHintSignedOut}
+          accept={(link) => {
+            if (link.kind !== "deviceLink") {
+              return m.deviceLink.notSignInCode;
+            }
+            void router.navigate({
+              to: "/device-link",
+              search: { server: link.server, link: link.id },
+            });
+            onSubmit(link.server);
+            return null;
+          }}
+          className={outlineButtonClass}
+        />
+      )}
       {onCancel !== undefined && (
         <Button onPress={onCancel} className={linkButtonClass + " self-center text-sm"}>
           {m.backToSignIn}

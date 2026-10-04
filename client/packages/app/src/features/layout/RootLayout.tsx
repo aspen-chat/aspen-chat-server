@@ -9,6 +9,7 @@ import { NotifyOnMessages } from "@/features/notifications/NotifyOnMessages";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { DeploymentWelcome } from "@/features/auth/DeploymentWelcome";
+import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
 import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
@@ -40,7 +41,8 @@ export function RootLayout() {
 /**
  * Signed out: the deployment's welcome above the sign-in or create-account form. An invite link
  * naming another deployment says the user's account may be on any deployment. A registration link (`/register`, with `?invite=` from the Administration
- * Dashboard) opens on the create-account screen with the invite filled in.
+ * Dashboard) opens on the create-account screen with the invite filled in. A sign-in code
+ * (`/device-link`) opens its own screen instead.
  */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
@@ -51,9 +53,29 @@ function SignedOut() {
   const inviteAt =
     pathname.startsWith("/invite/") && typeof search.at === "string" ? search.at : null;
   const invite = typeof search.invite === "string" ? search.invite : undefined;
-  const [screen, setScreen] = useState<"login" | "register">(
-    pathname === "/register" || invite !== undefined ? "register" : "login",
+  // The screen a link opens on, until the reader switches; a link opened later (one the desktop
+  // or mobile app is handed while it runs) opens on its own screen again.
+  const opened = `${pathname}?${invite ?? ""}`;
+  const [switched, setSwitched] = useState<{ on: string; screen: "login" | "register" } | null>(
+    null,
   );
+  const screen =
+    switched?.on === opened
+      ? switched.screen
+      : pathname === "/register" || invite !== undefined
+        ? "register"
+        : "login";
+  const setScreen = (next: "login" | "register") => {
+    setSwitched({ on: opened, screen: next });
+  };
+  // A sign-in code scanned or opened here signs this device in when the other one confirms it.
+  if (pathname === "/device-link") {
+    return (
+      <main className="flex min-h-full flex-col items-center justify-center">
+        <DeviceLinkRoute />
+      </main>
+    );
+  }
   return (
     <main className="flex min-h-full flex-col items-center justify-center gap-4 p-6">
       {inviteAt !== null && (
@@ -64,6 +86,8 @@ function SignedOut() {
       <DeploymentWelcome serverUrl={serverUrl} onChangeServer={changeServer} />
       {screen === "register" ? (
         <RegisterForm
+          // A new link's code fills the form afresh.
+          key={invite ?? ""}
           initialInvite={invite}
           onSwitchToLogin={() => {
             setScreen("login");

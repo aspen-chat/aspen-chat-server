@@ -31,3 +31,24 @@
   `@capacitor/app` while `@capacitor/browser` shows the page, so the native projects register
   the `aspen` URL scheme (an intent filter on Android, `CFBundleURLTypes` on iOS once its
   project is made); this path has not yet run on a device.
+- Signing in from another device (`OtherDeviceSignIn`, on the sign-in screen and as Other devices
+  in Sign-in and security): a computer, the desktop app or a browser, shows a sign-in code
+  (`DeviceLinkCode`) and a phone scans it, whichever of the two is signed in; phones never show
+  one and computers never scan. Signed out, the computer's code asks for a sign-in and it claims
+  one every couple of seconds (`AspenClient.claimDeviceLink`, which stores the session) until
+  the phone confirms; signed in, its code offers the account, it asks every couple of seconds
+  whether the code was scanned, and then asks the user to confirm the phone by the name the
+  phone gave. A device names itself from its user agent alone (`thisDeviceName`: "Firefox on
+  Linux", "Aspen on Android"), never a place. The code warns that it is a secret, counts down
+  its minute, and then blurs with a button for a new one; a code still waiting when its screen
+  closes is cancelled. The code holds `/device-link?server={origin}#{id}` under the
+  deployment's web client (see QR codes), so a phone's own camera opens it in a browser too;
+  the phone app's scanner reads it and opens the same route with the id as `link`.
+  `DeviceLinkScreen` scans it once (a scan uses the code up, so a second render reuses the
+  first's): signed in, it shows the computer's name with a warning that a stranger's code is a
+  trap, and signs it in only on Sign it in; signed out, it says which account the phone will be
+  signed in to and claims until the computer confirms. A code for another server is refused
+  when signed in; signed out, a mobile shell moves to the code's server first
+  (`ServerChoice.switchServer`), and the server form offers to scan a code instead of typing an
+  address, since the code names its server. The root layout shows the screen in place of the
+  sign-in forms while signed out (`/device-link`), and the router has it as a route signed in.

@@ -499,11 +499,41 @@ pub struct RegistrationInvite {
     pub note: Option<String>,
     /// Whether it would create an account now: not revoked, expired, or used up.
     pub usable: bool,
+    /// For a dual invite, the community each account it makes joins; `null` for a plain one,
+    /// or when its community invite is gone.
+    pub community: Option<InvitedCommunity>,
 }
 
-/// The wire record, with `usable` as of the moment it is made.
-impl From<app::registration_invite::RegistrationInvite> for RegistrationInvite {
-    fn from(invite: app::registration_invite::RegistrationInvite) -> Self {
+/// The community a dual invite's accounts join.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitedCommunity {
+    pub id: CommunityId,
+    pub name: String,
+    /// The code of the community invite they join with.
+    pub invite: String,
+    /// Whether the community invite still works; revoked or expired, the dual invite makes
+    /// accounts that join nothing.
+    pub usable: bool,
+}
+
+impl From<app::registration_invite::InvitedCommunity> for InvitedCommunity {
+    fn from(community: app::registration_invite::InvitedCommunity) -> Self {
+        InvitedCommunity {
+            id: community.id,
+            name: community.name,
+            invite: community.invite,
+            usable: community.usable,
+        }
+    }
+}
+
+impl RegistrationInvite {
+    /// The wire record, with `usable` as of the moment it is made.
+    fn new(
+        invite: app::registration_invite::RegistrationInvite,
+        community: Option<app::registration_invite::InvitedCommunity>,
+    ) -> Self {
         RegistrationInvite {
             usable: invite.usable(Utc::now()),
             code: invite.code,
@@ -514,6 +544,7 @@ impl From<app::registration_invite::RegistrationInvite> for RegistrationInvite {
             uses: invite.uses,
             revoked_at: invite.revoked_at,
             note: invite.note,
+            community: community.map(InvitedCommunity::from),
         }
     }
 }
@@ -531,6 +562,23 @@ pub struct RegistrationInviteRequest {
     /// What it is for, to remember it by.
     #[serde(default)]
     pub note: Option<String>,
+    /// Makes a dual invite: each account it makes joins this community, through a community
+    /// invite the caller makes, which needs Create invites there. It expires with the
+    /// registration invite.
+    #[serde(default)]
+    pub community: Option<CommunityId>,
+}
+
+impl From<&RegistrationInviteRequest> for app::registration_invite::Terms {
+    fn from(request: &RegistrationInviteRequest) -> Self {
+        Self {
+            max_uses: request.max_uses.unwrap_or(1),
+            expires_in: request
+                .expires_in_seconds
+                .map(|s| chrono::Duration::seconds(i64::from(s))),
+            note: request.note.clone(),
+        }
+    }
 }
 
 /// The newest 500 registration invites: every usable one, and those that no longer work while
@@ -558,8 +606,16 @@ pub async fn list_registration_invites(
         .await
         .map_err(app::Error::from)?;
     let invites = app::registration_invite::list(conn.as_mut(), false).await?;
+    let mut communities =
+        app::registration_invite::invited_communities(conn.as_mut(), &invites).await?;
     Ok(Json(
-        invites.into_iter().map(RegistrationInvite::from).collect(),
+        invites
+            .into_iter()
+            .map(|invite| {
+                let community = communities.remove(&invite.code);
+                RegistrationInvite::new(invite, community)
+            })
+            .collect(),
     ))
 }
 
@@ -573,7 +629,8 @@ pub async fn list_registration_invites(
         (status = CREATED, body = RegistrationInvite, headers(("Location" = String, description = "URL of the new invite"))),
         (status = BAD_REQUEST, description = "`validation`: uses, expiry, or note out of bounds", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs, Create invites in the community included", body = Problem),
+        (status = NOT_FOUND, description = "The community does not exist, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -583,30 +640,33 @@ pub async fn create_registration_invite(
     Json(request): Json<RegistrationInviteRequest>,
 ) -> ApiResult<Created<RegistrationInvite>> {
     access.require(DeploymentPermission::ManageRegistrationInvites)?;
+    let terms = app::registration_invite::Terms::from(&request);
     let mut conn = state
         .connection_pool
         .get()
         .await
         .map_err(app::Error::from)?;
-    let invite = app::registration_invite::create(
-        conn.as_mut(),
-        Some(session.user.id),
-        request.max_uses.unwrap_or(1),
-        request
-            .expires_in_seconds
-            .map(|s| chrono::Duration::seconds(i64::from(s))),
-        request.note,
-    )
-    .await?;
-    tracing::info!(code = %invite.code, admin = %session.user.id.0, "made a registration invite");
+    let invite = match request.community {
+        Some(community) => {
+            app::registration_invite::create_dual(&state, session.user.id, community, terms).await?
+        }
+        None => {
+            app::registration_invite::create(conn.as_mut(), Some(session.user.id), terms).await?
+        }
+    };
+    let communities =
+        app::registration_invite::invited_communities(conn.as_mut(), std::slice::from_ref(&invite))
+            .await?;
+    tracing::info!(code = %invite.code, admin = %session.user.id.0, community = ?request.community, "made a registration invite");
+    let community = communities.into_values().next();
     Ok(Created::new(
         format!("{API_PREFIX}/admin/registration-invites/{}", invite.code),
-        RegistrationInvite::from(invite),
+        RegistrationInvite::new(invite, community),
     ))
 }
 
-/// Revokes a registration invite, so it makes no more accounts; it stays listed, and the
-/// accounts it made are kept.
+/// Revokes a registration invite, so it makes no more accounts, and a dual invite's community
+/// invite with it; it stays listed, and the accounts it made are kept.
 #[utoipa::path(
     delete,
     path = "/admin/registration-invites/{code}",
@@ -632,7 +692,7 @@ pub async fn revoke_registration_invite(
         .get()
         .await
         .map_err(app::Error::from)?;
-    app::registration_invite::revoke(conn.as_mut(), &code).await?;
+    app::registration_invite::revoke(&state, conn.as_mut(), &code).await?;
     tracing::info!(%code, admin = %session.user.id.0, "revoked a registration invite");
     Ok(NoContent)
 }
