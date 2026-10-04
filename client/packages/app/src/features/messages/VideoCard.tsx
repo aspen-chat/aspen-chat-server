@@ -62,7 +62,7 @@ export function VideoCard({ preview, player }: { preview: LinkPreview; player: s
           href={preview.url}
           target="_blank"
           rel="noreferrer noopener"
-          className="truncate font-medium text-accent hover:underline"
+          className="font-medium wrap-anywhere text-accent hover:underline"
         >
           {title}
         </a>

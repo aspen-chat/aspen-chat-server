@@ -132,7 +132,7 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
         <img src={preview.imageUrl} alt="" className="h-16 w-16 shrink-0 rounded object-cover" />
       )}
       <span className="min-w-0">
-        <span className="block truncate font-medium text-accent">{title}</span>
+        <span className="block font-medium wrap-anywhere text-accent">{title}</span>
         {preview.description != null && (
           <span className="mt-0.5 line-clamp-2 block text-ink-muted">{preview.description}</span>
         )}
