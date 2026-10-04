@@ -2,11 +2,15 @@
 //!
 //! - `POST /attachments` — caller sends `{fileName, mimeType}`, server reserves an id and
 //!   returns `{id, uploadUrl, expiresAt}`.
-//! - `POST /attachments/{id}/confirm` — caller calls this after the direct-to-S3 PUT; the
-//!   server HEADs the object and flips the row to ready. Returns the final [`Attachment`] with
-//!   a public `downloadUrl`.
-//! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment.
-//! - `DELETE /attachments/{id}` — drops the row and the object.
+//! - `POST /attachments/{id}/confirm` — the uploader calls this after the direct-to-S3 PUT;
+//!   the server HEADs the object and flips the row to ready. Returns the final [`Attachment`]
+//!   with a public `downloadUrl`.
+//! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment, for its
+//!   uploader or anyone who may view a message it is in.
+//! - `DELETE /attachments/{id}` — the uploader drops an attachment in no message, row and
+//!   object.
+//!
+//! Anyone else is answered as if the attachment did not exist.
 //!
 //! Bytes do not flow through these handlers in either direction.
 
@@ -90,12 +94,13 @@ pub struct AttachmentUploadHandle {
 )]
 pub async fn init_attachment_upload(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Json(request): Json<AttachmentUploadInitRequest>,
 ) -> ApiResult<Created<AttachmentUploadHandle>> {
     let size = app::attachment::picture_size(request.width, request.height)?;
     let upload =
-        app::attachment::init_upload(&state, request.file_name, request.mime_type, size).await?;
+        app::attachment::init_upload(&state, user.id, request.file_name, request.mime_type, size)
+            .await?;
     Ok(Created::new(
         format!("{API_PREFIX}/attachments/{}", upload.id.0),
         AttachmentUploadHandle {
@@ -122,10 +127,10 @@ pub async fn init_attachment_upload(
 )]
 pub async fn confirm_attachment_upload(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(attachment): Path<AttachmentId>,
 ) -> ApiResult<Json<Attachment>> {
-    let row = app::attachment::confirm_upload(&state, attachment)
+    let row = app::attachment::confirm_upload(&state, user.id, attachment)
         .await
         .map_err(|e| match e {
             app::Error::Validation(reason) => {
@@ -152,10 +157,10 @@ pub async fn confirm_attachment_upload(
 )]
 pub async fn get_attachment(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(attachment): Path<AttachmentId>,
 ) -> ApiResult<Json<Attachment>> {
-    let row = app::attachment::read_attachment(&state, attachment).await?;
+    let row = app::attachment::read_attachment(&state, user.id, attachment).await?;
     Ok(Json(attachment_to_api(&state, row)))
 }
 
@@ -175,9 +180,9 @@ pub async fn get_attachment(
 )]
 pub async fn delete_attachment(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(attachment): Path<AttachmentId>,
 ) -> ApiResult<NoContent> {
-    app::attachment::delete_attachment(&state, attachment).await?;
+    app::attachment::delete_attachment(&state, user.id, attachment).await?;
     Ok(NoContent)
 }

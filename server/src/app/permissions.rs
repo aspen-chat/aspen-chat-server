@@ -22,7 +22,6 @@
 //! when an action was allowed by that alone, which the caller then logs.
 
 use crate::app::channel::ChannelType;
-use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
 use crate::database::schema::{
@@ -432,7 +431,15 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
     t!(key)
 }
 
-/// What the caller may do in one channel.
+/// That a `ChannelAccess` came from `channel_access`: it has no public constructor, so one cannot
+/// be made anywhere else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Checked;
+
+/// What the caller may do in one channel, which they may view: only `channel_access` makes one,
+/// and it refuses a channel they may not view, so holding one proves the check was made. A
+/// function that reads or writes a channel's contents for someone takes theirs, or checks it
+/// itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelAccess {
     pub channel: ChannelId,
@@ -450,6 +457,7 @@ pub struct ChannelAccess {
     /// Whether this is a one-to-one DM from the system account (`app::system_account`), whose
     /// notices the person reads and cannot answer.
     pub from_system: bool,
+    checked: Checked,
 }
 
 impl ChannelAccess {
@@ -638,17 +646,23 @@ async fn overrides_of_channel(
         .await?)
 }
 
+/// A live category's overrides; a deleted one's apply to nothing.
 async fn overrides_of_category(
     mut conn: &AsyncPgConnection,
     category_id: CategoryId,
 ) -> app::Result<Vec<Override>> {
     Ok(category_override::table
+        .inner_join(crate::database::schema::category::table)
         .select((
             category_override::role,
             category_override::allow,
             category_override::deny,
         ))
-        .filter(category_override::category.eq(category_id))
+        .filter(
+            category_override::category
+                .eq(category_id)
+                .and(crate::database::schema::category::deleted_at.is_null()),
+        )
         .load(&mut conn)
         .await?)
 }
@@ -689,7 +703,7 @@ async fn dm_peer(
 }
 
 pub async fn channel_access(
-    state: &GlobalServerContext,
+    state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user: UserId,
     channel_id: ChannelId,
@@ -744,6 +758,7 @@ pub async fn channel_access(
                         dm_moderator: true,
                         blocked: false,
                         from_system: false,
+                        checked: Checked,
                     });
                 }
                 return Err(not_found());
@@ -761,6 +776,7 @@ pub async fn channel_access(
                 dm_moderator: false,
                 blocked,
                 from_system,
+                checked: Checked,
             })
         }
         ChannelHome::Community {
@@ -792,6 +808,7 @@ pub async fn channel_access(
                 dm_moderator: false,
                 blocked: false,
                 from_system: false,
+                checked: Checked,
             })
         }
     }

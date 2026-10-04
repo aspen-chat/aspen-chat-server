@@ -40,7 +40,34 @@ pub struct JoinClaims {
 }
 
 impl JoinClaims {
-    /// Whether the token lets its holder produce media from `source`.
+    /// What the token lets its holder do in the call, until the API server says otherwise
+    /// (`VoiceCommand::Grant`).
+    pub fn grants(&self) -> Grants {
+        Grants {
+            speak: self.speak,
+            share_screen: self.share_screen,
+            camera: self.camera,
+            transfer_files: self.transfer_files,
+        }
+    }
+}
+
+/// What a participant may do in a call besides listen and watch: their channel permissions
+/// Speak, Share screen, Use camera, and Transfer files. A join token carries them as they stood
+/// when it was issued, and the API server sends them again whenever they change.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct Grants {
+    pub speak: bool,
+    pub share_screen: bool,
+    pub camera: bool,
+    pub transfer_files: bool,
+}
+
+impl Grants {
+    /// Whether they may produce media from `source`.
     pub fn may_produce(&self, source: crate::signal::MediaSource) -> bool {
         use crate::signal::MediaSource;
         match source {
@@ -61,6 +88,8 @@ pub enum TokenError {
     Expired,
     #[error("the token is not for this server")]
     WrongServer,
+    #[error("the token was already used; ask the API server for another")]
+    Used,
 }
 
 type HmacSha256 = Hmac<Sha256>;
@@ -159,8 +188,8 @@ mod tests {
     fn grants_decide_what_may_be_produced() {
         use crate::signal::MediaSource;
         let claims = claims();
-        assert!(claims.may_produce(MediaSource::Microphone));
-        assert!(!claims.may_produce(MediaSource::Screen));
-        assert!(!claims.may_produce(MediaSource::ScreenAudio));
+        assert!(claims.grants().may_produce(MediaSource::Microphone));
+        assert!(!claims.grants().may_produce(MediaSource::Screen));
+        assert!(!claims.grants().may_produce(MediaSource::ScreenAudio));
     }
 }

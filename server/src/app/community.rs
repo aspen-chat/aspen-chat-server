@@ -93,16 +93,14 @@ pub(crate) async fn create_community(
                 (t!("firstTextChannelName"), ChannelType::Text),
                 (t!("firstVoiceChannelName"), ChannelType::Voice),
             ] {
-                app::channel::insert_channel(
-                    state,
-                    conn.as_mut(),
-                    name.to_string(),
-                    0,
+                let new = app::channel::NewChannel {
+                    name: name.to_string(),
+                    sort_index: 0,
                     ty,
-                    community.id,
-                    None,
-                )
-                .await?;
+                    community: community.id,
+                    parent_category: None,
+                };
+                app::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
             }
             Ok(community)
         }

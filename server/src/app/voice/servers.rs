@@ -8,7 +8,7 @@ use crate::api::voice::VoiceSessionEndReason;
 use crate::app;
 use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
-use crate::app::permissions::{Permissions, channel_access};
+use crate::app::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::app::{ChannelId, UserId, VoiceServerId};
 use crate::database::schema::{channel, voice_server, voice_server_failure, voice_session};
 use crate::t;
@@ -22,7 +22,7 @@ use diesel_async::{AsyncConnection, RunQueryDsl};
 use rand::seq::SliceRandom;
 use tracing::{info, warn};
 use uuid::Uuid;
-use voice_protocol::token::{JoinClaims, sign};
+use voice_protocol::token::{Grants, JoinClaims, sign};
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = voice_server_failure)]
@@ -267,12 +267,12 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
-    let (speak, share_screen, transfer_files, camera) = (
-        access.has(Permissions::SPEAK),
-        access.has(Permissions::SHARE_SCREEN),
-        voice.file_transfers && access.has(Permissions::TRANSFER_FILES),
-        access.has(Permissions::USE_CAMERA),
-    );
+    let Grants {
+        speak,
+        share_screen,
+        camera,
+        transfer_files,
+    } = grants_of(voice.file_transfers, &access);
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,
@@ -294,6 +294,17 @@ pub async fn join_offer(
         transfer_files,
         camera,
     })
+}
+
+/// What someone with `access` to a channel may do in its call besides listen and watch, where
+/// `[voice] file_transfers` is `file_transfers`.
+pub(super) fn grants_of(file_transfers: bool, access: &ChannelAccess) -> Grants {
+    Grants {
+        speak: access.has(Permissions::SPEAK),
+        share_screen: access.has(Permissions::SHARE_SCREEN),
+        camera: access.has(Permissions::USE_CAMERA),
+        transfer_files: file_transfers && access.has(Permissions::TRANSFER_FILES),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

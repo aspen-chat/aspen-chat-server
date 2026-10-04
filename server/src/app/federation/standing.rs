@@ -198,7 +198,9 @@ pub fn spawn_confirmer(state: GlobalServerContext) {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval.min(300)));
         loop {
             tick.tick().await;
-            if let Err(error) = pass(&state).await {
+            let (passed, noted) = app::events::noting(pass(&state)).await;
+            app::events::settle(&state, noted, passed.is_err()).await;
+            if let Err(error) = passed {
                 tracing::warn!(%error, "checking foreign users' standing failed");
             }
         }
@@ -310,7 +312,7 @@ async fn confirm_home(
         admits(config, subject, Direction::Immigration, &lists)
     });
     for due in &closed {
-        app::login::revoke_all_sessions(&mut conn, due.id).await?;
+        end_stay(state, &mut conn, due.id).await?;
         tracing::info!(%home, user = %due.id.0, "ended the sessions of a user whose home this deployment no longer admits");
     }
     let Some(here) = own_domain(config) else {
@@ -340,7 +342,7 @@ async fn confirm_home(
                 );
                 for due in chunk {
                     if due.confirmed_at.is_none_or(|at| at < Utc::now() - grace) {
-                        app::login::revoke_all_sessions(&mut conn, due.id).await?;
+                        end_stay(state, &mut conn, due.id).await?;
                         tracing::info!(%home, user = %due.id.0, "ended the sessions of a user whose home has gone unreached");
                     }
                 }
@@ -404,15 +406,31 @@ async fn apply(
                     .await?;
             }
             Standing::Gone => {
-                conn.transaction(|conn| app::user::retire(state, conn, due.id).scope_boxed())
+                let retired = conn
+                    .transaction(|conn| app::user::retire(state, conn, due.id).scope_boxed())
                     .await?;
+                retired.finish(state).await;
                 tracing::info!(%home, user = %due.id.0, "retired a user their home says is gone");
             }
             Standing::Refused | Standing::Unknown => {
-                app::login::revoke_all_sessions(conn, due.id).await?;
+                end_stay(state, conn, due.id).await?;
                 tracing::info!(%home, user = %due.id.0, "ended the sessions of a user their home no longer lets be here");
             }
         }
+    }
+    Ok(())
+}
+
+/// Ends a foreign user's sessions here, closing their event streams, and takes them out of
+/// their calls.
+async fn end_stay(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+) -> app::Result<()> {
+    app::login::revoke_all_sessions(state, conn, user).await?;
+    if let Err(e) = app::voice::kick_everywhere(state, user).await {
+        tracing::warn!(user = %user.0, error = %e, "could not take a user out of their calls");
     }
     Ok(())
 }

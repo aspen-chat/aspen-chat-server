@@ -430,27 +430,58 @@ pub(crate) async fn delete_user(
     }
     caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| retire(&state, conn.as_mut(), id).scope_boxed())
+    let retired = conn
+        .transaction(|conn| retire(&state, conn.as_mut(), id).scope_boxed())
         .await?;
+    drop(conn);
+    retired.finish(&state).await;
     app::federation::notices::announce_deleted(&state, id);
     Ok(())
 }
 
-/// Deletes an account inside the caller's transaction: marks it deleted, takes its credentials
-/// and any bot token, leaves the bots it owned working but ownerless, and says it is gone.
+/// Deletes an account inside the caller's transaction: marks it deleted, ends its sign-ins and
+/// takes its credentials and any bot token, hands each community it owned to the member ranked
+/// highest there (`successor`), takes a bot out of its communities, leaves the bots it owned
+/// working but ownerless, and says it is gone. What is left to do once the transaction commits
+/// is returned, for `Retired::finish`.
 pub(crate) async fn retire(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     id: UserId,
-) -> Result<(), app::Error> {
-    let deleted = diesel::update(user::table)
+) -> Result<Retired, app::Error> {
+    let retired: Option<(String, Option<String>, bool)> = diesel::update(user::table)
         .set(user::deleted_at.eq(diesel::dsl::now))
         .filter(user::id.eq(id).and(user::deleted_at.is_null()))
-        .execute(conn)
-        .await?;
-    if deleted == 0 {
+        .returning((user::name, user::display_name, user::bot))
+        .get_result(conn)
+        .await
+        .optional()?;
+    let Some((name, display_name, bot)) = retired else {
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    };
+    let mut handovers = Vec::new();
+    let owned: Vec<(app::CommunityId, String)> = schema::community::table
+        .select((schema::community::id, schema::community::name))
+        .filter(
+            schema::community::owner
+                .eq(Some(id))
+                .and(schema::community::deleted_at.is_null()),
+        )
+        .load(conn)
+        .await?;
+    for (community, community_name) in owned {
+        let next = successor(conn, community, id).await?;
+        app::role::set_owner(state, conn, community, next).await?;
+        if let Some(next) = next {
+            handovers.push((community_name, next));
+        }
     }
+    if bot {
+        for community in app::events::memberships(conn, id).await? {
+            app::community::end_membership(state, conn, id, community).await?;
+        }
+    }
+    app::login::revoke_all_sessions(state, conn, id).await?;
     app::two_factor::remove_all(conn, id).await?;
     app::bot::orphan_bots_of(state, conn, id).await?;
     diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))
@@ -463,7 +494,79 @@ pub(crate) async fn retire(
         &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
     )
     .await?;
-    Ok(())
+    Ok(Retired {
+        name: display_name.unwrap_or(name),
+        handovers,
+    })
+}
+
+/// Who a community goes to when its owner's account is deleted: the member whose highest role
+/// ranks highest, the earliest to join among equals, leaving out bots, the system account, and
+/// anyone deleted or banned from the deployment. `None` when nobody is left.
+async fn successor(
+    conn: &mut AsyncPgConnection,
+    community: app::CommunityId,
+    leaving: UserId,
+) -> app::Result<Option<UserId>> {
+    #[derive(QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        user: UserId,
+    }
+    let query = format!(
+        r#"
+        SELECT cu."user" AS "user"
+        FROM community_user cu
+        JOIN "user" ON "user".id = cu."user"
+        LEFT JOIN community_member_role cmr
+            ON cmr.community = cu.community AND cmr."user" = cu."user"
+        LEFT JOIN community_role r ON r.id = cmr.role
+        WHERE cu.community = $1
+          AND cu."user" <> $2
+          AND "user".deleted_at IS NULL
+          AND NOT "user".bot
+          AND NOT "user".system
+          AND NOT {banned}
+        GROUP BY cu."user", cu.joined_at
+        ORDER BY COALESCE(MAX(r.position), 0) DESC, cu.joined_at, cu."user"
+        LIMIT 1
+        "#,
+        banned = app::user_ban::BANNED_SQL,
+    );
+    let row: Option<Row> = diesel::sql_query(query)
+        .bind::<diesel::sql_types::Uuid, _>(community.0)
+        .bind::<diesel::sql_types::Uuid, _>(leaving.0)
+        .get_result(conn)
+        .await
+        .optional()?;
+    Ok(row.map(|row| row.user))
+}
+
+/// What retiring an account leaves to do once its transaction has committed.
+#[must_use = "a retired account's new owners wait on `finish`"]
+pub(crate) struct Retired {
+    /// The name the account went by, for the notices.
+    name: String,
+    /// Each community handed on, by name, and who it went to.
+    handovers: Vec<(String, UserId)>,
+}
+
+impl Retired {
+    /// Tells each new owner by the system account what they now own. The account is gone
+    /// either way, so failures are logged. Its calls end as its deletion settles
+    /// (`app::events::rechecks_of`).
+    pub(crate) async fn finish(self, state: &GlobalServerContext) {
+        for (community, owner) in self.handovers {
+            let notice = crate::t!(
+                "ownershipInheritedNotice",
+                previous = self.name.as_str(),
+                community = community.as_str()
+            );
+            if let Err(e) = app::system_account::notify(state, owner, notice.to_string()).await {
+                tracing::warn!(owner = %owner.0, error = %e, "could not tell a new owner of their community");
+            }
+        }
+    }
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.

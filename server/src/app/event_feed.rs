@@ -56,8 +56,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -105,20 +105,65 @@ pub struct FeedEvent {
     creator: Option<UserId>,
     /// On a community's subject, the change the event makes to who may view what.
     change: Option<ModelChange>,
-    /// The community's model as it stood after this event, when the dispatcher held one.
-    access: Option<Arc<CommunityModel>>,
+    /// The community's model as it stood after this event, when the dispatcher held one. Set
+    /// as the event is followed, or for one retained before the dispatcher held the model, as
+    /// the model is adopted.
+    access: OnceLock<Arc<CommunityModel>>,
+    /// For an event that changes who may view the channel it names, the model as it stood
+    /// before: those who could view the channel then receive it too, so they learn they no
+    /// longer can.
+    before: OnceLock<Arc<CommunityModel>>,
     /// When it was published, on this process's clock.
     published: Instant,
-    /// On a user's own subject, that they were banned from the deployment: their connections
-    /// end once it is written to them.
-    ends_streams: bool,
+    /// On a user's own subject, that the connections receiving it end once it is written to
+    /// them, and why.
+    ends: Option<StreamEnd>,
+    /// On a user's own subject, the sign-ins of theirs that ended: only their connections
+    /// receive the event.
+    sign_ins: Option<EndedSignIns>,
+    /// On a community's subject, that what was announced about it may not have happened
+    /// (`app::events::settle`): the model is dropped and its readers resume.
+    resync: bool,
 }
 
 impl FeedEvent {
-    /// Whether a connection that delivers this event closes after it: its user was banned from
-    /// the deployment (`app::user_ban`).
-    pub fn ends_streams(&self) -> bool {
-        self.ends_streams
+    /// Whether a connection that delivers this event closes after it, and why.
+    pub fn ends(&self) -> Option<StreamEnd> {
+        self.ends
+    }
+
+    /// Whether a connection of `sign_in` receives this event: every connection of its user does,
+    /// except that an end of sign-ins reaches only theirs.
+    fn reaches(&self, sign_in: &str) -> bool {
+        self.sign_ins
+            .as_ref()
+            .is_none_or(|ended| ended.covers(sign_in))
+    }
+}
+
+/// Why a connection closes after an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEnd {
+    /// Its user was banned from the deployment (`app::user_ban`).
+    Banned,
+    /// Its sign-in ended (`app::login`): signed out, or revoked.
+    SignedOut,
+}
+
+/// The sign-ins a `signInsEnded` event ends, by `app::login::sign_in_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct EndedSignIns {
+    /// The one sign-in that ended; without it, every one but `kept` did.
+    ended: Option<String>,
+    kept: Option<String>,
+}
+
+impl EndedSignIns {
+    fn covers(&self, sign_in: &str) -> bool {
+        match &self.ended {
+            Some(ended) => ended == sign_in,
+            None => self.kept.as_deref() != Some(sign_in),
+        }
     }
 }
 
@@ -163,6 +208,8 @@ pub struct EventFeed {
 struct Register {
     id: u64,
     user: UserId,
+    /// The sign-in the connection belongs to (`app::login::sign_in_id`).
+    sign_in: String,
     communities: Vec<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
     moderator: bool,
@@ -202,11 +249,12 @@ impl EventFeed {
     }
 }
 
-/// Registers a connection of `user`'s, resuming after `resume_after` when that is still
-/// retained.
+/// Registers a connection of `user`'s, of the sign-in `sign_in` (`app::login::sign_in_id`),
+/// resuming after `resume_after` when that is still retained.
 pub async fn subscribe(
     state: &GlobalServerContext,
     user: UserId,
+    sign_in: String,
     resume_after: Option<u64>,
 ) -> app::Result<Subscription> {
     let mut conn = state.connection_pool.get().await?;
@@ -223,6 +271,7 @@ pub async fn subscribe(
             .send(Register {
                 id,
                 user,
+                sign_in: sign_in.clone(),
                 communities: communities.clone(),
                 roles: roles.clone(),
                 moderator,
@@ -311,8 +360,10 @@ fn moderation_change(payload: &str) -> Option<bool> {
 
 /// Whether `event`, of a community's, may reach `user` holding `roles` there: they hold the
 /// permission it requires, if any, or made what it is about; and it names no channel, or they
-/// may view the one it names, by `model`. A deployment moderator reads everything. Anything
-/// restricted reaches no one without a model.
+/// may view the one it names, by `model` or, for an event that changes who may, by the model
+/// before it (`event.before`). A channel a model does not know (one not yet made, or deleted)
+/// nobody views by it. A deployment moderator reads everything. Anything restricted reaches no
+/// one without a model.
 fn may_read(
     event: &FeedEvent,
     model: Option<&CommunityModel>,
@@ -334,9 +385,16 @@ fn may_read(
     {
         return false;
     }
-    event
-        .channel
-        .is_none_or(|channel| model.can_view(user, roles, channel))
+    let views = |model: &CommunityModel, channel: ChannelId| {
+        model.knows(channel) && model.can_view(user, roles, channel)
+    };
+    event.channel.is_none_or(|channel| {
+        views(model, channel)
+            || event
+                .before
+                .get()
+                .is_some_and(|before| views(before, channel))
+    })
 }
 
 /// The events the stream retains, by owner.
@@ -415,31 +473,28 @@ impl Retained {
         }
     }
 
-    /// What a connection of `user`'s reading `communities` and holding `roles` missed after
-    /// `after`, and the communities it reads and roles it holds once it has caught up.
+    /// What a connection of `user`'s, of the sign-in `sign_in`, reading what `reading` says
+    /// missed after `after`, and what it reads once it has caught up.
     /// The database was read at some moment in the retained window, possibly before changes
     /// published just ahead of it were committed, so every membership and role change of the
     /// user's retained up to `after` is applied first (each sets a value, so applying one the
     /// database already shows changes nothing), and those after it as they are passed. Channel
     /// events are kept by the model attached to each, or `models`' for one routed before the
     /// dispatcher held its community's.
-    #[allow(clippy::type_complexity)]
     fn catch_up(
         &self,
         user: UserId,
-        communities: Vec<CommunityId>,
-        mut roles: HashMap<CommunityId, Vec<RoleId>>,
-        mut moderator: bool,
+        sign_in: &str,
+        reading: Reading,
         after: u64,
         models: &HashMap<CommunityId, Arc<CommunityModel>>,
-    ) -> (
-        Vec<Arc<FeedEvent>>,
-        HashSet<CommunityId>,
-        HashMap<CommunityId, Vec<RoleId>>,
-        bool,
-    ) {
+    ) -> (Vec<Arc<FeedEvent>>, Reading) {
         let own = SubjectOwner::User(user);
-        let mut reading: HashSet<CommunityId> = communities.into_iter().collect();
+        let Reading {
+            communities: mut reading,
+            mut roles,
+            mut moderator,
+        } = reading;
         for e in self.since(own, 0).take_while(|e| e.sequence <= after) {
             apply_membership(&mut reading, &mut roles, e);
             moderator = e.moderator.unwrap_or(moderator);
@@ -463,14 +518,15 @@ impl Retained {
             SubjectOwner::User(_) => {
                 apply_membership(&mut reading, &mut roles, e);
                 moderator = e.moderator.unwrap_or(moderator);
-                true
+                e.reaches(sign_in)
             }
             SubjectOwner::Community(community) => {
                 reading.contains(&community)
                     && may_read(
                         e,
                         e.access
-                            .as_deref()
+                            .get()
+                            .map(Arc::as_ref)
                             .or_else(|| models.get(&community).map(Arc::as_ref)),
                         user,
                         roles.get(&community),
@@ -478,8 +534,21 @@ impl Retained {
                     )
             }
         });
-        (events, reading, roles, moderator)
+        let caught_up = Reading {
+            communities: reading,
+            roles,
+            moderator,
+        };
+        (events, caught_up)
     }
+}
+
+/// What a connection reads: its user's communities, the roles they hold in each besides
+/// everyone's, and whether they moderate the deployment.
+struct Reading {
+    communities: HashSet<CommunityId>,
+    roles: HashMap<CommunityId, Vec<RoleId>>,
+    moderator: bool,
 }
 
 /// Applies what an event on the user's own subject changes about their memberships and roles.
@@ -505,6 +574,7 @@ fn apply_membership(
 
 struct Connection {
     user: UserId,
+    sign_in: String,
     communities: HashSet<CommunityId>,
     /// The roles the user holds in each community besides everyone's.
     roles: HashMap<CommunityId, Vec<RoleId>>,
@@ -576,10 +646,13 @@ impl Routes {
             let Some(connection) = self.connections.get(id) else {
                 continue;
             };
+            if !event.reaches(&connection.sign_in) {
+                continue;
+            }
             if let SubjectOwner::Community(community) = event.owner
                 && (event.channel.is_some() || event.requires.is_some())
             {
-                let model = event.access.as_deref();
+                let model = event.access.get().map(Arc::as_ref);
                 let roles = connection.roles.get(&community);
                 let key = (
                     connection.moderator || model.is_some_and(|m| m.is_owner(connection.user)),
@@ -759,8 +832,19 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         }
         SubjectOwner::Community(_) => (None, None, None, ModelChange::read(payload.get())),
     };
-    let ends_streams = matches!(owner, SubjectOwner::User(_))
-        && payload.get().contains(r#""serverEvent":"accountBanned""#);
+    let own = matches!(owner, SubjectOwner::User(_));
+    let sign_ins = (own && payload.get().contains(r#""serverEvent":"signInsEnded""#))
+        .then(|| serde_json::from_str::<EndedSignIns>(payload.get()).ok())
+        .flatten();
+    let ends = if own && payload.get().contains(r#""serverEvent":"accountBanned""#) {
+        Some(StreamEnd::Banned)
+    } else if sign_ins.is_some() {
+        Some(StreamEnd::SignedOut)
+    } else {
+        None
+    };
+    let resync = matches!(owner, SubjectOwner::Community(_))
+        && payload.get().contains(r#""serverEvent":"communityResync""#);
     let channel = message
         .headers
         .as_ref()
@@ -805,9 +889,12 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             requires,
             creator,
             change,
-            access: None,
+            access: OnceLock::new(),
+            before: OnceLock::new(),
             published,
-            ends_streams,
+            ends,
+            sign_ins,
+            resync,
         },
         info.pending,
     ))
@@ -827,18 +914,18 @@ struct Models {
 
 impl Models {
     /// Takes `snapshot` as `community`'s model unless one is held already, bringing it up to
-    /// date with every retained event of the community.
+    /// date with every retained event of the community and attaching to each one routed
+    /// without a model the model as it stood there, so a catch-up judges it by the permissions
+    /// of its moment rather than today's.
     fn adopt(&mut self, retained: &Retained, community: CommunityId, snapshot: CommunityModel) {
         if self.models.contains_key(&community) {
             return;
         }
-        let mut model = snapshot;
+        let mut model = Arc::new(snapshot);
         for e in retained.since(SubjectOwner::Community(community), 0) {
-            if let Some(change) = &e.change {
-                model.apply(change);
-            }
+            apply_and_attach(&mut model, e);
         }
-        self.models.insert(community, Arc::new(model));
+        self.models.insert(community, model);
     }
 
     /// Lets go of the models no registered connection reads.
@@ -881,16 +968,27 @@ impl Models {
     }
 
     /// Applies `event`'s change to its community's model and attaches the model as it now
-    /// stands; follows the memberships it makes or ends. Returns the connections that joined
-    /// a community with no model here, which must resume.
+    /// stands; follows the memberships it makes or ends. Returns the connections that must
+    /// resume: those that joined a community with no model here, and on a resync, every one
+    /// reading the community, whose model is dropped.
     fn follow(&mut self, event: &mut FeedEvent) -> Vec<u64> {
         match event.owner {
+            SubjectOwner::Community(community) if event.resync => {
+                let resync: Vec<u64> = self
+                    .connections
+                    .iter()
+                    .filter(|(_, (_, communities))| communities.contains(&community))
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in &resync {
+                    self.unregister(*id);
+                }
+                self.models.remove(&community);
+                resync
+            }
             SubjectOwner::Community(community) => {
                 if let Some(model) = self.models.get_mut(&community) {
-                    if let Some(change) = &event.change {
-                        Arc::make_mut(model).apply(change);
-                    }
-                    event.access = Some(model.clone());
+                    apply_and_attach(model, event);
                 }
                 Vec::new()
             }
@@ -923,6 +1021,19 @@ impl Models {
             }
         }
     }
+}
+
+/// Applies `event`'s change to `model` and attaches the model to the event as it then stands,
+/// and, when the change concerns the channel the event names, as it stood before. Events
+/// already given models keep them.
+fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) {
+    if let Some(change) = &event.change {
+        if event.channel.is_some() {
+            let _ = event.before.set(model.clone());
+        }
+        Arc::make_mut(model).apply(change);
+    }
+    let _ = event.access.set(model.clone());
 }
 
 async fn dispatch(
@@ -1007,11 +1118,15 @@ async fn dispatch(
                     models.adopt(&retained, community, snapshot);
                 }
                 let (after, resumed) = retained.start_after(registration.resume_after);
-                let (missed, communities, roles, moderator) = retained.catch_up(
+                let reading = Reading {
+                    communities: registration.communities.into_iter().collect(),
+                    roles: registration.roles,
+                    moderator: registration.moderator,
+                };
+                let (missed, Reading { communities, roles, moderator }) = retained.catch_up(
                     registration.user,
-                    registration.communities,
-                    registration.roles,
-                    registration.moderator,
+                    &registration.sign_in,
+                    reading,
                     after,
                     &models.models,
                 );
@@ -1038,6 +1153,7 @@ async fn dispatch(
                 models.register(registration.id, registration.user, communities.clone());
                 let connection = Connection {
                     user: registration.user,
+                    sign_in: registration.sign_in,
                     communities,
                     roles,
                     moderator,
@@ -1090,9 +1206,12 @@ mod tests {
             requires: None,
             creator: None,
             change: None,
-            access: None,
+            access: OnceLock::new(),
+            before: OnceLock::new(),
             published: Instant::now(),
-            ends_streams: false,
+            ends: None,
+            sign_ins: None,
+            resync: false,
         }
     }
 
@@ -1105,7 +1224,7 @@ mod tests {
     ) -> Arc<FeedEvent> {
         let mut e = plain(sequence, SubjectOwner::Community(community), None);
         e.channel = Some(channel);
-        e.access = Some(model.clone());
+        let _ = e.access.set(model.clone());
         Arc::new(e)
     }
 
@@ -1179,16 +1298,19 @@ mod tests {
         }
         // The database, read at connect, still showed `left` and did not yet show `joined`.
         let none = HashMap::new();
-        let (missed, reading, _, _) =
-            retained.catch_up(user, vec![kept, left], HashMap::new(), false, 0, &none);
+        let reading = || Reading {
+            communities: HashSet::from([kept, left]),
+            roles: HashMap::new(),
+            moderator: false,
+        };
+        let (missed, caught_up) = retained.catch_up(user, "", reading(), 0, &none);
         assert_eq!(sequences(&missed), vec![2, 3, 4, 5, 6]);
-        assert_eq!(reading, HashSet::from([kept, joined]));
+        assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
         // Resuming after the join, with a database read from before it was committed, still
         // reads the community joined.
-        let (missed, reading, _, _) =
-            retained.catch_up(user, vec![kept, left], HashMap::new(), false, 4, &none);
+        let (missed, caught_up) = retained.catch_up(user, "", reading(), 4, &none);
         assert_eq!(sequences(&missed), vec![5, 6]);
-        assert_eq!(reading, HashSet::from([kept, joined]));
+        assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
     }
 
     #[test]
@@ -1220,6 +1342,7 @@ mod tests {
             1,
             Connection {
                 user,
+                sign_in: String::new(),
                 communities: HashSet::new(),
                 roles: HashMap::new(),
                 moderator: false,
@@ -1248,8 +1371,18 @@ mod tests {
         hidden: ChannelId,
         moderator: RoleId,
     ) -> CommunityModel {
+        two_channels_with(community, open, hidden, moderator, RoleId::new())
+    }
+
+    /// `two_channels`, with `everyone` as everyone's role.
+    fn two_channels_with(
+        community: CommunityId,
+        open: ChannelId,
+        hidden: ChannelId,
+        moderator: RoleId,
+        everyone: RoleId,
+    ) -> CommunityModel {
         use crate::app::permissions::Permissions;
-        let everyone = RoleId::new();
         let mut model = CommunityModel::new(community);
         for change in [
             ModelChange::Role {
@@ -1287,6 +1420,168 @@ mod tests {
     }
 
     #[test]
+    fn an_end_of_sign_ins_reaches_and_ends_only_theirs() {
+        let user = UserId::new();
+        let mut routes = Routes::default();
+        let mut receivers = Vec::new();
+        for (id, sign_in) in [(1, "a"), (2, "b"), (3, "c")] {
+            let (tx, rx) = mpsc::channel(8);
+            routes.add(
+                id,
+                Connection {
+                    user,
+                    sign_in: sign_in.to_string(),
+                    communities: HashSet::new(),
+                    roles: HashMap::new(),
+                    moderator: false,
+                    deliveries: tx,
+                },
+            );
+            receivers.push(rx);
+        }
+        let received = |receivers: &mut Vec<mpsc::Receiver<Delivery>>| -> Vec<bool> {
+            receivers
+                .iter_mut()
+                .map(|rx| match rx.try_recv() {
+                    Ok(Delivery::Live(e)) => e.ends() == Some(StreamEnd::SignedOut),
+                    _ => false,
+                })
+                .collect()
+        };
+        let ended = |sequence, ended: Option<&str>, kept: Option<&str>| {
+            let mut e = plain(sequence, SubjectOwner::User(user), None);
+            e.sign_ins = Some(EndedSignIns {
+                ended: ended.map(str::to_string),
+                kept: kept.map(str::to_string),
+            });
+            e.ends = Some(StreamEnd::SignedOut);
+            Arc::new(e)
+        };
+        // Signing out of one ends its streams alone.
+        routes.route(&ended(1, Some("b"), None));
+        assert_eq!(received(&mut receivers), vec![false, true, false]);
+        // Changing the password ends every other.
+        routes.route(&ended(2, None, Some("a")));
+        assert_eq!(received(&mut receivers), vec![false, true, true]);
+    }
+
+    #[test]
+    fn a_resync_drops_the_model_and_its_readers() {
+        let community = CommunityId::new();
+        let other = CommunityId::new();
+        let mut models = Models::default();
+        models
+            .models
+            .insert(community, Arc::new(CommunityModel::new(community)));
+        models
+            .models
+            .insert(other, Arc::new(CommunityModel::new(other)));
+        models.register(1, UserId::new(), HashSet::from([community, other]));
+        models.register(2, UserId::new(), HashSet::from([other]));
+        let mut resync = plain(1, SubjectOwner::Community(community), None);
+        resync.resync = true;
+        assert_eq!(models.follow(&mut resync), vec![1]);
+        assert!(!models.models.contains_key(&community));
+        // The other community is still read, by the connection that stays.
+        assert!(models.models.contains_key(&other));
+        assert_eq!(models.readers.get(&other), Some(&1));
+    }
+
+    #[test]
+    fn a_change_to_who_may_view_reaches_those_on_either_side_of_it() {
+        let member = UserId::new();
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let everyone = RoleId::new();
+        let mut models = Models::default();
+        models.models.insert(
+            community,
+            Arc::new(two_channels_with(
+                community, open, hidden, moderator, everyone,
+            )),
+        );
+        models.readers.insert(community, 1);
+        let mut routes = Routes::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        routes.add(
+            1,
+            Connection {
+                user: member,
+                sign_in: String::new(),
+                communities: HashSet::from([community]),
+                roles: HashMap::new(),
+                moderator: false,
+                deliveries: tx,
+            },
+        );
+        let mut followed = |sequence: u64, channel: ChannelId, change: Option<ModelChange>| {
+            let mut e = plain(sequence, SubjectOwner::Community(community), None);
+            e.channel = Some(channel);
+            e.change = change;
+            models.follow(&mut e);
+            Arc::new(e)
+        };
+        let hide = |channel| ModelChange::ChannelOverride {
+            channel,
+            role: everyone,
+            set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
+        };
+        // Hiding the open channel reaches the member, who could view it until then, and then
+        // nothing more of it does.
+        let hiding = followed(1, open, Some(hide(open)));
+        let after = followed(2, open, None);
+        // Moving the hidden one into no category changes nothing for them and is not sent.
+        let moved = followed(
+            3,
+            hidden,
+            Some(ModelChange::ChannelCategory {
+                channel: hidden,
+                category: None,
+            }),
+        );
+        // A channel made hidden, its override published ahead of its creation, never reaches
+        // them, though the model did not know it before.
+        let new = ChannelId::new();
+        let override_first = followed(4, new, Some(hide(new)));
+        let created = followed(
+            5,
+            new,
+            Some(ModelChange::ChannelCategory {
+                channel: new,
+                category: None,
+            }),
+        );
+        // Clearing the override on the hidden channel lets them view it, and they receive it.
+        let shown = followed(
+            6,
+            hidden,
+            Some(ModelChange::ChannelOverride {
+                channel: hidden,
+                role: everyone,
+                set: None,
+            }),
+        );
+        // Deleting a channel reaches only those who could view it.
+        let deleted = followed(7, new, Some(ModelChange::ChannelDeleted(new)));
+        for e in [
+            hiding,
+            after,
+            moved,
+            override_first,
+            created,
+            shown,
+            deleted,
+        ] {
+            routes.route(&e);
+        }
+        let mut sequences = Vec::new();
+        while let Ok(Delivery::Live(e)) = rx.try_recv() {
+            sequences.push(e.sequence);
+        }
+        assert_eq!(sequences, vec![1, 6]);
+    }
+
+    #[test]
     fn routing_leaves_out_channels_a_reader_may_not_view() {
         let (member, moderator_user) = (UserId::new(), UserId::new());
         let community = CommunityId::new();
@@ -1299,6 +1594,7 @@ mod tests {
             1,
             Connection {
                 user: member,
+                sign_in: String::new(),
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
@@ -1309,6 +1605,7 @@ mod tests {
             2,
             Connection {
                 user: moderator_user,
+                sign_in: String::new(),
                 communities: HashSet::from([community]),
                 roles: HashMap::from([(community, vec![moderator])]),
                 moderator: false,
@@ -1363,7 +1660,7 @@ mod tests {
         let mut change = plain(1, SubjectOwner::Community(community), None);
         change.change = Some(everyone_view);
         assert!(models.follow(&mut change).is_empty());
-        let attached = change.access.clone().expect("a model");
+        let attached = change.access.get().cloned().expect("a model");
         assert!(!attached.can_view(UserId::new(), &[moderator], hidden));
         let mut join = plain(2, SubjectOwner::User(user), Some((unmodelled, true)));
         assert_eq!(models.follow(&mut join), vec![7]);
@@ -1405,6 +1702,7 @@ mod tests {
                 id,
                 Connection {
                     user,
+                    sign_in: String::new(),
                     communities: HashSet::from([community]),
                     roles: HashMap::from([(community, roles)]),
                     moderator: false,
@@ -1416,7 +1714,7 @@ mod tests {
         let mut invite = plain(1, SubjectOwner::Community(community), None);
         invite.requires = Some(Permissions::MANAGE_INVITES);
         invite.creator = Some(creator);
-        invite.access = Some(model);
+        let _ = invite.access.set(model);
         routes.route(&Arc::new(invite));
         let got: Vec<bool> = receivers
             .iter_mut()

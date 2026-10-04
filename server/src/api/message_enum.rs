@@ -76,6 +76,20 @@ enum MessageEnumSource {
         channel: ChannelId,
         last_read: MessageId,
     },
+    // Something announced about the community may not have happened: a request published
+    // events about it inside a transaction that was then rolled back. Whoever holds the
+    // community's state reads it again. See `app::events::settle`.
+    #[message_gen(custom_event)]
+    CommunityResync { community: CommunityId },
+    // Some of the user's sign-ins ended: signed out, or every other one when they changed their
+    // password or second factor, or all of them. Sign-ins are named by `app::login::sign_in_id`.
+    // `ended` names the one that ended; without it, every sign-in but `kept` did. Event streams
+    // of an ended sign-in receive this and close as unauthorized; no other stream receives it.
+    #[message_gen(custom_event)]
+    SignInsEnded {
+        ended: Option<String>,
+        kept: Option<String>,
+    },
     // What the user may do across the deployment changed: a deployment role of theirs was
     // given, taken, changed, or deleted. See `app::deployment`.
     #[message_gen(custom_event)]
@@ -289,6 +303,11 @@ enum MessageEnumSource {
         // The people in a DM or group DM; empty for every other channel.
         #[message_gen(server_authoritative = "mutable")]
         recipients: Vec<UserId>,
+        // The overrides a community channel starts with, one per role, written with it so it is
+        // never open to more people than these allow. Each is checked as setting it afterwards
+        // would be; they are then the channel's overrides like any other.
+        #[message_gen(secret)]
+        overrides: Option<Vec<crate::app::role::RoleOverride>>,
     },
     Category {
         #[message_gen(id)]

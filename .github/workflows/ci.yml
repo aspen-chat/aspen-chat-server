@@ -1,5 +1,6 @@
 # Every push and pull request: the Rust workspace is formatted, lint-free, and tested on
-# x86-64; the client typechecks, lints, and passes its tests; two deployments federate and
+# x86-64, and changes to access are checked to reach everything already open
+# (`scripts/check_permissions.py`); the client typechecks, lints, and passes its tests; two deployments federate and
 # wake a stand-in phone over real TLS; and the servers are built for
 # 64-bit ARM two ways, natively and with the cross-compile script, and each build is started
 # against real services on an ARM machine.
@@ -58,6 +59,12 @@ jobs:
         run: |
           cargo run --locked -p aspen-chat-server -- --gen-openapi-schema
           cargo run --locked -p voice_server -- --gen-signal-schema
+      # Every change to access tried against a deployment of its own, watching what each side
+      # of it already has open: REST, event streams, calls, operator commands, attachments.
+      - name: Changes to access reach everything already open
+        run: |
+          cargo build --locked -p aspen-chat-server -p voice_server -p aspen-migrate
+          python3 scripts/check_permissions.py --bin target/debug --start-services
       - uses: actions/upload-artifact@v4
         with:
           name: schemas

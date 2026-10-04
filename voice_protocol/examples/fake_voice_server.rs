@@ -101,6 +101,7 @@ async fn main() {
             VoiceCommand::Kick {
                 session: uuid(rest.get(2)),
                 user: uuid(rest.get(3)),
+                reason: None,
             },
         )),
         "command-mute" => Some((

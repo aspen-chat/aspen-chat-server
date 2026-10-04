@@ -1,4 +1,4 @@
-import { ApiProblemError, type ChannelType } from "@aspen/protocol";
+import { ApiProblemError, explain, type ChannelType } from "@aspen/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState, type SyntheticEvent } from "react";
@@ -15,16 +15,31 @@ import {
   SelectValue,
   TextField,
 } from "react-aria-components";
-import { useCategories, useSync } from "@/api/hooks";
+import {
+  useAccess,
+  useCategories,
+  useCategoryOverrides,
+  useRoles,
+  useStore,
+  useSync,
+} from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
+  hintClass,
   inputClass,
   labelClass,
   primaryButtonClass,
 } from "@/features/auth/styles";
+import {
+  presetOverrides,
+  type Preset,
+  type PresetOption,
+} from "@/features/community-settings/accessPresets";
+import { PresetChoices } from "@/features/community-settings/PresetChoices";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { optionClass, selectPopoverClass } from "@/features/invites/dialog";
 
@@ -36,7 +51,8 @@ const selectButtonClass =
 
 /**
  * Names a new channel of a fixed type, files it under a category (a given one, or one chosen
- * here when the community has any), and opens it if it is a text channel.
+ * here when the community has any), sets who can use it from the start with the plain settings
+ * the access dialog leads with, and opens it if it is a text channel its creator can see.
  */
 export function CreateChannelForm({
   communityId,
@@ -55,9 +71,46 @@ export function CreateChannelForm({
   const navigate = useNavigate();
   const domain = useDomain();
   const categories = useCategories(communityId);
+  const store = useStore();
+  const roles = useRoles(communityId);
+  const access = useAccess(communityId);
   const [category, setCategory] = useState<string>(parentCategory ?? NO_CATEGORY);
+  const [preset, setPreset] = useState<Preset>("everyone");
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const categoryOverrides = useCategoryOverrides(category === NO_CATEGORY ? "" : category);
+  const categoryName = categories.find((c) => c.id === category)?.name;
+  const everyone = roles.find((r) => r.everyone);
+  // Only roles ranked below the creator's highest can be given an override, everyone's among
+  // them, so a creator who outranks no role is offered no choice.
+  const settable =
+    access === null ? [] : roles.filter((r) => !r.everyone && access.outranks(r.position));
+  const choosesAccess = everyone !== undefined && access?.outranks(everyone.position) === true;
+  const overrides =
+    choosesAccess && preset !== "custom" ? presetOverrides(preset, chosen, everyone.id) : [];
+  const shutOut =
+    access !== null && !explain(access, "viewChannel", categoryOverrides, overrides).allowed;
+  const options: readonly PresetOption[] = [
+    categoryName === undefined
+      ? { key: "everyone", label: m.access.presets.everyone, hint: m.access.presets.everyoneHint }
+      : {
+          key: "everyone",
+          label: m.access.presets.sameAsCategory,
+          hint: format(m.access.presets.sameAsCategoryHint, { category: categoryName }),
+        },
+    { key: "private", label: m.access.presets.private, hint: m.access.presets.privateHint },
+    // A voice channel has no posting to withhold.
+    ...(ty === "text"
+      ? [
+          {
+            key: "readOnly" as const,
+            label: m.access.presets.readOnly,
+            hint: m.access.presets.readOnlyHint,
+          },
+        ]
+      : []),
+  ];
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,9 +125,10 @@ export function CreateChannelForm({
         name,
         ty,
         parentCategory: category === NO_CATEGORY ? null : category,
+        overrides,
       });
       onDone();
-      if (channel.ty === "text") {
+      if (channel.ty === "text" && store.channel(channel.id) !== undefined) {
         await navigate(channelLink({ domain, community: communityId }, channel.id));
       }
     } catch (e) {
@@ -123,6 +177,24 @@ export function CreateChannelForm({
             </ListBox>
           </Popover>
         </Select>
+      )}
+      {choosesAccess && (
+        <div className="flex flex-col gap-3">
+          <PresetChoices
+            options={options}
+            preset={preset}
+            onPresetChange={setPreset}
+            roles={[...settable].reverse()}
+            chosen={chosen}
+            onChosenChange={setChosen}
+          />
+          <p className={hintClass}>{m.access.createNote}</p>
+        </div>
+      )}
+      {shutOut && (
+        <p role="status" className="text-sm text-danger">
+          {m.access.shutOut}
+        </p>
       )}
       {error !== null && (
         <p role="alert" className={alertClass}>

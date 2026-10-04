@@ -10,17 +10,24 @@
 //!    validation, so a half-finished upload can't be referenced from a
 //!    message.
 //!
-//! [`delete_attachment`] removes the row regardless of state and best-effort
-//! deletes the S3 object. Stale `ready_at IS NULL` rows whose presigned URL
-//! has expired are orphans the operator can sweep on a schedule; this module
-//! intentionally does not run that sweep itself so a hung confirm path can't
-//! delete an upload that's still racing toward `ready_at`.
+//! Each row records its uploader. Until it is in a message an attachment is
+//! theirs alone: only they may confirm it, read it, put it in a message, or
+//! delete it. Once it is in a message, whoever may view that message's channel
+//! may read it, and it goes only with the message (or with its removal by
+//! someone allowed to remove it).
+//!
+//! [`delete_attachment`] removes an unsent row of the caller's, confirmed or
+//! not, and best-effort deletes the S3 object. Stale `ready_at IS NULL` rows
+//! whose presigned URL has expired are orphans the operator can sweep on a
+//! schedule; this module intentionally does not run that sweep itself so a
+//! hung confirm path can't delete an upload that's still racing toward
+//! `ready_at`.
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::PresignedUpload;
-use crate::app::{AttachmentId, Loadable};
-use crate::database::schema::attachment;
+use crate::app::{AttachmentId, Loadable, UserId};
+use crate::database::schema::{attachment, message, message_attachment};
 use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::{
@@ -43,6 +50,9 @@ pub struct Attachment {
     /// A picture's size in pixels, as its uploader measured it; both or neither.
     pub width: Option<i32>,
     pub height: Option<i32>,
+    /// Who uploaded it; `None` for one uploaded before uploaders were recorded, or whose
+    /// uploader's account is gone.
+    pub uploader: Option<UserId>,
 }
 
 /// The largest side, in pixels, a picture's stated size may have.
@@ -130,6 +140,7 @@ pub fn storage_key(id: AttachmentId) -> String {
 /// `ready_at IS NULL` rows into the table.
 pub async fn init_upload(
     state: &GlobalServerContext,
+    caller: UserId,
     file_name: String,
     mime_type: String,
     size: Option<(i32, i32)>,
@@ -145,6 +156,7 @@ pub async fn init_upload(
         ready_at: None,
         width: size.map(|(w, _)| w),
         height: size.map(|(_, h)| h),
+        uploader: Some(caller),
     };
     let mut conn = state.connection_pool.get().await?;
     diesel::insert_into(attachment::table)
@@ -174,7 +186,7 @@ pub async fn init_upload(
     }
 }
 
-/// Verify an in-flight upload landed and flip the row to `ready`.
+/// Verify an in-flight upload of the caller's landed and flip the row to `ready`.
 ///
 /// Returns the DB row with a populated `ready_at`. The caller (the API
 /// handler) maps that into the wire DTO with `media_store.public_url`.
@@ -186,12 +198,18 @@ pub async fn init_upload(
 ///   the client most likely never completed the `PUT`.
 pub async fn confirm_upload(
     state: &GlobalServerContext,
+    caller: UserId,
     id: AttachmentId,
 ) -> app::Result<Attachment> {
     let mut conn = state.connection_pool.get().await?;
     let row: Attachment = attachment::table
         .select(Attachment::as_select())
-        .filter(attachment::id.eq(id).and(attachment::ready_at.is_null()))
+        .filter(
+            attachment::id
+                .eq(id)
+                .and(attachment::ready_at.is_null())
+                .and(attachment::uploader.eq(caller)),
+        )
         .first(conn.as_mut())
         .await?;
     if !state.media_store.head_object(&row.storage_key).await? {
@@ -214,7 +232,8 @@ pub async fn confirm_upload(
     })
 }
 
-/// Look up an attachment that has finished uploading.
+/// Look up an attachment that has finished uploading, for its uploader or for someone who may
+/// view a message it is in; not found for anyone else.
 ///
 /// Pending (`ready_at IS NULL`) rows are deliberately invisible here: from
 /// the client's perspective the upload "doesn't exist" until the confirm
@@ -222,10 +241,11 @@ pub async fn confirm_upload(
 /// half-uploaded blob attachable to a message via `create_message`.
 pub async fn read_attachment(
     state: &GlobalServerContext,
+    caller: UserId,
     id: AttachmentId,
 ) -> app::Result<Attachment> {
     let mut conn = state.connection_pool.get().await?;
-    attachment::table
+    let row: Attachment = attachment::table
         .select(Attachment::as_select())
         .filter(
             attachment::id
@@ -233,18 +253,47 @@ pub async fn read_attachment(
                 .and(attachment::ready_at.is_not_null()),
         )
         .first(conn.as_mut())
-        .await
-        .map_err(Into::into)
+        .await?;
+    if row.uploader == Some(caller) {
+        return Ok(row);
+    }
+    let channels: Vec<app::ChannelId> = message_attachment::table
+        .inner_join(message::table)
+        .select(message::channel)
+        .filter(message_attachment::attachment_id.eq(id))
+        .filter(message::deleted_at.is_null())
+        .load(conn.as_mut())
+        .await?;
+    for channel in channels {
+        if app::permissions::channel_access(state, conn.as_mut(), caller, channel)
+            .await
+            .is_ok()
+        {
+            return Ok(row);
+        }
+    }
+    Err(app::Error::Diesel(diesel::result::Error::NotFound))
 }
 
-/// Hard-delete the row and best-effort delete the S3 object.
-///
-/// Works on both `ready` and pending rows; the latter is what an operator
-/// sweep job will call to clean up abandoned reservations.
-pub async fn delete_attachment(state: &GlobalServerContext, id: AttachmentId) -> app::Result<()> {
+/// Hard-delete an attachment of the caller's that is in no message, and best-effort delete the
+/// S3 object. Works on both `ready` and pending rows. One in a message goes with the message;
+/// asking to delete it, or anyone else's, is answered as not found.
+pub async fn delete_attachment(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: AttachmentId,
+) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     let Some(deleted) = diesel::delete(attachment::table)
-        .filter(attachment::id.eq(id))
+        .filter(
+            attachment::id
+                .eq(id)
+                .and(attachment::uploader.eq(caller))
+                .and(diesel::dsl::not(diesel::dsl::exists(
+                    message_attachment::table
+                        .filter(message_attachment::attachment_id.eq(attachment::id)),
+                ))),
+        )
         .returning(Attachment::as_returning())
         .load(conn.as_mut())
         .await?

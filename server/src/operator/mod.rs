@@ -39,6 +39,15 @@ fn operator() -> String {
     format!("{user}@{host}")
 }
 
+/// What an operator command announces its changes with, so connected clients and the servers'
+/// event streams see them as they would the API's.
+async fn publisher(config: &AspenConfig) -> Result<crate::app::events::Publisher> {
+    crate::app::events::Publisher::connect(config)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("could not connect to NATS, which announces the change; is it running?")
+}
+
 async fn database(config: &AspenConfig) -> Result<diesel_async::AsyncPgConnection> {
     use diesel_async::AsyncConnection;
     diesel_async::AsyncPgConnection::establish(&config.database_url)

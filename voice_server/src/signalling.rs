@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,7 +18,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
-use voice_protocol::token::verify;
+use voice_protocol::token::{TokenError, verify};
 
 /// How long a client has to identify before the socket is closed.
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -28,6 +29,23 @@ pub struct AppState {
     pub token_secret: Arc<str>,
     pub rooms: Arc<Rooms>,
     pub limits: Arc<Limits>,
+    pub used_tokens: Arc<UsedTokens>,
+}
+
+/// The join tokens this server has accepted that have not yet expired, by nonce. A token
+/// admits one connection: someone removed from a call cannot come back on the token they
+/// joined with, and every join asks the API server, which decides again.
+#[derive(Default)]
+pub struct UsedTokens(std::sync::Mutex<HashMap<Uuid, i64>>);
+
+impl UsedTokens {
+    /// Records a token with `nonce`, expiring at `expires_at`, as used at `now`. Returns false
+    /// when it already was.
+    fn claim(&self, nonce: Uuid, expires_at: i64, now: i64) -> bool {
+        let mut used = self.0.lock().expect("used tokens lock");
+        used.retain(|_, expires| *expires > now);
+        used.insert(nonce, expires_at).is_none()
+    }
 }
 
 /// The client address of a request, behind any trusted proxies.
@@ -115,7 +133,16 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
 
     let claims = match tokio::time::timeout(IDENTIFY_TIMEOUT, next_frame(&mut stream)).await {
         Ok(Some(ClientMessage::Identify { token })) => {
-            match verify(&token, state.token_secret.as_bytes(), state.server, now()) {
+            let at = now();
+            match verify(&token, state.token_secret.as_bytes(), state.server, at).and_then(
+                |claims| {
+                    if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
+                        Ok(claims)
+                    } else {
+                        Err(TokenError::Used)
+                    }
+                },
+            ) {
                 Ok(claims) => claims,
                 Err(e) => {
                     let _ = outbox.send(ServerMessage::Error {
@@ -161,7 +188,11 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         let _ = writer.await;
         return;
     }
-    let connection = match state.rooms.join(channel, user, outbox.clone()).await {
+    let connection = match state
+        .rooms
+        .join(channel, user, outbox.clone(), claims.grants())
+        .await
+    {
         Ok(connection) => connection,
         Err(e) => {
             warn!(error = e.to_string(), "join failed");
@@ -214,7 +245,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                     .await
             }
             ClientMessage::Produce { source, .. } | ClientMessage::ProduceRtp { source }
-                if !claims.may_produce(source) =>
+                if !state.rooms.grants(channel, user).may_produce(source) =>
             {
                 Err(RoomError::NotPermitted(source))
             }
@@ -248,7 +279,9 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ClientMessage::SetState { muted, deafened } => {
                 state.rooms.set_state(channel, user, muted, deafened).await
             }
-            ClientMessage::OfferFile { .. } if !claims.transfer_files => {
+            ClientMessage::OfferFile { .. }
+                if !state.rooms.grants(channel, user).transfer_files =>
+            {
                 Err(RoomError::TransferNotPermitted)
             }
             ClientMessage::OfferFile {
@@ -330,5 +363,21 @@ async fn next_frame(
             Ok(Message::Close(_)) | Err(_) => return None,
             Ok(Message::Ping(_) | Message::Pong(_)) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_admits_one_connection_until_it_expires() {
+        let used = UsedTokens::default();
+        let (nonce, other) = (Uuid::now_v7(), Uuid::now_v7());
+        assert!(used.claim(nonce, 160, 100));
+        assert!(!used.claim(nonce, 160, 120));
+        assert!(used.claim(other, 160, 120));
+        // Once expired it is forgotten; verifying refuses it by then anyway.
+        assert!(used.claim(nonce, 260, 200));
     }
 }

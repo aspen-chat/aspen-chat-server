@@ -1,5 +1,5 @@
 use crate::api::message_enum;
-use crate::api::message_enum::request::ChannelUpdateRequest;
+use crate::api::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
 use crate::api::message_enum::server_event::{ChannelEvent, ServerEvent};
 use crate::app;
 use crate::app::category::Category;
@@ -9,6 +9,7 @@ use crate::app::link_preview::load_previews;
 use crate::app::message::{Message, MessageWithRelations};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, missing, require_member};
+use crate::app::role::GrantedOverride;
 use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
     UserId, publish_event,
@@ -90,38 +91,38 @@ impl Loadable for Channel {
     }
 }
 
-/// Makes a text or voice channel in a community, which takes Manage channels there.
+/// Makes a text or voice channel in a community, which takes Manage channels there, with the
+/// overrides it starts with, each on the terms setting it afterwards would take.
 pub async fn create_channel(
     state: &GlobalServerContext,
     caller: UserId,
-    name: String,
-    sort_index: i32,
-    ty: ChannelType,
-    community: Option<CommunityId>,
-    parent_category: Option<CategoryId>,
+    request: ChannelCreateRequest,
 ) -> super::error::Result<Channel> {
-    let Some(community) = community else {
+    let Some(community) = request.community else {
         return Err(app::Error::Validation(t!("channelNeedsCommunity")));
     };
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            require_member(conn.as_mut(), caller, community)
-                .await?
-                .require(Permissions::MANAGE_CHANNELS)?;
-            if let Some(category) = parent_category {
+            let access = require_member(conn.as_mut(), caller, community).await?;
+            access.require(Permissions::MANAGE_CHANNELS)?;
+            if let Some(category) = request.parent_category {
                 ensure_category_of(conn.as_mut(), category, community).await?;
             }
-            insert_channel(
-                state,
+            let overrides = app::role::check_initial_overrides(
                 conn.as_mut(),
-                name,
-                sort_index,
-                ty,
-                community,
-                parent_category,
+                &access,
+                request.overrides.as_deref().unwrap_or_default(),
             )
-            .await
+            .await?;
+            let new = NewChannel {
+                name: request.name,
+                sort_index: request.sort_index,
+                ty: request.ty,
+                community,
+                parent_category: request.parent_category,
+            };
+            insert_channel(state, conn.as_mut(), new, &overrides).await
         }
         .scope_boxed()
     })
@@ -148,16 +149,30 @@ async fn ensure_category_of(
     Ok(())
 }
 
-/// Writes a new text or voice channel and announces it, inside the caller's transaction.
+/// A text or voice channel to be made in a community.
+pub struct NewChannel {
+    pub name: String,
+    pub sort_index: i32,
+    pub ty: ChannelType,
+    pub community: CommunityId,
+    pub parent_category: Option<CategoryId>,
+}
+
+/// Writes a new text or voice channel with its overrides and announces it, inside the caller's
+/// transaction.
 pub async fn insert_channel(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
-    name: String,
-    sort_index: i32,
-    ty: ChannelType,
-    community: CommunityId,
-    parent_category: Option<CategoryId>,
+    new: NewChannel,
+    overrides: &[GrantedOverride],
 ) -> app::Result<Channel> {
+    let NewChannel {
+        name,
+        sort_index,
+        ty,
+        community,
+        parent_category,
+    } = new;
     // Threads, DMs, and group DMs have endpoints of their own, which set what they need.
     if !matches!(ty, ChannelType::Text | ChannelType::Voice) {
         return Err(app::Error::Validation(t!("channelTypeNotCreatable")));
@@ -180,8 +195,15 @@ pub async fn insert_channel(
         .values(&channel)
         .execute(conn)
         .await?;
+    app::role::insert_initial_overrides(state, conn, channel.id, overrides).await?;
+    // Published as the channel's own event, after its overrides, so it reaches only those who
+    // may view it.
     let event = ServerEvent::Channel(ChannelEvent::Create(record(&channel, Vec::new())));
-    app::publish_event(state, conn, EventScope::Community(community), &event).await?;
+    let scope = EventScope::ChannelDefinition {
+        channel: channel.id,
+        departed: None,
+    };
+    app::publish_event(state, conn, scope, &event).await?;
     Ok(channel)
 }
 
@@ -237,13 +259,14 @@ pub async fn read_channels(
         .collect())
 }
 
-/// Every live channel of each of `communities`, including those filed under a category, ordered
-/// by community and then sort index. This is the batch a client needs to render the channel
-/// tree of every community it belongs to in one request.
+/// Every live channel the user of `visible` may view in its communities, including those filed
+/// under a category, ordered by community and then sort index. This is the batch a client needs
+/// to render the channel tree of every community it belongs to in one request.
 pub(crate) async fn read_communities_channels(
     state: &GlobalServerContext,
-    communities: &[CommunityId],
+    visible: &app::visibility::Visibility,
 ) -> app::error::Result<Vec<app::channel::Channel>> {
+    let communities = visible.communities();
     if communities.is_empty() {
         return Ok(Vec::new());
     }
@@ -258,9 +281,12 @@ pub(crate) async fn read_communities_channels(
                 .and(channel::deleted_at.is_null()),
         )
         .order_by((channel::community.asc(), channel::sort_index.asc()))
-        .load(conn.as_mut())
+        .load::<app::channel::Channel>(conn.as_mut())
         .await?;
-    Ok(channels)
+    Ok(channels
+        .into_iter()
+        .filter(|c| visible.can_view(c.id))
+        .collect())
 }
 
 /// The top-level channels of a community the caller may view.

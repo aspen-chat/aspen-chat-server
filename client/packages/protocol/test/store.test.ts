@@ -201,8 +201,11 @@ describe("RecordStore events", () => {
       community: aspen.id,
       user: me.id,
     });
+    // Leaving takes the whole community away, its channels and member sample with it.
     expect(store.communities()).toEqual([birch, cedar]);
-    expect(store.memberIds(aspen.id)).toEqual([bob.id]);
+    expect(store.community(aspen.id)).toBeUndefined();
+    expect(store.memberIds(aspen.id)).toEqual([]);
+    expect(store.channels(aspen.id)).toEqual([]);
   });
 
   it("regroups member records when a member's status changes", () => {
@@ -1205,6 +1208,55 @@ describe("RecordStore roles and access", () => {
     expect(store.channel(general.id)).toBeUndefined();
     expect(store.channelRemoved(general.id)).toBe(true);
     expect(store.channel(dev.id)).toBeDefined();
+  });
+
+  it("lets go of a channel moved where the caller may not view it, and of its pins", () => {
+    const store = withRoles();
+    store.setPins(dev.id, []);
+    store.applyEvent({
+      serverEvent: "categoryOverride",
+      type: "create",
+      category: work.id,
+      role: everyone.id,
+      allow: [],
+      deny: ["viewChannel"],
+    });
+    expect(store.channel(dev.id)).toBeUndefined();
+    expect(store.pins(dev.id)).toBeUndefined();
+    // Moving general into the hidden category is the last the caller hears of it.
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: general.id,
+      parentCategory: work.id,
+    });
+    expect(store.channel(general.id)).toBeUndefined();
+  });
+
+  it("forgets the bans it held once the caller may not ban", () => {
+    const store = withRoles();
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: me.id,
+      roles: [moderator.id],
+    });
+    store.applyEvent({
+      serverEvent: "role",
+      type: "update",
+      id: moderator.id,
+      permissions: ["banMembers"],
+    });
+    store.replaceBans(aspen.id, []);
+    expect(store.bans(aspen.id)).toEqual([]);
+    store.applyEvent({
+      serverEvent: "role",
+      type: "update",
+      id: moderator.id,
+      permissions: [],
+    });
+    expect(store.bans(aspen.id)).toBeUndefined();
   });
 
   it("gives the owner everything and forgets a deleted role's overrides", () => {

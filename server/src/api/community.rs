@@ -87,6 +87,24 @@ pub async fn sideload_communities(
     communities: &[CommunityId],
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
+    // What lists channels, or things in them, is read through what the caller may view, which
+    // its readers take.
+    let visible = if [
+        CommunityInclude::Channels,
+        CommunityInclude::Voice,
+        CommunityInclude::ReadStates,
+        CommunityInclude::Mutes,
+        CommunityInclude::Notifications,
+        CommunityInclude::Roles,
+    ]
+    .iter()
+    .any(|i| include.contains(*i))
+    {
+        Some(app::visibility::Visibility::load(state, caller, communities).await?)
+    } else {
+        None
+    };
+    let visible = visible.as_ref();
     let (
         channels,
         categories,
@@ -100,12 +118,13 @@ pub async fn sideload_communities(
         emoji,
     ) = tokio::try_join!(
         async {
-            if include.contains(CommunityInclude::Channels) {
-                app::channel::read_communities_channels(state, communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Channels) => {
+                    app::channel::read_communities_channels(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
@@ -127,39 +146,43 @@ pub async fn sideload_communities(
             }
         },
         async {
-            if include.contains(CommunityInclude::Voice) {
-                app::voice::read_communities_voice(state, communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Voice) => {
+                    app::voice::read_communities_voice(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
-            if include.contains(CommunityInclude::ReadStates) {
-                app::read_state::read_communities_read_states(state, caller, communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::ReadStates) => {
+                    app::read_state::read_communities_read_states(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
-            if include.contains(CommunityInclude::Mutes) {
-                app::channel_mute::read_mutes(state, caller, &[], communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Mutes) => {
+                    app::channel_mute::read_community_mutes(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
-            if include.contains(CommunityInclude::Notifications) {
-                app::notification_setting::read_settings(state, caller, &[], communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Notifications) => {
+                    app::notification_setting::read_community_settings(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
@@ -172,14 +195,15 @@ pub async fn sideload_communities(
             }
         },
         async {
-            if include.contains(CommunityInclude::Roles) {
-                let (roles, overrides) = tokio::try_join!(
-                    app::role::read_communities_roles(state, communities),
-                    app::role::read_communities_overrides(state, communities),
-                )?;
-                Ok(Some((roles, overrides)))
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Roles) => {
+                    let (roles, overrides) = tokio::try_join!(
+                        app::role::read_communities_roles(state, communities),
+                        app::role::read_communities_overrides(state, visible),
+                    )?;
+                    Ok(Some((roles, overrides)))
+                }
+                _ => Ok(None),
             }
         },
         async {
@@ -192,44 +216,6 @@ pub async fn sideload_communities(
             }
         },
     )?;
-    // What lists channels, or things in them, shows only the channels the caller may view.
-    let hides = [
-        CommunityInclude::Channels,
-        CommunityInclude::Voice,
-        CommunityInclude::ReadStates,
-        CommunityInclude::Mutes,
-        CommunityInclude::Notifications,
-    ];
-    let (channels, voice, read_states, mutes, notifications) =
-        if hides.iter().any(|i| include.contains(*i)) {
-            let visibility = app::visibility::Visibility::load(state, caller, communities).await?;
-            let can_view = |channel| visibility.can_view(channel);
-            (
-                channels.map(|mut c| {
-                    c.retain(|c| can_view(c.id));
-                    c
-                }),
-                voice.map(|(mut sessions, mut participants)| {
-                    sessions.retain(|s| can_view(s.channel));
-                    participants.retain(|p| can_view(p.channel));
-                    (sessions, participants)
-                }),
-                read_states.map(|mut r| {
-                    r.retain(|r| can_view(r.channel));
-                    r
-                }),
-                mutes.map(|mut m| {
-                    m.retain(|m| can_view(m.channel));
-                    m
-                }),
-                notifications.map(|mut n| {
-                    n.retain(|n| n.channel.is_none_or(can_view));
-                    n
-                }),
-            )
-        } else {
-            (channels, voice, read_states, mutes, notifications)
-        };
     let mut included = Included {
         channels: channels.map(|channels| {
             channels

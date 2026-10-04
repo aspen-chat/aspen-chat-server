@@ -310,6 +310,7 @@ pub async fn change_password(
         .await
         .map_err(app::Error::from)?;
     match app::login::try_change_password(
+        &state,
         conn,
         &session.caller,
         &state.config.auth,

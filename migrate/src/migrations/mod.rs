@@ -76,3 +76,5 @@ pub mod m20261003_045506_deployment_profile;
 pub mod m20261003_070819_reports;
 pub mod m20261003_090734_icon_uploader;
 pub mod m20261003_203845_username_ignores_case;
+pub mod m20261003_233932_deleted_category_leftovers;
+pub mod m20261004_001047_attachment_uploader;

@@ -5,6 +5,7 @@ import { useBans, useSync } from "@/api/hooks";
 import { alertClass, hintClass } from "@/features/auth/styles";
 import { planeClass, planeSurfaceClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
+import { useNow } from "@/features/layout/useNow";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { useDateFormat } from "@/i18n/format";
 import { useMessages } from "@/i18n/context";
@@ -12,13 +13,20 @@ import { format } from "@/i18n/messages";
 
 const WHEN: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
+/** How often the list lets go of bans whose end has passed, which no event announces. */
+const EXPIRY_CHECK_MS = 30_000;
+
 /**
  * The community's standing bans, newest first, each with its reason and end, and a button
- * that lifts it. Shown to holders of Ban members, whose events keep it current.
+ * that lifts it. Shown to holders of Ban members, whose events keep it current; a ban whose
+ * end passes leaves the list by this device's clock.
  */
 export function BannedList({ communityId }: { communityId: string }) {
   const m = useMessages();
-  const bans = useBans(communityId);
+  const now = useNow(EXPIRY_CHECK_MS);
+  const bans = useBans(communityId)?.filter(
+    (ban) => ban.until == null || Date.parse(ban.until) > now,
+  );
   return (
     <section className={planeClass} aria-labelledby="banned-heading">
       <h3 id="banned-heading" className="font-medium">

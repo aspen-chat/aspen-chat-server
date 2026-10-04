@@ -59,7 +59,7 @@ uses one of these codes, after a message saying why:
 | Close code | Why |
 | --- | --- |
 | 4400 | The first message was not a well-formed `identify`. An outdated client, or a proxy mangling the connection. |
-| 4401 | The session is not valid: expired, signed out elsewhere, or revoked. The app signs in again. |
+| 4401 | The session is not valid: expired, signed out elsewhere, or revoked, before the stream opened or while it was open (signing out, a password or second factor change, a deleted account). The app signs in again. |
 | 4403 | Two factors are required and the account has none. |
 | 4408 | No `identify` within ten seconds. Usually a very slow connection. |
 | 4410 | The account was banned from this deployment. The app signs out and says why. |

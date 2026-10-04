@@ -32,6 +32,7 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
+import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
 import type { Invocation, NotificationLevel } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
@@ -248,6 +249,8 @@ export class AspenSync {
   readonly #random: () => number;
   /** Communities waiting to be read again because the caller's access in them may have grown. */
   readonly #accessReloads = new Set<string>();
+  /** Channels heard of but not held, waiting to be looked up (`#scheduleDiscovery`). */
+  readonly #discoveries = new Set<string>();
   readonly #pinLoads = new Map<string, Promise<void>>();
   /** The channels whose online count is shown, with how many places show each. */
   readonly #presenceChannels = new Map<string, number>();
@@ -910,13 +913,24 @@ export class AspenSync {
    * Creates a channel at the end of its community's sort order, filed under `parentCategory`
    * when given. The result is cached at once; the matching event is then a no-op.
    */
+  /**
+   * Makes a channel, with the overrides it starts with. Those are applied as their events would
+   * be, so a channel its creator has shut themselves out of leaves the store again at once,
+   * whichever of the response and the events arrives first.
+   */
   async createChannel(
     communityId: string,
-    options: { name: string; ty: ChannelType; parentCategory: string | null },
+    options: {
+      name: string;
+      ty: ChannelType;
+      parentCategory: string | null;
+      overrides?: readonly OverrideGrant[];
+    },
   ): Promise<Channel> {
     const sortIndex = this.store
       .channels(communityId)
       .reduce((max, channel) => Math.max(max, channel.sortIndex + 1), 0);
+    const overrides = options.overrides ?? [];
     const result = await this.#client.api.POST("/api/v1/channels", {
       body: {
         name: options.name,
@@ -924,13 +938,33 @@ export class AspenSync {
         community: communityId,
         parentCategory: options.parentCategory,
         sortIndex,
+        ...(overrides.length > 0
+          ? {
+              overrides: overrides.map((o) => ({
+                role: o.role,
+                allow: [...o.allow],
+                deny: [...o.deny],
+              })),
+            }
+          : {}),
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ channels: [result.data] });
-    return result.data;
+    const channel = result.data;
+    this.store.ingest({ channels: [channel] });
+    for (const o of overrides) {
+      this.store.applyEvent({
+        serverEvent: "channelOverride",
+        type: "create",
+        channel: channel.id,
+        role: o.role,
+        allow: [...o.allow],
+        deny: [...o.deny],
+      });
+    }
+    return channel;
   }
 
   /**
@@ -2537,6 +2571,11 @@ export class AspenSync {
         ? this.store.channelsLastMessaged(event.id)
         : [];
     const widens = this.#mayWidenAccess(event);
+    const unheld = this.#unheldChannelIn(event);
+    const moderates =
+      event.serverEvent === "deploymentAccessChanged" &&
+      !this.store.moderator &&
+      event.permissions.includes("moderateCommunities");
     const retagged = this.#unreadTagsChangedBy(event);
     const blockChanged =
       event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
@@ -2555,6 +2594,20 @@ export class AspenSync {
     }
     if (widens !== null) {
       this.#scheduleAccessReload(widens);
+    }
+    if (unheld !== null) {
+      this.#scheduleDiscovery(unheld);
+    }
+    // Moderating the deployment shows every channel of every community, which the caller's
+    // own reads left out.
+    if (moderates) {
+      for (const community of this.store.communities()) {
+        this.#scheduleAccessReload(community.id);
+      }
+    }
+    // Something announced about the community may not have happened; it is read again.
+    if (event.serverEvent === "communityResync") {
+      this.#scheduleAccessReload(event.community);
     }
     if (event.serverEvent === "message" && event.type === "create") {
       this.ensureUser(event.author);
@@ -2617,7 +2670,9 @@ export class AspenSync {
       (me !== null && (this.store.memberRoles(community, me) ?? []).includes(role));
     switch (event.serverEvent) {
       case "role": {
-        if (event.type !== "update" || event.permissions == null) {
+        // Deleting a role the caller holds may lift a denial it carried in channels whose
+        // overrides the caller was never sent.
+        if (event.type !== "delete" && (event.type !== "update" || event.permissions == null)) {
           return null;
         }
         const community = this.#communityOfRole(event.id);
@@ -2642,6 +2697,51 @@ export class AspenSync {
       default:
         return null;
     }
+  }
+
+  /**
+   * A community channel `event` concerns that the store does not hold: an override set on it,
+   * or its move. The server sends these to whoever may view the channel before or after the
+   * change, so one about a channel the caller does not have is one they may view now.
+   */
+  #unheldChannelIn(event: ServerEvent): string | null {
+    const channel =
+      event.serverEvent === "channelOverride"
+        ? event.channel
+        : event.serverEvent === "channel" &&
+            event.type === "update" &&
+            event.parentCategory !== undefined
+          ? event.id
+          : null;
+    return channel !== null && this.store.channel(channel) === undefined ? channel : null;
+  }
+
+  /**
+   * Looks up a channel the caller may now view, and then reads its community again, which
+   * brings the channel with everything about it. It waits a moment, spread like an access
+   * reload, since a new channel's overrides arrive just ahead of the channel itself.
+   */
+  #scheduleDiscovery(channelId: string): void {
+    if (this.#discoveries.has(channelId)) {
+      return;
+    }
+    this.#discoveries.add(channelId);
+    const generation = this.#generation;
+    this.#setTimeout(() => {
+      this.#discoveries.delete(channelId);
+      if (generation !== this.#generation || this.store.channel(channelId) !== undefined) {
+        return;
+      }
+      void this.#client.api
+        .GET("/api/v1/channels/{channel}", { params: { path: { channel: channelId } } })
+        .then((result) => {
+          const community = result.data?.community;
+          if (community != null && generation === this.#generation) {
+            this.#scheduleAccessReload(community);
+          }
+        })
+        .catch(() => undefined);
+    }, this.#random() * ACCESS_RELOAD_SPREAD_MS);
   }
 
   #communityOfRole(roleId: string): string | undefined {

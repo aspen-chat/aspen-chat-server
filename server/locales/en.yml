@@ -197,6 +197,7 @@ removeSelf: "Leave the community instead of removing yourself."
 overrideTarget: "Threads and DMs take no overrides; set them on the parent channel."
 overrideCommunityPermission: "Only channel permissions can be allowed or denied in a channel or category."
 overrideConflict: "A permission can't be both allowed and denied."
+overrideRoleRepeated: "Each role can have only one override in a channel; list it once."
 channelCommunityFixed: "A channel can't be moved to another community."
 editOthersMessage: "Only a message's author can edit it."
 deploymentViewDashboard: "View the Administration Dashboard"
@@ -308,6 +309,7 @@ commandNotEditable: "A command can't be edited once sent, since its bot has alre
 systemNoticesReadOnly: "These are notices from this server, and can't be answered here."
 systemAccountNoDm: "That's this server's own account, which sends notices. It can't be messaged."
 systemAccountNoBlock: "That's this server's own account, which sends notices. Mute its conversation to quiet them."
+ownershipInheritedNotice: "%{previous} deleted their account, so you now own %{community}, as the member ranked highest there. You can hand it on to another member from its settings, under Overview."
 everyoneLimitNotice: "%{community} now has %{count} members, so `@everyone` would reach a lot of people at once. To keep that from happening by accident, the everyone role can no longer tag everyone. If you want members to keep that ability, turn Mention everyone back on for the everyone role in %{community}'s settings, under Roles."
 
 # Bans from the deployment

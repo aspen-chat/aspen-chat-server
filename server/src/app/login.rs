@@ -13,8 +13,10 @@ use rand::RngExt;
 use tracing::error;
 
 use crate::api::error::PasswordRequirement;
+use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::ephemeral_token;
+use crate::app::events::Publishing;
 use crate::app::two_factor::{self, SecondFactor, SecondFactorMethods};
 use crate::app::user::UserPg;
 use crate::{CHACHA_RNG, app, app::UserId, database::schema};
@@ -404,26 +406,67 @@ pub async fn try_token_refresh(
     })
 }
 
-/// Revokes a refresh token and all sessions issued from it. Returns whether a refresh token was
-/// actually removed; callers treat an unknown token as already revoked.
+/// Names a sign-in (a refresh token and the sessions issued from it) without revealing it: the
+/// first half of the SHA-256 of its refresh token, in hex. Event streams know which sign-in
+/// they belong to by it, and `signInsEnded` events name the sign-ins that ended by it.
+pub fn sign_in_id(refresh_token: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(refresh_token.as_bytes());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Tells `user`'s event streams that sign-ins ended: `ended` alone, or without it every one but
+/// `kept`. The streams of those sign-ins close.
+async fn announce_ended(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    ended: Option<String>,
+    kept: Option<String>,
+) -> app::Result<()> {
+    app::publish_event(
+        state,
+        conn,
+        app::EventScope::User(user),
+        &ServerEvent::SignInsEnded { ended, kept },
+    )
+    .await
+}
+
+/// Revokes a refresh token and all sessions issued from it, closing their event streams.
+/// Returns whether a refresh token was actually removed; callers treat an unknown token as
+/// already revoked.
 pub async fn try_logout(
-    mut conn: impl AsMut<AsyncPgConnection>,
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
     refresh_token_value: &str,
 ) -> Result<bool, app::Error> {
     use schema::{refresh_token, session};
-    let conn = conn.as_mut();
-    diesel::delete(session::table)
-        .filter(session::dsl::refresh_token.eq(refresh_token_value))
-        .execute(conn)
-        .await?;
-    // TODO: Kill any event streams associated with this refresh token
-    // TODO stretch goal: If this server is ever sharded then tell the other shards to kill their event
-    // streams too
-    let rows_deleted = diesel::delete(refresh_token::table)
-        .filter(refresh_token::dsl::token.eq(refresh_token_value))
-        .execute(conn)
-        .await?;
-    Ok(rows_deleted > 0)
+    let refresh_token_value = refresh_token_value.to_string();
+    conn.transaction(|conn| {
+        async move {
+            diesel::delete(session::table)
+                .filter(session::dsl::refresh_token.eq(&refresh_token_value))
+                .execute(conn)
+                .await?;
+            let owner: Option<UserId> = diesel::delete(refresh_token::table)
+                .filter(refresh_token::dsl::token.eq(&refresh_token_value))
+                .returning(refresh_token::user)
+                .get_result(conn)
+                .await
+                .optional()?;
+            if let Some(user) = owner {
+                let ended = Some(sign_in_id(&refresh_token_value));
+                announce_ended(state, conn, user, ended, None).await?;
+            }
+            Ok(owner.is_some())
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 pub enum ChangePasswordOutcome {
@@ -437,6 +480,7 @@ pub enum ChangePasswordOutcome {
 /// The session performing the change stays valid. The old password proves who the caller is
 /// for an account without two-factor sign-in; one with it also needs a recent verification.
 pub async fn try_change_password(
+    state: &impl Publishing,
     mut conn: impl AsMut<AsyncPgConnection>,
     caller: &two_factor::Caller,
     config: &crate::aspen_config::AuthConfig,
@@ -481,7 +525,7 @@ pub async fn try_change_password(
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
             .await?;
-            revoke_other_sessions(conn, user_id, &current_session_token).await
+            revoke_other_sessions(state, conn, user_id, &current_session_token).await
         }
         .scope_boxed()
     })
@@ -490,9 +534,14 @@ pub async fn try_change_password(
     Ok(ChangePasswordOutcome::Ok)
 }
 
-/// Expires every session and sign-in of `user_id`, as when their home withdraws them from this
-/// deployment or its moderators ban them.
-pub async fn revoke_all_sessions(conn: &mut AsyncPgConnection, user_id: UserId) -> app::Result<()> {
+/// Expires every session and sign-in of `user_id`, closing their event streams, as when their
+/// home withdraws them from this deployment, its moderators ban them, or the account ends.
+/// Their phones are no longer woken (`app::push`), which goes by live sign-ins.
+pub async fn revoke_all_sessions(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+) -> app::Result<()> {
     use schema::refresh_token;
     diesel::update(
         refresh_token::table
@@ -502,12 +551,13 @@ pub async fn revoke_all_sessions(conn: &mut AsyncPgConnection, user_id: UserId) 
     .set(refresh_token::expires.eq(diesel::dsl::now))
     .execute(conn)
     .await?;
-    Ok(())
+    announce_ended(state, conn, user_id, None, None).await
 }
 
 /// Expires every session and sign-in of `user_id` except the one `current_session_token`
 /// belongs to, so a stolen credential stops working once its owner secures the account.
 pub async fn revoke_other_sessions(
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
     current_session_token: &str,
@@ -542,7 +592,13 @@ pub async fn revoke_other_sessions(
     .bind::<diesel::sql_types::Uuid, _>(&user_id)
     .execute(conn)
     .await?;
-    Ok(())
+    let kept: Option<String> = schema::session::table
+        .select(schema::session::refresh_token)
+        .filter(schema::session::token.eq(current_session_token))
+        .first(conn)
+        .await
+        .optional()?;
+    announce_ended(state, conn, user_id, None, kept.as_deref().map(sign_in_id)).await
 }
 
 #[cfg(test)]

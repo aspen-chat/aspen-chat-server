@@ -9,8 +9,6 @@ import { CaretDownIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import {
   Button,
-  CheckboxButton,
-  CheckboxField,
   Dialog,
   Label,
   ListBox,
@@ -18,9 +16,6 @@ import {
   Modal,
   ModalOverlay,
   Popover,
-  RadioButton,
-  RadioField,
-  RadioGroup,
   Select,
   SelectValue,
   ToggleButton,
@@ -37,6 +32,13 @@ import {
 } from "@/api/hooks";
 import { alertClass, fieldClass, hintClass, labelClass } from "@/features/auth/styles";
 import { MemberPicker } from "@/features/community-settings/MemberPicker";
+import {
+  currentPreset,
+  withheldBy,
+  type Preset,
+  type PresetOption,
+} from "@/features/community-settings/accessPresets";
+import { PresetChoices } from "@/features/community-settings/PresetChoices";
 import { CHANNEL_GROUPS } from "@/features/community-settings/permissionGroups";
 import {
   dialogClass,
@@ -46,7 +48,6 @@ import {
   selectButtonClass,
   wideModalClass,
 } from "@/features/invites/dialog";
-import { RadioMark, choiceClass, markClass } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -57,45 +58,6 @@ import { problemText } from "@/api/problemText";
 export type AccessTarget =
   | { kind: "channel"; id: string; name: string; communityId: string }
   | { kind: "category"; id: string; name: string; communityId: string };
-
-type Preset = "everyone" | "private" | "readOnly" | "custom";
-
-/** What a read-only channel withholds from everyone but the chosen roles: taking part. */
-const POSTING: readonly Permission[] = [
-  "sendMessages",
-  "sendInThreads",
-  "startThreads",
-  "createPolls",
-];
-
-/**
- * Which of the simple settings the overrides amount to, and the roles it names: everyone's
- * role denied viewing is private to the roles allowed it; denied sending, read-only for those
- * allowed to send; no overrides at all is open to everyone; anything else is custom.
- */
-function currentPreset(
-  overrides: readonly OverrideGrant[],
-  everyone: string | undefined,
-): { preset: Preset; roles: readonly string[] } {
-  const base = overrides.find((o) => o.role === everyone);
-  const others = overrides.filter((o) => o.role !== everyone);
-  if (base?.deny.includes("viewChannel") === true) {
-    return {
-      preset: "private",
-      roles: others.filter((o) => o.allow.includes("viewChannel")).map((o) => o.role),
-    };
-  }
-  if (base?.deny.includes("sendMessages") === true) {
-    return {
-      preset: "readOnly",
-      roles: others.filter((o) => o.allow.includes("sendMessages")).map((o) => o.role),
-    };
-  }
-  if (overrides.every((o) => o.allow.length === 0 && o.deny.length === 0)) {
-    return { preset: "everyone", roles: [] };
-  }
-  return { preset: "custom", roles: [] };
-}
 
 /**
  * Who can use a channel, or every channel of a category. It leads with three plain choices
@@ -190,8 +152,7 @@ function Presets({
     // Everyone's override says who is shut out, each chosen role's lets it back in, and every
     // other override goes, so the result is exactly the preset. The roles are let in first, so
     // their members never lose the channel while the change is made.
-    const withheld: readonly Permission[] =
-      preset === "private" ? ["viewChannel"] : preset === "readOnly" ? POSTING : [];
+    const withheld = withheldBy(preset);
     const set = (role: string, value: { allow: Permission[]; deny: Permission[] } | null) =>
       sync.setOverride(target.kind, target.id, role, value);
     const roleWrites = others.flatMap((role) =>
@@ -215,7 +176,7 @@ function Presets({
     setApplying(false);
   }
 
-  const options: readonly { key: Preset; label: string; hint: string }[] = [
+  const options: readonly PresetOption[] = [
     { key: "everyone", label: m.access.presets.everyone, hint: m.access.presets.everyoneHint },
     { key: "private", label: m.access.presets.private, hint: m.access.presets.privateHint },
     { key: "readOnly", label: m.access.presets.readOnly, hint: m.access.presets.readOnlyHint },
@@ -232,60 +193,14 @@ function Presets({
 
   return (
     <div className="flex flex-col gap-3">
-      <RadioGroup
-        value={preset}
-        onChange={(value) => {
-          setPreset(value as Preset);
-        }}
-        className={fieldClass}
-      >
-        <Label className={labelClass}>{m.access.presetsLabel}</Label>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {options.map((option) => (
-            <RadioField key={option.key} value={option.key}>
-              <RadioButton className={choiceClass}>
-                <RadioMark />
-                <span className="flex flex-col">
-                  <span className="font-medium">{option.label}</span>
-                  <span className="text-xs text-ink-muted">{option.hint}</span>
-                </span>
-              </RadioButton>
-            </RadioField>
-          ))}
-        </div>
-      </RadioGroup>
-      {(preset === "private" || preset === "readOnly") && (
-        <fieldset className="flex flex-col gap-1">
-          <legend className={labelClass}>{m.access.rolesLabel}</legend>
-          {others.map((role) => (
-            <CheckboxField
-              key={role.id}
-              isSelected={chosen.has(role.id)}
-              onChange={(selected) => {
-                const next = new Set(chosen);
-                if (selected) {
-                  next.add(role.id);
-                } else {
-                  next.delete(role.id);
-                }
-                setChosen(next);
-              }}
-            >
-              <CheckboxButton className="group flex items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
-                <span className={markClass + " mt-0"}>
-                  <CheckIcon
-                    size={12}
-                    weight="bold"
-                    aria-hidden="true"
-                    className="hidden group-selected:block"
-                  />
-                </span>
-                {role.name}
-              </CheckboxButton>
-            </CheckboxField>
-          ))}
-        </fieldset>
-      )}
+      <PresetChoices
+        options={options}
+        preset={preset}
+        onPresetChange={setPreset}
+        roles={others}
+        chosen={chosen}
+        onChosenChange={setChosen}
+      />
       {error !== null && (
         <p role="alert" className={alertClass}>
           {error}

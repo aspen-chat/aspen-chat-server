@@ -252,6 +252,25 @@ impl Rooms {
         Ok(())
     }
 
+    /// Withdraws every offer `user` has standing in `channel`'s call, as when they may no
+    /// longer offer files.
+    pub(super) fn withdraw_offers_of(&self, channel: Uuid, user: Uuid) {
+        let Ok(room) = self.room(channel) else {
+            return;
+        };
+        let own: Vec<Uuid> = room
+            .offers
+            .lock()
+            .expect("offers lock")
+            .iter()
+            .filter(|(_, offer)| offer.from == user)
+            .map(|(id, _)| *id)
+            .collect();
+        for offer in own {
+            self.end_offer(channel, offer, OfferEnd::NotPermitted);
+        }
+    }
+
     /// Ends an offer, if it still stands, telling everyone.
     fn end_offer(&self, channel: Uuid, offer: Uuid, reason: OfferEnd) {
         let Ok(room) = self.room(channel) else {

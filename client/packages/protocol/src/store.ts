@@ -1118,6 +1118,16 @@ export class RecordStore {
       this.#putUser(me);
       this.#touch("me");
 
+      // Pins and bans are kept current by events, some of which may have been missed; they are
+      // read afresh when next shown.
+      for (const id of this.#pins.keys()) {
+        this.#touch(`pins:${id}`);
+      }
+      this.#pins.clear();
+      for (const id of this.#bans.keys()) {
+        this.#touch(`bans:${id}`);
+      }
+      this.#bans.clear();
       const listed = new Set(communities.map((c) => c.id));
       for (const id of this.#myCommunities) {
         if (!listed.has(id)) {
@@ -1832,9 +1842,10 @@ export class RecordStore {
           } else {
             this.#removeMember(event.community, event.user);
             this.#setMemberRoles(event.community, event.user, undefined);
+            // Leaving, being removed, or being banned takes the whole community away: nothing
+            // of it reaches the caller any more, so nothing held of it stays.
             if (event.user === this.#myUserId) {
-              this.#myCommunities.delete(event.community);
-              this.#touch("communities");
+              this.#removeCommunity(event.community);
             }
           }
           break;
@@ -1854,6 +1865,16 @@ export class RecordStore {
                 this.#removeChannel(updated.id);
               } else {
                 this.#putChannel(updated);
+                // A move into another category may hide it: the server tells those who could
+                // view it before the move, and then nothing more.
+                if (
+                  event.parentCategory !== undefined &&
+                  updated.community != null &&
+                  this.#decided(updated.community) &&
+                  !this.channelAccess(updated.id).has("viewChannel")
+                ) {
+                  this.#removeChannel(updated.id);
+                }
               }
             }
           } else {
@@ -2410,11 +2431,7 @@ export class RecordStore {
     for (const channel of channels) {
       this.#touch(`channelAccess:${channel.id}`);
     }
-    // Until both the community's roles and the caller's own are known, nothing is decided.
-    const known =
-      (this.moderator || this.#memberRoles.has(`${communityId}/${this.#myUserId ?? ""}`)) &&
-      this.roles(communityId).some((r) => r.everyone);
-    if (known) {
+    if (this.#decided(communityId)) {
       for (const channel of channels) {
         if (!this.channelAccess(channel.id).has("viewChannel")) {
           this.#removeChannel(channel.id);
@@ -2428,7 +2445,23 @@ export class RecordStore {
           }
         }
       }
+      // Without Ban members no ban events arrive, so a list held now would go stale; it is read
+      // afresh if the permission comes back.
+      if (this.access(communityId)?.has("banMembers") !== true && this.#bans.delete(communityId)) {
+        this.#touch(`bans:${communityId}`);
+      }
     }
+  }
+
+  /**
+   * Whether what the caller may do in a community can be decided: both its roles and the
+   * caller's own are known (or the caller moderates the deployment).
+   */
+  #decided(communityId: string): boolean {
+    return (
+      (this.moderator || this.#memberRoles.has(`${communityId}/${this.#myUserId ?? ""}`)) &&
+      this.roles(communityId).some((r) => r.everyone)
+    );
   }
 
   #putChannel(channel: Channel): void {
@@ -2627,6 +2660,19 @@ export class RecordStore {
     }
     if (channel.community != null) {
       this.#touch(`channels:${channel.community}`);
+    }
+    // No pin events reach a channel the caller no longer has, so its pins are read afresh if it
+    // comes back.
+    if (this.#pins.delete(id)) {
+      this.#touch(`pins:${id}`);
+    }
+    // What links into it showed is no longer the caller's to see.
+    for (const link of Array.from(this.#links.values())) {
+      if (link.state === "available" && this.#messages.get(link.id)?.channelId === id) {
+        this.#links.set(link.id, { ...link, state: "unavailable" });
+        this.#touch(`link:${link.id}`);
+        this.#removeMessage(link.id);
+      }
     }
     const window = this.#windows.get(id);
     if (window !== undefined) {
