@@ -1,4 +1,4 @@
-/* The board takes the app's colours and fonts from the bridge (`--aspen-*`). */
+/* The calendar takes the app's colours and fonts from the bridge (`--aspen-*`). */
 :root {
   color-scheme: light dark;
   font-family: var(--aspen-font-sans, system-ui, sans-serif);

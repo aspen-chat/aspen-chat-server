@@ -22,13 +22,14 @@ interface AspenPushPlugin {
 export const AspenPush = registerPlugin<AspenPushPlugin>("AspenPush");
 
 /**
- * What a notification the native code posted carries, for opening its message when it is
- * tapped: the deployment, and where the message is.
+ * What a notification the native code posted carries, for opening its message (or, for a
+ * plugin's notice about no message, its channel) when it is tapped: the deployment, and where
+ * the message is.
  */
 export interface NotificationTarget {
   origin: string;
   channel: string;
-  message: string;
+  message: string | null;
   community: string | null;
   /** The channel a thread's message is in, when it is in a thread. */
   parentChannel: string | null;

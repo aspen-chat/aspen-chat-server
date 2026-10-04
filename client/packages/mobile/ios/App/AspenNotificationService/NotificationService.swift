@@ -7,9 +7,10 @@ private let log = Logger(subsystem: "org.aspenchat.client", category: "push")
 /// Turns a push into the notification it stands for, within the thirty seconds iOS gives an
 /// extension (`spec/push.md`, What reaches the phone): the push carries only a subscription id
 /// and ciphertext, so the extension finds the account the app kept for that subscription
-/// (`PushStateStore`), decrypts the pointer (`WebPush`), fetches the message it names with the
-/// account's session (getting a new one with its refresh token on `401`), and shows who wrote
-/// it, where, and what it says, grouped by channel, carrying where it is for a tap to open it.
+/// (`PushStateStore`), decrypts the pointer (`WebPush`), fetches the message or plugin's notice
+/// it names with the account's session (getting a new one with its refresh token on `401`), and
+/// shows who wrote it, where, and what it says (a notice: its plugin's name and what it says),
+/// grouped by channel, carrying where it is for a tap to open it.
 /// Whatever fails leaves the placeholder the push came with, which reads sensibly on its own.
 /// A `read` or `deleted` pointer shows nothing new, and hiding what was shown needs Apple's
 /// filtering entitlement, which this build does not hold; it leaves the placeholder.
@@ -68,14 +69,11 @@ final class NotificationService: UNNotificationServiceExtension {
         if let badge = pointer["badge"] as? Int {
             content.badge = NSNumber(value: badge)
         }
-        guard pointer["kind"] as? String == "message",
-              let channel = pointer["channel"] as? String,
-              let messageId = pointer["message"] as? String
-        else {
+        guard let channel = pointer["channel"] as? String else {
             contentHandler(content)
             return
         }
-        fetcher.fetch(account: account, messageId: messageId) { [weak self] shown in
+        let show: (ShownMessage?) -> Void = { [weak self] shown in
             guard let self, let handler = self.handler else {
                 return
             }
@@ -88,15 +86,18 @@ final class NotificationService: UNNotificationServiceExtension {
                 content.categoryIdentifier = "message"
                 content.userInfo = [
                     "origin": account.origin,
-                    "channel": channel,
-                    "message": messageId,
+                    "channel": shown.channel,
+                    "message": shown.message ?? NSNull(),
                     "community": shown.community ?? NSNull(),
                     "parentChannel": shown.parentChannel ?? NSNull(),
                 ]
             } else {
-                log.error("the message a push points to could not be fetched; the placeholder stays")
+                log.error("what a push points to could not be fetched; the placeholder stays")
             }
             handler(content)
+        }
+        if !fetcher.fetch(account: account, pointer: pointer, done: show) {
+            contentHandler(content)
         }
     }
 
@@ -109,17 +110,21 @@ final class NotificationService: UNNotificationServiceExtension {
     }
 }
 
-/// What a fetched message shows as.
+/// What a fetched message or notice shows as, and what a tap on it opens: the message in
+/// `channel`, or the channel itself for a notice about no message.
 struct ShownMessage {
     let title: String
     let place: String?
     let body: String
+    let channel: String
+    let message: String?
     let community: String?
     let parentChannel: String?
 }
 
-/// Reads the message a pointer names, as the app would (`GET /messages/{id}` with the authors,
-/// channels, and tagged people sideloaded), with the account's session, renewed once on `401`.
+/// Reads what a pointer names, as the app would (`GET /messages/{id}` with the authors,
+/// channels, and tagged people sideloaded, or `GET /users/@me/plugin-notices/{id}`), with the
+/// account's session, renewed once on `401`.
 final class MessageFetcher {
     private static let timeout: TimeInterval = 12
 
@@ -130,15 +135,50 @@ final class MessageFetcher {
         return URLSession(configuration: configuration)
     }()
 
-    func fetch(account: PushState.Account, messageId: String, done: @escaping (ShownMessage?) -> Void) {
-        let url = "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions"
+    /// Fetches what `pointer` names, a message or a plugin's notice, and answers whether it names
+    /// one; `done` is called only when it does.
+    func fetch(account: PushState.Account, pointer: [String: Any], done: @escaping (ShownMessage?) -> Void) -> Bool {
+        switch pointer["kind"] as? String {
+        case "message":
+            guard let messageId = pointer["message"] as? String else {
+                return false
+            }
+            fetch(
+                account: account,
+                url: "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions",
+                parse: { Self.shown(from: $0, messageId: messageId) },
+                done: done
+            )
+            return true
+        case "notice":
+            guard let noticeId = pointer["notice"] as? String else {
+                return false
+            }
+            fetch(
+                account: account,
+                url: "\(account.origin)/api/v1/users/@me/plugin-notices/\(noticeId)",
+                parse: Self.notice(from:),
+                done: done
+            )
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func fetch(
+        account: PushState.Account,
+        url: String,
+        parse: @escaping (Data) -> ShownMessage?,
+        done: @escaping (ShownMessage?) -> Void
+    ) {
         get(url: url, token: account.sessionToken) { [self] status, data in
             if status == 200, let data {
-                done(Self.shown(from: data))
+                done(parse(data))
                 return
             }
             guard status == 401 else {
-                log.error("fetching the message answered \(status, privacy: .public)")
+                log.error("fetching what a push points to answered \(status, privacy: .public)")
                 done(nil)
                 return
             }
@@ -149,7 +189,7 @@ final class MessageFetcher {
                 }
                 PushStateStore.setSessionToken(subscription: account.subscription, token: token)
                 get(url: url, token: token) { status, data in
-                    done(status == 200 && data != nil ? Self.shown(from: data ?? Data()) : nil)
+                    done(status == 200 && data != nil ? parse(data ?? Data()) : nil)
                 }
             }
         }
@@ -194,7 +234,7 @@ final class MessageFetcher {
     /// The notification a message read makes: its author's name as the title, the channel as
     /// the place (`#name` in a community; none in a DM, whose people the title already names),
     /// and its text with tags as names, or what it holds instead of text.
-    static func shown(from data: Data) -> ShownMessage? {
+    static func shown(from data: Data, messageId: String) -> ShownMessage? {
         guard let read = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let message = read["data"] as? [String: Any],
               let authorId = message["author"] as? String,
@@ -217,8 +257,31 @@ final class MessageFetcher {
             title: author.map(nameOf) ?? NSLocalizedString("notification.someone", comment: "Someone"),
             place: place,
             body: body(of: message, included: included),
+            channel: channelId,
+            message: messageId,
             community: community,
             parentChannel: parentChannel
+        )
+    }
+
+    /// The notification a plugin's notice makes: the plugin's name as the title, and what it
+    /// says, both in the language the session asked for.
+    static func notice(from data: Data) -> ShownMessage? {
+        guard let notice = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let title = notice["title"] as? String,
+              let body = notice["body"] as? String,
+              let channel = notice["channel"] as? String
+        else {
+            return nil
+        }
+        return ShownMessage(
+            title: title,
+            place: nil,
+            body: body,
+            channel: channel,
+            message: notice["message"] as? String,
+            community: notice["community"] as? String,
+            parentChannel: notice["parentChannel"] as? String
         )
     }
 

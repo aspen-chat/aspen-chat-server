@@ -687,6 +687,23 @@ export function usePlugins(): readonly PluginInfo[] {
   return useTopic("plugins", (s) => s.plugins());
 }
 
+/** The plugin that shows a channel of a plugin's kind, and the kind; `undefined` for none. */
+export function usePluginKind(
+  channel: Channel,
+): { plugin: PluginInfo; kind: PluginInfo["channelTypes"][number] } | undefined {
+  const plugins = usePlugins();
+  if (channel.ty !== "plugin") {
+    return undefined;
+  }
+  for (const plugin of plugins) {
+    const kind = plugin.channelTypes.find((k) => k.pluginType === channel.pluginType);
+    if (kind !== undefined) {
+      return { plugin, kind };
+    }
+  }
+  return undefined;
+}
+
 /** One plugin the deployment runs, or `undefined` for one it does not. */
 export function usePlugin(id: string): PluginInfo | undefined {
   return useTopic("plugins", (s) => s.plugin(id));

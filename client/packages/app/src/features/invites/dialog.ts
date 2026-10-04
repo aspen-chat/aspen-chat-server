@@ -34,6 +34,10 @@ export const planeClass = "flex flex-col gap-3 " + planeSurfaceClass;
 export const dangerPlaneClass = "flex flex-col gap-2 " + planeShapeClass + " border-danger/40";
 export const dialogClass = "flex flex-col gap-4 outline-none";
 export const headingClass = "text-lg font-semibold";
+/** A dialog's or card's button for what is most likely wanted, beside `secondaryButtonClass`. */
+export const accentButtonClass =
+  "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast outline-none " +
+  "hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50";
 export const dangerButtonClass =
   "rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-accent-contrast outline-none " +
   "hover:opacity-90 pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-danger/50";

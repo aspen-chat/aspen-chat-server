@@ -99,7 +99,7 @@ const aspen = (() => {
       if (answer.status >= 400) throw Object.assign(new Error(answer.body), { status: answer.status });
       return answer.body === "" ? null : JSON.parse(answer.body);
     },
-    /** People by id: `{id, name, displayName, avatar}` each, as the app holds them. */
+    /** People by id: `{id, name, displayName}` each; one the app cannot find is left out. */
     async users(ids) {
       const answer = await ask({ type: "users", ids });
       return answer.users;

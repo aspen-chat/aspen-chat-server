@@ -25,6 +25,13 @@ export const plugins = {
   readsDms: "Also reads direct messages.",
   account: "Its account",
   accountOf: "The account of the {plugin} plugin.",
+  channelKindHint: "A channel the {plugin} plugin shows.",
+  newChannelOfKind: "New {kind}",
+  needsPlugin:
+    "This channel is shown by a plugin this server does not run here. Its administrators can turn it on.",
+  viewTitle: "{channel}, shown by the {plugin} plugin",
+  pressFailed:
+    "{plugin} could not do that. Try again; if it keeps failing, tell this community's moderators.",
   accountAsks: "Its account asks for these permissions here:",
   accountNeedsAddBots:
     "Bringing in its account takes the Add bots permission, and giving it permissions takes Manage roles and Assign roles.",
@@ -68,5 +75,10 @@ export const plugins = {
     routes: "Answer requests of its own",
     events: "Send events to people's apps",
     act: "Act through an account of its own",
+    views: "Show pages of its own in the apps",
+    channelTypes: "Add kinds of channel",
+    timers: "Wake itself at times it sets",
+    notify: "Notify people",
+    capabilities: "Give out private links that need no sign-in",
   },
 } as const;

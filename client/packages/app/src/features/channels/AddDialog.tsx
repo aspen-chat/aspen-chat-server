@@ -1,6 +1,6 @@
-import type { Community } from "@aspen/protocol";
+import type { Community, PluginInfo } from "@aspen/protocol";
 import { useState } from "react";
-import { useCan } from "@/api/hooks";
+import { useCan, usePlugins } from "@/api/hooks";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateCategoryForm } from "@/features/channels/CreateCategoryForm";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
@@ -16,12 +16,20 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
-type Step = "choose" | "user" | "text" | "voice" | "category";
+type Step =
+  | "choose"
+  | "user"
+  | "text"
+  | "voice"
+  | "category"
+  | { plugin: PluginInfo; kind: PluginInfo["channelTypes"][number] };
 
 /**
  * The sidebar's "Add new…" button: pick what to add to the community, then fill it in. A user
- * is added by inviting them, so that choice opens the invite manager. Only what the caller may
- * add is offered, and without anything to offer there is no button.
+ * is added by inviting them, so that choice opens the invite manager. Kinds of channel the
+ * deployment's plugins add are offered beside text and voice; the server refuses one whose plugin
+ * does not run in the community, saying so. Only what the caller may add is offered, and without
+ * anything to offer there is no button.
  */
 export function AddDialog({ community }: { community: Community }) {
   const m = useMessages();
@@ -55,6 +63,7 @@ function useOffers(communityId: string): { user: boolean; channel: boolean; cate
 function Steps({ community, close }: { community: Community; close: () => void }) {
   const m = useMessages();
   const offers = useOffers(community.id);
+  const plugins = usePlugins();
   const [step, setStep] = useState<Step>("choose");
   const back = () => {
     setStep("choose");
@@ -63,6 +72,21 @@ function Steps({ community, close }: { community: Community; close: () => void }
     setStep(next);
   };
 
+  if (typeof step === "object") {
+    return (
+      <>
+        <StepHeading onBack={back}>
+          {format(m.plugins.newChannelOfKind, { kind: step.kind.name })}
+        </StepHeading>
+        <CreateChannelForm
+          communityId={community.id}
+          ty="plugin"
+          pluginType={step.kind.pluginType}
+          onDone={close}
+        />
+      </>
+    );
+  }
   switch (step) {
     case "choose":
       return (
@@ -87,6 +111,16 @@ function Steps({ community, close }: { community: Community; close: () => void }
                 hint={m.addOptions.voiceChannelHint}
                 onPress={choose("voice")}
               />
+              {plugins.flatMap((plugin) =>
+                plugin.channelTypes.map((kind) => (
+                  <OptionButton
+                    key={kind.pluginType}
+                    title={kind.name}
+                    hint={format(m.plugins.channelKindHint, { plugin: plugin.name })}
+                    onPress={choose({ plugin, kind })}
+                  />
+                )),
+              )}
             </>
           )}
           {offers.category && (

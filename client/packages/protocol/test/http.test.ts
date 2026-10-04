@@ -66,6 +66,31 @@ function liveSession(): Session {
 }
 
 describe("AspenClient", () => {
+  it("calls a plugin's route only beneath the plugin's routes", async () => {
+    const { fetch, calls } = scriptedFetch([() => jsonResponse(200, { ok: true })]);
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const answer = await client.pluginRoute("org.example.forum", {
+      method: "GET",
+      path: "boards/a b/posts",
+      query: "page=2",
+    });
+    expect(answer.status).toBe(200);
+    expect(calls.map((call) => call.url)).toEqual([
+      `${baseUrl}/api/v1/plugins/org.example.forum/routes/boards/a%20b/posts?page=2`,
+    ]);
+    expect(calls[0]?.authorization).toBe("Bearer session-1");
+    for (const [method, path] of [
+      ["DELETE", "../../users/@me"],
+      ["GET", "boards/./posts"],
+      ["TRACE", "boards"],
+    ] as const) {
+      expect((await client.pluginRoute("org.example.forum", { method, path })).status).toBe(400);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
   it("names the languages the user reads in every request", async () => {
     const { fetch, calls } = scriptedFetch([
       () => problem(401, "invalidCredentials"),

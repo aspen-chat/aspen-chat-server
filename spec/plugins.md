@@ -291,9 +291,11 @@ The frame never holds the person's session token; it talks to the app only throu
   dark. It says `theme` again when any of that changes.
 - The frame asks `request` (`id`, `method`, `path`, `query`, `body`), which the app makes to
   the plugin's route as the person and answers `response` (`id`, `status`, `contentType`,
-  `body` as text).
-- The frame asks `users` (`id`, `ids`), which the app answers `users` with each person's name,
-  display name, and avatar URL, as it already holds them or reads them.
+  `body` as text; `status` 0 when the deployment could not be reached). A path that would leave
+  the plugin's routes (a `.` or `..` segment) is answered 400 without being sent.
+- The frame asks `users` (`id`, `ids`), which the app answers `users` with each person's `id`,
+  `name`, and `displayName`, as it already holds them or reads them; one it cannot find is left
+  out.
 - The app passes on the plugin's `pluginEvent`s for the channel and community the view shows, as
   `event`.
 - The frame may ask `open` with a channel or message the person may open, which the app opens.

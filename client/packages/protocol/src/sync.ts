@@ -15,7 +15,12 @@
 
 import { AdminApi, adminRead } from "./admin";
 import { EventStream, type EventStreamOptions } from "./events";
-import type { CommunityPlugin, CustomEmoji, ServerEvent } from "./generated/events";
+import type {
+  CommunityPlugin,
+  CustomEmoji,
+  Message as EventMessage,
+  ServerEvent,
+} from "./generated/events";
 import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
@@ -41,7 +46,8 @@ import { eventStreamUrl } from "./urls";
 import { VoiceCall } from "./voice";
 import type { VoiceMedia } from "./voiceMedia";
 
-type Message = components["schemas"]["Message"];
+// The store's record, which the event stream carries; a read's record is assignable to it.
+type Message = EventMessage;
 type Attachment = components["schemas"]["Attachment"];
 type Invite = components["schemas"]["Invite"];
 type Community = components["schemas"]["Community"];
@@ -194,6 +200,11 @@ export type SyncListener = () => void;
  * Another deployment the user signs in to says they are now in a DM there (the home's
  * `foreignDmJoined` event). `channel` is that deployment's id.
  */
+/** A plugin's own event, for its views. */
+export type PluginEvent = Extract<ServerEvent, { serverEvent: "pluginEvent" }>;
+/** What a plugin tells the user of. */
+export type PluginNotice = Extract<ServerEvent, { serverEvent: "pluginNotice" }>;
+
 export interface ForeignDmNotice {
   readonly domain: string;
   readonly channel: string;
@@ -261,6 +272,8 @@ export class AspenSync {
   readonly #latestLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
   readonly #notifyListeners = new Set<(message: Message) => void>();
+  readonly #pluginEventListeners = new Set<(event: PluginEvent) => void>();
+  readonly #pluginNoticeListeners = new Set<(notice: PluginNotice) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
   readonly #ownsPreferences: boolean;
 
@@ -387,6 +400,29 @@ export class AspenSync {
     this.#notifyListeners.add(listener);
     return () => {
       this.#notifyListeners.delete(listener);
+    };
+  };
+
+  /**
+   * Registers for plugins' own events (`pluginEvent`), which only their views use, and returns
+   * the unsubscribe function.
+   */
+  readonly onPluginEvent = (listener: (event: PluginEvent) => void): (() => void) => {
+    this.#pluginEventListeners.add(listener);
+    return () => {
+      this.#pluginEventListeners.delete(listener);
+    };
+  };
+
+  /**
+   * Registers for what plugins tell the user of (`pluginNotice`), which the server sends only
+   * where their settings would tell them of a message that tags them, and returns the
+   * unsubscribe function. How to tell them is the app's.
+   */
+  readonly onPluginNotice = (listener: (notice: PluginNotice) => void): (() => void) => {
+    this.#pluginNoticeListeners.add(listener);
+    return () => {
+      this.#pluginNoticeListeners.delete(listener);
     };
   };
 
@@ -854,6 +890,37 @@ export class AspenSync {
     }
   }
 
+  /**
+   * Presses a button of a message's card, which calls its plugin as the user. Answers the
+   * plugin's status.
+   */
+  async pressCardButton(messageId: string, button: string): Promise<number> {
+    const result = await this.#client.api.POST("/api/v1/messages/{message}/card/buttons/{button}", {
+      params: { path: { message: messageId, button } },
+      parseAs: "text",
+    });
+    if (
+      result.response.status >= 400 &&
+      result.response.headers.get("content-type")?.includes("problem")
+    ) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.response.status;
+  }
+
+  /** Calls a plugin's route as the user, for a plugin's view. */
+  pluginRoute(
+    plugin: string,
+    request: { method: string; path: string; query?: string; body?: string },
+  ): Promise<{ status: number; contentType: string | null; body: string }> {
+    return this.#client.pluginRoute(plugin, request);
+  }
+
+  /** Where the deployment's API is, for the URLs plugins' views are shown from. */
+  get apiBase(): string {
+    return this.#client.baseUrl;
+  }
+
   /** Reads what plugins say about a person. */
   async loadUserAnnotations(userId: string): Promise<void> {
     const result = await this.#client.api.GET("/api/v1/users/{user}/annotations", {
@@ -1046,6 +1113,8 @@ export class AspenSync {
       ty: ChannelType;
       parentCategory: string | null;
       overrides?: readonly OverrideGrant[];
+      /** For a channel of `ty` `plugin`, the kind a plugin adds. */
+      pluginType?: string;
     },
   ): Promise<Channel> {
     const sortIndex = this.store
@@ -1059,6 +1128,7 @@ export class AspenSync {
         community: communityId,
         parentCategory: options.parentCategory,
         sortIndex,
+        ...(options.pluginType === undefined ? {} : { pluginType: options.pluginType }),
         ...(overrides.length > 0
           ? {
               overrides: overrides.map((o) => ({
@@ -2418,6 +2488,15 @@ export class AspenSync {
     this.#userLoads.set(userId, load);
   }
 
+  /** The people of `ids`, each as cached or read now; `undefined` for one who is not found. */
+  async loadUsers(ids: readonly string[]): Promise<(User | undefined)[]> {
+    for (const id of ids) {
+      this.ensureUser(id);
+    }
+    await Promise.all(ids.flatMap((id) => this.#userLoads.get(id) ?? []));
+    return ids.map((id) => this.store.user(id));
+  }
+
   // ---------------------------------------------------------------------------------------
 
   #setStatus(status: SyncStatus): void {
@@ -2677,6 +2756,18 @@ export class AspenSync {
   }
 
   #apply(event: ServerEvent): void {
+    if (event.serverEvent === "pluginEvent") {
+      for (const listener of this.#pluginEventListeners) {
+        listener(event);
+      }
+      return;
+    }
+    if (event.serverEvent === "pluginNotice") {
+      for (const listener of this.#pluginNoticeListeners) {
+        listener(event);
+      }
+      return;
+    }
     if (event.serverEvent === "foreignDmJoined") {
       for (const listener of this.#foreignDmListeners) {
         listener({

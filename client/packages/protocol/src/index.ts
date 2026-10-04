@@ -157,6 +157,8 @@ export {
   type MessageHolding,
   type MessageSearch,
   type ForeignDmNotice,
+  type PluginEvent,
+  type PluginNotice,
 } from "./sync";
 export type {
   Category,

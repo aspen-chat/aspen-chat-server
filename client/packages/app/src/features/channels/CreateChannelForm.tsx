@@ -50,18 +50,22 @@ const selectButtonClass =
   "hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
- * Names a new channel of a fixed type, files it under a category (a given one, or one chosen
- * here when the community has any), sets who can use it from the start with the plain settings
- * the access dialog leads with, and opens it if it is a text channel its creator can see.
+ * Names a new channel of a fixed type (or kind of a plugin's), files it under a category (a given
+ * one, or one chosen here when the community has any), sets who can use it from the start with
+ * the plain settings the access dialog leads with, and opens it if it is a text channel or a
+ * plugin's, which its creator can see.
  */
 export function CreateChannelForm({
   communityId,
   ty,
+  pluginType,
   parentCategory,
   onDone,
 }: {
   communityId: string;
   ty: ChannelType;
+  /** For a channel of a kind a plugin adds, the kind. */
+  pluginType?: string;
   /** Files the channel under this category and hides the choice; absent, the form offers one. */
   parentCategory?: string;
   onDone: () => void;
@@ -126,9 +130,13 @@ export function CreateChannelForm({
         ty,
         parentCategory: category === NO_CATEGORY ? null : category,
         overrides,
+        ...(pluginType === undefined ? {} : { pluginType }),
       });
       onDone();
-      if (channel.ty === "text" && store.channel(channel.id) !== undefined) {
+      if (
+        (channel.ty === "text" || channel.ty === "plugin") &&
+        store.channel(channel.id) !== undefined
+      ) {
         await navigate(channelLink({ domain, community: communityId }, channel.id));
       }
     } catch (e) {

@@ -1072,7 +1072,8 @@ describe("RecordStore threads and DMs", () => {
 
   it("holds the replies echoes show, which no window of the channel includes", () => {
     const store = bootstrapped();
-    const reply = { ...message(7, thread.id), content: "a reply" };
+    // A read's record, whose card (none here) is typed by the OpenAPI document.
+    const reply = { ...message(7, thread.id), content: "a reply", card: null };
     store.ingest({ messages: [reply] });
     expect(store.message(reply.id)?.content).toBe("a reply");
     expect(store.messages(general.id)).toBeUndefined();
@@ -1555,6 +1556,7 @@ describe("RecordStore plugins", () => {
     principal: null,
     principalPermissions: [],
     communitySettings: [],
+    channelTypes: [],
     messages: { watched: "Watched" },
   };
 

@@ -6,12 +6,16 @@
   decrypts a push, RFC 8291, as the native code must), saving the `PushState` through the native
   plugin `AspenPush` (`src/api/pushBridge.ts`), which says which platform, app, and relay the
   build is. A build without that plugin simply has no push. Signing out forgets every account.
-  Tapping a notification opens its message. On Android (`packages/mobile/android`, the one
+  Tapping a notification opens its message (a notice about no message, its channel). On Android (`packages/mobile/android`, the one
   native project kept in git), `AspenPushPlugin` holds the state in the app's private storage,
   and `AspenMessagingService` takes the place of the push plugin's FCM service (the manifest
   removes that one), handing it anything that is not a relay push: `PushHandler` decrypts
   (`WebPush`), fetches with the account's session, refreshing it on `401`, and posts the
-  notification, tagged `channel/message` so `read` and `deleted` take it down. A build pushes
+  notification, tagged `channel/message` so `read` and `deleted` take it down; a `notice`
+  pointer is fetched from `GET /users/@me/plugin-notices/{notice}` and shown with the plugin's
+  name and what it says, tagged `channel/notice` (notice ids are UUIDv7 too, so reading the
+  channel takes down the notices before it), and opens its message, or its channel when it is
+  about none. A build pushes
   only with a relay in the `aspen_push_relay` string and a `google-services.json` from its
   publisher's Firebase project. On iOS (`packages/mobile/ios/App`), `AspenPushPlugin.swift` is the
   same plugin: `describe` names APNs, the bundle id, the sandbox for a debug build, and the relay
@@ -25,7 +29,8 @@
   runs it against RFC 8291's example with `swiftc`, no target needed), fetches the message
   with the session (`include=authors,channels,mentions`, so tags show as names; renewed once
   on `401`, the new token written back), and shows the author,
-  the channel, and the text with tags as names, carrying where the message is for a tap; a
+  the channel, and the text with tags as names, carrying where the message is for a tap, and
+  fetches a `notice` pointer's notice, showing its plugin's name and text; a
   `read` or `deleted` pointer, and any failure, leaves the placeholder, since the build holds no
   filtering entitlement. The `AppDelegate` posts APNs registration to the Capacitor push plugin.
   `xcrun simctl push <device> org.aspenchat.client payload.json` delivers a push to the

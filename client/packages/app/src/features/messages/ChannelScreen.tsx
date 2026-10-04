@@ -13,6 +13,7 @@ import { MessageList } from "@/features/messages/MessageList";
 import { threadLink, type ChannelHome } from "@/features/messages/links";
 import { ThreadPanel } from "@/features/threads/ThreadPanel";
 import { VoiceScreen } from "@/features/voice/VoiceScreen";
+import { PluginChannelScreen } from "@/features/plugins/PluginChannel";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { DmCall } from "@/features/dms/DmCall";
@@ -21,7 +22,7 @@ import { Toasts } from "@/features/layout/Toasts";
 
 /**
  * A channel's screen, in a community or among the caller's DMs: a text channel's or DM's
- * history and composer, or a voice channel's call. With a message id in the URL the history
+ * history and composer, a voice channel's call, or a plugin's view of a channel of its kind. With a message id in the URL the history
  * opens around that message; otherwise it opens at the newest messages and follows new ones as
  * they arrive. With a thread id the thread opens beside it, in place of it on small screens.
  */
@@ -59,7 +60,9 @@ export function ChannelScreen() {
   // Every (re)bootstrap drops the loaded windows, so reload whenever the sync comes back live.
   // A message id that merely leaves the URL, as it does once the reader scrolls, is not a
   // reason to reload: the window already holds that part of the history and stays put.
-  const readable = channel !== undefined && channel.ty !== "voice" && channel.ty !== "thread";
+  const readable =
+    channel !== undefined &&
+    (channel.ty === "text" || channel.ty === "dm" || channel.ty === "groupDm");
   useEffect(() => {
     if (!live || !readable || channelId === undefined) {
       return;
@@ -98,6 +101,10 @@ export function ChannelScreen() {
 
   if (channel.ty === "voice" && communityId !== undefined) {
     return <VoiceScreen channel={channel} communityId={communityId} />;
+  }
+
+  if (channel.ty === "plugin" && communityId !== undefined) {
+    return <PluginChannelScreen channel={channel} communityId={communityId} />;
   }
 
   return (

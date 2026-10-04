@@ -26,8 +26,8 @@ import org.json.JSONObject;
 
 /**
  * What the phone does with a push while the app may be closed (spec/push.md, The app): finds the
- * account its subscription names, decrypts the pointer, and shows the message it points to, or
- * takes down what was shown for a channel read elsewhere or a message deleted.
+ * account its subscription names, decrypts the pointer, and shows the message or plugin's notice
+ * it points to, or takes down what was shown for a channel read elsewhere or a message deleted.
  */
 public final class PushHandler {
 
@@ -65,16 +65,18 @@ public final class PushHandler {
             }
             String kind = pointer.optString("kind");
             String channel = pointer.getString("channel");
-            String message = pointer.getString("message");
             switch (kind) {
                 case "message":
-                    show(subscription, account, channel, message);
+                    show(subscription, account, channel, pointer.getString("message"));
                     break;
                 case "read":
-                    takeDown(channel, message, true);
+                    takeDown(channel, pointer.getString("message"), true);
                     break;
                 case "deleted":
-                    takeDown(channel, message, false);
+                    takeDown(channel, pointer.getString("message"), false);
+                    break;
+                case "notice":
+                    showNotice(subscription, account, channel, pointer.getString("notice"));
                     break;
                 default:
                     // A kind this app does not know yet.
@@ -112,7 +114,55 @@ public final class PushHandler {
         if (text.isEmpty()) {
             text = context.getString(R.string.aspen_push_new_message);
         }
+        post(
+            origin,
+            channel,
+            messageId,
+            message.getString("channelId"),
+            messageId,
+            community,
+            parentChannel,
+            where == null ? name : name + " · " + where,
+            text
+        );
+    }
 
+    /** Shows a plugin's notice: the plugin's name, and what it says. */
+    private void showNotice(String subscription, JSONObject account, String channel, String noticeId)
+        throws IOException, JSONException {
+        String origin = account.getString("origin");
+        JSONObject notice = fetch(subscription, account, origin + "/api/v1/users/@me/plugin-notices/" + noticeId);
+        if (notice == null) {
+            return;
+        }
+        post(
+            origin,
+            channel,
+            noticeId,
+            notice.getString("channel"),
+            notice.isNull("message") ? null : notice.optString("message"),
+            notice.isNull("community") ? null : notice.optString("community"),
+            notice.isNull("parentChannel") ? null : notice.optString("parentChannel"),
+            notice.getString("title"),
+            notice.getString("body")
+        );
+    }
+
+    /**
+     * Posts a notification tagged {@code channel}/{@code id} that opens {@code message} in
+     * {@code opens} (or the channel, for none) when tapped.
+     */
+    private void post(
+        String origin,
+        String channel,
+        String id,
+        String opens,
+        String message,
+        String community,
+        String parentChannel,
+        String title,
+        String text
+    ) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -129,16 +179,17 @@ public final class PushHandler {
         }
         open.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         // The push plugin passes a tapped notification's extras to the app when they carry a
-        // message id; the rest say where the message is (spec/push.md, The app).
-        open.putExtra("google.message_id", messageId);
+        // message id, which a notice's id stands in for; the rest say what to open
+        // (spec/push.md, The app).
+        open.putExtra("google.message_id", id);
         open.putExtra("origin", origin);
-        open.putExtra("channel", message.getString("channelId"));
-        open.putExtra("message", messageId);
+        open.putExtra("channel", opens);
+        open.putExtra("message", message);
         open.putExtra("community", community);
         open.putExtra("parentChannel", parentChannel);
         PendingIntent tap = PendingIntent.getActivity(
             context,
-            messageId.hashCode(),
+            id.hashCode(),
             open,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
@@ -146,7 +197,7 @@ public final class PushHandler {
             // The status bar draws a small icon by its alpha alone; the colour tints it where shown.
             .setSmallIcon(R.drawable.ic_stat_aspen)
             .setColor(0xFF047857)
-            .setContentTitle(where == null ? name : name + " · " + where)
+            .setContentTitle(title)
             .setContentText(text)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
             .setGroup(channel)
@@ -154,7 +205,7 @@ public final class PushHandler {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(tap);
-        manager.notify(tagOf(channel, messageId), 0, builder.build());
+        manager.notify(tagOf(channel, id), 0, builder.build());
     }
 
     /**
@@ -170,7 +221,8 @@ public final class PushHandler {
                 continue;
             }
             String id = tag.substring(prefix.length());
-            // Message ids are UUIDv7, so an earlier message sorts first.
+            // Message and notice ids are UUIDv7, so an earlier one sorts first: reading a channel
+            // takes down the notices about it from before what was read.
             if (upTo ? id.compareTo(message) <= 0 : id.equals(message)) {
                 manager.cancel(tag, shown.getId());
             }

@@ -12,6 +12,7 @@ const filter: PluginInfo = {
   principal: null,
   principalPermissions: [],
   communitySettings: [],
+  channelTypes: [],
   messages: { watched: "Mentions %{word}", plain: "Plain" },
 };
 

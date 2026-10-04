@@ -41,22 +41,22 @@ guard let pointer = try JSONSerialization.jsonObject(with: plaintext) as? [Strin
     exit(1)
 }
 print("pointer \(pointer)")
-guard pointer["kind"] as? String == "message", let messageId = pointer["message"] as? String else {
-    print("a \(pointer["kind"] ?? "?") pointer shows nothing new")
-    exit(0)
-}
 let done = DispatchSemaphore(value: 0)
 var outcome: ShownMessage?
-MessageFetcher().fetch(account: account, messageId: messageId) { shown in
+let fetching = MessageFetcher().fetch(account: account, pointer: pointer) { shown in
     outcome = shown
     done.signal()
 }
+guard fetching else {
+    print("a \(pointer["kind"] ?? "?") pointer shows nothing new")
+    exit(0)
+}
 _ = done.wait(timeout: .now() + 20)
 guard let shown = outcome else {
-    print("FAIL: the message could not be fetched; the placeholder would stay")
+    print("FAIL: what the pointer names could not be fetched; the placeholder would stay")
     exit(1)
 }
 print("title: \(shown.title)")
 print("subtitle: \(shown.place ?? "")")
 print("body: \(shown.body)")
-print("opens: community \(shown.community ?? "none"), parent channel \(shown.parentChannel ?? "none")")
+print("opens: channel \(shown.channel), message \(shown.message ?? "none"), community \(shown.community ?? "none"), parent channel \(shown.parentChannel ?? "none")")
