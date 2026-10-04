@@ -1,5 +1,5 @@
-//! Reports (`app::report`): the categories anyone reports with, reporting a message or a
-//! profile, and, under `/admin`, the review of what was reported, which takes Review reports,
+//! Reports (`app::report`): the categories anyone reports with, reporting a message, a
+//! profile, or a nickname, and, under `/admin`, the review of what was reported, which takes Review reports,
 //! and the deployment's own categories, which take Manage report categories.
 
 use crate::api::API_PREFIX;
@@ -66,6 +66,15 @@ pub struct ProfileReportRequest {
     pub explanation: Option<String>,
     /// At least one.
     pub aspects: Vec<ProfileAspect>,
+}
+
+/// A report of a member's nickname in a community.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NicknameReportRequest {
+    pub category: ReportCategoryId,
+    #[serde(default)]
+    pub explanation: Option<String>,
 }
 
 /// A report as it was received.
@@ -186,6 +195,51 @@ pub async fn report_profile(
     ))
 }
 
+/// Reports the nickname a member chose in a community the caller belongs to, to the
+/// deployment's moderators; the nickname is kept as it stands. Nobody reports their own or the
+/// system account's, and each person reports a member's nickname in a community once while its
+/// case is unresolved.
+#[utoipa::path(
+    post,
+    path = "/communities/{community}/members/{user}/nickname/reports",
+    tag = TAG_REPORTS,
+    params(("community" = CommunityId, Path), ("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = ReportReceipt),
+        (status = BAD_REQUEST, description = "`validation`: no nickname to report, an unknown or hidden category, an explanation too long or missing for Other, or the caller's own nickname or the system account's", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such community, or either person is not a member", body = Problem),
+        (status = CONFLICT, description = "`alreadyReported`", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn report_nickname(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((community, subject)): Path<(CommunityId, UserId)>,
+    Json(request): Json<NicknameReportRequest>,
+) -> ApiResult<Created<ReportReceipt>> {
+    let filed = app::report::report_nickname(
+        &state,
+        user.id,
+        community,
+        subject,
+        &ReportRequest {
+            category: request.category,
+            explanation: request.explanation,
+        },
+    )
+    .await?;
+    Ok(Created::new(
+        format!(
+            "{API_PREFIX}/communities/{}/members/{}/nickname/reports/{}",
+            community.0, subject.0, filed.id.0
+        ),
+        filed.into(),
+    ))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Review
 
@@ -202,15 +256,18 @@ pub struct ReportCaseList {
     pub users: Vec<User>,
     /// Where the messages were posted.
     pub channels: Vec<Channel>,
+    /// The communities of those channels, and those the nickname cases are about.
     pub communities: Vec<Community>,
     pub attachments: Vec<Attachment>,
 }
 
-/// The users, attachments, channels, and communities `messages` and `people` name.
+/// The users, attachments, channels, and communities `messages`, `people`, and `communities`
+/// name.
 async fn named_by(
     state: &GlobalServerContext,
     messages: &[ReviewedMessage],
     people: impl IntoIterator<Item = UserId>,
+    communities: impl IntoIterator<Item = CommunityId>,
 ) -> ApiResult<(Vec<User>, Vec<Channel>, Vec<Community>, Vec<Attachment>)> {
     let mut users: HashSet<UserId> = people.into_iter().collect();
     users.extend(messages.iter().map(|m| m.message.author));
@@ -240,6 +297,7 @@ async fn named_by(
     let community_ids: Vec<CommunityId> = channels
         .iter()
         .filter_map(|c| c.community)
+        .chain(communities)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -258,13 +316,14 @@ async fn named_by(
 impl ReportCaseList {
     async fn of(state: &GlobalServerContext, page: app::report::CasePage) -> ApiResult<Self> {
         let people = page.people();
+        let case_communities = page.communities();
         let messages: Vec<ReviewedMessage> = page
             .messages
             .into_iter()
             .map(ReviewedMessage::from)
             .collect();
         let (users, channels, communities, attachments) =
-            named_by(state, &messages, people).await?;
+            named_by(state, &messages, people, case_communities).await?;
         Ok(Self {
             cases: page.cases,
             messages,
@@ -434,7 +493,7 @@ pub async fn get_report_context(
         .map(ReviewedMessage::from)
         .collect();
     let (users, channels, communities, attachments) =
-        named_by(&state, &messages, std::iter::empty()).await?;
+        named_by(&state, &messages, std::iter::empty(), std::iter::empty()).await?;
     Ok(Json(ReportContext {
         channel: window.channel,
         messages,
@@ -465,6 +524,10 @@ pub struct ReportResolutionRequest {
     /// and a username replaced with a placeholder they are told to change. Takes Ban users.
     #[serde(default)]
     pub reset: Vec<ProfileAspect>,
+    /// For a nickname case, clear the nickname, whatever it is now. Takes Moderate any
+    /// community.
+    #[serde(default)]
+    pub clear_nickname: bool,
 }
 
 /// Resolves an open case with the actions asked for, each taking its own permission; the case
@@ -503,6 +566,7 @@ pub async fn resolve_report_case(
             ban: request.ban.map(Into::into),
             delete_message: request.delete_message,
             reset: request.reset,
+            clear_nickname: request.clear_nickname,
         },
     )
     .await?;

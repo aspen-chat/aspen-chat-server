@@ -437,7 +437,7 @@ async fn audience(
 
 /// The copy of a membership event the rest of the community receives: without the member's own
 /// list position, which is theirs alone. `None` when nothing else is left to tell them, as for a
-/// reorder.
+/// reorder alone.
 fn for_community(event: &ServerEvent) -> Option<ServerEvent> {
     use crate::api::message_enum::server_event::UserCommunityEvent;
     let mut copy = event.clone();
@@ -446,10 +446,15 @@ fn for_community(event: &ServerEvent) -> Option<ServerEvent> {
             membership.sort_index = None;
         }
         ServerEvent::UserCommunity(UserCommunityEvent::Update {
-            sort_index, roles, ..
+            sort_index,
+            roles,
+            nickname,
+            ..
         }) => {
             *sort_index = None;
-            roles.as_ref()?;
+            if roles.is_none() && nickname.is_none() {
+                return None;
+            }
         }
         _ => {}
     }
@@ -945,6 +950,7 @@ mod tests {
             user,
             sort_index: Some(3),
             roles: Vec::new(),
+            nickname: None,
         }));
         let copy = serde_json::to_value(for_community(&joined).expect("a copy")).unwrap();
         assert_eq!(copy["sortIndex"], serde_json::Value::Null);
@@ -954,13 +960,26 @@ mod tests {
             user,
             sort_index: Some(Some(1)),
             roles: None,
+            nickname: None,
         });
         assert!(for_community(&reordered).is_none());
+        // A nickname is the community's to see.
+        let renamed = ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            community,
+            user,
+            sort_index: Some(Some(1)),
+            roles: None,
+            nickname: Some(Some("Aster".to_string())),
+        });
+        let copy = serde_json::to_value(for_community(&renamed).expect("a copy")).unwrap();
+        assert!(copy.get("sortIndex").is_none());
+        assert_eq!(copy["nickname"], "Aster");
         let promoted = ServerEvent::UserCommunity(UserCommunityEvent::Update {
             community,
             user,
             sort_index: Some(Some(1)),
             roles: Some(Vec::new()),
+            nickname: None,
         });
         let copy = serde_json::to_value(for_community(&promoted).expect("a copy")).unwrap();
         assert!(copy.get("sortIndex").is_none());

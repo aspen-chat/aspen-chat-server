@@ -23,8 +23,9 @@
   shares (`PushState.swift`). The extension (`NotificationService.swift`) decrypts the push's
   ciphertext with the account's keys (`WebPush.swift`, CryptoKit; `ios/scripts/check_webpush.sh`
   runs it against RFC 8291's example with `swiftc`, no target needed), fetches the message
-  with the session (`include=authors,channels,mentions`, so tags show as names; renewed once
-  on `401`, the new token written back), and shows the author,
+  with the session (`include=authors,channels,mentions,memberships`, so tags show as names and
+  the author by their nickname in a community; renewed once on `401`, the new token written
+  back), and shows the author,
   the channel, and the text with tags as names, carrying where the message is for a tap; a
   `read` or `deleted` pointer, and any failure, leaves the placeholder, since the build holds no
   filtering entitlement. The `AppDelegate` posts APNs registration to the Capacitor push plugin.

@@ -10,6 +10,11 @@ export const reports = {
   reportProfileHeading: "Report {name}'s profile",
   reportProfileHint:
     "Your report goes to this server's moderators, with the profile as it is now. {name} isn't told who reported it.",
+  reportNickname: "Report nickname",
+  reportNicknameLabel: "Report the nickname {nickname}",
+  reportNicknameHeading: "Report the nickname “{nickname}”",
+  reportNicknameHint:
+    "Your report goes to this server's moderators, with the nickname as it is now and the community it's used in. Its owner isn't told who reported it.",
   aspectsLabel: "What's wrong with it",
   aspects: {
     displayName: "Display name",
@@ -44,6 +49,8 @@ export const reports = {
   warningAboutProfile: "About your profile:",
   warningAboutTheirs: "About {name}'s message:",
   warningAboutTheirProfile: "About {name}'s profile:",
+  warningAboutNickname: "About your nickname in {community}:",
+  warningAboutTheirNickname: "About {name}'s nickname in {community}:",
   reportedAspects: "Reported: {aspects}",
   // Review
   title: "Reports",
@@ -58,8 +65,14 @@ export const reports = {
   noneDismissed: "No report is dismissed.",
   kindMessage: "Message",
   kindProfile: "Profile",
+  kindNickname: "Nickname",
   caseHeading: "{kind} by {name}",
   profileHeading: "{name}'s profile",
+  nicknameHeading: "{name}'s nickname in {community}",
+  nicknameReported: "Reported as “{nickname}”",
+  nicknameNow: "Now “{nickname}”",
+  nicknameGone: "They have no nickname there now.",
+  communityGone: "a deleted community",
   reportCount: "{count} reports",
   oneReport: "1 report",
   lastReported: "Last reported {time}",
@@ -90,6 +103,7 @@ export const reports = {
   didBanReason: "Banned from the server: {reason}",
   didDelete: "Deleted the message",
   didReset: "Reset: {aspects}",
+  didClearNickname: "Cleared the nickname",
   showMore: "Show more",
   // Resolving
   resolveHeading: "Act on the report about {name}",
@@ -105,6 +119,9 @@ export const reports = {
   reset: "Reset the profile",
   resetHint: "Clears what you choose. A username becomes a placeholder they're asked to change.",
   resetForeign: "Their profile belongs to their home server, so it can't be reset here.",
+  clearNickname: "Clear the nickname",
+  clearNicknameHint:
+    "They go by their display name in the community again, and can choose another nickname.",
   resolve: "Resolve",
   resolving: "Resolving…",
   resolvedToast: "Report resolved.",

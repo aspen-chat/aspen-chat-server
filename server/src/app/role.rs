@@ -655,6 +655,7 @@ async fn announce_member_roles(
             user,
             sort_index: None,
             roles: Some(roles.clone()),
+            nickname: None,
         }),
     )
     .await?;
@@ -768,6 +769,49 @@ pub async fn remove_member(
                 .await?;
             }
             app::community::end_membership(state, conn.as_mut(), member, community_id).await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Clears `member`'s nickname in the community. Anyone may clear their own; anyone else's takes
+/// Manage nicknames, and a member ranked below the caller, never the owner. Returns whether
+/// there was one to clear.
+pub async fn clear_nickname(
+    state: &GlobalServerContext,
+    caller: UserId,
+    community_id: CommunityId,
+    member: UserId,
+) -> app::Result<bool> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            if member != caller {
+                let access = require_member(conn.as_mut(), caller, community_id).await?;
+                access.require(Permissions::MANAGE_NICKNAMES)?;
+                let their_rank = member_below(conn.as_mut(), &access, member).await?;
+                // Moderation when the community's own permissions would not have allowed it.
+                if access.moderator
+                    && !(access
+                        .member_permissions
+                        .contains(Permissions::MANAGE_NICKNAMES)
+                        && their_rank < access.role_rank())
+                {
+                    log_moderation(
+                        conn.as_mut(),
+                        caller,
+                        ModerationAction::ClearNickname,
+                        Some(community_id),
+                        None,
+                        Some(member.0.to_string()),
+                    )
+                    .await?;
+                }
+            } else {
+                require_actual_member(conn.as_mut(), member, community_id).await?;
+            }
+            app::community::erase_nickname(state, conn.as_mut(), community_id, member).await
         }
         .scope_boxed()
     })

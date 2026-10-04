@@ -1,21 +1,22 @@
-//! Reports of objectionable messages and profiles, and their review.
+//! Reports of objectionable messages, profiles, and nicknames, and their review.
 //!
-//! Anyone may report a message they can read, or a person's profile, choosing what is wrong
-//! from the report categories (`report_category`): the built-in ones, and those the deployment
-//! added with Manage report categories, which may also hide any of them but Other. A profile
-//! report names the aspects it finds objectionable and keeps the profile as it stood, picture
-//! included. A person reports a thing once; nobody reports their own messages or profile, or the
-//! system account's.
+//! Anyone may report a message they can read, a person's profile, or the nickname a fellow
+//! member chose in a community, choosing what is wrong from the report categories
+//! (`report_category`): the built-in ones, and those the deployment added with Manage report
+//! categories, which may also hide any of them but Other. A profile report names the aspects it
+//! finds objectionable and keeps the profile as it stood, picture included; a nickname report
+//! keeps the nickname. A person reports a thing once; nobody reports their own messages,
+//! profile, or nickname, or the system account's.
 //!
-//! Reports of one message, or of one person's profile, gather in a case (`report_case`), of
-//! which at most one is unresolved at a time: `open` until a reviewer acts on it, or
+//! Reports of one message, of one person's profile, or of one member's nickname in one
+//! community gather in a case (`report_case`), of which at most one is unresolved at a time: `open` until a reviewer acts on it, or
 //! `dismissed`, hidden but kept, until it is restored or reported again, either of which opens
 //! it again. Holders of Review reports read the cases, and the messages around a reported
 //! message (logged once for a DM's). Acting on an open case resolves it for good, with any of:
 //! a warning, sent as a DM from the reviewer (`MessageKind::Warning`, which takes Message any
 //! user); a ban from the deployment (`app::user_ban`, which takes Ban users); deleting the
-//! reported message (which takes Moderate any community); and resetting the reported aspects of
-//! a profile (which takes Ban users). Nobody acts on a case about themselves, or about someone
+//! reported message, or clearing the reported nickname (each of which takes Moderate any
+//! community); and resetting the reported aspects of a profile (which takes Ban users). Nobody acts on a case about themselves, or about someone
 //! whose highest deployment role is not below theirs. Reports and cases are never deleted
 //! through the API. Every change to what awaits review is announced to each holder of Review
 //! reports as `reportsChanged`.
@@ -31,12 +32,12 @@ use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::user::UserPg;
 use crate::app::user_ban::{UserBanRequest, banned};
 use crate::app::{
-    self, ChannelId, EventScope, IconId, MessageId, ReportCaseId, ReportCategoryId, ReportId,
-    UserId, publish_event,
+    self, ChannelId, CommunityId, EventScope, IconId, MessageId, ReportCaseId, ReportCategoryId,
+    ReportId, UserId, publish_event,
 };
 use crate::database::schema::{
-    deployment_role, message, moderation_log, report, report_case, report_category, user,
-    user_deployment_role,
+    community, community_user, deployment_role, message, moderation_log, report, report_case,
+    report_category, user, user_deployment_role,
 };
 use crate::t;
 use chrono::{DateTime, Utc};
@@ -190,9 +191,23 @@ pub struct Warning {
     pub profile: Option<ProfileSnapshot>,
     #[serde(default)]
     pub aspects: Vec<ProfileAspect>,
+    /// For a warning about a nickname, the nickname as the latest report found it.
+    #[serde(default)]
+    pub nickname: Option<NicknameSnapshot>,
 }
 
 app::jsonb_sql_traits!(Warning);
+
+/// A nickname a warning is about, with the community it was chosen in, named as it was when the
+/// warning was sent, so the warning reads the same once the person has left or the community is
+/// gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NicknameSnapshot {
+    pub community: CommunityId,
+    pub community_name: String,
+    pub nickname: String,
+}
 
 /// What a case is about.
 #[derive(
@@ -213,6 +228,8 @@ app::jsonb_sql_traits!(Warning);
 pub enum ReportKind {
     Message,
     Profile,
+    /// A member's nickname in one community.
+    Nickname,
 }
 
 app::wire_name_traits!(ReportKind);
@@ -388,6 +405,9 @@ pub struct Resolution {
     /// The aspects of the profile reset.
     #[serde(default)]
     pub reset: Vec<ProfileAspect>,
+    /// Whether the reported nickname was cleared.
+    #[serde(default)]
+    pub cleared_nickname: bool,
 }
 
 app::jsonb_sql_traits!(Resolution);
@@ -414,6 +434,8 @@ pub struct Report {
     /// For a profile report, what it finds objectionable, and the profile as it stood.
     pub aspects: Vec<ProfileAspect>,
     pub profile: Option<ProfileSnapshot>,
+    /// For a nickname report, the nickname as it stood.
+    pub nickname: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -428,6 +450,8 @@ pub struct ReportCase {
     pub subject: UserId,
     /// For a message case, the message reported.
     pub message: Option<MessageId>,
+    /// For a nickname case, the community the nickname was chosen in.
+    pub community: Option<CommunityId>,
     /// Its reports, oldest first.
     pub reports: Vec<Report>,
     pub opened_at: DateTime<Utc>,
@@ -451,6 +475,7 @@ struct CaseRow {
     kind: ReportKind,
     subject: UserId,
     message: Option<MessageId>,
+    community: Option<CommunityId>,
     status: ReportStatus,
     opened_at: DateTime<Utc>,
     last_reported_at: DateTime<Utc>,
@@ -470,6 +495,7 @@ struct ReportRow {
     explanation: Option<String>,
     aspects: ProfileAspects,
     profile: Option<ProfileSnapshot>,
+    nickname: Option<String>,
     created_at: DateTime<Utc>,
 }
 
@@ -482,6 +508,7 @@ impl From<ReportRow> for Report {
             explanation: row.explanation,
             aspects: row.aspects.0,
             profile: row.profile,
+            nickname: row.nickname,
             created_at: row.created_at,
         }
     }
@@ -511,6 +538,13 @@ impl CasePage {
         }
         people.extend(self.messages.iter().map(|m| *m.message.message.author.id()));
         people.into_iter().collect()
+    }
+
+    /// The communities the page's nickname cases are about.
+    pub fn communities(&self) -> Vec<CommunityId> {
+        let communities: HashSet<CommunityId> =
+            self.cases.iter().filter_map(|c| c.community).collect();
+        communities.into_iter().collect()
     }
 }
 
@@ -764,22 +798,36 @@ async fn check_subject(
     Ok(())
 }
 
-/// Adds a report to the unresolved case of `kind` about `message` or `subject`, opening one or
+/// What a report is about, and what it keeps of it.
+enum Reported {
+    Message(MessageId),
+    Profile {
+        aspects: Vec<ProfileAspect>,
+        profile: ProfileSnapshot,
+    },
+    Nickname {
+        community: CommunityId,
+        nickname: String,
+    },
+}
+
+/// Adds a report to the unresolved case about what is `reported` of `subject`, opening one or
 /// reopening a dismissed one, inside the caller's transaction.
-#[allow(clippy::too_many_arguments)]
 async fn file(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
-    kind: ReportKind,
     subject: UserId,
-    message: Option<MessageId>,
+    reported: Reported,
     reporter: UserId,
     request: &ReportRequest,
     explanation: Option<String>,
-    aspects: Vec<ProfileAspect>,
-    profile: Option<ProfileSnapshot>,
 ) -> app::Result<Filed> {
     let now = Utc::now();
+    let (kind, message, community) = match &reported {
+        Reported::Message(message) => (ReportKind::Message, Some(*message), None),
+        Reported::Profile { .. } => (ReportKind::Profile, None, None),
+        Reported::Nickname { community, .. } => (ReportKind::Nickname, None, Some(*community)),
+    };
     // A first report opens the case; concurrent first reports make one, the second finding
     // the first's.
     diesel::insert_into(report_case::table)
@@ -788,6 +836,7 @@ async fn file(
             kind,
             subject,
             message,
+            community,
             status: ReportStatus::Open,
             opened_at: now,
             last_reported_at: now,
@@ -802,15 +851,23 @@ async fn file(
         .select(CaseRow::as_select())
         .filter(report_case::kind.eq(kind))
         .filter(report_case::status.ne(ReportStatus::Resolved));
-    let case: CaseRow = match message {
-        Some(message) => {
+    let case: CaseRow = match (message, community) {
+        (Some(message), _) => {
             unresolved
                 .filter(report_case::message.eq(message))
                 .for_update()
                 .first(conn)
                 .await?
         }
-        None => {
+        (None, Some(community)) => {
+            unresolved
+                .filter(report_case::subject.eq(subject))
+                .filter(report_case::community.eq(community))
+                .for_update()
+                .first(conn)
+                .await?
+        }
+        (None, None) => {
             unresolved
                 .filter(report_case::subject.eq(subject))
                 .for_update()
@@ -839,6 +896,11 @@ async fn file(
     if reopened {
         tracing::info!(case = %case.id.0, "a dismissed report case was reported again");
     }
+    let (aspects, profile, nickname) = match reported {
+        Reported::Message(_) => (Vec::new(), None, None),
+        Reported::Profile { aspects, profile } => (aspects, Some(profile), None),
+        Reported::Nickname { nickname, .. } => (Vec::new(), None, Some(nickname)),
+    };
     let row = ReportRow {
         id: ReportId::new(),
         case: case.id,
@@ -847,6 +909,7 @@ async fn file(
         explanation,
         aspects: ProfileAspects(aspects),
         profile,
+        nickname,
         created_at: now,
     };
     diesel::insert_into(report::table)
@@ -897,14 +960,11 @@ pub async fn report_message(
             file(
                 state,
                 conn.as_mut(),
-                ReportKind::Message,
                 author,
-                Some(message_id),
+                Reported::Message(message_id),
                 reporter,
                 request,
                 explanation,
-                Vec::new(),
-                None,
             )
             .await
         }
@@ -944,14 +1004,60 @@ pub async fn report_profile(
             file(
                 state,
                 conn.as_mut(),
-                ReportKind::Profile,
                 subject,
-                None,
+                Reported::Profile {
+                    aspects: aspects_named,
+                    profile: ProfileSnapshot::from(&profile),
+                },
                 reporter,
                 request,
                 explanation,
-                aspects_named,
-                Some(ProfileSnapshot::from(&profile)),
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Reports the nickname `subject` chose in `community`, which the reporter must belong to; the
+/// nickname is kept as it stands.
+pub async fn report_nickname(
+    state: &GlobalServerContext,
+    reporter: UserId,
+    community: CommunityId,
+    subject: UserId,
+    request: &ReportRequest,
+) -> app::Result<Filed> {
+    let mut conn = state.connection_pool.get().await?;
+    app::permissions::require_actual_member(conn.as_mut(), reporter, community).await?;
+    let nickname: Option<String> = community_user::table
+        .select(community_user::nickname)
+        .filter(
+            community_user::community
+                .eq(community)
+                .and(community_user::user.eq(subject)),
+        )
+        .first(conn.as_mut())
+        .await?;
+    let Some(nickname) = nickname else {
+        return Err(app::Error::Validation(t!("reportNoNickname")));
+    };
+    check_subject(conn.as_mut(), reporter, subject).await?;
+    let explanation = checked_request(conn.as_mut(), request).await?;
+    conn.transaction(|conn| {
+        async move {
+            file(
+                state,
+                conn.as_mut(),
+                subject,
+                Reported::Nickname {
+                    community,
+                    nickname,
+                },
+                reporter,
+                request,
+                explanation,
             )
             .await
         }
@@ -1100,6 +1206,7 @@ async fn page_of(
             status: row.status,
             subject: row.subject,
             message: row.message,
+            community: row.community,
             opened_at: row.opened_at,
             last_reported_at: row.last_reported_at,
             closed_at: row.closed_at,
@@ -1222,7 +1329,7 @@ pub async fn case_context(
         .first(conn.as_mut())
         .await?;
     let Some(reported) = reported else {
-        return Err(app::Error::Validation(t!("reportNotMessage")));
+        return Err(app::Error::Validation(t!("reportNoContext")));
     };
     let channel: ChannelId = message::table
         .select(message::channel)
@@ -1318,6 +1425,8 @@ pub struct Actions {
     pub delete_message: bool,
     /// For a profile case, the aspects to reset.
     pub reset: Vec<ProfileAspect>,
+    /// For a nickname case, clear the nickname.
+    pub clear_nickname: bool,
 }
 
 /// Loads a case to act on, refusing a reviewer who may not act on it.
@@ -1366,13 +1475,14 @@ pub async fn resolve(
         && actions.ban.is_none()
         && !actions.delete_message
         && actions.reset.is_empty()
+        && !actions.clear_nickname
     {
         return Err(app::Error::Validation(t!("reportNoAction")));
     }
     if warn.is_some() {
         access.require(DeploymentPermission::MessageAnyUser)?;
     }
-    if actions.delete_message {
+    if actions.delete_message || actions.clear_nickname {
         access.require(DeploymentPermission::ModerateCommunities)?;
     }
     if let Some(ban) = &actions.ban {
@@ -1385,7 +1495,11 @@ pub async fn resolve(
     if !actions.reset.is_empty() {
         access.require(DeploymentPermission::BanUsers)?;
     }
-    let (deleting, resetting) = (actions.delete_message, !actions.reset.is_empty());
+    let (deleting, resetting, clearing) = (
+        actions.delete_message,
+        !actions.reset.is_empty(),
+        actions.clear_nickname,
+    );
     let mut conn = state.connection_pool.get().await?;
     let case = conn
         .transaction(|conn| {
@@ -1396,6 +1510,9 @@ pub async fn resolve(
                 }
                 if deleting && case.kind != ReportKind::Message {
                     return Err(app::Error::Validation(t!("reportDeleteNotMessage")));
+                }
+                if clearing && case.kind != ReportKind::Nickname {
+                    return Err(app::Error::Validation(t!("reportClearNotNickname")));
                 }
                 if resetting {
                     if case.kind != ReportKind::Profile {
@@ -1488,6 +1605,12 @@ async fn act(
         reset_profile(state, access, case.subject, &actions.reset).await?;
         resolution.reset = actions.reset.clone();
     }
+    if actions.clear_nickname
+        && let Some(community) = case.community
+    {
+        clear_reported_nickname(state, access, community, case.subject).await?;
+        resolution.cleared_nickname = true;
+    }
     if let Some(ban) = &actions.ban {
         app::user_ban::ban_user(state, access, case.subject, ban).await?;
         resolution.ban = Some(BanGiven {
@@ -1500,8 +1623,8 @@ async fn act(
     Ok(())
 }
 
-/// What a warning about `case` names: the message, or the profile as the latest report found it
-/// with every aspect the reports named.
+/// What a warning about `case` names: the message, the profile as the latest report found it
+/// with every aspect the reports named, or the nickname as the latest report found it.
 async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> app::Result<Warning> {
     let mut conn = state.connection_pool.get().await?;
     let reports: Vec<ReportRow> = report::table
@@ -1516,11 +1639,30 @@ async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> app::Result<
             aspects.push(*aspect);
         }
     }
+    let nickname = match (
+        case.community,
+        reports.iter().rev().find_map(|r| r.nickname.clone()),
+    ) {
+        (Some(community_id), Some(nickname)) => {
+            let community_name: String = community::table
+                .select(community::name)
+                .find(community_id)
+                .first(conn.as_mut())
+                .await?;
+            Some(NicknameSnapshot {
+                community: community_id,
+                community_name,
+                nickname,
+            })
+        }
+        _ => None,
+    };
     Ok(Warning {
         subject: case.subject,
         message: case.message,
         profile: reports.iter().rev().find_map(|r| r.profile.clone()),
         aspects,
+        nickname,
     })
 }
 
@@ -1542,7 +1684,7 @@ async fn send_warning(
         text,
         Vec::new(),
         false,
-        Posting::Warning(warning),
+        Posting::Warning(Box::new(warning)),
     )
     .await?;
     let mut conn = state.connection_pool.get().await?;
@@ -1625,6 +1767,34 @@ async fn reset_profile(
         .await?;
     }
     Ok(())
+}
+
+/// Clears `subject`'s nickname in `community`, whatever it is now, if they are still there with
+/// one; their rank in the community does not matter, since the reviewer's rank among the
+/// deployment's moderators was checked. Written to the moderation log.
+async fn clear_reported_nickname(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    community: CommunityId,
+    subject: UserId,
+) -> app::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            app::community::erase_nickname(state, conn.as_mut(), community, subject).await?;
+            log_moderation(
+                conn.as_mut(),
+                access.user,
+                ModerationAction::ClearNickname,
+                Some(community),
+                None,
+                Some(subject.0.to_string()),
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Marks a case resolved or dismissed by the reviewer, with what was done, inside the caller's

@@ -171,6 +171,7 @@ endpoints = [
   "PUT /communities/{community}/members/{user}/roles/{role}",
   "DELETE /communities/{community}/members/{user}/roles/{role}",
   "DELETE /communities/{community}/members/{user}",
+  "DELETE /communities/{community}/members/{user}/nickname",
   "PUT /channels/{channel}/overrides/{role}",
   "DELETE /channels/{channel}/overrides/{role}",
   "PUT /categories/{category}/overrides/{role}",
@@ -310,11 +311,15 @@ user = { requests = 10, per_seconds = 600, burst = 3 }
 [rate_limits.endpoints."PUT /bots/{bot}/owner"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
-# Reporting a message or a profile: ten back to back, and fifty a day, across both.
+# Reporting a message, a profile, or a nickname: ten back to back, and fifty a day, across all
+# three.
 [rate_limits.endpoints."POST /messages/{message}/reports"]
 user = { requests = 50, per_seconds = 86400, burst = 10, bucket = "reports" }
 
 [rate_limits.endpoints."POST /users/{user}/reports"]
+user = { requests = 50, per_seconds = 86400, burst = 10, bucket = "reports" }
+
+[rate_limits.endpoints."POST /communities/{community}/members/{user}/nickname/reports"]
 user = { requests = 50, per_seconds = 86400, burst = 10, bucket = "reports" }
 
 [rate_limits.endpoints."PATCH /bots/{bot}"]
@@ -340,6 +345,11 @@ user = { requests = 10, per_seconds = 3600, burst = 3 }
 [rate_limits.endpoints."PUT /communities/{community}/members/@me"]
 user = { requests = 20, per_seconds = 3600, burst = 5 }
 ip = { requests = 60, per_seconds = 3600, burst = 20 }
+
+# A nickname is announced to the whole community; reordering one's list is cheap but rides the
+# same endpoint, so the limit is per community and roomy.
+[rate_limits.endpoints."PATCH /communities/{community}/members/@me"]
+user_per_community = { requests = 30, per_seconds = 600, burst = 10 }
 
 # Searching members: generous for someone typing into a picker, too slow to page through a
 # large community quickly.

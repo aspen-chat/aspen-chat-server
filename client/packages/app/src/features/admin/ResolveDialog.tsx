@@ -33,8 +33,9 @@ const WARNING_MAX = 2000;
 /**
  * What a reviewer does about an open case, any of: a warning in their own words, sent from
  * them (Message any user); a ban from the server (Ban users), with a deletion of recent
- * messages for a holder of Moderate any community; deleting the reported message (Moderate any
- * community); and resetting the reported aspects of a profile of this server's (Ban users). Each
+ * messages for a holder of Moderate any community; deleting the reported message, or clearing
+ * the reported nickname (each Moderate any community); and resetting the reported aspects of a
+ * profile of this server's (Ban users). Each
  * is offered only to those who may take it. Done, the case is resolved for good.
  */
 export function ResolveDialog({
@@ -67,13 +68,18 @@ export function ResolveDialog({
   const [banChoice, setBanChoice] = useState<BanChoice>(NEW_BAN);
   const [withOwner, setWithOwner] = useState(false);
   const [remove, setRemove] = useState(false);
+  const [clearNickname, setClearNickname] = useState(false);
   const [reset, setReset] = useState(false);
   const [resetting, setResetting] = useState<readonly ProfileAspect[]>(aspects);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const chosen =
-    (warn && warning.trim() !== "") || ban || remove || (reset && resetting.length > 0);
+    (warn && warning.trim() !== "") ||
+    ban ||
+    remove ||
+    clearNickname ||
+    (reset && resetting.length > 0);
 
   async function resolve() {
     if (!chosen || pending) {
@@ -93,6 +99,7 @@ export function ResolveDialog({
             }
           : {}),
         deleteMessage: remove,
+        clearNickname,
         reset: reset ? [...resetting] : [],
       });
       toast(m.reports.resolvedToast);
@@ -147,6 +154,14 @@ export function ResolveDialog({
               onChange={setRemove}
               label={m.reports.deleteMessage}
               hint={m.reports.deleteMessageHint}
+            />
+          )}
+          {c.kind === "nickname" && moderator && (
+            <ChoiceCheckbox
+              isSelected={clearNickname}
+              onChange={setClearNickname}
+              label={m.reports.clearNickname}
+              hint={m.reports.clearNicknameHint}
             />
           )}
           {c.kind === "profile" && mayBan && (

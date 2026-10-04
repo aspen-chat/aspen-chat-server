@@ -175,6 +175,7 @@ diesel::table! {
         community -> Uuid,
         sort_index -> Int4,
         joined_at -> Timestamptz,
+        nickname -> Nullable<Text>,
     }
 }
 
@@ -544,6 +545,7 @@ diesel::table! {
         aspects -> Array<Nullable<Text>>,
         profile -> Nullable<Jsonb>,
         created_at -> Timestamptz,
+        nickname -> Nullable<Text>,
     }
 }
 
@@ -559,6 +561,7 @@ diesel::table! {
         closed_at -> Nullable<Timestamptz>,
         closed_by -> Nullable<Uuid>,
         resolution -> Nullable<Jsonb>,
+        community -> Nullable<Uuid>,
     }
 }
 
@@ -785,6 +788,7 @@ diesel::joinable!(registration_invite -> invite (community_invite));
 diesel::joinable!(report -> report_case (case));
 diesel::joinable!(report -> report_category (category));
 diesel::joinable!(report -> user (reporter));
+diesel::joinable!(report_case -> community (community));
 diesel::joinable!(report_case -> message (message));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));

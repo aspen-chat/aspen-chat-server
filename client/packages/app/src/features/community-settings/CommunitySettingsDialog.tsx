@@ -17,7 +17,7 @@ import {
   Tabs,
   TextField,
 } from "react-aria-components";
-import { useAccess, useMe, useMemberRoles, useSync, useUser } from "@/api/hooks";
+import { useAccess, useMe, useMemberRoles, useNickname, useSync, useUser } from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
@@ -45,6 +45,8 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CommunityNotifications } from "@/features/notifications/CommunityNotifications";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
+import { NicknameForm } from "@/features/users/Nickname";
+import { useNameIn } from "@/features/users/nameIn";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { problemText } from "@/api/problemText";
@@ -125,6 +127,7 @@ function Overview({ community }: { community: Community }) {
   const m = useMessages();
   const access = useAccess(community.id);
   const owner = useUser(community.owner ?? undefined);
+  const ownerName = useNameIn(owner, community.id);
   const me = useMe();
   const member = useMemberRoles(community.id, me?.id ?? "") !== undefined;
   const manage = access?.has("manageCommunity") === true;
@@ -139,17 +142,32 @@ function Overview({ community }: { community: Community }) {
           <CommunityNotifications communityId={community.id} />
         </div>
       )}
+      {member && me !== null && <OwnNickname communityId={community.id} me={me} />}
       <section className={planeClass}>
         <h3 className="text-sm font-semibold text-ink-muted">{m.communitySettings.ownerHeading}</h3>
         <p className={hintClass}>
           {owner === undefined
             ? m.communitySettings.noOwner
-            : format(m.communitySettings.ownerIs, { name: displayNameOf(owner) })}
+            : format(m.communitySettings.ownerIs, { name: ownerName ?? displayNameOf(owner) })}
         </p>
         {access?.owner === true && <Transfer community={community} />}
       </section>
       {access?.owner === true || moderator ? <Delete community={community} /> : null}
       {access?.owner !== true && member && <Leave community={community} />}
+    </div>
+  );
+}
+
+/** The caller's nickname here, on a plane of its own when there is anything to show. */
+function OwnNickname({ communityId, me }: { communityId: string; me: User }) {
+  const access = useAccess(communityId);
+  const nickname = useNickname(communityId, me.id);
+  if (access?.has("changeNickname") !== true && nickname === undefined) {
+    return null;
+  }
+  return (
+    <div className={planeClass}>
+      <NicknameForm communityId={communityId} me={me} />
     </div>
   );
 }

@@ -176,8 +176,9 @@ each subscription's keys beside the session it registered them with.
 
 - `kind`, and what it needs:
   - `message` (`channel`, `message`): a message the person should be told of. The app fetches
-    it (`GET /api/v1/messages/{message}?include=authors,channels,mentions`) and shows who wrote it,
-    where, and what it says, grouped by channel.
+    it (`GET /api/v1/messages/{message}?include=authors,channels,mentions,memberships`) and shows
+    who wrote it (by the nickname their membership carries, in a community), where, and what it
+    says, grouped by channel.
   - `read` (`channel`, `message`): the person read the channel up to `message` on another
     device; the app removes that channel's notifications up to it. It shows nothing.
   - `deleted` (`channel`, `message`): the message is gone; the app removes its notification. It
@@ -242,9 +243,10 @@ on Android in the app's private storage.
 For a push, the notification code:
 
 1. finds the account whose `subscription` is the push's `s`, and decrypts `c` with its keys;
-2. for `message`, fetches `GET {origin}/api/v1/messages/{message}?include=authors,channels,mentions`
-   with `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and
-   `refreshToken`, and keeps it), and shows who wrote it, where, and what it says (tags as
+2. for `message`, fetches
+   `GET {origin}/api/v1/messages/{message}?include=authors,channels,mentions,memberships` with
+   `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and
+   `refreshToken`, and keeps it), and shows who wrote it (by their nickname in a community), where, and what it says (tags as
    names), grouped by channel, with the message id as the notification's identifier;
 3. for `read`, removes that channel's notifications up to `message`; for `deleted`, that one;
    either shows nothing;

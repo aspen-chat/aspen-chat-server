@@ -18,6 +18,7 @@ import {
   useRoles,
   useStore,
   useUsers,
+  useNicknames,
 } from "@/api/hooks";
 import { useForeignDeployments } from "@/api/deploymentsContext";
 import { Avatar } from "@/features/communities/Avatar";
@@ -91,6 +92,7 @@ export function useCommandLine({
   const parent = useChannel(channel?.parentChannel ?? "");
   const home = channel?.parentChannel != null ? parent : channel;
   const communityId = home?.community ?? "";
+  const nicknames = useNicknames(home?.community);
   const commandsNeeded = draft.startsWith("/");
   const lists = useCommands(commandsNeeded ? channelId : null);
   const offered = offeredCommands(lists ?? []);
@@ -190,13 +192,14 @@ export function useCommandLine({
                   ...sample.filter((u) => !search.members.some((f) => f.id === u.id)),
                 ];
           for (const user of people) {
+            const called = nicknames.get(user.id) ?? displayNameOf(user);
             offer(
               user.id,
               "userId",
               `@${user.name}`,
-              displayNameOf(user),
+              called,
               handleOf(user),
-              <Avatar name={displayNameOf(user)} iconId={user.icon} size="sm" />,
+              <Avatar name={called} iconId={user.icon} size="sm" />,
             );
           }
           break;

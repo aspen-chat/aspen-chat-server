@@ -81,3 +81,4 @@ pub mod m20261004_001047_attachment_uploader;
 pub mod m20261004_044609_dual_invites;
 pub mod m20261004_062257_role_colors;
 pub mod m20261004_070339_deployment_settings;
+pub mod m20261004_100025_nicknames;

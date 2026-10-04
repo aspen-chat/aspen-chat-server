@@ -88,7 +88,7 @@ public final class PushHandler {
     private void show(String subscription, JSONObject account, String channel, String messageId)
         throws IOException, JSONException {
         String origin = account.getString("origin");
-        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + "?include=authors,channels,mentions");
+        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + "?include=authors,channels,mentions,memberships");
         if (read == null) {
             return;
         }
@@ -96,7 +96,6 @@ public final class PushHandler {
         JSONObject included = read.optJSONObject("included");
         JSONObject author = find(included, "users", message.getString("author"));
         JSONObject posted = find(included, "channels", message.getString("channelId"));
-        String name = nameOf(author);
         String where = null;
         String community = null;
         String parentChannel = null;
@@ -108,6 +107,8 @@ public final class PushHandler {
                 where = "#" + posted.optString("name");
             }
         }
+        String nickname = nicknameOf(included, community, message.getString("author"));
+        String name = nickname != null ? nickname : nameOf(author);
         String text = readable(message.optString("content"), included);
         if (text.isEmpty()) {
             text = context.getString(R.string.aspen_push_new_message);
@@ -184,6 +185,28 @@ public final class PushHandler {
         }
         String display = user.isNull("displayName") ? "" : user.optString("displayName");
         return display.isEmpty() ? user.optString("name") : display;
+    }
+
+    /** The nickname {@code user} goes by in {@code community}, from the read's memberships, if any. */
+    private static String nicknameOf(JSONObject included, String community, String user) {
+        if (included == null || community == null) {
+            return null;
+        }
+        JSONArray memberships = included.optJSONArray("userCommunities");
+        if (memberships == null) {
+            return null;
+        }
+        for (int i = 0; i < memberships.length(); i++) {
+            JSONObject membership = memberships.optJSONObject(i);
+            if (membership != null
+                && community.equals(membership.optString("community"))
+                && user.equals(membership.optString("user"))
+                && !membership.isNull("nickname")
+                && !membership.optString("nickname").isEmpty()) {
+                return membership.optString("nickname");
+            }
+        }
+        return null;
     }
 
     private static String tagOf(String channel, String message) {

@@ -24,6 +24,7 @@ import {
   useDeploymentCan,
   useMe,
   useMemberRoles,
+  useNickname,
   useRoles,
   useSync,
   useUser,
@@ -48,13 +49,17 @@ import { useDomain, channelLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { ReportModal } from "@/features/reports/ReportDialog";
+import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/features/users/Nickname";
+import { useNameIn } from "@/features/users/nameIn";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
  * bio, with ways to message, block, and report them when they are someone else. Opens from any
  * control that names the user, such as a message author or a member row. Opened within a
- * community it shows the roles they hold there, with a way to give them another for those who
- * may. Inside the reader's one-to-one DM with them it offers no way to message them, which is
+ * community it calls them by their nickname there, if they chose one, with their display name
+ * beneath; shows the roles they hold there, with a way to give them another for those who may;
+ * lets the reader choose their own nickname on their own card; and offers clearing someone
+ * else's nickname to those who may, and reporting it to anyone. Inside the reader's one-to-one DM with them it offers no way to message them, which is
  * where the reader already is. A block takes away messaging and calling, except for a holder of
  * Message any user, who reaches anyone. The system account's card offers none of these: it
  * sends notices, and is not messaged, called, blocked, or reported.
@@ -68,8 +73,10 @@ export function ProfileCard({ user }: { user: User }) {
   const open = useChannel(channelId ?? "");
   const inTheirDm = open?.ty === "dm" && open.recipients.includes(user.id);
   const messagesAnyone = useDeploymentCan("messageAnyUser");
-  const name = displayNameOf(user);
+  const nickname = useNickname(communityId, user.id);
+  const name = nickname ?? displayNameOf(user);
   const nameColor = useNameColor(user.id, communityId);
+  const [nicknameError, setNicknameError] = useState<string | null>(null);
   return (
     <div className="flex w-72 flex-col gap-2 p-2">
       <div className={planeClass}>
@@ -83,6 +90,9 @@ export function ProfileCard({ user }: { user: User }) {
               {user.bot && <BotBadge />}
               {user.system && <SystemBadge />}
             </div>
+            {nickname !== undefined && (
+              <div className="truncate text-sm">{displayNameOf(user)}</div>
+            )}
             <div className="truncate text-sm text-ink-muted">
               {handleOf(user)}
               {user.pronouns != null && <span> · {user.pronouns}</span>}
@@ -113,6 +123,11 @@ export function ProfileCard({ user }: { user: User }) {
       {communityId !== undefined && (
         <CommunityRoles communityId={communityId} userId={user.id} name={name} />
       )}
+      {communityId !== undefined && me !== null && me.id === user.id && (
+        <section className={planeClass}>
+          <NicknameForm communityId={communityId} me={me} />
+        </section>
+      )}
       {me !== null && me.id !== user.id && !user.system && (
         <>
           {(!blocked || messagesAnyone) && (!inTheirDm || !user.bot) && (
@@ -122,7 +137,23 @@ export function ProfileCard({ user }: { user: User }) {
             </div>
           )}
           <BlockControl userId={user.id} name={name} blocked={blocked} />
-          <ReportProfileButton userId={user.id} name={name} />
+          <ReportProfileButton userId={user.id} name={displayNameOf(user)} />
+          {communityId !== undefined && (
+            <>
+              <ReportNicknameButton communityId={communityId} userId={user.id} />
+              <ClearNicknameButton
+                communityId={communityId}
+                userId={user.id}
+                name={name}
+                onError={setNicknameError}
+              />
+              {nicknameError !== null && (
+                <p role="alert" className="text-xs text-danger">
+                  {nicknameError}
+                </p>
+              )}
+            </>
+          )}
         </>
       )}
       {wizard && (
@@ -499,6 +530,8 @@ export function ProfilePopover({
   anchorRef?: RefObject<HTMLElement | null>;
 }) {
   const m = useMessages();
+  const { communityId } = useParams({ strict: false });
+  const name = useNameIn(user, communityId) ?? displayNameOf(user);
   return (
     <DialogTrigger>
       {children}
@@ -507,10 +540,7 @@ export function ProfilePopover({
         {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
         className="rounded-lg border border-line bg-surface shadow-lg"
       >
-        <Dialog
-          aria-label={format(m.profile.cardLabel, { name: displayNameOf(user) })}
-          className="outline-none"
-        >
+        <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
           <ProfileCard user={user} />
         </Dialog>
       </Popover>

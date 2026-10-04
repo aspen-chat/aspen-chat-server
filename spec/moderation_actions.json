@@ -19,6 +19,7 @@
         "liftUserBan",
         "warnUser",
         "resetProfile",
+        "clearNickname",
         "readReportContext"
     ]
 }

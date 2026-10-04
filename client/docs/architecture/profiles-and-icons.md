@@ -17,3 +17,16 @@
   (`useAssignableRoles`, which the members panel's role picker shares). Someone else's card
   offers Message and Call, which a block takes away except Message for a holder of Message any
   user, Block, and Report profile (see Reports).
+- Nicknames are a member's name in one community (`nickname` on their `userCommunity`), which
+  the store keeps per community and member (`RecordStore.nickname`, `nicknames`, topic
+  `nicknames:<communityId>`) from every membership a read or event carries, an update's field
+  applied as a merge patch. Within a community a member is called by it in place of their
+  display name: `PersonName` with `community`, `useNameIn` (`src/features/users/nameIn.ts`) for
+  one person and `useNicknames` for many, in message headers, tags and their completion, the
+  member list (sorted by it), calls, reactions, polls, embeds, the members panel, and
+  notifications. The card opened in a community shows the nickname with the display name
+  beneath; on the reader's own card, and in community settings' Overview, `NicknameForm`
+  (`src/features/users/Nickname.tsx`) sets theirs with Change nickname
+  (`AspenSync.setNickname`) and clears it with nothing; on anyone else's, and in the members
+  panel, `ClearNicknameButton` clears it for holders of Manage nicknames over someone ranked
+  below them, never the owner (`useMayClearNickname`, `AspenSync.clearNickname`).

@@ -57,6 +57,8 @@ bitflags::bitflags! {
         const ADD_BOTS = 1 << 11;
         const MANAGE_CUSTOM_EMOJI = 1 << 12;
         const BAN_MEMBERS = 1 << 13;
+        const CHANGE_NICKNAME = 1 << 14;
+        const MANAGE_NICKNAMES = 1 << 15;
 
         // In a channel, and adjustable per channel and category.
         const VIEW_CHANNEL = 1 << 16;
@@ -81,16 +83,18 @@ app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
     /// Every permission that holds across the community.
-    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 14) - 1);
+    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 16) - 1);
     /// Every permission an override may adjust.
     pub const CHANNEL: Self = Self::from_bits_retain(((1 << 31) - 1) & !((1 << 16) - 1));
 
-    /// The everyone role of a new community: taking part, tagging one another, and inviting
-    /// others. Tagging roles and everyone at once is left to moderators.
+    /// The everyone role of a new community: taking part, tagging one another, inviting
+    /// others, and choosing a nickname. Tagging roles and everyone at once is left to
+    /// moderators.
     pub const MEMBER_TEMPLATE: Self = Self::CHANNEL
         .difference(Self::MENTION_ROLES)
         .difference(Self::MENTION_EVERYONE)
-        .union(Self::CREATE_INVITES);
+        .union(Self::CREATE_INVITES)
+        .union(Self::CHANGE_NICKNAME);
     /// A new community's Moderator role.
     pub const MODERATOR_TEMPLATE: Self = Self::MEMBER_TEMPLATE
         .union(Self::MENTION_ROLES)
@@ -102,7 +106,8 @@ impl Permissions {
         .union(Self::MANAGE_CALLS)
         .union(Self::ADD_BOTS)
         .union(Self::MANAGE_CUSTOM_EMOJI)
-        .union(Self::BAN_MEMBERS);
+        .union(Self::BAN_MEMBERS)
+        .union(Self::MANAGE_NICKNAMES);
     /// A new community's Admin role: everything but what only the owner may do.
     pub const ADMIN_TEMPLATE: Self = Self::all();
 
@@ -143,6 +148,8 @@ pub enum Permission {
     AddBots,
     ManageCustomEmoji,
     BanMembers,
+    ChangeNickname,
+    ManageNicknames,
     ViewChannel,
     SendMessages,
     AttachFiles,
@@ -179,6 +186,8 @@ impl Permission {
             Permission::AddBots => Permissions::ADD_BOTS,
             Permission::ManageCustomEmoji => Permissions::MANAGE_CUSTOM_EMOJI,
             Permission::BanMembers => Permissions::BAN_MEMBERS,
+            Permission::ChangeNickname => Permissions::CHANGE_NICKNAME,
+            Permission::ManageNicknames => Permissions::MANAGE_NICKNAMES,
             Permission::ViewChannel => Permissions::VIEW_CHANNEL,
             Permission::SendMessages => Permissions::SEND_MESSAGES,
             Permission::AttachFiles => Permissions::ATTACH_FILES,
@@ -255,12 +264,13 @@ pub const OWNER_RANK: i32 = i32::MAX;
 pub const MODERATOR_RANK: i32 = i32::MAX - 1;
 
 /// What Moderate any community gives in every community: seeing everything, and the powers
-/// that take things away (deleting messages, attachments, reactions, and write-ins, and removing
-/// members). Renaming and deleting channels and communities are checked by name where they are
+/// that take things away (deleting messages, attachments, reactions, and write-ins, removing
+/// members, and clearing nicknames). Renaming and deleting channels and communities are checked by name where they are
 /// done.
 pub const MODERATION: Permissions = Permissions::VIEW_CHANNEL
     .union(Permissions::MANAGE_MESSAGES)
-    .union(Permissions::REMOVE_MEMBERS);
+    .union(Permissions::REMOVE_MEMBERS)
+    .union(Permissions::MANAGE_NICKNAMES);
 
 impl CommunityAccess {
     /// Resolves a member's permissions from the roles they hold.
@@ -396,37 +406,44 @@ pub fn missing(permission: Permissions) -> app::Error {
     app::Error::Forbidden(t!("permissionMissing", permission = describe(permission)))
 }
 
-/// A permission's name, as the error for lacking it says it.
+/// A permission's name, as the error for lacking it says it: one permission's own name, or the
+/// owner's for anything more.
 pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
-    let key = match permission {
-        Permissions::MANAGE_COMMUNITY => "permissionManageCommunity",
-        Permissions::MANAGE_CHANNELS => "permissionManageChannels",
-        Permissions::MANAGE_CATEGORIES => "permissionManageCategories",
-        Permissions::CREATE_INVITES => "permissionCreateInvites",
-        Permissions::MANAGE_INVITES => "permissionManageInvites",
-        Permissions::MANAGE_ROLES => "permissionManageRoles",
-        Permissions::ASSIGN_ROLES => "permissionAssignRoles",
-        Permissions::REMOVE_MEMBERS => "permissionRemoveMembers",
-        Permissions::MANAGE_MESSAGES => "permissionManageMessages",
-        Permissions::PIN_MESSAGES => "permissionPinMessages",
-        Permissions::MANAGE_CALLS => "permissionManageCalls",
-        Permissions::ADD_BOTS => "permissionAddBots",
-        Permissions::VIEW_CHANNEL => "permissionViewChannel",
-        Permissions::SEND_MESSAGES => "permissionSendMessages",
-        Permissions::ATTACH_FILES => "permissionAttachFiles",
-        Permissions::ADD_REACTIONS => "permissionAddReactions",
-        Permissions::START_THREADS => "permissionStartThreads",
-        Permissions::SEND_IN_THREADS => "permissionSendInThreads",
-        Permissions::CREATE_POLLS => "permissionCreatePolls",
-        Permissions::JOIN_VOICE => "permissionJoinVoice",
-        Permissions::SPEAK => "permissionSpeak",
-        Permissions::SHARE_SCREEN => "permissionShareScreen",
-        Permissions::MENTION_MEMBERS => "permissionMentionMembers",
-        Permissions::MENTION_ROLES => "permissionMentionRoles",
-        Permissions::MENTION_EVERYONE => "permissionMentionEveryone",
-        Permissions::TRANSFER_FILES => "permissionTransferFiles",
-        Permissions::USE_CAMERA => "permissionUseCamera",
-        _ => "permissionOwner",
+    let key = match Permission::ALL.iter().find(|p| p.bits() == permission) {
+        Some(named) => match named {
+            Permission::ManageCommunity => "permissionManageCommunity",
+            Permission::ManageChannels => "permissionManageChannels",
+            Permission::ManageCategories => "permissionManageCategories",
+            Permission::CreateInvites => "permissionCreateInvites",
+            Permission::ManageInvites => "permissionManageInvites",
+            Permission::ManageRoles => "permissionManageRoles",
+            Permission::AssignRoles => "permissionAssignRoles",
+            Permission::RemoveMembers => "permissionRemoveMembers",
+            Permission::ManageMessages => "permissionManageMessages",
+            Permission::PinMessages => "permissionPinMessages",
+            Permission::ManageCalls => "permissionManageCalls",
+            Permission::AddBots => "permissionAddBots",
+            Permission::ManageCustomEmoji => "permissionManageCustomEmoji",
+            Permission::BanMembers => "permissionBanMembers",
+            Permission::ChangeNickname => "permissionChangeNickname",
+            Permission::ManageNicknames => "permissionManageNicknames",
+            Permission::ViewChannel => "permissionViewChannel",
+            Permission::SendMessages => "permissionSendMessages",
+            Permission::AttachFiles => "permissionAttachFiles",
+            Permission::AddReactions => "permissionAddReactions",
+            Permission::StartThreads => "permissionStartThreads",
+            Permission::SendInThreads => "permissionSendInThreads",
+            Permission::CreatePolls => "permissionCreatePolls",
+            Permission::JoinVoice => "permissionJoinVoice",
+            Permission::Speak => "permissionSpeak",
+            Permission::ShareScreen => "permissionShareScreen",
+            Permission::MentionMembers => "permissionMentionMembers",
+            Permission::MentionRoles => "permissionMentionRoles",
+            Permission::MentionEveryone => "permissionMentionEveryone",
+            Permission::TransferFiles => "permissionTransferFiles",
+            Permission::UseCamera => "permissionUseCamera",
+        },
+        None => "permissionOwner",
     };
     t!(key)
 }
@@ -971,9 +988,9 @@ mod tests {
 
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
-        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 1_744_764_936);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_434_392);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_434_495);
+        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 1_744_781_320);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_483_544);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_483_647);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

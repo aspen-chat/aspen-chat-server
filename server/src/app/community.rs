@@ -44,6 +44,7 @@ pub struct CommunityUser {
     pub user: UserId,
     pub community: CommunityId,
     pub sort_index: i32,
+    pub nickname: Option<String>,
 }
 
 impl Loadable for Community {
@@ -328,6 +329,7 @@ pub(crate) async fn add_member(
             user,
             community,
             sort_index,
+            nickname: None,
         })
         .execute(conn)
         .await?;
@@ -353,6 +355,7 @@ pub(crate) async fn add_member(
         user,
         sort_index: Some(sort_index),
         roles: roles.to_vec(),
+        nickname: None,
     };
     let event = ServerEvent::UserCommunity(UserCommunityEvent::Create(membership.clone()));
     app::publish_event(
@@ -390,43 +393,90 @@ pub(crate) async fn read_membership(
         user: row.user,
         sort_index: Some(row.sort_index),
         roles,
+        nickname: row.nickname,
     })
 }
 
-/// Moves a community within `user`'s own list. Returns the membership as the event carried it.
-pub(crate) async fn reorder_membership(
+/// Checks a nickname, which must be non-blank and no longer than a display name when set, and
+/// trims it; `None` clears it.
+fn checked_nickname(nickname: Option<String>) -> app::Result<Option<String>> {
+    let Some(nickname) = nickname else {
+        return Ok(None);
+    };
+    let nickname = nickname.trim();
+    if nickname.is_empty() || nickname.chars().count() > app::user::DISPLAY_NAME_MAX_CHARS {
+        return Err(app::Error::Validation(t!(
+            "nicknameLength",
+            max = app::user::DISPLAY_NAME_MAX_CHARS
+        )));
+    }
+    Ok(Some(nickname.to_string()))
+}
+
+/// Changes `user`'s own membership: where the community sits in their list, and their nickname
+/// there, which takes Change nickname to set but nothing to clear. Absent fields are unchanged.
+/// Announces what changed, the list position to them alone, and returns the membership.
+pub(crate) async fn update_membership(
     state: &GlobalServerContext,
     user: UserId,
     community: CommunityId,
-    sort_index: i32,
+    sort_index: Option<i32>,
+    nickname: Option<Option<String>>,
 ) -> app::error::Result<message_enum::UserCommunity> {
+    let nickname = nickname.map(checked_nickname).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let updated = diesel::update(community_user::table)
+            let row: CommunityUser = community_user::table
+                .select(CommunityUser::as_select())
                 .filter(
                     community_user::community
                         .eq(community)
                         .and(community_user::user.eq(user)),
                 )
-                .set(community_user::sort_index.eq(sort_index))
-                .execute(conn)
+                .for_update()
+                .first(conn.as_mut())
                 .await?;
-            if updated == 0 {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            if let Some(Some(_)) = &nickname {
+                require_member(conn.as_mut(), user, community)
+                    .await?
+                    .require(Permissions::CHANGE_NICKNAME)?;
             }
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Membership { community, user },
-                &ServerEvent::UserCommunity(UserCommunityEvent::Update {
-                    community,
-                    user,
-                    sort_index: Some(Some(sort_index)),
-                    roles: None,
-                }),
-            )
-            .await?;
+            let sort_index = sort_index.filter(|index| *index != row.sort_index);
+            let nickname = nickname.filter(|nickname| *nickname != row.nickname);
+            if sort_index.is_some() || nickname.is_some() {
+                #[derive(AsChangeset)]
+                #[diesel(table_name = community_user)]
+                struct Change {
+                    sort_index: Option<i32>,
+                    nickname: Option<Option<String>>,
+                }
+                diesel::update(community_user::table)
+                    .filter(
+                        community_user::community
+                            .eq(community)
+                            .and(community_user::user.eq(user)),
+                    )
+                    .set(Change {
+                        sort_index,
+                        nickname: nickname.clone(),
+                    })
+                    .execute(conn.as_mut())
+                    .await?;
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::Membership { community, user },
+                    &ServerEvent::UserCommunity(UserCommunityEvent::Update {
+                        community,
+                        user,
+                        sort_index: sort_index.map(Some),
+                        roles: None,
+                        nickname: nickname.clone(),
+                    }),
+                )
+                .await?;
+            }
             let roles = app::role::roles_of_members(conn.as_mut(), &[(community, user)])
                 .await?
                 .remove(&(community, user))
@@ -434,13 +484,53 @@ pub(crate) async fn reorder_membership(
             Ok(message_enum::UserCommunity {
                 community,
                 user,
-                sort_index: Some(sort_index),
+                sort_index: Some(sort_index.unwrap_or(row.sort_index)),
                 roles,
+                nickname: nickname.unwrap_or(row.nickname),
             })
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Clears `member`'s nickname in `community`, if they have one, and announces it, inside the
+/// caller's transaction, with no checks. Returns whether there was one to clear.
+pub(crate) async fn erase_nickname(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    member: UserId,
+) -> app::Result<bool> {
+    let cleared = diesel::update(community_user::table)
+        .filter(
+            community_user::community
+                .eq(community)
+                .and(community_user::user.eq(member))
+                .and(community_user::nickname.is_not_null()),
+        )
+        .set(community_user::nickname.eq(None::<String>))
+        .execute(conn)
+        .await?;
+    if cleared > 0 {
+        publish_event(
+            state,
+            conn,
+            EventScope::Membership {
+                community,
+                user: member,
+            },
+            &ServerEvent::UserCommunity(UserCommunityEvent::Update {
+                community,
+                user: member,
+                sort_index: None,
+                roles: None,
+                nickname: Some(None),
+            }),
+        )
+        .await?;
+    }
+    Ok(cleared > 0)
 }
 
 /// Takes the caller out of a community. Its owner cannot leave; they must hand it on first.
@@ -508,6 +598,8 @@ pub struct CommunityMember {
     pub community: CommunityId,
     #[diesel(sql_type = diesel::sql_types::Integer)]
     pub sort_index: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub nickname: Option<String>,
     #[diesel(embed)]
     pub user: app::user::UserPg,
 }
@@ -521,6 +613,8 @@ pub struct Membership {
     pub sort_index: Option<i32>,
     /// The roles they hold there besides everyone's, lowest first.
     pub roles: Vec<RoleId>,
+    /// Their name in the community, shown there in place of their display name.
+    pub nickname: Option<String>,
 }
 
 /// The member sample of each of `communities`, at most [`MEMBERS_PER_COMMUNITY`] per community,
@@ -557,11 +651,11 @@ pub(crate) async fn read_community_members(
     // since it orders no one else.
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
-        SELECT community, sort_index, id, name, password_hash, icon, created_at, last_seen_at,
+        SELECT community, sort_index, nickname, id, name, password_hash, icon, created_at, last_seen_at,
                deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
                bot_owner, bot_public, home_domain, home_id, home_icon, name_hue
         FROM (
-            SELECT cu.community, cu.sort_index, u.*,
+            SELECT cu.community, cu.sort_index, cu.nickname, u.*,
                    ROW_NUMBER() OVER (
                        PARTITION BY cu.community
                        ORDER BY connected.id IS NOT NULL DESC,
@@ -603,10 +697,12 @@ async fn memberships_of(
 ) -> app::Result<Vec<Membership>> {
     let mut communities = Vec::with_capacity(rows.len());
     let mut sort_indexes = Vec::with_capacity(rows.len());
+    let mut nicknames = Vec::with_capacity(rows.len());
     let mut users = Vec::with_capacity(rows.len());
     for row in rows {
         communities.push(row.community);
         sort_indexes.push(row.sort_index);
+        nicknames.push(row.nickname);
         users.push(row.user);
     }
     let keys: Vec<(CommunityId, UserId)> = communities
@@ -619,9 +715,11 @@ async fn memberships_of(
     Ok(communities
         .into_iter()
         .zip(sort_indexes)
+        .zip(nicknames)
         .zip(users)
-        .map(|((community, sort_index), user)| Membership {
+        .map(|(((community, sort_index), nickname), user)| Membership {
             community,
+            nickname,
             roles: roles
                 .remove(&(community, user.user_pg.id))
                 .unwrap_or_default(),
@@ -636,8 +734,8 @@ pub const MAX_MEMBER_PAGE: i64 = 50;
 /// The furthest into a member search a page may start.
 pub const MAX_MEMBER_OFFSET: i64 = 10_000;
 
-/// One page of `community`'s members whose username or display name contains `search`, by name:
-/// `limit` of them from `offset`.
+/// One page of `community`'s members whose username, display name, or nickname there contains
+/// `search`, by the name the community shows: `limit` of them from `offset`.
 ///
 /// In a community no bigger than the member sample (`MEMBERS_PER_COMMUNITY`), which every
 /// member already reads whole, anyone in it may search. In a larger one only those who act on
@@ -678,15 +776,16 @@ pub(crate) async fn search_community_members(
     }
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
-        SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
+        SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
                u.home_id, u.home_icon, u.name_hue
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
-          AND ($2::text IS NULL OR lower(u.name) LIKE $2 OR lower(u.display_name) LIKE $2)
-        ORDER BY lower(COALESCE(u.display_name, u.name)), u.id
+          AND ($2::text IS NULL OR lower(u.name) LIKE $2 OR lower(u.display_name) LIKE $2
+               OR lower(cu.nickname) LIKE $2)
+        ORDER BY lower(COALESCE(cu.nickname, u.display_name, u.name)), u.id
         OFFSET $3 LIMIT $4
         "#,
     )
@@ -734,7 +833,7 @@ pub(crate) async fn read_authors_memberships(
     let mut conn = state.connection_pool.get().await?;
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
-        SELECT DISTINCT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon,
+        SELECT DISTINCT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon,
                u.created_at, u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio,
                u.status_text, u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public,
                u.home_domain, u.home_id, u.home_icon, u.name_hue
@@ -766,7 +865,7 @@ pub(crate) async fn read_community_member(
     require_member(conn.as_mut(), caller, community).await?;
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
-        SELECT cu.community, cu.sort_index, u.id, u.name, u.password_hash, u.icon, u.created_at,
+        SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
                u.home_id, u.home_icon, u.name_hue

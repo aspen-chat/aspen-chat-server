@@ -609,6 +609,28 @@ export function useMemberRoles(communityId: string, userId: string): readonly st
   return useTopic(`roles:${communityId}`, (s) => s.memberRoles(communityId, userId));
 }
 
+const NO_NICKNAMES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The nickname a member chose in a community, which it shows in place of their display name;
+ * `undefined` when they chose none, outside a community, or while unknown.
+ */
+export function useNickname(
+  communityId: string | null | undefined,
+  userId: string | undefined,
+): string | undefined {
+  return useTopic(`nicknames:${communityId ?? ""}`, (s) =>
+    communityId == null || userId === undefined ? undefined : s.nickname(communityId, userId),
+  );
+}
+
+/** Every known nickname in a community, `user -> nickname`, for naming many members at once. */
+export function useNicknames(communityId: string | null | undefined): ReadonlyMap<string, string> {
+  return useTopic(`nicknames:${communityId ?? ""}`, (s) =>
+    communityId == null ? NO_NICKNAMES : s.nicknames(communityId),
+  );
+}
+
 /** A community's roles, lowest first, and what each member holds besides everyone's. */
 export interface RolesOfMembers {
   roles: readonly Role[];

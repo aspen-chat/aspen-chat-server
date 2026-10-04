@@ -1,6 +1,6 @@
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiResult, Problem};
-use crate::api::extract::{Created, Json, NoContent, Path, Query};
+use crate::api::extract::{Created, Json, NoContent, Path, Query, double_option};
 use crate::api::include::{IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::api::message_enum::request::{
     CommunityCreateRequest, CommunityUpdateRequest, UserCommunityCreateRequest,
@@ -36,6 +36,7 @@ impl From<&app::community::Membership> for UserCommunity {
             user: membership.user.user_pg.id,
             sort_index: membership.sort_index,
             roles: membership.roles.clone(),
+            nickname: membership.nickname.clone(),
         }
     }
 }
@@ -570,12 +571,18 @@ pub async fn join_community(
     }
 }
 
-/// Moves the community within the calling user's own list. Other members' lists are unaffected.
+/// Changes the calling user's own membership. Absent fields are unchanged.
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MembershipUpdateRequest {
-    /// The community's new position in the caller's list; lower comes first.
-    pub sort_index: i32,
+    /// The community's new position in the caller's list; lower comes first. Other members'
+    /// lists are unaffected.
+    #[serde(default)]
+    pub sort_index: Option<i32>,
+    /// The caller's name in this community, shown there in place of their display name; `null`
+    /// clears it. Setting one takes Change nickname; clearing it takes nothing.
+    #[serde(default, deserialize_with = "double_option")]
+    pub nickname: Option<Option<String>>,
 }
 
 #[utoipa::path(
@@ -586,8 +593,9 @@ pub struct MembershipUpdateRequest {
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = UserCommunity),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation` (a nickname blank or too long)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: setting a nickname takes Change nickname", body = Problem),
         (status = NOT_FOUND, description = "Not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -598,9 +606,43 @@ pub async fn update_membership(
     Path(community): Path<CommunityId>,
     Json(request): Json<MembershipUpdateRequest>,
 ) -> ApiResult<Json<UserCommunity>> {
-    let membership =
-        app::community::reorder_membership(&state, user.id, community, request.sort_index).await?;
+    let membership = app::community::update_membership(
+        &state,
+        user.id,
+        community,
+        request.sort_index,
+        request.nickname,
+    )
+    .await?;
     Ok(Json(membership))
+}
+
+/// Clears a member's nickname in the community. Anyone may clear their own (`@me`); clearing
+/// someone else's takes Manage nicknames, and they must rank below the caller's highest role, so
+/// the owner's is theirs alone. Clearing a nickname that is not there still yields `204`.
+#[utoipa::path(
+    delete,
+    path = "/communities/{community}/members/{user}/nickname",
+    tag = TAG_COMMUNITIES,
+    params(("community" = CommunityId, Path), ("user" = inline(UserRef), Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: Manage nicknames is missing, or they do not rank below the caller", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or either person is not a member", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn clear_nickname(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path((community, member)): Path<(CommunityId, UserRef)>,
+) -> ApiResult<NoContent> {
+    let member = member.resolve(&session);
+    app::role::clear_nickname(&state, session.user.id, community, member).await?;
+    Ok(NoContent)
 }
 
 /// Removes the calling user from the community. Leaving a community the user is not a member of

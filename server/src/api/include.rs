@@ -329,6 +329,7 @@ mod tests {
                 user,
                 sort_index: Some(0),
                 roles: Vec::new(),
+                nickname: None,
             }]),
             ..Included::default()
         };
@@ -338,7 +339,7 @@ mod tests {
                 "data": {"id": 1},
                 "included": {
                     "users": [],
-                    "userCommunities": [{"community": community.0, "user": user.0, "sortIndex": 0, "roles": []}],
+                    "userCommunities": [{"community": community.0, "user": user.0, "sortIndex": 0, "roles": [], "nickname": null}],
                 },
             })
         );

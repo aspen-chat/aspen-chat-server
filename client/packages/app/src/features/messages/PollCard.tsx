@@ -21,6 +21,8 @@ import {
   useStore,
   useSync,
   useChannelCan,
+  useChannel,
+  useNicknames,
 } from "@/api/hooks";
 import { inputClass } from "@/features/auth/styles";
 import {
@@ -166,9 +168,10 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
   const { index, option } = choice;
   const mine = myVotes.has(index);
   const voters = poll.results[index]?.voters ?? null;
+  const nicknames = useNicknames(useChannel(poll.channelId)?.community);
   const nameOf = (id: string) => {
     const user = store.user(id);
-    return user === undefined ? m.unknownUser : displayNameOf(user);
+    return user === undefined ? m.unknownUser : (nicknames.get(id) ?? displayNameOf(user));
   };
   const names = voters === null ? null : voters.map(nameOf).join(", ");
   const note = !choice.writeIn

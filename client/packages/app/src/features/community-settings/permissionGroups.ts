@@ -17,11 +17,18 @@ export const PERMISSION_GROUPS = [
       "removeMembers",
       "banMembers",
       "addBots",
+      "changeNickname",
     ],
   },
   {
     key: "moderation",
-    permissions: ["manageMessages", "pinMessages", "manageCalls", "manageCustomEmoji"],
+    permissions: [
+      "manageMessages",
+      "pinMessages",
+      "manageCalls",
+      "manageCustomEmoji",
+      "manageNicknames",
+    ],
   },
   {
     key: "text",

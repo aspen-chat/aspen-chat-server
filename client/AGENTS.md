@@ -71,12 +71,12 @@ commit, as with comments.
 - [`polls.md`](docs/architecture/polls.md): poll records, votes, closing, and write-ins.
 - [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, and Settings.
 - [`presence.md`](docs/architecture/presence.md): polling statuses and reporting activity.
-- [`profiles-and-icons.md`](docs/architecture/profiles-and-icons.md): icon upload and cropping, profile fields, and the profile card.
+- [`profiles-and-icons.md`](docs/architecture/profiles-and-icons.md): icon upload and cropping, profile fields, the profile card, and nicknames.
 - [`push.md`](docs/architecture/push.md): waking phones: the app's subscriptions, Android's handler, and iOS's notification service extension.
 - [`qr-codes.md`](docs/architecture/qr-codes.md): drawing codes with the line mark, saving them, invites' codes, the addresses links name, and the phone's scanner.
 - [`rail-and-channel-list.md`](docs/architecture/rail-and-channel-list.md): drag-and-drop reordering, folders on the rail, and folded categories.
 - [`reactions.md`](docs/architecture/reactions.md): reaction summaries, chips, and the reactions dialog.
-- [`reports.md`](docs/architecture/reports.md): reporting messages and profiles, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
+- [`reports.md`](docs/architecture/reports.md): reporting messages, profiles, and nicknames, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.

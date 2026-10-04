@@ -11,7 +11,7 @@ import {
 } from "@aspen/protocol";
 import { useCallback, useEffect, useState } from "react";
 import { Button, ToggleButton, ToggleButtonGroup } from "react-aria-components";
-import { useReportsChanges, useSync } from "@/api/hooks";
+import { useNickname, useReportsChanges, useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { ResolveDialog } from "@/features/admin/ResolveDialog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
@@ -219,7 +219,11 @@ function CaseCard({
     >
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="rounded border border-line px-1.5 text-xs text-ink-muted">
-          {c.kind === "message" ? m.reports.kindMessage : m.reports.kindProfile}
+          {c.kind === "message"
+            ? m.reports.kindMessage
+            : c.kind === "nickname"
+              ? m.reports.kindNickname
+              : m.reports.kindProfile}
         </span>
         <h3 id={`case-${c.id}`} className="flex min-w-0 items-center gap-1.5 text-sm">
           <Person user={subject} />
@@ -266,6 +270,8 @@ function CaseCard({
             )}
           </div>
         )
+      ) : c.kind === "nickname" ? (
+        <NicknameCase report={c} named={named} subjectName={subjectName} />
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
           {snapshot !== null && (
@@ -334,6 +340,7 @@ function CaseCard({
               </span>
             )}
             {c.resolution?.deletedMessage === true && <span>{m.reports.didDelete}</span>}
+            {c.resolution?.clearedNickname === true && <span>{m.reports.didClearNickname}</span>}
             {(c.resolution?.reset?.length ?? 0) > 0 && (
               <span>
                 {format(m.reports.didReset, { aspects: aspectList(c.resolution?.reset ?? []) })}
@@ -397,6 +404,70 @@ function CaseCard({
         )}
       </footer>
     </article>
+  );
+}
+
+/**
+ * What a nickname case is about: whose nickname, in which community, as the latest report found
+ * it, and what it is now, which the reviewer reads from the member's record.
+ */
+function NicknameCase({
+  report: c,
+  named,
+  subjectName,
+}: {
+  report: ReportCase;
+  named: Named;
+  subjectName: string;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const community = c.community == null ? undefined : named.communities.get(c.community);
+  const reported = [...c.reports].reverse().find((r) => r.nickname != null)?.nickname ?? null;
+  const now = useNickname(c.community, c.subject);
+  const [read, setRead] = useState(false);
+  useEffect(() => {
+    if (c.community == null || c.status !== "open") {
+      return;
+    }
+    let current = true;
+    // Read only when the reviewer may read the community's members: as a member of it, or as a
+    // moderator of the deployment. Otherwise nothing is said of what it is now.
+    void sync
+      .loadMember(c.community, c.subject)
+      .catch(() => false)
+      .then((found) => {
+        if (current) {
+          setRead(found);
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [sync, c.community, c.subject, c.status]);
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <p className="text-xs text-ink-muted">
+        {format(m.reports.nicknameHeading, {
+          name: subjectName,
+          community: community?.name ?? m.reports.communityGone,
+        })}
+      </p>
+      {reported !== null && (
+        <p className="rounded-md border border-line px-2 py-1 font-medium break-words">
+          {format(m.reports.nicknameReported, { nickname: reported })}
+        </p>
+      )}
+      {c.status === "open" &&
+        read &&
+        (now === undefined ? (
+          <p className="text-xs text-ink-muted">{m.reports.nicknameGone}</p>
+        ) : now !== reported ? (
+          <p className="text-xs text-ink-muted">
+            {format(m.reports.nicknameNow, { nickname: now })}
+          </p>
+        ) : null)}
+    </div>
   );
 }
 

@@ -10,11 +10,13 @@ import {
   SpeakerHighIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
+import { useParams } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
   useSilenced,
+  useChannel,
   useChannelCan,
   useChannelVoice,
   useIdWizard,
@@ -28,6 +30,7 @@ import { primaryButtonClass } from "@/features/auth/styles";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { Avatar } from "@/features/communities/Avatar";
 import { displayNameOf } from "@/features/users/profile";
+import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
 import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
@@ -266,10 +269,12 @@ function screenLabel(
 function FocusedScreen({ screen }: { screen: { user: string | null; track: MediaStreamTrack } }) {
   const m = useMessages();
   const user = useUser(screen.user ?? undefined);
+  const { communityId } = useParams({ strict: false });
+  const name = useNameIn(user, communityId);
   return (
     <ScreenTile
       track={screen.track}
-      label={screenLabel(m, screen.user, user === undefined ? undefined : displayNameOf(user))}
+      label={screenLabel(m, screen.user, name)}
       className="aspect-video max-h-[60vh] w-full"
       expandable
     />
@@ -285,10 +290,12 @@ function ScreenThumbnail({
 }) {
   const m = useMessages();
   const user = useUser(screen.user ?? undefined);
+  const { communityId } = useParams({ strict: false });
+  const name = useNameIn(user, communityId);
   return (
     <ScreenTile
       track={screen.track}
-      label={screenLabel(m, screen.user, user === undefined ? undefined : displayNameOf(user))}
+      label={screenLabel(m, screen.user, name)}
       className={"h-20 w-36 " + (selected ? "ring-2 ring-accent" : "")}
     />
   );
@@ -317,7 +324,7 @@ function ParticipantTile({
   const self = useMe()?.id === userId;
   const mutedForMe = usePreference(userMuted(userId));
   const blocked = useBlocked(userId);
-  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  const name = useNameIn(user, useChannel(channelId)?.community) ?? m.unknownUser;
   const tile = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const avatar =

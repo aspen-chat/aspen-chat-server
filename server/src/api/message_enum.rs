@@ -410,6 +410,12 @@ enum MessageEnumSource {
         // The roles the member holds besides everyone's.
         #[message_gen(server_authoritative = "mutable")]
         roles: Vec<RoleId>,
+        // The member's name in this community, shown there in place of their display name. Set
+        // by `PATCH /communities/{community}/members/@me`, which takes Change nickname, and
+        // cleared by `DELETE /communities/{community}/members/{user}/nickname`, which takes
+        // Manage nicknames for anyone else's.
+        #[message_gen(server_authoritative = "mutable")]
+        nickname: Option<String>,
     },
     // A channel's call while anyone is in it. Created and ended by the voice server's reports,
     // never by a client request; clients join through `POST /channels/{channel}/voice/join`.

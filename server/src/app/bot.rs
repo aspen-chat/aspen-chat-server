@@ -442,16 +442,18 @@ pub async fn add_to_community(
                 if !row.bot_public && row.bot_owner != Some(caller) {
                     return Err(app::Error::Forbidden(t!("botPrivate")));
                 }
-                let member: bool = diesel::select(diesel::dsl::exists(
-                    community_user::table.filter(
+                // Who is already a member, and their nickname there.
+                let member: Option<Option<String>> = community_user::table
+                    .select(community_user::nickname)
+                    .filter(
                         community_user::community
                             .eq(community)
                             .and(community_user::user.eq(bot)),
-                    ),
-                ))
-                .get_result(conn.as_mut())
-                .await?;
-                if member {
+                    )
+                    .first(conn.as_mut())
+                    .await
+                    .optional()?;
+                if let Some(nickname) = member {
                     let roles = app::role::roles_of_members(conn.as_mut(), &[(community, bot)])
                         .await?
                         .remove(&(community, bot))
@@ -462,6 +464,7 @@ pub async fn add_to_community(
                             user: bot,
                             sort_index: None,
                             roles,
+                            nickname,
                         },
                         false,
                     ));

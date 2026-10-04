@@ -45,6 +45,7 @@ import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import { UserMention } from "@/features/messages/Mention";
 import { formatNodes } from "@/i18n/formatNodes";
+import { useNameIn } from "@/features/users/nameIn";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -115,6 +116,7 @@ export const MessageItem = memo(function MessageItem({
   const navigate = useNavigate();
   const message = useMessage(id);
   const author = useUser(message?.author);
+  const authorName = useNameIn(author, home.community);
   const authorLoading = useUserLoading(message?.author);
   const me = useMe();
   const permissions = useChannelAccess(channelId);
@@ -319,11 +321,11 @@ export const MessageItem = memo(function MessageItem({
         // name already offers the card, so a keyboard does not stop on each message twice.
         <ProfilePopover user={author}>
           <Button
-            aria-label={format(m.profile.show, { name: displayNameOf(author) })}
+            aria-label={format(m.profile.show, { name: authorName ?? displayNameOf(author) })}
             excludeFromTabOrder
             className="h-fit shrink-0 rounded-full outline-none pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
           >
-            <Avatar name={displayNameOf(author)} iconId={author.icon} />
+            <Avatar name={authorName ?? displayNameOf(author)} iconId={author.icon} />
           </Button>
         </ProfilePopover>
       )}
@@ -442,6 +444,7 @@ function MessageHeader({
   const timeFormat = useDateFormat(TIME);
   const m = useMessages();
   const nameColor = useNameColor(author?.id, home.community);
+  const name = useNameIn(author, home.community);
   // A thread's messages link to the thread; elsewhere a message links to itself in its history.
   const permalink =
     parentId === null
@@ -461,11 +464,11 @@ function MessageHeader({
       ) : (
         <ProfilePopover user={author}>
           <Button
-            aria-label={format(m.profile.show, { name: displayNameOf(author) })}
+            aria-label={format(m.profile.show, { name: name ?? displayNameOf(author) })}
             className="rounded font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
             style={{ color: nameColor }}
           >
-            {displayNameOf(author)}
+            {name ?? displayNameOf(author)}
           </Button>
         </ProfilePopover>
       )}

@@ -48,9 +48,11 @@ import { format } from "@/i18n/messages";
 /** The longest explanation a report takes, as the server counts it. */
 const EXPLANATION_MAX = 1000;
 
-/** What is being reported: a message, or someone's profile. */
+/** What is being reported: a message, someone's profile, or a member's nickname in a community. */
 export type ReportTarget =
-  { kind: "message"; messageId: string } | { kind: "profile"; userId: string; name: string };
+  | { kind: "message"; messageId: string }
+  | { kind: "profile"; userId: string; name: string }
+  | { kind: "nickname"; communityId: string; userId: string; nickname: string };
 
 /** A message's Report control and the dialog it opens. */
 export function ReportMessageButton({
@@ -95,7 +97,7 @@ export function ReportModal({
 /**
  * Why the reporter is reporting: a category from those the server offers, each with what it
  * covers; for a profile, which of its aspects are wrong; and anything they would add, which
- * Other needs. Sent, it says so in a toast and closes.
+ * Other needs. A nickname is reported whole, so it names no aspects. Sent, it says so in a toast and closes.
  */
 function ReportForm({ target, close }: { target: ReportTarget; close: () => void }) {
   const m = useMessages();
@@ -130,7 +132,7 @@ function ReportForm({ target, close }: { target: ReportTarget; close: () => void
   const explanationRequired = chosen?.builtin === "other";
   const ready =
     chosen !== undefined &&
-    (target.kind === "message" || aspects.length > 0) &&
+    (target.kind !== "profile" || aspects.length > 0) &&
     (!explanationRequired || explanation.trim() !== "");
 
   async function send() {
@@ -143,8 +145,10 @@ function ReportForm({ target, close }: { target: ReportTarget; close: () => void
     try {
       if (target.kind === "message") {
         await sync.reportMessage(target.messageId, category, said);
-      } else {
+      } else if (target.kind === "profile") {
         await sync.reportProfile(target.userId, category, said, aspects);
+      } else {
+        await sync.reportNickname(target.communityId, target.userId, category, said);
       }
       toast(m.reports.sent);
       close();
@@ -165,12 +169,16 @@ function ReportForm({ target, close }: { target: ReportTarget; close: () => void
       <DialogHeading>
         {target.kind === "message"
           ? m.reports.reportMessageHeading
-          : format(m.reports.reportProfileHeading, { name: target.name })}
+          : target.kind === "profile"
+            ? format(m.reports.reportProfileHeading, { name: target.name })
+            : format(m.reports.reportNicknameHeading, { nickname: target.nickname })}
       </DialogHeading>
       <p className="text-sm text-ink-muted">
         {target.kind === "message"
           ? m.reports.reportMessageHint
-          : format(m.reports.reportProfileHint, { name: target.name })}
+          : target.kind === "profile"
+            ? format(m.reports.reportProfileHint, { name: target.name })
+            : m.reports.reportNicknameHint}
       </p>
       {target.kind === "profile" && (
         <fieldset className="flex flex-col gap-2">

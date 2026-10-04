@@ -263,6 +263,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             role::remove_member,
             bot::add_bot
         ))
+        .routes(routes!(community::clear_nickname))
         .routes(routes!(role::transfer_ownership))
         .routes(routes!(
             role::set_channel_override,
@@ -336,6 +337,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(report::list_report_categories))
         .routes(routes!(report::report_message))
         .routes(routes!(report::report_profile))
+        .routes(routes!(report::report_nickname))
         .routes(routes!(report::list_report_cases))
         .routes(routes!(report::get_report_counts))
         .routes(routes!(report::get_report_case))

@@ -9,7 +9,15 @@ import {
   type KeyboardEvent,
   type SyntheticEvent,
 } from "react";
-import { useChannel, useChannelAccess, useMe, useMembers, useRoles, useUsers } from "@/api/hooks";
+import {
+  useChannel,
+  useChannelAccess,
+  useMe,
+  useMembers,
+  useNicknames,
+  useRoles,
+  useUsers,
+} from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
@@ -70,6 +78,7 @@ export function useTagging({
   const sample = useMembers(home?.community ?? "");
   const recipients = useUsers(home?.community == null ? (home?.recipients ?? []) : []);
   const roles = useRoles(home?.community ?? "");
+  const nicknames = useNicknames(home?.community);
   const [caret, setCaret] = useState(0);
   const [picks, setPicks] = useState<readonly PickedTag[]>(initialPicks);
   const [active, setActive] = useState(0);
@@ -88,18 +97,21 @@ export function useTagging({
   if (!off && typing !== null && typing.start !== dismissedAt) {
     if (access.has("mentionMembers")) {
       for (const user of people) {
+        const nickname = nicknames.get(user.id);
         if (
           user.id !== me?.id &&
           (user.name.toLowerCase().includes(query) ||
-            displayNameOf(user).toLowerCase().includes(query))
+            displayNameOf(user).toLowerCase().includes(query) ||
+            (nickname?.toLowerCase().includes(query) ?? false))
         ) {
+          const called = nickname ?? displayNameOf(user);
           suggestions.push({
             key: `user:${user.id}`,
             text: `@${user.name}`,
             token: `<@${user.id}>`,
-            label: displayNameOf(user),
+            label: called,
             detail: handleOf(user),
-            icon: <Avatar name={displayNameOf(user)} iconId={user.icon} size="sm" />,
+            icon: <Avatar name={called} iconId={user.icon} size="sm" />,
           });
         }
       }
