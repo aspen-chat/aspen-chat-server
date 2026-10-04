@@ -1,6 +1,6 @@
 //! A community's own emoji (`custom_emoji`): named pictures its members use in messages, as
 //! `<:id>` in the text, and as reactions. Holders of Manage custom emoji add, rename, and
-//! remove them, up to `[communities] custom_emoji_limit` per community. The picture is an icon
+//! remove them, up to the deployment setting `custom_emoji_limit` per community. The picture is an icon
 //! uploaded first (`app::icon`), which goes with the emoji.
 
 use crate::api::message_enum::server_event::{CustomEmojiEvent, ServerEvent};
@@ -127,7 +127,7 @@ pub async fn create_emoji(
     icon_id: IconId,
 ) -> app::Result<message_enum::CustomEmoji> {
     let name = validate_name(name)?;
-    let limit = i64::from(state.config.communities.custom_emoji_limit);
+    let limit = i64::from(state.settings().custom_emoji_limit);
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

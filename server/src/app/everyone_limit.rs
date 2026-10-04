@@ -1,5 +1,5 @@
-//! Mention everyone in a growing community: when a community has gained
-//! `[communities] everyone_mention_limit` members, Mention everyone is taken from its everyone
+//! Mention everyone in a growing community: when a community has gained as many members as the
+//! deployment setting `everyone_mention_limit`, Mention everyone is taken from its everyone
 //! role, where a tag of everyone would reach more people than it likely means to, and the
 //! owner is told why by the system account (`app::system_account`), free to give it back.
 //!
@@ -28,7 +28,7 @@ pub async fn after_join(state: &GlobalServerContext, community_id: CommunityId) 
 }
 
 async fn apply(state: &GlobalServerContext, community_id: CommunityId) -> app::Result<()> {
-    let limit = state.config.communities.everyone_mention_limit;
+    let limit = state.settings().everyone_mention_limit;
     if limit == 0 {
         return Ok(());
     }

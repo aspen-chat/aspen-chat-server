@@ -73,20 +73,38 @@ export function federationWorld() {
     known(friendlyDeployment, { origin: "firstContact", addedBy: null }),
   ];
   const find = (domain: string) => deployments.find((d) => d.domain === domain);
+  // The gates, as `PATCH /admin/federation` names them.
+  const gates: Record<string, string | boolean> = {
+    usersEmigration: "allowList",
+    usersImmigration: "open",
+    usersSharedList: false,
+    usersImmigrationInviteRequired: false,
+    botsEmigration: "closed",
+    botsImmigration: "closed",
+    botsSharedList: false,
+    botsImmigrationInviteRequired: false,
+  };
+  const overview = () => ({
+    domain: "aspen.example.com",
+    keyFingerprint: "SHA256:this-deployment",
+    keyCreatedAt: minutesAgo(9000),
+    users: { emigration: gates.usersEmigration, immigration: gates.usersImmigration },
+    bots: { emigration: gates.botsEmigration, immigration: gates.botsImmigration },
+    usersSharedList: gates.usersSharedList,
+    botsSharedList: gates.botsSharedList,
+    usersImmigrationInviteRequired: gates.usersImmigrationInviteRequired,
+    botsImmigrationInviteRequired: gates.botsImmigrationInviteRequired,
+    listsInForce: gates.usersEmigration === "allowList" ? ["usersEmigrationAllow"] : [],
+    document: null,
+    protocol: { version: 1, minimum: 1, capabilities: [] },
+    software: { name: "aspen", version: "0.1.0" },
+  });
   return {
-    overview: () => ({
-      domain: "aspen.example.com",
-      keyFingerprint: "SHA256:this-deployment",
-      keyCreatedAt: minutesAgo(9000),
-      users: { emigration: "allowList", immigration: "open" },
-      bots: { emigration: "closed", immigration: "closed" },
-      usersSharedList: false,
-      botsSharedList: false,
-      listsInForce: ["usersEmigrationAllow"],
-      document: null,
-      protocol: { version: 1, minimum: 1, capabilities: [] },
-      software: { name: "aspen", version: "0.1.0" },
-    }),
+    overview,
+    update: (change: Record<string, string | boolean>) => {
+      Object.assign(gates, change);
+      return overview();
+    },
     list: (url: URL) => {
       const name = (url.searchParams.get("filter[name]") ?? "").toLowerCase();
       return deployments.filter((d) => d.domain.includes(name));

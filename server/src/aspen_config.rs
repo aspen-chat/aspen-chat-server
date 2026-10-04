@@ -1,8 +1,7 @@
 pub use aspen_limits::{Limit, LimitSetting, RuleTable};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
-use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AspenConfig {
@@ -29,17 +28,9 @@ pub struct AspenConfig {
     #[serde(default)]
     pub limits: LimitsConfig,
     #[serde(default)]
-    pub bots: BotsConfig,
-    #[serde(default)]
-    pub communities: CommunitiesConfig,
-    #[serde(default)]
-    pub system_account: SystemAccountConfig,
-    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub presence: PresenceConfig,
-    #[serde(default)]
-    pub registration: RegistrationConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
@@ -182,16 +173,6 @@ pub struct MetricsConfig {
     pub listen_addr: std::net::SocketAddr,
 }
 
-/// Who may create an account (`app::registration_invite`).
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct RegistrationConfig {
-    /// Whether creating an account takes an invite from the deployment's administrators. Off,
-    /// anyone who reaches the server may register. On, the first account's invite is made
-    /// from the terminal (`aspen-chat-server invites create`).
-    pub invite_required: bool,
-}
-
 /// Whether people show as online, away, or offline (`app::user_status`).
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
@@ -207,13 +188,6 @@ pub struct PresenceConfig {
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct AuthConfig {
-    /// Every account must have a second factor. A session of an account without one can only
-    /// add one (or sign out) until it does.
-    pub require_two_factor: bool,
-    /// How the server names itself to authenticators: the label beside an authenticator app's
-    /// codes and the name a passkey prompt shows.
-    #[default = "Aspen"]
-    pub service_name: String,
     /// A change to security settings needs the session to have proved who its user is within
     /// this many seconds; ten minutes by default.
     #[default = 600]
@@ -254,22 +228,17 @@ pub struct LimitsConfig {
     pub max_communities_per_user: u32,
 }
 
-/// Federation: which of this deployment's users and bots may use other deployments, and whose
-/// may use this one (`app::federation`).
-///
-/// Each direction has a gate. The deployment's policy, in the terms operators use, is the gates
-/// of its users: none (both closed, the default), emigration (only `emigration` open or on a
-/// list), immigration (only `immigration`), and full (both), each either open or with a list.
-/// Bots have gates of their own, which work the same way.
+/// Federation: this deployment's name among deployments and how it checks on the users of
+/// others (`app::federation`). Who may cross is the gates, which are deployment settings
+/// (`app::deployment_settings`), changed from the dashboard or the terminal.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default, deny_unknown_fields)]
 pub struct FederationConfig {
     /// This deployment's name among deployments: the domain it is served at, with `:port` when
-    /// that is not 443, such as `chat.example.org`. Required when any gate is not closed.
-    /// Other deployments pin the key they find at this name, so it must not change.
+    /// that is not 443, such as `chat.example.org`. Required before any gate opens. Other
+    /// deployments pin the key they find at this name, so once a server has started with it,
+    /// it may not change (`app::deployment_settings::pin_domain`).
     pub domain: Option<String>,
-    pub users: MigrationRules,
-    pub bots: MigrationRules,
     /// How often this deployment asks the homes of the users from elsewhere signed in here
     /// whether they are still in good standing there (`app::federation::standing`): an hour.
     #[default = 3600]
@@ -280,55 +249,6 @@ pub struct FederationConfig {
     /// Settings for trying federation on one machine; a deployment others use leaves them out.
     pub development: FederationDevelopment,
 }
-
-/// Who may cross between this deployment and others, one direction at a time.
-#[derive(Clone, Debug, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct MigrationRules {
-    /// This deployment's accounts using other deployments.
-    pub emigration: Gate,
-    /// Other deployments' accounts using this one.
-    pub immigration: Gate,
-    /// Both directions read one list instead of a list each. Both gates must then use a list,
-    /// and the same kind of list.
-    pub shared_list: bool,
-    /// Whether an account of another deployment arriving here for the first time needs a
-    /// registration invite (`app::registration_invite`), as `[registration] invite_required`
-    /// asks of accounts made here.
-    pub immigration_invite_required: bool,
-}
-
-/// One direction's gate.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    Deserialize,
-    Serialize,
-    ToSchema,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub enum Gate {
-    /// No one crosses.
-    #[default]
-    Closed,
-    /// Anyone crosses, to or from any deployment.
-    Open,
-    /// Only to or from the deployments on this direction's allow list.
-    AllowList,
-    /// To or from any deployment but those on this direction's block list.
-    BlockList,
-    /// A gate another deployment publishes that this one does not know, as a newer one may.
-    /// Never configured here: `aspen.toml` names only the gates above.
-    #[serde(other)]
-    Unknown,
-}
-
-crate::app::wire_name_traits!(Gate);
 
 /// Settings for running deployments side by side on one machine.
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -345,46 +265,13 @@ pub struct FederationDevelopment {
 }
 
 impl FederationConfig {
-    /// Whether any gate lets anyone cross.
-    pub fn enabled(&self) -> bool {
-        [&self.users, &self.bots]
-            .iter()
-            .any(|rules| rules.emigration != Gate::Closed || rules.immigration != Gate::Closed)
-    }
-
-    /// Whether an immigration gate lets accounts of other deployments in.
-    pub fn admits_anyone(&self) -> bool {
-        self.users.immigration != Gate::Closed || self.bots.immigration != Gate::Closed
-    }
-
     fn validate(&self) -> Result<(), config::ConfigError> {
-        if self.enabled() && self.domain.is_none() {
-            return Err(config::ConfigError::Message(
-                "federation.domain must be set when a federation gate is not closed".into(),
-            ));
-        }
         if let Some(domain) = &self.domain {
             crate::app::federation::Domain::parse(domain).map_err(|_| {
                 config::ConfigError::Message(format!(
                     "federation.domain {domain:?} is not a domain, optionally with a port"
                 ))
             })?;
-        }
-        for (name, rules) in [("users", &self.users), ("bots", &self.bots)] {
-            if rules.emigration == Gate::Unknown || rules.immigration == Gate::Unknown {
-                return Err(config::ConfigError::Message(format!(
-                    "federation.{name} names a gate other than closed, open, allowList, or blockList"
-                )));
-            }
-            let listed = |gate: Gate| matches!(gate, Gate::AllowList | Gate::BlockList);
-            if rules.shared_list
-                && !(listed(rules.emigration) && rules.emigration == rules.immigration)
-            {
-                return Err(config::ConfigError::Message(format!(
-                    "federation.{name}.shared_list needs emigration and immigration to be the \
-                     same kind of list"
-                )));
-            }
         }
         Ok(())
     }
@@ -399,45 +286,8 @@ pub struct PushConfig {
     pub enabled: bool,
 }
 
-/// What changes in a community as it grows (`app::everyone_limit`).
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
-#[serde(default)]
-pub struct CommunitiesConfig {
-    /// How many members a community gains before Mention everyone is turned off for its
-    /// everyone role, its owner told why by the system account, and left to turn it back on.
-    /// 0 never turns it off.
-    #[default = 200]
-    pub everyone_mention_limit: u32,
-    /// The most custom emoji one community may hold (`app::custom_emoji`).
-    #[default = 1000]
-    pub custom_emoji_limit: u32,
-}
-
-/// The deployment's own account, which sends people notices from the deployment itself
-/// (`app::system_account`).
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
-#[serde(default)]
-pub struct SystemAccountConfig {
-    /// What the account is called wherever it is named.
-    #[default = "Aspen"]
-    pub display_name: String,
-}
-
-/// Bots: accounts that sign in only with a token, each made and managed by a person
-/// (`app::bot`).
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
-#[serde(default)]
-pub struct BotsConfig {
-    /// Whether people may make bots at all. Bots already made keep working either way.
-    #[default = true]
-    pub enabled: bool,
-    /// The most bots one person may own.
-    #[default = 25]
-    pub max_per_user: u32,
-}
-
-/// Voice calls. The servers listed here are seeded into the `voice_server` table at startup,
-/// matched by name, and can then be managed through the `/voice-servers` endpoints.
+/// Voice calls. The voice servers themselves are rows of `voice_server`, added from the
+/// dashboard or the terminal (`aspen-chat-server voice-servers`).
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct VoiceConfig {
@@ -470,20 +320,6 @@ pub struct VoiceConfig {
     /// voice server slot indefinitely.
     #[default(24 * 60 * 60)]
     pub idle_session_seconds: u64,
-    /// Whether people may offer files to one another in calls. Off, no join token grants
-    /// Transfer files, whatever the channel's permissions say.
-    #[default = true]
-    pub file_transfers: bool,
-    pub servers: Vec<VoiceServerSeed>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct VoiceServerSeed {
-    pub name: String,
-    /// The base URL clients open for signalling and measure latency against.
-    pub url: String,
-    /// The most participants the server carries at once.
-    pub capacity: u32,
 }
 
 /// The web client people open in a browser.
@@ -672,14 +508,9 @@ mod tests {
         assert_eq!(config.voice.idle_session_seconds, 24 * 60 * 60);
         assert_eq!(config.media.s3.bucket, "elsewhere");
         assert_eq!(config.media.s3.upload_url_ttl_seconds, 900);
-        assert_eq!(config.auth.service_name, "Aspen");
-        assert!(config.bots.enabled);
-        assert_eq!(config.bots.max_per_user, 25);
         assert_eq!(config.presence.away_after_seconds, 600);
         assert_eq!(config.limits.max_communities_per_user, 500);
         assert!(config.metrics.enabled);
-        assert!(!config.federation.enabled());
-        assert_eq!(config.federation.users.emigration, Gate::Closed);
         assert_eq!(config.event_queue_size, 512);
         assert_eq!(
             config.voice.token_secret,
@@ -695,27 +526,12 @@ mod tests {
             .validate()
     }
 
-    /// An open gate needs the deployment's domain, and a shared list needs both directions to
-    /// use the same kind of list.
+    /// The domain must be a domain, and the gates are not set here.
     #[test]
     fn federation_settings_are_checked() {
-        assert!(federation("[users]\nemigration = \"open\"").is_err());
-        assert!(
-            federation("domain = \"chat.example.org\"\n[users]\nemigration = \"open\"").is_ok()
-        );
+        assert!(federation("domain = \"chat.example.org\"").is_ok());
+        assert!(federation("domain = \"a.example:8443\"").is_ok());
         assert!(federation("domain = \"https://chat.example.org\"").is_err());
-        assert!(
-            federation(
-                "domain = \"a.example\"\n[users]\nemigration = \"allowList\"\nimmigration = \"blockList\"\nshared_list = true"
-            )
-            .is_err()
-        );
-        assert!(
-            federation(
-                "domain = \"a.example:8443\"\n[bots]\nemigration = \"blockList\"\nimmigration = \"blockList\"\nshared_list = true"
-            )
-            .is_ok()
-        );
-        assert!(federation("[users]\nemigration = \"sometimes\"").is_err());
+        assert!(federation("[users]\nemigration = \"open\"").is_err());
     }
 }

@@ -63,7 +63,10 @@ pub enum FederationCommand {
     },
 }
 
-fn print_deployment(config: &AspenConfig, listed: &crate::app::federation::Listed) {
+fn print_deployment(
+    policy: &crate::app::federation::FederationPolicy,
+    listed: &crate::app::federation::Listed,
+) {
     use crate::app::federation::{self, Direction, Subject};
     let d = &listed.deployment;
     let key = d
@@ -78,7 +81,7 @@ fn print_deployment(config: &AspenConfig, listed: &crate::app::federation::Liste
     ]
     .into_iter()
     .filter(|(subject, direction, _)| {
-        federation::admits(&config.federation, *subject, *direction, &listed.lists)
+        federation::admits(policy, *subject, *direction, &listed.lists)
     })
     .map(|(_, _, name)| name)
     .collect();
@@ -131,6 +134,10 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
     use crate::app::federation::{self, ContactOutcome, Origin};
     let mut conn = database(config).await?;
     let fail = |e: crate::app::Error| anyhow!("{e}");
+    let policy = crate::app::deployment_settings::load(&mut conn)
+        .await
+        .map_err(fail)?
+        .federation;
     let contact = async |conn: &mut diesel_async::AsyncPgConnection,
                          domain: &federation::Domain|
            -> Result<()> {
@@ -152,7 +159,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 println!("{domain} presented a different key, which is refused until accepted")
             }
         }
-        print_deployment(config, &listed);
+        print_deployment(&policy, &listed);
         Ok(())
     };
     match command {
@@ -169,10 +176,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 ),
                 None => println!("key: none yet; the server makes it when it starts with a domain"),
             }
-            for (name, rules) in [
-                ("users", &config.federation.users),
-                ("bots", &config.federation.bots),
-            ] {
+            for (name, rules) in [("users", &policy.users), ("bots", &policy.bots)] {
                 println!(
                     "{name}: emigration {}, immigration {}{}",
                     rules.emigration,
@@ -184,7 +188,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                     }
                 );
             }
-            let lists: Vec<String> = federation::FederationList::all_in_force(&config.federation)
+            let lists: Vec<String> = federation::FederationList::all_in_force(&policy)
                 .iter()
                 .map(ToString::to_string)
                 .collect();
@@ -194,7 +198,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
         }
         FederationCommand::List => {
             for listed in federation::list_all(&mut conn).await.map_err(fail)? {
-                print_deployment(config, &listed);
+                print_deployment(&policy, &listed);
             }
         }
         FederationCommand::Add { domain, note } => {
@@ -239,7 +243,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 .await
                 .map_err(fail)?;
             tracing::warn!(%domain, operator = operator(), "accepted a deployment's new key");
-            print_deployment(config, &listed);
+            print_deployment(&policy, &listed);
         }
         FederationCommand::ListAdd { domain, list } => {
             let added = federation::set_listed(&mut conn, &domain, list, true, None)
@@ -249,7 +253,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 tracing::info!(%domain, %list, operator = operator(), "put a deployment on a list");
             }
             print_deployment(
-                config,
+                &policy,
                 &federation::get(&mut conn, &domain).await.map_err(fail)?,
             );
         }
@@ -261,7 +265,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
                 tracing::info!(%domain, %list, operator = operator(), "took a deployment off a list");
             }
             print_deployment(
-                config,
+                &policy,
                 &federation::get(&mut conn, &domain).await.map_err(fail)?,
             );
         }

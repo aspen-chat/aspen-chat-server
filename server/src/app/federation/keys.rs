@@ -11,8 +11,8 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{Domain, jws, own_domain};
+use crate::app::federation::{Gate, MigrationRules};
 use crate::app::{self, FederationKeyId};
-use crate::aspen_config::{Gate, MigrationRules};
 use crate::database::schema::federation_key;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
@@ -281,10 +281,10 @@ impl From<PublicKey> for DocumentKey {
 /// This deployment's document; `None` when it has no domain, and so takes no part in
 /// federation.
 pub async fn document(state: &GlobalServerContext) -> app::Result<Option<DeploymentDocument>> {
-    let config = &state.config.federation;
-    let Some(domain) = own_domain(config) else {
+    let Some(domain) = own_domain(&state.config.federation) else {
         return Ok(None);
     };
+    let policy = state.settings().federation;
     let mut conn = state.connection_pool.get().await?;
     let since = Utc::now() - Duration::days(HANDOVER_WINDOW_DAYS);
     let keys: Vec<PublicKey> = federation_key::table
@@ -304,8 +304,8 @@ pub async fn document(state: &GlobalServerContext) -> app::Result<Option<Deploym
     Ok(Some(DeploymentDocument {
         domain,
         keys: keys.into_iter().map(DocumentKey::from).collect(),
-        users: (&config.users).into(),
-        bots: (&config.bots).into(),
+        users: (&policy.users).into(),
+        bots: (&policy.bots).into(),
         protocol: Protocol::ours(),
         software: Some(Software::ours()),
     }))

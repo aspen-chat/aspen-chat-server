@@ -67,7 +67,7 @@ fn giving_caller(
 ) -> ApiResult<Option<Caller>> {
     match session {
         Some(EnrollingSessionUser(SessionUser { caller, .. })) => {
-            if caller.enrollment_required(&state.config.auth) {
+            if caller.enrollment_required(&state.settings()) {
                 return Err(ApiError::new(ProblemCode::TwoFactorEnrollmentRequired));
             }
             Ok(Some(caller.clone()))

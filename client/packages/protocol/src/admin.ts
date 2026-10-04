@@ -23,6 +23,10 @@ export type ContactResult = components["schemas"]["ContactResult"];
 export type Gate = components["schemas"]["Gate"];
 export type DeploymentProfileUpdateRequest =
   components["schemas"]["DeploymentProfileUpdateRequest"];
+export type DeploymentSettings = components["schemas"]["DeploymentSettings"];
+export type DeploymentSettingsUpdateRequest =
+  components["schemas"]["DeploymentSettingsUpdateRequest"];
+export type FederationUpdateRequest = components["schemas"]["FederationUpdateRequest"];
 
 export type UserSort = NonNullable<
   NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
@@ -285,9 +289,32 @@ export class AdminApi {
     return adminRead(await this.#client.api.PATCH("/api/v1/deployment", { body: change }));
   }
 
+  /** The policies the deployment's administrators set. */
+  async deploymentSettings(): Promise<DeploymentSettings> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/settings"));
+  }
+
+  /**
+   * Changes the deployment's policies, for every server at once. Answers with them as they now
+   * are.
+   */
+  async updateDeploymentSettings(
+    change: DeploymentSettingsUpdateRequest,
+  ): Promise<DeploymentSettings> {
+    return adminRead(await this.#client.api.PATCH("/api/v1/admin/settings", { body: change }));
+  }
+
   /** This deployment's part in federation: its domain, key, gates, and lists in force. */
   async federation(): Promise<FederationOverview> {
     return adminRead(await this.#client.api.GET("/api/v1/admin/federation"));
+  }
+
+  /**
+   * Changes the gates, for every server at once; users of other deployments a closed gate no
+   * longer admits are signed out. Answers with this deployment's part in federation as it now is.
+   */
+  async updateFederation(change: FederationUpdateRequest): Promise<FederationOverview> {
+    return adminRead(await this.#client.api.PATCH("/api/v1/admin/federation", { body: change }));
   }
 
   /** A page of the other deployments this one knows, alphabetically, searched by domain. */

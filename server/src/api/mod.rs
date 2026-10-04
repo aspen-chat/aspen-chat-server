@@ -19,7 +19,7 @@ pub(crate) mod channel_mute;
 pub(crate) mod community;
 pub(crate) mod custom_emoji;
 pub(crate) mod deployment;
-pub(crate) mod deployment_profile;
+pub(crate) mod deployment_settings;
 pub(crate) mod device_link;
 pub(crate) mod dm;
 pub(crate) mod error;
@@ -47,7 +47,8 @@ pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
 
-use crate::aspen_config::{CorsConfig, FederationConfig};
+use crate::app::deployment_settings::SettingsCache;
+use crate::aspen_config::CorsConfig;
 use std::time::Duration;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
@@ -153,39 +154,37 @@ impl Modify for SecurityAddon {
     }
 }
 
-/// The CORS layer for `config`. A deployment that admits accounts from elsewhere allows every
-/// origin, whatever the list says: those accounts use it from their own deployment's web client,
-/// wherever that is served, and every request is authenticated by a bearer token rather than a
-/// cookie, so no origin gains anything a page could not already do with the token it holds.
-fn cors_layer(config: &CorsConfig, federation: &FederationConfig) -> Option<CorsLayer> {
-    let any = federation.admits_anyone() || config.allowed_origins.iter().any(|o| o == "*");
-    if config.allowed_origins.is_empty() && !any {
-        return None;
-    }
-    let origin = if any {
+/// The CORS layer for `config`. While a deployment admits accounts from elsewhere it allows
+/// every origin, whatever the list says: those accounts use it from their own deployment's web
+/// client, wherever that is served, and every request is authenticated by a bearer token rather
+/// than a cookie, so no origin gains anything a page could not already do with the token it
+/// holds. The gates change while the server runs, so whether they admit anyone is read from
+/// `settings` as each request arrives. An origin allowed neither way is sent no CORS headers.
+fn cors_layer(config: &CorsConfig, settings: SettingsCache) -> CorsLayer {
+    let origin = if config.allowed_origins.iter().any(|o| o == "*") {
         AllowOrigin::any()
     } else {
-        AllowOrigin::list(
-            config
-                .allowed_origins
-                .iter()
-                .filter_map(|o| HeaderValue::from_str(o).ok()),
-        )
+        let listed: Vec<HeaderValue> = config
+            .allowed_origins
+            .iter()
+            .filter_map(|o| HeaderValue::from_str(o).ok())
+            .collect();
+        AllowOrigin::predicate(move |origin, _| {
+            listed.contains(origin) || settings.current().federation.admits_anyone()
+        })
     };
-    Some(
-        CorsLayer::new()
-            .allow_origin(origin)
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PUT,
-                Method::PATCH,
-                Method::DELETE,
-            ])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-            .expose_headers([LOCATION, RETRY_AFTER])
-            .max_age(Duration::from_secs(60 * 60)),
-    )
+    CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .expose_headers([LOCATION, RETRY_AFTER])
+        .max_age(Duration::from_secs(60 * 60))
 }
 
 /// Every API route, relative to `API_PREFIX`.
@@ -195,8 +194,12 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::login_second_factor))
         .routes(routes!(auth::auth_methods))
         .routes(routes!(
-            deployment_profile::get_deployment_profile,
-            deployment_profile::update_deployment_profile
+            deployment_settings::get_deployment_profile,
+            deployment_settings::update_deployment_profile
+        ))
+        .routes(routes!(
+            deployment_settings::get_settings,
+            deployment_settings::update_settings
         ))
         .routes(routes!(auth::reauthenticate))
         .routes(routes!(auth::start_passkey_ceremony))
@@ -355,7 +358,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(federation::home_avatar))
         .routes(routes!(federation::receive_notice))
         .routes(routes!(federation::answer_standing))
-        .routes(routes!(federation::get_federation))
+        .routes(routes!(
+            federation::get_federation,
+            federation::update_federation
+        ))
         .routes(routes!(
             federation::list_deployments,
             federation::add_deployment
@@ -533,11 +539,8 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
         metrics::spawn_samplers(context.clone());
     }
     app::context::start_background_tasks(&context).await?;
-    let cors = cors_layer(&context.config.cors, &context.config.federation);
-    let router: axum::Router = axum::Router::from(router.with_state(context))
-        .layer(axum::middleware::from_fn(app::locale::layer));
-    Ok(match cors {
-        Some(cors) => router.layer(cors),
-        None => router,
-    })
+    let cors = cors_layer(&context.config.cors, context.settings.clone());
+    Ok(axum::Router::from(router.with_state(context))
+        .layer(axum::middleware::from_fn(app::locale::layer))
+        .layer(cors))
 }

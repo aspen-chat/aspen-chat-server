@@ -14,6 +14,7 @@
 
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
+use crate::app::deployment_settings::DeploymentSettings;
 use crate::app::{self, UserId};
 use crate::aspen_config::AuthConfig;
 use crate::database::schema::{passkey, recovery_code, refresh_token, totp_secret, user};
@@ -96,10 +97,10 @@ impl Caller {
         }
     }
 
-    /// Whether the server requires a second factor this account does not have yet. Such a
+    /// Whether `settings` require a second factor this account does not have yet. Such a
     /// session may only add one, or sign out.
-    pub fn enrollment_required(&self, config: &AuthConfig) -> bool {
-        config.require_two_factor && !self.bot && !self.foreign && !self.has_second_factor
+    pub fn enrollment_required(&self, settings: &DeploymentSettings) -> bool {
+        settings.require_two_factor && !self.bot && !self.foreign && !self.has_second_factor
     }
 }
 
@@ -341,7 +342,7 @@ pub async fn begin_totp(
         .await?;
     Ok(TotpEnrollment {
         secret: BASE32_NOPAD.encode(&secret),
-        uri: otpauth_uri(&secret, &state.config.auth.service_name, &name),
+        uri: otpauth_uri(&secret, state.settings().name(), &name),
     })
 }
 
@@ -400,7 +401,7 @@ pub async fn confirm_totp(
 pub async fn remove_totp(state: &GlobalServerContext, caller: &Caller) -> app::Result<()> {
     caller.ensure_recently_verified(&state.config.auth)?;
     let user_id = caller.user;
-    let require = state.config.auth.require_two_factor;
+    let require = state.settings().require_two_factor;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -725,7 +726,7 @@ pub async fn overview(
         totp: found.totp,
         passkeys,
         recovery_codes_remaining,
-        required: state.config.auth.require_two_factor,
+        required: state.settings().require_two_factor,
         verified_until: caller.verified_until(&state.config.auth),
     })
 }

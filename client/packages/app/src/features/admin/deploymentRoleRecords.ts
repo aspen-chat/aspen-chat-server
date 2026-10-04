@@ -16,6 +16,7 @@ export const DEPLOYMENT_PERMISSIONS: readonly DeploymentPermission[] = [
   "manageReportCategories",
   "banUsers",
   "messageAnyUser",
+  "manageDeploymentSettings",
 ];
 
 /** The deployment's roles and the caller's standing among them, read together. */

@@ -16,7 +16,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | --- | --- | --- |
 | `invalidCredentials` | Wrong username or password. | Nothing, unless one account sees many: someone may be guessing, which the sign-in rate limits slow. |
 | `tooManyAttempts` | Ten wrong passwords or codes for one account within fifteen minutes; its second factors are locked for the rest of the window. | Wait. Repeated lockouts of one account suggest someone guessing. |
-| `twoFactorEnrollmentRequired` | `[auth] require_two_factor` is on and the account has no authenticator app or passkey. | The person adds one; their session allows nothing else meanwhile. |
+| `twoFactorEnrollmentRequired` | The deployment setting `require-two-factor` is on and the account has no authenticator app or passkey. | The person adds one; their session allows nothing else meanwhile. |
 | `lastSecondFactor` | Removing the account's only second factor, where two factors are required. | Add another first. |
 | `reauthenticationRequired` | A security change needs a password or code given within `[auth] reverify_seconds`. | The app asks for it. |
 | `passkeysUnavailable` | `[auth.passkeys]` is not set. | Set it (see [Configuration](configuration.md#authpasskeys)) to offer passkeys. |
@@ -62,7 +62,7 @@ uses one of these codes, after a message saying why:
 | --- | --- |
 | 4400 | The first message was not a well-formed `identify`. An outdated client, or a proxy mangling the connection. |
 | 4401 | The session is not valid: expired, signed out elsewhere, or revoked, before the stream opened or while it was open (signing out, a password or second factor change, a deleted account). The app signs in again. |
-| 4403 | Two factors are required and the account has none. |
+| 4403 | Two factors are required and the account has none, when the stream opens or when the requirement is turned on while it is open. |
 | 4408 | No `identify` within ten seconds. Usually a very slow connection. |
 | 4410 | The account was banned from this deployment. The app signs out and says why. |
 
@@ -114,8 +114,13 @@ channel, or by someone they blocked.
 again in the dashboard.
 
 **The server will not start.** It says why on standard error: a setting it cannot read, a rate
-limit naming an endpoint that does not exist, federation gates open without a `domain`, or a
-service it cannot reach.
+limit naming an endpoint that does not exist, a `[federation] domain` other than the one this
+deployment is already known by (or none, once it has one), or a service it cannot reach.
+
+**A setting changed but a server did not follow.** Every API server watches NATS for changes to
+the [deployment settings](configuration.md#deployment-settings) and reads them from the database
+as they commit. One that cannot reach NATS logs `following the deployment's settings failed` and
+tries again every five seconds, reading the settings afresh when it reconnects.
 
 **`aspen-migrate up` stops at "usernames that differ only by case".** Usernames are unique
 regardless of case, so people can sign in however they type theirs, and the migration that makes

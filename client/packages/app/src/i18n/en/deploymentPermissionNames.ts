@@ -21,7 +21,7 @@ export const deploymentPermissionNames = {
   },
   manageFederation: {
     name: "Manage federation",
-    hint: "Add and forget other deployments, check and accept their keys, and edit the lists that decide who may come and go.",
+    hint: "Open and close the gates to other deployments, add and forget them, check and accept their keys, and edit the lists that decide who may come and go.",
   },
   moderateCommunities: {
     name: "Moderate any community",
@@ -42,5 +42,9 @@ export const deploymentPermissionNames = {
   messageAnyUser: {
     name: "Message any user",
     hint: "Start a DM with anyone, whatever communities they share and whoever blocked whom. Needed to warn someone.",
+  },
+  manageDeploymentSettings: {
+    name: "Manage deployment settings",
+    hint: "Change the server's name and icon, and its policies: registration invites, second factors, bots, community limits, and files in calls.",
   },
 } as const;

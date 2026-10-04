@@ -2,9 +2,9 @@ import {
   ChartLineUpIcon,
   FileArrowUpIcon,
   FlagIcon,
+  GearSixIcon,
   GlobeIcon,
   ListBulletsIcon,
-  HandWavingIcon,
   HardDrivesIcon,
   IdentificationBadgeIcon,
   ScrollIcon,
@@ -23,6 +23,7 @@ import { ReportCategoriesSection } from "@/features/admin/ReportCategories";
 import { ReportsSection } from "@/features/admin/Reports";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { DeploymentProfileSection } from "@/features/admin/DeploymentProfile";
+import { DeploymentSettingsSection } from "@/features/admin/DeploymentSettings";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
@@ -49,7 +50,7 @@ const ADMIN_TABS = [
   "reportCategories",
   "users",
   "communities",
-  "profile",
+  "settings",
   "federation",
   "moderation",
   "transfers",
@@ -74,7 +75,7 @@ function useAllowedTabs(): AdminTab[] {
     reportCategories: permissions.has("manageReportCategories"),
     users: directories,
     communities: directories,
-    profile: permissions.has("manageFederation"),
+    settings: permissions.has("manageDeploymentSettings"),
     federation: permissions.has("manageFederation"),
     moderation: view,
     transfers: view,
@@ -94,7 +95,7 @@ function useTabLabel(): (tab: AdminTab) => string {
       reportCategories: m.reports.categoriesTitle,
       users: m.admin.users,
       communities: m.admin.communities,
-      profile: m.admin.profile,
+      settings: m.admin.settings,
       federation: m.federation.title,
       moderation: m.admin.moderationLog,
       transfers: m.admin.fileTransfers,
@@ -110,7 +111,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   reportCategories: ListBulletsIcon,
   users: UsersIcon,
   communities: UsersThreeIcon,
-  profile: HandWavingIcon,
+  settings: GearSixIcon,
   federation: GlobeIcon,
   moderation: ScrollIcon,
   transfers: FileArrowUpIcon,
@@ -224,8 +225,13 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return <UserDirectory roles={roles.data} />;
     case "communities":
       return <CommunityDirectory />;
-    case "profile":
-      return <DeploymentProfileSection />;
+    case "settings":
+      return (
+        <>
+          <DeploymentProfileSection />
+          <DeploymentSettingsSection />
+        </>
+      );
     case "federation":
       return <FederationSection />;
     case "moderation":

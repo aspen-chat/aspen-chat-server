@@ -7,7 +7,8 @@ on, and try restoring now and then.
 ## The database
 
 Every account, community, channel, message, reaction, poll, role, invite, setting, and session
-is in PostgreSQL, and so is this deployment's federation key. Any PostgreSQL backup works: a
+is in PostgreSQL, as are the deployment's own settings (its name, policies, and federation
+gates), its registered voice servers, and its federation key. Any PostgreSQL backup works: a
 nightly `pg_dump -Fc`, or continuous archiving (base backups and WAL) when losing a day of
 messages is too much.
 
@@ -33,9 +34,11 @@ posted them would have to post them again.
 
 ## What needs no backup
 
-- **NATS** holds only the last minute of events, and voice servers' reports waiting to be
-  applied. After a loss, every client notices the gap, reloads what it shows, and carries on,
-  and within a minute each voice server's next snapshot puts the record of its calls right.
+- **NATS** holds only the last minute of events, voice servers' reports waiting to be applied,
+  and the number of the last change to the deployment's settings. After a loss, every client
+  notices the gap, reloads what it shows, and carries on, within a minute each voice server's
+  next snapshot puts the record of its calls right, and each API server reads the settings
+  afresh.
 - **Valkey** holds rate limit counters, who is online, and sign-in steps in progress (tickets
   for a second factor, passkey ceremonies). After a loss, people halfway through signing in
   start again; nobody is signed out.

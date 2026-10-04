@@ -585,7 +585,7 @@ export class AspenClient {
     const retry = request.clone();
     const response = await this.#fetch(withBearer(request, session.sessionToken));
     if (response.status === 403) {
-      await this.#noticeEnrollmentRequired(response);
+      await this.#noticeEnrollmentProblem(response);
     }
     if (response.status !== 401) {
       return response;
@@ -603,20 +603,25 @@ export class AspenClient {
    * without one this way. Flagging the session lets the app show the enrollment screen instead
    * of failing everywhere.
    */
-  async #noticeEnrollmentRequired(response: Response): Promise<void> {
+  async #noticeEnrollmentProblem(response: Response): Promise<void> {
     let body: unknown;
     try {
       body = await response.clone().json();
     } catch {
       return;
     }
+    if (isProblem(body) && body.code === "twoFactorEnrollmentRequired") {
+      this.noticeEnrollmentRequired();
+    }
+  }
+
+  /**
+   * Flags the session as owing a second factor the deployment requires, as a refused request or
+   * the event stream's close says, so the app shows the enrollment screen.
+   */
+  noticeEnrollmentRequired(): void {
     const session = this.session;
-    if (
-      isProblem(body) &&
-      body.code === "twoFactorEnrollmentRequired" &&
-      session !== null &&
-      session.twoFactorEnrollmentRequired !== true
-    ) {
+    if (session !== null && session.twoFactorEnrollmentRequired !== true) {
       this.#setSession({ ...session, twoFactorEnrollmentRequired: true });
     }
   }

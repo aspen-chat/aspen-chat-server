@@ -1,8 +1,9 @@
-//! Invites to create an account. With `[registration] invite_required` set, registering takes
-//! one: each may be used up to `max_uses` times, until `expires_at` if it has one, and not once
+//! Invites to create an account. With the deployment setting `registration_invite_required` on
+//! (`app::deployment_settings`), registering takes one: each may be used up to `max_uses` times, until `expires_at` if it has one, and not once
 //! revoked. The deployment's administrators make and revoke them from the Administration
 //! Dashboard (`app::admin`), and the terminal makes the first (`aspen-chat-server invites`),
-//! since an invite-only deployment has no administrator until someone registers. Each account
+//! since an invite-only deployment, made one from the terminal (`aspen-chat-server settings`),
+//! has no administrator until someone registers. Each account
 //! records the invite it was made with (`user.registered_with`).
 //!
 //! A dual invite is a registration invite that also names an invite to a community

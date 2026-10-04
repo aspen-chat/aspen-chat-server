@@ -244,10 +244,6 @@ class Stack:
             f'listen_addr = "127.0.0.1:{p.api_metrics}"\n'
             "[voice]\n"
             f'token_secret = "{TOKEN_SECRET}"\n'
-            "[[voice.servers]]\n"
-            f'name = "{self.name}"\n'
-            f'url = "http://127.0.0.1:{p.voice}"\n'
-            "capacity = 50\n"
         )
         if self.voice_id:
             (self.work / "voice_server.toml").write_text(
@@ -291,6 +287,8 @@ class Stack:
         )
         if migrated.returncode != 0:
             raise Failed(f"migrations failed: {migrated.stderr[-1000:]}")
+        self.command("voice-servers", "add", self.name, "--url", f"http://127.0.0.1:{self.ports.voice}",
+                     "--capacity", "50")
         self._spawn(
             [str(self.bins / "aspen-chat-server"), "--no-https", "--port", str(self.ports.api), "--listen-addr", "127.0.0.1"],
             "api.log",
@@ -298,7 +296,7 @@ class Stack:
         wait_for("the chat server", lambda: http_status(f"{self.base}/api/v1/auth/methods") == 200, 60)
         self.voice_id = psql(f"SELECT id FROM voice_server WHERE name = '{self.name}'", self.database)
         if not self.voice_id:
-            raise Failed("the chat server did not register the voice server from its config")
+            raise Failed("the voice server was not registered")
         self._write_configs()
         self._spawn([str(self.bins / "voice_server")], "voice.log")
         wait_for("the voice server", lambda: http_status(f"http://127.0.0.1:{self.ports.voice}/health") == 204, 60)

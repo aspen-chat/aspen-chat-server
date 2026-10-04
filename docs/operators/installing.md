@@ -149,16 +149,14 @@ voice_server estimate-capacity
 ```
 
 measures this CPU and reads the machine's memory, network, and port range, and prints a
-capacity. Register the server with the API servers by adding it to `aspen.toml`:
+capacity. Register the server where an API server runs:
 
-```toml
-[[voice.servers]]
-name = "voice-1"
-url = "https://voice-1.chat.example.org"
-capacity = 120
+```
+aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.org --capacity 120
 ```
 
-and restart them; they record it at startup. Its id is then in the database
+It may be run again with the same arguments, so a deployment script can run it every time; the
+dashboard registers servers too. Its id is then in the database
 (`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id, the same
 `token_secret`, and NATS:
 
@@ -208,11 +206,19 @@ things out of any community or DM), `reviewReports` (the reports people make of 
 profiles), `banUsers` (banning accounts from the whole deployment), and `messageAnyUser`
 (messaging anyone, which a moderator's warning takes). `admin allow <permission>` lets the top
 role do each of them too. From then on, administrators manage everything else from the
-Administration Dashboard, starting with its Profile tab: the display name and icon the
-sign-in screen welcomes people with.
+Administration Dashboard, starting with its Settings tab: the display name and icon the
+sign-in screen welcomes people with, and the deployment's policies.
 
-If `[registration] invite_required` is on, nobody can create the first account without an
-invite: make one first with `aspen-chat-server invites create`.
+A deployment open to anyone may skip this. To make it invite-only before anyone has an account,
+turn that on from the terminal, then make the first invite:
+
+```
+aspen-chat-server settings set --registration-invite-required true
+aspen-chat-server invites create
+```
+
+The rest of the [deployment settings](configuration.md#deployment-settings) can be set the same
+way.
 
 Commands like these read the same `aspen.toml`, so run them from the same directory, with the
 same environment, as the server.

@@ -32,7 +32,6 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use webauthn_rs::prelude::{
     AuthenticationResult, DiscoverableAuthentication, DiscoverableKey, Passkey,
@@ -48,8 +47,9 @@ const CLAIM_LIFETIME_SECONDS: i64 = 2 * 60;
 /// The longest passkey name kept.
 pub const MAX_NAME_CHARS: usize = 64;
 
-/// The relying party, or `None` when passkeys are not configured.
-pub fn relying_party(config: &AuthConfig) -> app::Result<Option<Arc<Webauthn>>> {
+/// The relying party, called `name` in passkey prompts, or `None` when passkeys are not
+/// configured.
+pub fn relying_party(config: &AuthConfig, name: &str) -> app::Result<Option<Webauthn>> {
     let Some(passkeys) = &config.passkeys else {
         return Ok(None);
     };
@@ -69,17 +69,17 @@ pub fn relying_party(config: &AuthConfig) -> app::Result<Option<Arc<Webauthn>>> 
             "auth.passkeys.origins must name at least one origin".to_string(),
         )));
     };
-    let mut builder = WebauthnBuilder::new(&passkeys.rp_id, first)?.rp_name(&config.service_name);
+    let mut builder = WebauthnBuilder::new(&passkeys.rp_id, first)?.rp_name(name);
     for origin in rest {
         builder = builder.append_allowed_origin(origin);
     }
-    Ok(Some(Arc::new(builder.build()?)))
+    Ok(Some(builder.build()?))
 }
 
-fn relying_party_of(state: &GlobalServerContext) -> app::Result<&Webauthn> {
-    state
-        .webauthn
-        .as_deref()
+/// The relying party for a ceremony, called what the deployment is called now. Building one
+/// only parses the configured origins, which the server checked as it started.
+fn relying_party_of(state: &GlobalServerContext) -> app::Result<Webauthn> {
+    relying_party(&state.config.auth, state.settings().name())?
         .ok_or(app::Error::PasskeysUnavailable)
 }
 
@@ -681,7 +681,7 @@ pub async fn remove(
 ) -> app::Result<()> {
     caller.ensure_recently_verified(&state.config.auth)?;
     let user_id = caller.user;
-    let require = state.config.auth.require_two_factor;
+    let require = state.settings().require_two_factor;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

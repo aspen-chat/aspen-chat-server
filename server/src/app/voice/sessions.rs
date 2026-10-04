@@ -69,13 +69,16 @@ pub async fn kick_participant(
 /// Removes `user` from every call they are in, as when they are banned from the deployment
 /// (`app::user_ban`) or their account ends. Each voice server disconnects them and reports
 /// their leaving; a join not yet reported is caught as its report is applied (`recheck_seat`).
-pub async fn kick_everywhere(state: &GlobalServerContext, user: UserId) -> app::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
+pub async fn kick_everywhere(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+) -> app::Result<()> {
     let calls: Vec<(VoiceSessionId, VoiceServerId)> = voice_participant::table
         .inner_join(voice_session::table)
         .select((voice_session::id, voice_session::voice_server))
         .filter(voice_participant::user.eq(user))
-        .load(conn.as_mut())
+        .load(conn)
         .await?;
     for (session, server) in calls {
         let payload = serde_json::to_vec(&VoiceCommand::Kick {
@@ -84,7 +87,7 @@ pub async fn kick_everywhere(state: &GlobalServerContext, user: UserId) -> app::
             reason: Some(KickReason::AccessLost),
         })?;
         state
-            .nats_context
+            .nats()
             .client()
             .publish(command_subject(server.0), payload.into())
             .await
@@ -144,6 +147,8 @@ pub enum Recheck {
     Category(CategoryId),
     /// Every call the user is in.
     User(UserId),
+    /// Every call on the deployment.
+    Everyone,
 }
 
 /// Brings the calls `which` names in line with what their participants may now do, after a
@@ -157,8 +162,7 @@ pub fn recheck(state: &GlobalServerContext, which: Recheck) {
     tokio::spawn(async move {
         let rechecked = async {
             let mut conn = state.connection_pool.get().await?;
-            let file_transfers = state.config.voice.file_transfers;
-            recheck_in(&state, conn.as_mut(), file_transfers, which).await
+            recheck_in(&state, conn.as_mut(), which).await
         };
         if let Err(e) = rechecked.await {
             warn!(?which, error = %e, "could not recheck who may stay in calls");
@@ -167,13 +171,13 @@ pub fn recheck(state: &GlobalServerContext, which: Recheck) {
 }
 
 /// `recheck` on `conn`, waiting for it, for an operator command, which has no server context.
-/// `file_transfers` is `[voice] file_transfers`.
 pub async fn recheck_in(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
-    file_transfers: bool,
     which: Recheck,
 ) -> app::Result<()> {
+    // Read from the row rather than a server's copy, which an operator command does not have.
+    let file_transfers = app::deployment_settings::load(conn).await?.file_transfers;
     let seats = voice_participant::table
         .inner_join(voice_session::table)
         .select((
@@ -200,6 +204,7 @@ pub async fn recheck_in(
             ),
         ),
         Recheck::User(user) => seats.filter(voice_participant::user.eq(user)),
+        Recheck::Everyone => seats,
     };
     let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
     for (session, server, channel, user) in seats {
@@ -508,7 +513,7 @@ pub(super) async fn apply_report(
             .first(conn.as_mut())
             .await
             .optional_not_found()?;
-        let file_transfers = state.config.voice.file_transfers;
+        let file_transfers = state.settings().file_transfers;
         if let Some(server) = server
             && let Err(e) = recheck_seat(
                 state,

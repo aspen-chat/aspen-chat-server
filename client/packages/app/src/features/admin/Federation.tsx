@@ -2,9 +2,10 @@ import {
   type FederatedDeployment,
   type FederationList,
   type FederationOverview,
+  type FederationUpdateRequest,
   type Gate,
 } from "@aspen/protocol";
-import { CopyIcon, KeyIcon, WarningIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CopyIcon, KeyIcon, WarningIcon } from "@phosphor-icons/react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import {
   Button,
@@ -12,19 +13,25 @@ import {
   Form,
   Input,
   Label,
+  ListBox,
+  ListBoxItem,
   Modal,
   ModalOverlay,
+  Popover,
+  Select,
+  SelectValue,
   TextField,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Directory, type Column } from "@/features/admin/Directory";
-import { Cell, Status, Table } from "@/features/admin/FleetHealth";
+import { Status } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
 import { useAdminRead, type AdminRead } from "@/features/admin/useAdminRead";
 import {
   alertClass,
   fieldClass,
+  hintClass,
   inputClass,
   labelClass,
   primaryButtonClass,
@@ -33,8 +40,11 @@ import {
   dangerButtonClass,
   dialogClass,
   modalClass,
+  optionClass,
   overlayClass,
   secondaryButtonClass,
+  selectButtonClass,
+  selectPopoverClass,
 } from "@/features/invites/dialog";
 import { copyText } from "@/features/layout/clipboard";
 import { ChoiceCheckbox } from "@/features/layout/choices";
@@ -62,8 +72,8 @@ function protocolRange(protocol: { version: number; minimum: number }): string {
 }
 
 /**
- * Federation, for holders of Manage federation: this deployment's domain, key, and gates as
- * aspen.toml sets them, adding other deployments (each contacted at once, pinning its key), and
+ * Federation, for holders of Manage federation: this deployment's domain and key, its gates,
+ * which are changed here for every server at once, adding other deployments (each contacted at once, pinning its key), and
  * the directory of those known, where each is checked again, put on and taken off the lists
  * the gates read, has a changed key reviewed and accepted, or is forgotten.
  */
@@ -186,7 +196,6 @@ function Identity({ read }: { read: AdminRead<FederationOverview> }) {
   if (overview.domain == null) {
     return <p className="text-sm text-ink-muted">{m.federation.notFederating}</p>;
   }
-  const gate = (value: Gate) => m.federation.gate[value];
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface-raised p-4">
       <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
@@ -211,29 +220,182 @@ function Identity({ read }: { read: AdminRead<FederationOverview> }) {
           )}
         </dd>
       </dl>
-      <Table
-        label={m.federation.gates}
-        headings={[m.federation.who, m.federation.going, m.federation.coming]}
-      >
-        {(
-          [
-            [m.federation.users, overview.users, overview.usersSharedList],
-            [m.federation.bots, overview.bots, overview.botsSharedList],
-          ] as const
-        ).map(([who, gates, shared]) => (
-          <tr key={who}>
-            <Cell>
-              <span className="font-medium">{who}</span>
-              {shared && (
-                <span className="block text-xs text-ink-muted">{m.federation.sharedList}</span>
-              )}
-            </Cell>
-            <Cell>{gate(gates.emigration)}</Cell>
-            <Cell>{gate(gates.immigration)}</Cell>
-          </tr>
-        ))}
-      </Table>
+      <GatesForm initial={overview} onSaved={read.reload} />
     </div>
+  );
+}
+
+/** The gates this form sets, each named as the request names it. */
+type Gates = {
+  [K in keyof FederationUpdateRequest]-?: NonNullable<FederationUpdateRequest[K]>;
+};
+
+/** What the gates are in `overview`, as the form holds them. */
+function gatesOf(overview: FederationOverview): Gates {
+  return {
+    usersEmigration: overview.users.emigration,
+    usersImmigration: overview.users.immigration,
+    usersSharedList: overview.usersSharedList,
+    usersImmigrationInviteRequired: overview.usersImmigrationInviteRequired,
+    botsEmigration: overview.bots.emigration,
+    botsImmigration: overview.bots.immigration,
+    botsSharedList: overview.botsSharedList,
+    botsImmigrationInviteRequired: overview.botsImmigrationInviteRequired,
+  };
+}
+
+/** The gates a deployment may set; `unknown` is only ever another deployment's. */
+const SETTABLE_GATES: readonly Gate[] = ["closed", "open", "allowList", "blockList"];
+
+/**
+ * The gates of users and of bots, each way, with whether a kind's two gates share one list and
+ * whether a first arrival needs a registration invite. Saving sends only what changed; the
+ * server's answer is what the fields then start from.
+ */
+function GatesForm({ initial, onSaved }: { initial: FederationOverview; onSaved: () => void }) {
+  const m = useMessages();
+  const sync = useSync();
+  const [saved, setSaved] = useState(() => gatesOf(initial));
+  const [draft, setDraft] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const change: FederationUpdateRequest = Object.fromEntries(
+    (Object.keys(draft) as (keyof Gates)[])
+      .filter((key) => draft[key] !== saved[key])
+      .map((key) => [key, draft[key]]),
+  );
+
+  function set<K extends keyof Gates>(key: K, value: Gates[K]) {
+    setDraft((d) => ({ ...d, [key]: value }));
+    setDone(false);
+  }
+
+  const kinds = [
+    ["users", m.federation.users],
+    ["bots", m.federation.bots],
+  ] as const;
+  return (
+    <Form
+      aria-label={m.federation.gates}
+      onSubmit={(event) => {
+        event.preventDefault();
+        setSaving(true);
+        setError(null);
+        void sync.admin
+          .updateFederation(change)
+          .then((now) => {
+            const gates = gatesOf(now);
+            setSaved(gates);
+            setDraft(gates);
+            setDone(true);
+            onSaved();
+          })
+          .catch((e: unknown) => {
+            setError(problemText(e));
+          })
+          .finally(() => {
+            setSaving(false);
+          });
+      }}
+      className="flex flex-col gap-3"
+    >
+      <div>
+        <h3 className="font-semibold">{m.federation.gates}</h3>
+        <p className={hintClass}>{m.federation.gatesHint}</p>
+      </div>
+      {kinds.map(([kind, who]) => (
+        <fieldset key={kind} className="flex flex-col gap-2">
+          <legend className="mb-1 font-medium">{who}</legend>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <GateSelect
+              label={m.federation.going}
+              value={draft[`${kind}Emigration`]}
+              onChange={(gate) => {
+                set(`${kind}Emigration`, gate);
+              }}
+            />
+            <GateSelect
+              label={m.federation.coming}
+              value={draft[`${kind}Immigration`]}
+              onChange={(gate) => {
+                set(`${kind}Immigration`, gate);
+              }}
+            />
+          </div>
+          <ChoiceCheckbox
+            isSelected={draft[`${kind}SharedList`]}
+            onChange={(shared) => {
+              set(`${kind}SharedList`, shared);
+            }}
+            label={m.federation.sharedList}
+            hint={m.federation.sharedListHint}
+          />
+          <ChoiceCheckbox
+            isSelected={draft[`${kind}ImmigrationInviteRequired`]}
+            onChange={(required) => {
+              set(`${kind}ImmigrationInviteRequired`, required);
+            }}
+            label={m.federation.immigrationInviteRequired}
+          />
+        </fieldset>
+      ))}
+      {error !== null && (
+        <p role="alert" className={alertClass}>
+          {error}
+        </p>
+      )}
+      <div className="flex items-center gap-3">
+        <Button
+          type="submit"
+          isDisabled={saving || Object.keys(change).length === 0}
+          className={primaryButtonClass}
+        >
+          {saving ? m.federation.savingGates : m.federation.saveGates}
+        </Button>
+        {done && (
+          <span role="status" className="text-sm text-ink-muted">
+            {m.federation.gatesSaved}
+          </span>
+        )}
+      </div>
+    </Form>
+  );
+}
+
+function GateSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: Gate;
+  onChange: (gate: Gate) => void;
+}) {
+  const m = useMessages();
+  return (
+    <Select
+      value={value}
+      onChange={(key) => {
+        onChange(key as Gate);
+      }}
+      className={fieldClass}
+    >
+      <Label className={labelClass}>{label}</Label>
+      <Button className={selectButtonClass + " py-2"}>
+        <SelectValue />
+        <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />
+      </Button>
+      <Popover className={selectPopoverClass}>
+        <ListBox>
+          {SETTABLE_GATES.map((gate) => (
+            <ListBoxItem key={gate} id={gate} className={optionClass}>
+              {m.federation.gate[gate]}
+            </ListBoxItem>
+          ))}
+        </ListBox>
+      </Popover>
+    </Select>
   );
 }
 

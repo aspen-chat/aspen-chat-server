@@ -1,7 +1,7 @@
 //! What people may do across the whole deployment, rather than in one community: open the
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
-//! own roles, bots, federation with other deployments, and report categories, moderate any
-//! community, review reports, ban users from the deployment, and message anyone.
+//! own roles, bots, federation with other deployments, report categories, and settings,
+//! moderate any community, review reports, ban users from the deployment, and message anyone.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -46,6 +46,7 @@ bitflags::bitflags! {
         const MANAGE_REPORT_CATEGORIES = 1 << 8;
         const BAN_USERS = 1 << 9;
         const MESSAGE_ANY_USER = 1 << 10;
+        const MANAGE_DEPLOYMENT_SETTINGS = 1 << 11;
     }
 }
 
@@ -97,6 +98,7 @@ pub enum DeploymentPermission {
     ManageReportCategories,
     BanUsers,
     MessageAnyUser,
+    ManageDeploymentSettings,
 }
 
 impl DeploymentPermission {
@@ -115,6 +117,7 @@ impl DeploymentPermission {
             Self::ManageReportCategories => DeploymentPermissions::MANAGE_REPORT_CATEGORIES,
             Self::BanUsers => DeploymentPermissions::BAN_USERS,
             Self::MessageAnyUser => DeploymentPermissions::MESSAGE_ANY_USER,
+            Self::ManageDeploymentSettings => DeploymentPermissions::MANAGE_DEPLOYMENT_SETTINGS,
         }
     }
 
@@ -131,6 +134,7 @@ impl DeploymentPermission {
             Self::ManageReportCategories => t!("deploymentManageReportCategories"),
             Self::BanUsers => t!("deploymentBanUsers"),
             Self::MessageAnyUser => t!("deploymentMessageAnyUser"),
+            Self::ManageDeploymentSettings => t!("deploymentManageDeploymentSettings"),
         }
     }
 }
@@ -277,9 +281,12 @@ mod tests {
             to_names(DeploymentPermissions::all()),
             DeploymentPermission::ALL.to_vec()
         );
-        // What `admin grant` gives: the first seven but moderation, and Manage report
-        // categories, as the migrations give existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 111 | 256);
+        // What `admin grant` gives: the first seven but moderation, Manage report categories,
+        // and Manage deployment settings, as the migrations give existing administrators.
+        assert_eq!(
+            DeploymentPermissions::ADMINISTRATOR.bits(),
+            111 | 256 | 2048
+        );
     }
 
     #[test]

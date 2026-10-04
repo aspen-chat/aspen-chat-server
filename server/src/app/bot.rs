@@ -122,7 +122,7 @@ async fn ensure_may_own(
     if foreign {
         return Err(app::Error::Validation(t!("botOwnerMustBeLocal")));
     }
-    let max = state.config.bots.max_per_user;
+    let max = state.settings().bots_max_per_user;
     if owned_count(conn, owner).await? >= i64::from(max) {
         return Err(at_limit(max));
     }
@@ -159,7 +159,7 @@ pub async fn create(
     name: String,
     display_name: Option<String>,
 ) -> app::Result<(User, String)> {
-    if !state.config.bots.enabled {
+    if !state.settings().bots_enabled {
         return Err(app::Error::Forbidden(t!("botsDisabled")));
     }
     validate_username(&name)?;

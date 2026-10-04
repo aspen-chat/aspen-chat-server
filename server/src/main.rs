@@ -125,6 +125,17 @@ enum Command {
         #[clap(subcommand)]
         action: operator::FederationCommand,
     },
+    /// Operator commands for the deployment's settings: its name, policies, and federation
+    /// gates.
+    Settings {
+        #[clap(subcommand)]
+        action: operator::SettingsCommand,
+    },
+    /// Operator commands for the registry of voice servers.
+    VoiceServers {
+        #[clap(subcommand)]
+        action: operator::VoiceServersCommand,
+    },
 }
 
 thread_local! {
@@ -216,6 +227,8 @@ async fn run(options: Opt) -> Result<()> {
             Command::Invites { action } => operator::invites(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
             Command::Federation { action } => operator::federation(&config, action).await,
+            Command::Settings { action } => operator::settings(&config, action).await,
+            Command::VoiceServers { action } => operator::voice_servers(&config, action).await,
         };
     }
     let app = api::make_router(options.gen_openapi_schema).await?;

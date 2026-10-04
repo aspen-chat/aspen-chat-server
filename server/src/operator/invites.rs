@@ -52,9 +52,14 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(code = %invite.code, operator = operator(), "made a registration invite");
             println!("{}", invite.code);
-            if !config.registration.invite_required {
+            let settings = crate::app::deployment_settings::load(&mut conn)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            if !settings.registration_invite_required {
                 eprintln!(
-                    "note: [registration] invite_required is off, so this server does not ask for it"
+                    "note: registering takes no invite on this deployment; \
+                     `aspen-chat-server settings set --registration-invite-required true` \
+                     makes it take one"
                 );
             }
         }

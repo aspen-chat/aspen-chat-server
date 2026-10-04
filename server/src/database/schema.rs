@@ -188,19 +188,36 @@ diesel::table! {
 }
 
 diesel::table! {
-    deployment_profile (singleton) {
-        singleton -> Bool,
-        display_name -> Nullable<Text>,
-        icon -> Nullable<Uuid>,
-    }
-}
-
-diesel::table! {
     deployment_role (id) {
         id -> Uuid,
         name -> Text,
         position -> Int4,
         permissions -> Int8,
+    }
+}
+
+diesel::table! {
+    deployment_settings (singleton) {
+        singleton -> Bool,
+        display_name -> Nullable<Text>,
+        icon -> Nullable<Uuid>,
+        revision -> Int8,
+        federation_domain -> Nullable<Text>,
+        registration_invite_required -> Bool,
+        require_two_factor -> Bool,
+        bots_enabled -> Bool,
+        bots_max_per_user -> Int4,
+        everyone_mention_limit -> Int4,
+        custom_emoji_limit -> Int4,
+        file_transfers -> Bool,
+        users_emigration -> Text,
+        users_immigration -> Text,
+        users_shared_list -> Bool,
+        users_immigration_invite_required -> Bool,
+        bots_emigration -> Text,
+        bots_immigration -> Text,
+        bots_shared_list -> Bool,
+        bots_immigration_invite_required -> Bool,
     }
 }
 
@@ -716,7 +733,7 @@ diesel::joinable!(community_user -> user (user));
 diesel::joinable!(custom_emoji -> community (community));
 diesel::joinable!(custom_emoji -> icon (icon));
 diesel::joinable!(custom_emoji -> user (created_by));
-diesel::joinable!(deployment_profile -> icon (icon));
+diesel::joinable!(deployment_settings -> icon (icon));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
@@ -799,8 +816,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_role,
     community_user,
     custom_emoji,
-    deployment_profile,
     deployment_role,
+    deployment_settings,
     dm_recipient,
     federated_deployment,
     federation_key,

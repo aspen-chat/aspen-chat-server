@@ -1,12 +1,98 @@
-//! Federation policy: the lists a deployment may be on ([`FederationList`]) and whether the
-//! gates in `[federation]` admit a crossing ([`admits`]).
+//! Federation policy: the gates, which are deployment settings (`app::deployment_settings`), the
+//! lists a deployment may be on ([`FederationList`]), and whether the gates admit a crossing
+//! ([`admits`]).
 
 use crate::app;
-use crate::aspen_config::{FederationConfig, Gate, MigrationRules};
 use diesel::{AsExpression, FromSqlRow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+/// One direction's gate.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Deserialize,
+    Serialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[serde(rename_all = "camelCase")]
+#[diesel(sql_type = diesel::sql_types::Text)]
+pub enum Gate {
+    /// No one crosses.
+    #[default]
+    Closed,
+    /// Anyone crosses, to or from any deployment.
+    Open,
+    /// Only to or from the deployments on this direction's allow list.
+    AllowList,
+    /// To or from any deployment but those on this direction's block list.
+    BlockList,
+    /// A gate another deployment publishes that this one does not know, as a newer one may.
+    /// Never set here: the settings hold only the gates above.
+    #[serde(other)]
+    Unknown,
+}
+
+app::wire_name_traits!(Gate);
+app::text_sql_traits!(Gate);
+
+/// Who may cross between this deployment and others, one direction at a time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MigrationRules {
+    /// This deployment's accounts using other deployments.
+    pub emigration: Gate,
+    /// Other deployments' accounts using this one.
+    pub immigration: Gate,
+    /// Both directions read one list instead of a list each. Both gates then use a list, and
+    /// the same kind of list.
+    pub shared_list: bool,
+    /// Whether an account of another deployment arriving here for the first time needs a
+    /// registration invite (`app::registration_invite`), as the deployment setting
+    /// `registration_invite_required` asks of accounts made here.
+    pub immigration_invite_required: bool,
+}
+
+/// The deployment's federation policy: the gates of its users and, separately, its bots.
+///
+/// The policy, in the terms operators use, is the gates of its users: none (both closed, the
+/// default), emigration (only `emigration` open or on a list), immigration (only `immigration`),
+/// and full (both), each either open or with a list. Bots' gates work the same way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FederationPolicy {
+    pub users: MigrationRules,
+    pub bots: MigrationRules,
+}
+
+impl FederationPolicy {
+    /// Whether any gate lets anyone cross.
+    pub fn enabled(&self) -> bool {
+        [&self.users, &self.bots]
+            .iter()
+            .any(|rules| rules.emigration != Gate::Closed || rules.immigration != Gate::Closed)
+    }
+
+    /// Whether an immigration gate lets accounts of other deployments in.
+    pub fn admits_anyone(&self) -> bool {
+        self.users.immigration != Gate::Closed || self.bots.immigration != Gate::Closed
+    }
+
+    /// The rules for `subject`.
+    pub fn rules(&self, subject: Subject) -> &MigrationRules {
+        match subject {
+            Subject::Users => &self.users,
+            Subject::Bots => &self.bots,
+        }
+    }
+}
 
 /// Whose crossing a gate governs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,7 +125,7 @@ pub enum ListKind {
 }
 
 /// A list a deployment may be on, named by whose crossings it governs, which way, and whether
-/// it allows or blocks. Only the lists `[federation]` puts in force are read; the others keep
+/// it allows or blocks. Only the lists the gates put in force are read; the others keep
 /// their entries, so switching a gate from an allow list to a block list never turns the
 /// deployments allowed into ones blocked.
 #[derive(
@@ -109,14 +195,14 @@ impl FederationList {
             .expect("every combination of parts names a list")
     }
 
-    /// The list that decides `subject`'s crossings `direction` under `config`, if a list
+    /// The list that decides `subject`'s crossings `direction` under `policy`, if a list
     /// decides them.
     pub fn in_force(
-        config: &FederationConfig,
+        policy: &FederationPolicy,
         subject: Subject,
         direction: Direction,
     ) -> Option<Self> {
-        let rules = rules_for(config, subject);
+        let rules = policy.rules(subject);
         let kind = match gate(rules, direction) {
             Gate::AllowList => ListKind::Allow,
             Gate::BlockList => ListKind::Block,
@@ -130,12 +216,12 @@ impl FederationList {
         Some(Self::of(subject, direction, kind))
     }
 
-    /// Every list `config` puts in force, each once.
-    pub fn all_in_force(config: &FederationConfig) -> Vec<Self> {
+    /// Every list `policy` puts in force, each once.
+    pub fn all_in_force(policy: &FederationPolicy) -> Vec<Self> {
         let mut lists = Vec::new();
         for subject in [Subject::Users, Subject::Bots] {
             for direction in [Direction::Emigration, Direction::Immigration] {
-                if let Some(list) = Self::in_force(config, subject, direction)
+                if let Some(list) = Self::in_force(policy, subject, direction)
                     && !lists.contains(&list)
                 {
                     lists.push(list);
@@ -143,13 +229,6 @@ impl FederationList {
             }
         }
         lists
-    }
-}
-
-fn rules_for(config: &FederationConfig, subject: Subject) -> &MigrationRules {
-    match subject {
-        Subject::Users => &config.users,
-        Subject::Bots => &config.bots,
     }
 }
 
@@ -162,16 +241,16 @@ fn gate(rules: &MigrationRules, direction: Direction) -> Gate {
 
 /// Whether `subject` may cross `direction` between this deployment and one that is on `lists`.
 pub fn admits(
-    config: &FederationConfig,
+    policy: &FederationPolicy,
     subject: Subject,
     direction: Direction,
     lists: &[FederationList],
 ) -> bool {
-    match gate(rules_for(config, subject), direction) {
+    match gate(policy.rules(subject), direction) {
         Gate::Closed | Gate::Unknown => false,
         Gate::Open => true,
         Gate::AllowList | Gate::BlockList => {
-            let list = FederationList::in_force(config, subject, direction)
+            let list = FederationList::in_force(policy, subject, direction)
                 .expect("a gate with a list has a list in force");
             let on = lists.contains(&list);
             match list.parts().2 {
@@ -185,7 +264,6 @@ pub fn admits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aspen_config::FederationDevelopment;
 
     #[test]
     fn list_names_round_trip() {
@@ -196,13 +274,10 @@ mod tests {
         }
     }
 
-    fn config(users: MigrationRules) -> FederationConfig {
-        FederationConfig {
-            domain: Some("a.example".into()),
+    fn config(users: MigrationRules) -> FederationPolicy {
+        FederationPolicy {
             users,
             bots: MigrationRules::default(),
-            development: FederationDevelopment::default(),
-            ..FederationConfig::default()
         }
     }
 

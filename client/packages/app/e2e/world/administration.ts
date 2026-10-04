@@ -102,8 +102,20 @@ export function administration() {
     displayName: "Family Server",
     icon: null,
   };
+  // The deployment's policies, as `GET /admin/settings` answers and its `PATCH` changes.
+  const settings: Record<string, number | boolean> = {
+    registrationInviteRequired: true,
+    requireTwoFactor: false,
+    botsEnabled: true,
+    botsMaxPerUser: 25,
+    everyoneMentionLimit: 200,
+    customEmojiLimit: 1000,
+    fileTransfers: true,
+  };
   return {
     profile: () => profile,
+    settings: () => settings,
+    updateSettings: (change: Record<string, number | boolean>) => Object.assign(settings, change),
     updateProfile: (change: { displayName?: string | null }) => {
       if (change.displayName !== undefined) {
         profile.displayName = change.displayName;

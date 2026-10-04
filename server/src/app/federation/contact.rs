@@ -196,8 +196,8 @@ pub async fn record_contact(
 mod tests {
     use super::*;
     use crate::app::FederationKeyId;
+    use crate::app::federation::Gate;
     use crate::app::federation::keys::{DocumentKey, Gates, KeyAlgorithm};
-    use crate::aspen_config::Gate;
     use base64::Engine as _;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 

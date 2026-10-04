@@ -310,7 +310,7 @@ async fn issue(
         refresh_token,
         session_token,
         session_token_expires,
-        enrollment_required: state.config.auth.require_two_factor
+        enrollment_required: state.settings().require_two_factor
             && method == SignInMethod::Password
             && !foreign,
     })
