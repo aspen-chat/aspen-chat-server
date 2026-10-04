@@ -9,7 +9,7 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { messageLink, useDomain } from "@/features/messages/links";
 import { BotBadge, SystemBadge } from "@/features/users/BotBadge";
-import { displayNameOf } from "@/features/users/profile";
+import { useNameIn } from "@/features/users/nameIn";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 
@@ -38,7 +38,7 @@ export function EmbeddedMessage({
   const domain = useDomain();
   const author = useUser(message.author);
   const timeFormat = useDateFormat(TIME);
-  const name = author === undefined ? m.unknownUser : displayNameOf(author);
+  const name = useNameIn(author, community) ?? m.unknownUser;
   const nameColor = useNameColor(message.author, community);
   const time = (
     <time dateTime={message.timestamp}>{timeFormat.format(new Date(message.timestamp))}</time>

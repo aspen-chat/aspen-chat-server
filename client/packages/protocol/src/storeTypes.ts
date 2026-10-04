@@ -64,6 +64,7 @@ export type Listener = () => void;
  * - `invites:<communityId>`, `invite:<code>`: a community's invites, once loaded
  * - `roles:<communityId>`: a community's roles, lowest first, and which of them each member
  *   holds
+ * - `nicknames:<communityId>`: the nicknames members chose in a community
  * - `overrides:<channelId|categoryId>`: one channel's or category's overrides
  * - `access:<communityId>`: what the caller may do across a community
  * - `channelAccess:<channelId>`: what the caller may do in one channel

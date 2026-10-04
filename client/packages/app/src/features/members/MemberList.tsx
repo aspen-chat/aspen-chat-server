@@ -2,11 +2,12 @@ import { shownApartRole, type Role, type User, type UserOnlineStatus } from "@as
 import { PaneEdge } from "@/features/layout/ResizablePane";
 import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
-import { useBlocked, useMembers, useRolesOfMembers } from "@/api/hooks";
+import { useBlocked, useMembers, useNicknames, useRolesOfMembers } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
 import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameColor } from "@/features/users/nameColor";
+import { useNameIn } from "@/features/users/nameIn";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -46,6 +47,11 @@ export function MemberGroups({
   const m = useMessages();
   const members = useMembers(communityId);
   const { roles, of } = useRolesOfMembers(communityId);
+  const nicknames = useNicknames(communityId);
+  const byName = (a: User, b: User): number =>
+    (nicknames.get(a.id) ?? displayNameOf(a)).localeCompare(
+      nicknames.get(b.id) ?? displayNameOf(b),
+    );
   const apart = new Map<string, { role: Role; users: User[] }>();
   const online: User[] = [];
   const offline: User[] = [];
@@ -91,10 +97,6 @@ export function MemberGroups({
   );
 }
 
-function byName(a: User, b: User): number {
-  return displayNameOf(a).localeCompare(displayNameOf(b));
-}
-
 function MemberGroup({
   heading,
   headingLevel,
@@ -128,7 +130,7 @@ function MemberRow({ user, communityId }: { user: User; communityId: string }) {
   const m = useMessages();
   const offline = user.onlineStatus === "offline";
   const blocked = useBlocked(user.id);
-  const name = displayNameOf(user);
+  const name = useNameIn(user, communityId) ?? displayNameOf(user);
   // An offline row is dimmed, and a dimmed colour would no longer read against the list, so an
   // offline name keeps the plain ink, which reads dimmed.
   const nameColor = useNameColor(user.id, communityId);

@@ -1182,6 +1182,63 @@ describe("RecordStore roles and access", () => {
     expect(store.access(aspen.id, bob.id)?.has("manageMessages")).toBe(false);
   });
 
+  it("keeps each member's nickname per community, as reads and events give it", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen, birch], {
+      users: [me, bob],
+      userCommunities: [
+        { community: aspen.id, user: bob.id, sortIndex: 0, roles: [], nickname: "Bobbin" },
+        { community: birch.id, user: bob.id, sortIndex: 0, roles: [] },
+      ],
+    });
+    expect(store.nickname(aspen.id, bob.id)).toBe("Bobbin");
+    expect(store.nickname(birch.id, bob.id)).toBeUndefined();
+    expect(store.nicknames(aspen.id).get(bob.id)).toBe("Bobbin");
+    const listener = vi.fn();
+    store.subscribe(`nicknames:${aspen.id}`, listener);
+    // An update without the field leaves the nickname alone.
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      roles: [],
+    });
+    expect(store.nickname(aspen.id, bob.id)).toBe("Bobbin");
+    expect(listener).not.toHaveBeenCalled();
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      nickname: "Robert",
+    });
+    expect(store.nickname(aspen.id, bob.id)).toBe("Robert");
+    expect(listener).toHaveBeenCalledTimes(1);
+    // `null` clears it.
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      nickname: null,
+    });
+    expect(store.nickname(aspen.id, bob.id)).toBeUndefined();
+    expect(store.nicknames(aspen.id).size).toBe(0);
+    store.noteMemberships([
+      { community: aspen.id, user: bob.id, sortIndex: null, roles: [], nickname: "Bob B." },
+    ]);
+    expect(store.nickname(aspen.id, bob.id)).toBe("Bob B.");
+    // Leaving takes it with the membership.
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "delete",
+      community: aspen.id,
+      user: bob.id,
+    });
+    expect(store.nickname(aspen.id, bob.id)).toBeUndefined();
+  });
+
   it("lets go of a channel the caller may no longer view, and keeps it for its role", () => {
     const store = withRoles();
     const listener = vi.fn();

@@ -209,6 +209,8 @@ export class RecordStore {
   readonly #commands = new Map<string, readonly BotCommands[]>();
   /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
   readonly #memberRoles = new Map<string, readonly string[]>();
+  /** `community/user -> nickname` of each member known to have one there. */
+  readonly #nicknames = new Map<string, string>();
   /** What the caller may do across the deployment. */
   #deployment: ReadonlySet<DeploymentPermission> = new Set();
   /** How many report cases await review, for a reviewer, once read; and each change to them. */
@@ -430,6 +432,28 @@ export class RecordStore {
     return this.#memberRoles.get(`${communityId}/${userId}`);
   }
 
+  /**
+   * Topic `nicknames:<communityId>`: the name a member chose in the community, which it shows
+   * in place of their display name, or `undefined` when they chose none or no read has said.
+   */
+  nickname(communityId: string, userId: string): string | undefined {
+    return this.#nicknames.get(`${communityId}/${userId}`);
+  }
+
+  /** Topic `nicknames:<communityId>`: `user -> nickname` for every member known to have one. */
+  nicknames(communityId: string): ReadonlyMap<string, string> {
+    return this.#memoized(`nicknames:${communityId}`, () => {
+      const prefix = `${communityId}/`;
+      const found = new Map<string, string>();
+      for (const [key, nickname] of this.#nicknames) {
+        if (key.startsWith(prefix)) {
+          found.set(key.slice(prefix.length), nickname);
+        }
+      }
+      return found;
+    });
+  }
+
   /** Topic `overrides:<channelId>`. */
   channelOverrides(channelId: string): readonly ChannelOverride[] {
     return this.#memoized(`overrides:${channelId}`, () =>
@@ -513,13 +537,14 @@ export class RecordStore {
   }
 
   /**
-   * Records the roles of members a search found, without making them part of the community's
-   * member sample, which stays what the community read gave.
+   * Records the roles and nicknames of members a search or a read found, without making them
+   * part of the community's member sample, which stays what the community read gave.
    */
-  noteMemberRoles(memberships: readonly UserCommunity[]): void {
+  noteMemberships(memberships: readonly UserCommunity[]): void {
     this.#batch(() => {
       for (const membership of memberships) {
         this.#setMemberRoles(membership.community, membership.user, membership.roles);
+        this.#setNickname(membership.community, membership.user, membership.nickname);
       }
     });
   }
@@ -1337,6 +1362,7 @@ export class RecordStore {
           }
           ids.push(membership.user);
           this.#setMemberRoles(membership.community, membership.user, membership.roles);
+          this.#setNickname(membership.community, membership.user, membership.nickname);
           // Only the caller's own membership says where it sits in their list.
           if (membership.user === this.#myUserId && membership.sortIndex != null) {
             this.#setMyOrder(membership.community, membership.sortIndex);
@@ -1707,6 +1733,7 @@ export class RecordStore {
       this.#channelOverrides.clear();
       this.#categoryOverrides.clear();
       this.#memberRoles.clear();
+      this.#nicknames.clear();
       this.#deployment = new Set();
       this.#windows.clear();
       this.#invites.clear();
@@ -1825,6 +1852,7 @@ export class RecordStore {
           if (event.type === "create") {
             this.#addMember(event.community, event.user);
             this.#setMemberRoles(event.community, event.user, event.roles);
+            this.#setNickname(event.community, event.user, event.nickname);
             if (event.user === this.#myUserId) {
               this.#myCommunities.add(event.community);
               if (event.sortIndex != null) {
@@ -1839,9 +1867,13 @@ export class RecordStore {
             if (event.roles != null) {
               this.#setMemberRoles(event.community, event.user, event.roles);
             }
+            if (event.nickname !== undefined) {
+              this.#setNickname(event.community, event.user, event.nickname);
+            }
           } else {
             this.#removeMember(event.community, event.user);
             this.#setMemberRoles(event.community, event.user, undefined);
+            this.#setNickname(event.community, event.user, undefined);
             // Leaving, being removed, or being banned takes the whole community away: nothing
             // of it reaches the caller any more, so nothing held of it stays.
             if (event.user === this.#myUserId) {
@@ -2239,7 +2271,13 @@ export class RecordStore {
         this.#memberRoles.delete(key);
       }
     }
+    for (const key of Array.from(this.#nicknames.keys())) {
+      if (key.startsWith(`${id}/`)) {
+        this.#nicknames.delete(key);
+      }
+    }
     this.#touch(`roles:${id}`);
+    this.#touch(`nicknames:${id}`);
     this.#touch(`access:${id}`);
     for (const invite of Array.from(this.#invites.values())) {
       if (invite.community === id) {
@@ -2403,6 +2441,19 @@ export class RecordStore {
     for (const community of communities) {
       this.#accessChanged(community);
     }
+  }
+
+  #setNickname(communityId: string, userId: string, nickname: string | null | undefined): void {
+    const key = `${communityId}/${userId}`;
+    if ((nickname ?? undefined) === this.#nicknames.get(key)) {
+      return;
+    }
+    if (nickname == null) {
+      this.#nicknames.delete(key);
+    } else {
+      this.#nicknames.set(key, nickname);
+    }
+    this.#touch(`nicknames:${communityId}`);
   }
 
   #setMemberRoles(communityId: string, userId: string, roles: readonly string[] | undefined): void {

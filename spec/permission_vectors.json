@@ -351,6 +351,8 @@
                 "addBots",
                 "manageCustomEmoji",
                 "banMembers",
+                "changeNickname",
+                "manageNicknames",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -382,6 +384,8 @@
                 "addBots",
                 "manageCustomEmoji",
                 "banMembers",
+                "changeNickname",
+                "manageNicknames",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -1064,11 +1068,13 @@
             "community": [
                 "removeMembers",
                 "manageMessages",
+                "manageNicknames",
                 "viewChannel"
             ],
             "channel": [
                 "removeMembers",
                 "manageMessages",
+                "manageNicknames",
                 "viewChannel"
             ],
             "rank": 2147483646
@@ -1117,6 +1123,7 @@
                 "createInvites",
                 "removeMembers",
                 "manageMessages",
+                "manageNicknames",
                 "viewChannel",
                 "sendMessages",
                 "attachFiles",
@@ -1136,6 +1143,7 @@
                 "createInvites",
                 "removeMembers",
                 "manageMessages",
+                "manageNicknames",
                 "viewChannel",
                 "attachFiles",
                 "addReactions",

@@ -166,6 +166,7 @@ export const admin = {
     liftUserBan: "Lifted a ban from the server",
     warnUser: "Warned someone",
     resetProfile: "Reset someone's profile",
+    clearNickname: "Cleared someone's nickname",
     readReportContext: "Read the DM around a reported message",
   },
   invite: "Invite",

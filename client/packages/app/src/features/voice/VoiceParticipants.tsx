@@ -20,7 +20,7 @@ import {
 import { useNameColor } from "@/features/users/nameColor";
 import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
-import { displayNameOf } from "@/features/users/profile";
+import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
 import { visibleParticipants } from "@/features/voice/voiceList";
 import { useMessages } from "@/i18n/context";
@@ -83,7 +83,7 @@ function ParticipantRow({
   const self = useMe()?.id === userId;
   const mutedForMe = usePreference(userMuted(userId));
   const blocked = useBlocked(userId);
-  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  const name = useNameIn(user, useChannel(channelId)?.community) ?? m.unknownUser;
   const row = useRef<HTMLLIElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const avatar = (

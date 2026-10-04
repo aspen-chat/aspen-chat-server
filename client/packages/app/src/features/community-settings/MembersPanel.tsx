@@ -17,6 +17,7 @@ import {
   useCommunity,
   useMe,
   useMemberRoles,
+  useNickname,
   useRoles,
   useStore,
   useSync,
@@ -38,12 +39,14 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 import { problemText } from "@/api/problemText";
+import { ClearNicknameButton } from "@/features/users/Nickname";
 
 /**
  * The community's members, each with their roles: the member sample, or, for those who may search
- * every member, whoever the search finds. Those who
- * may assign roles change a member's roles below their own highest; those who may remove
- * members remove anyone ranked below them, never the owner.
+ * every member, whoever the search finds, each called by their nickname with their display name
+ * beside it. Those who may assign roles change a member's roles below their own highest; those
+ * who may remove members, or clear nicknames, do so to anyone ranked below them, never the
+ * owner.
  */
 export function MembersPanel({ communityId }: { communityId: string }) {
   const m = useMessages();
@@ -90,7 +93,8 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
   const held = useMemberRoles(communityId, member.id);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const name = displayNameOf(member);
+  const nickname = useNickname(communityId, member.id);
+  const name = nickname ?? displayNameOf(member);
   const owner = community?.owner === member.id;
   const self = me?.id === member.id;
   const theirs = store.access(communityId, member.id);
@@ -116,6 +120,9 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
         <Avatar name={name} iconId={member.icon} size="sm" />
         <span className="truncate font-medium">
           {name}
+          {nickname !== undefined && (
+            <span className="font-normal text-ink-muted"> · {displayNameOf(member)}</span>
+          )}
           {self && <span className="font-normal text-ink-muted"> ({m.members.you})</span>}
         </span>
         {owner && (
@@ -146,6 +153,12 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
               onError={setError}
             />
           )}
+          <ClearNicknameButton
+            communityId={communityId}
+            userId={member.id}
+            name={name}
+            onError={setError}
+          />
           {mayBan && (
             <>
               <Button

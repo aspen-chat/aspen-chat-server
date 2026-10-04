@@ -488,8 +488,125 @@ def name_colours(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.member["name"])
     world.stream.gather(0.5)
 
+def nicknames(world: World, check: Checks) -> None:
+    say("nicknames: choosing, losing Change nickname, clearing, and reporting")
+    stack = world.stack
+    community, member = world.community, world.member
+    mine = f"/communities/{community}/members/@me"
+    owner_stream = stack.events(world.owner["token"])
+    owner_stream.gather(0.5)
+    stack.api("PATCH", mine, {"nickname": "Aster"}, member["token"])
+    got = owner_stream.gather(1.0)
+    heard = of(got, "userCommunity", type="update", user=member["id"])
+    check("a nickname chosen reaches the rest of the community",
+          any(e.get("nickname") == "Aster" for e in heard), got)
+    check("without the member's own list position", all("sortIndex" not in e for e in heard), heard)
+    check("and reads back from the member's record",
+          world.as_owner("GET", f"/communities/{community}/members/{member['id']}").get("nickname") == "Aster")
+    stack.api("PATCH", mine, {"sortIndex": 7}, member["token"])
+    check("a reorder alone tells the community nothing",
+          not of(owner_stream.gather(1.0), "userCommunity", user=member["id"]))
+    everyone = next(r for r in world.as_owner("GET", f"/communities/{community}/roles") if r["everyone"])
+    kept = [p for p in everyone["permissions"] if p != "changeNickname"]
+    world.as_owner("PATCH", f"/roles/{world.everyone}", {"permissions": kept})
+    check("without Change nickname, a member cannot choose another",
+          stack.status("PATCH", mine, {"nickname": "Bramble"}, member["token"]) == 403)
+    check("but keeps the one they had",
+          world.as_owner("GET", f"/communities/{community}/members/{member['id']}").get("nickname") == "Aster")
+    check("and may clear their own",
+          stack.status("DELETE", f"{mine}/nickname", token=member["token"]) == 204)
+    check("which the community hears", any(
+        "nickname" in e and e["nickname"] is None
+        for e in of(owner_stream.gather(1.0), "userCommunity", type="update", user=member["id"])))
+    world.as_owner("PATCH", f"/roles/{world.everyone}", {"permissions": kept + ["changeNickname"]})
+    stack.api("PATCH", mine, {"nickname": "Aster"}, member["token"])
+    world.as_owner("PATCH", mine, {"nickname": "Captain"})
+
+    moderator = world.account("nickmod")
+    invite = world.as_owner("POST", f"/communities/{community}/invites", {})
+    stack.api("PUT", mine, {"inviteCode": invite.get("code") or invite.get("id")}, moderator["token"])
+    clearers = world.role("Clearers", ["manageNicknames"])
+    world.as_owner("PUT", f"/communities/{community}/members/{moderator['id']}/roles/{clearers}")
+    check("without Manage nicknames, nobody clears another's",
+          stack.status("DELETE", f"/communities/{community}/members/{moderator['id']}/nickname",
+                       token=member["token"]) == 403)
+    check("with it, a moderator clears a member's below them",
+          stack.status("DELETE", f"/communities/{community}/members/{member['id']}/nickname",
+                       token=moderator["token"]) == 204)
+    check("and the member hears it", any(
+        "nickname" in e and e["nickname"] is None
+        for e in of(world.stream.gather(1.0), "userCommunity", type="update", user=member["id"])))
+    check("but never the owner's",
+          stack.status("DELETE", f"/communities/{community}/members/{world.owner['id']}/nickname",
+                       token=moderator["token"]) == 403)
+    check("nor may they choose one for someone else",
+          stack.status("PATCH", f"/communities/{community}/members/{member['id']}", {"nickname": "X"},
+                       token=moderator["token"]) in (404, 405))
+
+    say("nicknames: reports and their review")
+    stack.api("PATCH", mine, {"nickname": "Aster"}, member["token"])
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    reports = f"/communities/{community}/members/{member['id']}/nickname/reports"
+    outsider = world.account("nickout")
+    check("someone outside the community cannot report a nickname in it",
+          stack.status("POST", reports, {"category": category}, outsider["token"]) == 404)
+    check("nor can anyone report a member with none",
+          stack.status("POST", f"/communities/{community}/members/{moderator['id']}/nickname/reports",
+                       {"category": category}, world.owner["token"]) == 400)
+    check("nor their own", stack.status("POST", reports, {"category": category}, member["token"]) == 400)
+    check("a member reports another's", stack.status("POST", reports, {"category": category},
+                                                     world.owner["token"]) == 201)
+    check("once", stack.status("POST", reports, {"category": category}, world.owner["token"]) == 409)
+    stack.command("admin", "grant", world.owner["name"])
+    for permission in REVIEWING:
+        stack.command("admin", "allow", permission)
+    cases = world.as_owner("GET", "/admin/reports")
+    case = next((c for c in cases["cases"] if c["kind"] == "nickname" and c["subject"] == member["id"]), None)
+    check("the reviewer finds a nickname case", case is not None, cases["cases"])
+    if case is None:
+        return stop_reviewing(world)
+    check("naming the community, which the page includes",
+          case["community"] == community and any(c["id"] == community for c in cases["communities"]), case)
+    check("and the nickname as reported", case["reports"][0].get("nickname") == "Aster", case["reports"])
+    stack.api("PATCH", mine, {"nickname": "Aster Again"}, member["token"])
+    world.stream.gather(0.5)
+    check("clearing is for nickname cases alone",
+          stack.status("POST", f"/admin/reports/{case['id']}/resolution", {"deleteMessage": True},
+                       world.owner["token"]) == 400)
+    resolved = world.as_owner("POST", f"/admin/reports/{case['id']}/resolution",
+                              {"clearNickname": True, "warn": "Please choose a kinder nickname."})
+    outcome = resolved["cases"][0]
+    check("resolving it clears the nickname standing now",
+          outcome["resolution"]["clearedNickname"] and stack.api(
+              "GET", f"/communities/{community}/members/{member['id']}", token=member["token"]
+          ).get("nickname") is None, outcome)
+    check("which the member hears", any(
+        "nickname" in e and e["nickname"] is None
+        for e in of(world.stream.gather(1.0), "userCommunity", type="update", user=member["id"])))
+    dms = stack.api("GET", "/users/@me/dms", token=member["token"])
+    warned = []
+    for dm in (dms["data"] if isinstance(dms, dict) else dms):
+        read = stack.api("GET", f"/channels/{dm['id']}/messages", token=member["token"])
+        warned += [m for m in (read["data"] if isinstance(read, dict) else read) if m.get("kind") == "warning"]
+    check("and the warning names the nickname and its community",
+          any((m.get("warning") or {}).get("nickname", {}).get("nickname") == "Aster" and
+              m["warning"]["nickname"]["community"] == community for m in warned), warned)
+    stop_reviewing(world)
+
+
+# What reviewing a nickname case and acting on it take, beyond the top deployment role.
+REVIEWING = ["reviewReports", "moderateCommunities", "messageAnyUser"]
+
+
+def stop_reviewing(world: World) -> None:
+    for permission in REVIEWING:
+        world.stack.command("admin", "deny", permission)
+    world.stack.command("admin", "revoke", world.owner["name"])
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links]
+             deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
+             nicknames]
 
 
 def main() -> None:

@@ -41,6 +41,9 @@ pub enum ModerationAction {
     WarnUser,
     /// A profile reset in reviewing a report; the subject is the person.
     ResetProfile,
+    /// A member's nickname cleared, in their community or in reviewing a report of it; the
+    /// subject is the person.
+    ClearNickname,
     /// The messages around a reported message in a DM, read in reviewing the report; the
     /// subject is the reported message.
     ReadReportContext,
@@ -168,7 +171,8 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
         | ModerationAction::BanUser
         | ModerationAction::LiftUserBan
         | ModerationAction::WarnUser
-        | ModerationAction::ResetProfile => Some(Subject::User(UserId(id(subject)?))),
+        | ModerationAction::ResetProfile
+        | ModerationAction::ClearNickname => Some(Subject::User(UserId(id(subject)?))),
         ModerationAction::DeleteMessage
         | ModerationAction::ReadDm
         | ModerationAction::ReadReportContext => Some(Subject::Message(MessageId(id(subject)?))),

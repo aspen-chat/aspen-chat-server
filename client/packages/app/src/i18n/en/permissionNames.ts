@@ -32,6 +32,14 @@ export const permissionNames = {
     name: "Ban members",
     hint: "Ban members below your highest role, with a reason and for a time, and lift bans.",
   },
+  changeNickname: {
+    name: "Change nickname",
+    hint: "Choose a name of their own in this community. Anyone can clear their nickname.",
+  },
+  manageNicknames: {
+    name: "Manage nicknames",
+    hint: "Clear the nicknames of members ranked below them.",
+  },
   manageMessages: {
     name: "Manage messages",
     hint: "Delete anyone's messages and take down poll answers.",

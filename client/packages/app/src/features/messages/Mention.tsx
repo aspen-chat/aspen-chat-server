@@ -5,7 +5,7 @@ import { MentionContext } from "@/features/messages/mentionContext";
 import type { MentionKind } from "@/features/messages/remarkMentions";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameColor, useRoleColor } from "@/features/users/nameColor";
-import { displayNameOf } from "@/features/users/profile";
+import { useNameIn } from "@/features/users/nameIn";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { PersonName } from "@/features/users/PersonName";
@@ -39,8 +39,9 @@ export function Mention({ kind, id, text }: { kind: MentionKind; id: string; tex
 
 /**
  * A person named in text: "@" and their name, as a chip that opens their card where `chip`
- * says they count, drawn in their name's colour where `communityId` is (by default, the
- * community of the message around it), and plain text otherwise.
+ * says they count, and plain text otherwise. Where `communityId` is (by default, the community
+ * of the message around it), they are called by their nickname there and drawn in their name's
+ * colour.
  */
 export function UserMention({
   id,
@@ -54,22 +55,24 @@ export function UserMention({
   const m = useMessages();
   const context = useContext(MentionContext);
   const user = useUser(id);
-  const color = useNameColor(id, communityId === undefined ? context?.communityId : communityId);
-  if (user === undefined) {
+  const community = communityId === undefined ? context?.communityId : communityId;
+  const color = useNameColor(id, community);
+  const called = useNameIn(user, community);
+  if (user === undefined || called === undefined) {
     return (
       <>
-        @<PersonName id={id} />
+        @<PersonName id={id} community={community} />
       </>
     );
   }
-  const name = `@${displayNameOf(user)}`;
+  const name = `@${called}`;
   if (!chip) {
     return <>{name}</>;
   }
   return (
     <ProfilePopover user={user}>
       <Button
-        aria-label={format(m.profile.show, { name: displayNameOf(user) })}
+        aria-label={format(m.profile.show, { name: called })}
         className={chipClass + " inline"}
         style={{ color }}
       >

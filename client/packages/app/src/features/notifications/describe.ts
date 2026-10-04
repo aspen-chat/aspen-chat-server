@@ -3,7 +3,10 @@ import { decodeTags } from "@/features/mentions/tags";
 import { displayNameOf } from "@/features/users/profile";
 import { format, type Messages } from "@/i18n/messages";
 
-/** What a notification says of a message: who wrote it where, and its text with tags as names. */
+/**
+ * What a notification says of a message: who wrote it (by their nickname, in a community) where,
+ * and its text with tags as names.
+ */
 export function describe(
   m: Messages,
   sync: AspenSync,
@@ -11,9 +14,11 @@ export function describe(
 ): { title: string; body: string } {
   const store = sync.store;
   const author = store.user(message.author);
-  const name = author === undefined ? m.unknownUser : displayNameOf(author);
   const channel = store.channel(message.channelId);
   const place = channel?.parentChannel != null ? store.channel(channel.parentChannel) : channel;
+  const nickname =
+    place?.community == null ? undefined : store.nickname(place.community, message.author);
+  const name = author === undefined ? m.unknownUser : (nickname ?? displayNameOf(author));
   const community = place?.community == null ? undefined : store.community(place.community);
   const title =
     place === undefined || community === undefined

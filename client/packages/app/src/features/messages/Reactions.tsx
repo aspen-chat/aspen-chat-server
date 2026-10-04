@@ -31,6 +31,7 @@ import {
   useReactions,
   useSync,
   useUser,
+  useNicknames,
   useUsers,
 } from "@/api/hooks";
 import {
@@ -42,6 +43,7 @@ import {
 import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
+import { useNameIn } from "@/features/users/nameIn";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { emojiIdOf } from "@/features/emoji/customEmoji";
@@ -192,7 +194,10 @@ function ReactionChip({
   const m = useMessages();
   const sync = useSync();
   const users = useUsers(reactions.users);
-  const names = users.map((user) => (user === undefined ? m.unknownUser : displayNameOf(user)));
+  const nicknames = useNicknames(communityId);
+  const names = users.map((user) =>
+    user === undefined ? m.unknownUser : (nicknames.get(user.id) ?? displayNameOf(user)),
+  );
   const more = reactions.count - names.length;
   const named = useEmojiName(communityId, emoji);
   const who =
@@ -505,7 +510,7 @@ function Reactor({
   const channelId = useMessage(messageId)?.channelId ?? "";
   const community = useChannel(channelId)?.community;
   const moderate = useChannelCan(channelId, "manageMessages") && me?.id !== userId;
-  const name = user === undefined ? m.unknownUser : displayNameOf(user);
+  const name = useNameIn(user, community) ?? m.unknownUser;
   const label = format(m.removeReactor, { name });
   return (
     <li className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">

@@ -1593,6 +1593,28 @@ export class AspenSync {
     }
   }
 
+  /**
+   * Reports the nickname a fellow member chose in a community to the deployment's moderators;
+   * the server keeps it as it stands.
+   */
+  async reportNickname(
+    communityId: string,
+    userId: string,
+    category: string,
+    explanation: string | null,
+  ): Promise<void> {
+    const result = await this.#client.api.POST(
+      "/api/v1/communities/{community}/members/{user}/nickname/reports",
+      {
+        params: { path: { community: communityId, user: userId } },
+        body: { category, ...(explanation === null ? {} : { explanation }) },
+      },
+    );
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
   async deleteBot(botId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/bots/{bot}", {
@@ -1932,7 +1954,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.ingest({ users: result.data.data });
-    this.store.noteMemberRoles(result.data.included.userCommunities ?? []);
+    this.store.noteMemberships(result.data.included.userCommunities ?? []);
     return result.data.data;
   }
 
@@ -1964,7 +1986,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.noteMemberRoles([result.data]);
+    this.store.noteMemberships([result.data]);
     return true;
   }
 
@@ -1984,6 +2006,34 @@ export class AspenSync {
         community: communityId,
         user: me,
       });
+    }
+  }
+
+  /**
+   * Sets the caller's nickname in a community, or clears it with `null`. Setting one takes
+   * Change nickname. The change arrives as the membership's update event.
+   */
+  async setNickname(communityId: string, nickname: string | null): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/communities/{community}/members/@me", {
+      params: { path: { community: communityId } },
+      body: { nickname },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Clears a member's nickname in a community: anyone's own, or, with Manage nicknames, that of
+   * someone ranked below the caller. The change arrives as the membership's update event.
+   */
+  async clearNickname(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/communities/{community}/members/{user}/nickname",
+      { params: { path: { community: communityId, user: userId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
     }
   }
 
@@ -2870,13 +2920,13 @@ export class AspenSync {
 
   /**
    * Takes in what a message read sideloaded, with `messages` when the read's own are to be
-   * stored too. Its memberships say which roles the authors hold, for drawing their names in
-   * their roles' colours; they are not the community's member sample, which they leave alone.
+   * stored too. Its memberships say which roles the authors hold and what they are called
+   * there, for drawing their names in their roles' colours and by their nicknames; they are not the community's member sample, which they leave alone.
    */
   #ingestMessageRead(included: Included, messages?: readonly Message[]): void {
     const { userCommunities, ...rest } = included;
     this.store.ingest(messages === undefined ? rest : { ...rest, messages: [...messages] });
-    this.store.noteMemberRoles(userCommunities ?? []);
+    this.store.noteMemberships(userCommunities ?? []);
   }
 
   async #reloadReactions(messageId: string): Promise<void> {

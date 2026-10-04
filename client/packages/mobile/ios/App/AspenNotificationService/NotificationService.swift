@@ -131,7 +131,7 @@ final class MessageFetcher {
     }()
 
     func fetch(account: PushState.Account, messageId: String, done: @escaping (ShownMessage?) -> Void) {
-        let url = "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions"
+        let url = "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions,memberships"
         get(url: url, token: account.sessionToken) { [self] status, data in
             if status == 200, let data {
                 done(Self.shown(from: data))
@@ -213,8 +213,10 @@ final class MessageFetcher {
         } else {
             place = nil
         }
+        let nickname = community.flatMap { nicknameOf(included, community: $0, user: authorId) }
         return ShownMessage(
-            title: author.map(nameOf) ?? NSLocalizedString("notification.someone", comment: "Someone"),
+            title: nickname ?? author.map(nameOf)
+                ?? NSLocalizedString("notification.someone", comment: "Someone"),
             place: place,
             body: body(of: message, included: included),
             community: community,
@@ -262,6 +264,18 @@ final class MessageFetcher {
             return display
         }
         return user["name"] as? String ?? "…"
+    }
+
+    /// The nickname `user` goes by in `community`, from the read's memberships, if any.
+    private static func nicknameOf(_ included: [String: Any], community: String, user: String) -> String? {
+        let memberships = included["userCommunities"] as? [[String: Any]] ?? []
+        let membership = memberships.first {
+            $0["community"] as? String == community && $0["user"] as? String == user
+        }
+        guard let nickname = membership?["nickname"] as? String, !nickname.isEmpty else {
+            return nil
+        }
+        return nickname
     }
 
     private static func find(_ included: [String: Any], _ type: String, _ id: String) -> [String: Any]? {

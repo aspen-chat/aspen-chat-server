@@ -155,7 +155,7 @@ pub enum Posting {
     /// A bot command, whose text is the command as checked.
     Command(Invocation),
     /// A moderator's warning, about what it names (`app::report`).
-    Warning(Warning),
+    Warning(Box<Warning>),
 }
 
 /// Posts a message. In a thread it counts toward the thread's summary, and with
@@ -173,7 +173,7 @@ pub async fn create_message(
     let (command, warning) = match posting {
         Posting::Text => (None, None),
         Posting::Command(invocation) => (Some(invocation), None),
-        Posting::Warning(warning) => (None, Some(warning)),
+        Posting::Warning(warning) => (None, Some(*warning)),
     };
     let mut conn = state.connection_pool.get().await?;
     let message = conn

@@ -32,6 +32,8 @@ export const COMMUNITY_PERMISSIONS: readonly Permission[] = [
   "addBots",
   "manageCustomEmoji",
   "banMembers",
+  "changeNickname",
+  "manageNicknames",
 ];
 
 /** Permissions a channel or category override may allow or deny. */
@@ -67,9 +69,15 @@ export const MODERATOR_RANK = OWNER_RANK - 1;
 
 /**
  * What Moderate any community gives in every community, as the server's `MODERATION`: seeing
- * everything, and taking things away (messages, attachments, reactions, write-ins, members).
+ * everything, and taking things away (messages, attachments, reactions, write-ins, members,
+ * nicknames).
  */
-export const MODERATION: readonly Permission[] = ["viewChannel", "manageMessages", "removeMembers"];
+export const MODERATION: readonly Permission[] = [
+  "viewChannel",
+  "manageMessages",
+  "removeMembers",
+  "manageNicknames",
+];
 
 /** A set of permissions. */
 export type PermissionSet = ReadonlySet<Permission>;
@@ -79,7 +87,11 @@ const BROAD_TAGS: ReadonlySet<Permission> = new Set(["mentionRoles", "mentionEve
 
 /** The templates a new community's roles start from, as the server writes them. */
 export const TEMPLATES = {
-  member: [...CHANNEL_PERMISSIONS.filter((p) => !BROAD_TAGS.has(p)), "createInvites"],
+  member: [
+    ...CHANNEL_PERMISSIONS.filter((p) => !BROAD_TAGS.has(p)),
+    "createInvites",
+    "changeNickname",
+  ],
   moderator: [
     ...CHANNEL_PERMISSIONS,
     "createInvites",
@@ -91,6 +103,8 @@ export const TEMPLATES = {
     "addBots",
     "manageCustomEmoji",
     "banMembers",
+    "changeNickname",
+    "manageNicknames",
   ],
   admin: ALL_PERMISSIONS,
 } as const satisfies Record<string, readonly Permission[]>;

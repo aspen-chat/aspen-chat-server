@@ -24,4 +24,16 @@ export const profile = {
   call: "Call {name}",
   show: "Show profile of {name}",
   message: "Message",
+  nickname: "Nickname",
+  nicknameIn: "Your nickname in {community}",
+  nicknameHint: "Shown in place of your display name in this community only.",
+  nicknameLocked:
+    "You can't choose a nickname here. You can clear the one you have, and go by your display name.",
+  nicknamePlaceholder: "{name}",
+  saveNickname: "Save nickname",
+  clearMyNickname: "Clear nickname",
+  clearNickname: "Clear nickname",
+  clearNicknameLabel: "Clear {name}'s nickname",
+  nicknameCleared: "Nickname cleared.",
+  nicknameSaved: "Nickname saved.",
 } as const;

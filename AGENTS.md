@@ -203,9 +203,9 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/push.md` — waking phones through Web Push
 - `docs/architecture/event-routing.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
-- `docs/architecture/reports.md` — reports of messages and profiles, their categories, cases and their review, warnings, and what deleting a message keeps
+- `docs/architecture/reports.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, and what deleting a message keeps
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
-- `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
+- `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, nicknames, the everyone mention limit, and member search
 
 ### Event Ordering Guarantee
 

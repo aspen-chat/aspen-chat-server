@@ -12,8 +12,9 @@ import { format } from "@/i18n/messages";
 
 /**
  * A moderator's warning, as its DM shows it: labelled as one, then what it is about (the
- * message reported, shown even once deleted, or the profile as the reports found it), then the
- * moderator's own words.
+ * message reported, shown even once deleted, the profile as the reports found it, or the
+ * nickname, with the community it was chosen in as it was named then), then the moderator's own
+ * words.
  */
 export function WarningBody({ message, home }: { message: Message; home: ChannelHome }) {
   const m = useMessages();
@@ -22,14 +23,22 @@ export function WarningBody({ message, home }: { message: Message; home: Channel
   const subject = useUser(warning?.subject);
   const mine = me !== null && warning?.subject === me.id;
   const name = subject === undefined ? m.unknownUser : displayNameOf(subject);
+  const nickname = warning?.nickname ?? null;
   const about =
     warning?.message != null
       ? mine
         ? m.reports.warningAbout
         : format(m.reports.warningAboutTheirs, { name })
-      : mine
-        ? m.reports.warningAboutProfile
-        : format(m.reports.warningAboutTheirProfile, { name });
+      : nickname !== null
+        ? mine
+          ? format(m.reports.warningAboutNickname, { community: nickname.communityName })
+          : format(m.reports.warningAboutTheirNickname, {
+              name,
+              community: nickname.communityName,
+            })
+        : mine
+          ? m.reports.warningAboutProfile
+          : format(m.reports.warningAboutTheirProfile, { name });
   return (
     <div className="mt-1 flex max-w-xl flex-col gap-2 rounded-md border border-danger/40 bg-danger-soft/40 p-2">
       <p className="flex items-center gap-1.5 text-sm font-semibold text-danger">
@@ -41,6 +50,10 @@ export function WarningBody({ message, home }: { message: Message; home: Channel
           <p className="text-xs text-ink-muted">{about}</p>
           {warning.message != null ? (
             <WarnedMessage id={warning.message} from={message.id} />
+          ) : nickname !== null ? (
+            <p className="rounded-md border border-line bg-surface px-2 py-1 text-sm font-medium break-words">
+              {nickname.nickname}
+            </p>
           ) : warning.profile != null ? (
             <ProfileSnapshotCard snapshot={warning.profile} aspects={warning.aspects ?? []} />
           ) : null}

@@ -23,9 +23,11 @@
   caller's. A join offer says whether the caller
   may speak and share (`VoiceCallState.canSpeak`, `canShare`); without Speak the call joins to
   listen, opening no microphone. `src/features/community-settings` is the management UI: the
-  sidebar gear's `CommunitySettingsDialog` (name and icon, ownership, delete or leave; roles,
-  with templates and a grouped `PermissionChecklist` whose unheld permissions are disabled; and
-  members, with their roles, Remove, and, for holders of Ban members, Ban: `BanDialog` takes a
+  sidebar gear's `CommunitySettingsDialog` (name and icon, the caller's own nickname,
+  ownership, delete or leave; roles, with templates and a grouped `PermissionChecklist` whose
+  unheld permissions are disabled; and members, each by their nickname, with their roles,
+  Remove, Clear nickname (Manage nicknames; see Profiles and icons), and, for holders of Ban
+  members, Ban: `BanDialog` takes a
   reason, how long for, and, for a banner who also holds Manage messages, whether their messages
   from the last hour or day go too, and `BannedList` beneath the members shows the standing
   bans (`RecordStore.bans`, topic `bans:<communityId>`, read on first use by `useBans` and kept
@@ -35,7 +37,8 @@
   category's lock, which leads with three presets (everyone, only some roles, read-only) and
   keeps per-role allow, default, and deny under Advanced and a per-member explanation
   (`explain`) under Check access. Wherever a member is chosen (the Members tab, handing over
-  ownership, Check access), `useMemberSearch` shows the member sample until something is typed,
+  ownership, Check access), `useMemberSearch` shows the member sample until something is typed
+  (the server's search matches nicknames too),
   and then, for those the server lets search every member (the same rule, mirrored so the field
   is not offered to anyone refused), searches with `AspenSync.searchMembers`, which caches the
   people found and their roles without adding them to the sample; `MemberPicker` is the
