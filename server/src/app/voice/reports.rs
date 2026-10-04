@@ -14,6 +14,7 @@ use super::sessions::apply_report;
 use crate::app;
 use crate::app::VoiceServerId;
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use async_nats::jetstream;
 use async_nats::jetstream::AckKind;
 use async_nats::jetstream::consumer::pull::MessagesErrorKind;
@@ -267,8 +268,8 @@ fn worth_retrying(error: &app::Error) -> bool {
 /// Removes every report of a voice server still waiting, once the server is no longer
 /// registered. A failure is logged: the server is gone either way, and what is left of its
 /// reports ages out of the stream.
-pub(super) async fn forget_server(state: &GlobalServerContext, server: VoiceServerId) {
-    let stream = match state.nats_context.get_stream(REPORT_STREAM).await {
+pub(super) async fn forget_server(state: &impl Publishing, server: VoiceServerId) {
+    let stream = match state.nats().get_stream(REPORT_STREAM).await {
         Ok(stream) => stream,
         Err(e) => {
             warn!(

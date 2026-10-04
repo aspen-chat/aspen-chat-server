@@ -5,11 +5,17 @@ environment instead, which overrides the file: `ASPEN_` followed by the key, wit
 section and its keys (`ASPEN_DATABASE_URL`, `ASPEN_FEDERATION__DOMAIN`,
 `ASPEN_VOICE__IDLE_SESSION_SECONDS`). A setting left out takes the default shown. A value the
 server cannot read stops it at startup with a message naming the setting; in `[federation]`, so
-does a key it does not know, since a misspelt gate would otherwise leave it closed without a
-word.
+does a key it does not know.
 
 A voice server reads `voice_server.toml` the same way, with the prefix `ASPEN_VOICE_SERVER_`;
 see [the voice server](#voice_servertoml) at the end.
+
+`aspen.toml` holds what a server needs to start: where its services are, its secrets, its sizes,
+and what is bound to its domain. What the deployment's administrators decide (its name, who may
+register, second factors, bots, community limits, files in calls, and the federation gates) is
+kept in the database instead, so every server follows one answer and a change takes effect at
+once without a restart; see [Deployment settings](#deployment-settings). So are the voice servers
+calls run on; see [Voice servers](#voice-servers).
 
 ## The services
 
@@ -60,8 +66,6 @@ addresses are the clients' and must be reachable by them.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `require_two_factor` | `false` | Every account must have an authenticator app or a passkey. An account without one can do nothing but add one or sign out. |
-| `service_name` | `"Aspen"` | How authenticator apps and passkey prompts name this deployment. |
 | `reverify_seconds` | `600` | Changing security settings needs a password or code given within this long. |
 | `password_hashing_threads` | one per CPU | How many passwords may be hashed or checked at once. Each takes 19 MiB and most of a core for a moment. |
 | `password_hashing_wait_seconds` | `10` | How long a sign-in waits for one of those threads before it is refused with `serverBusy`. |
@@ -74,34 +78,6 @@ Passkeys are offered only when this section is present.
 | --- | --- | --- |
 | `rp_id` | required | The domain passkeys belong to, such as `chat.example.org`. Browsers offer a passkey only to pages on this domain or under it. **Changing it makes every registered passkey useless.** |
 | `origins` | required | Every page origin that may use a passkey: this server's own (it serves the page the desktop and mobile apps open) and the web client's, if different, such as `["https://chat.example.org"]`. |
-
-## `[registration]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `invite_required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. An invite made in the dashboard may also name a community (a dual invite): each account it makes joins that community as it is made, and someone who already has an account just joins. Revoking a dual invite revokes its community invite too; revoking that community invite from the community leaves a plain registration invite. |
-
-## `[bots]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `enabled` | `true` | Whether people may make bots. Bots already made keep working either way. |
-| `max_per_user` | `25` | The most bots one person may own. |
-
-## `[communities]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `everyone_mention_limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the system account and may turn it back on. `0` never turns it off. |
-| `custom_emoji_limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
-
-## `[system_account]`
-
-The deployment's own account, which sends people notices from the deployment itself (so far, the notice above). It is made the first time it is needed, is marked as the system wherever it is named, cannot be signed in to, messaged, or blocked, and its username (`system`) takes no name from anyone.
-
-| Setting | Default | |
-| --- | --- | --- |
-| `display_name` | `"Aspen"` | What the account is called. A change shows as each person next reads the account. |
 
 ## `[limits]`
 
@@ -127,19 +103,6 @@ The deployment's own account, which sends people notices from the deployment its
 | `offer_silence_seconds` | `60` | A voice server that has not reported for this long is not offered to people joining. |
 | `session_silence_seconds` | `86400` | A voice server that has not reported for this long has its calls ended. Long on purpose: a call is worth more than tidiness after a brief network fault. |
 | `idle_session_seconds` | `86400` | A call that never had two people in it at once ends after this long, so a forgotten client cannot hold a place on a voice server. |
-| `file_transfers` | `true` | Whether people may offer files to one another in calls. Transfers go between their devices, or through a voice server's relay (`[transfer]` in `voice_server.toml`); either way this deployment keeps a record of each offer and transfer for its moderators, never the file. `false` turns the whole feature off: no one can offer a file, whatever the channels' permissions. |
-
-### `[[voice.servers]]`
-
-Voice servers to register at startup, one table each; they are matched by name, so changing a
-`url` or `capacity` here updates the registered server. Administrators can also add and change
-them in the dashboard.
-
-| Setting | | |
-| --- | --- | --- |
-| `name` | required | |
-| `url` | required | Where clients reach it, as `https://voice-1.chat.example.org`. |
-| `capacity` | required | The most people it carries at once; `voice_server estimate-capacity` suggests one. |
 
 ## `[push]`
 
@@ -183,18 +146,9 @@ See [Federation](federation.md) for what these mean together.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `domain` | none | This deployment's name among deployments: the domain it is served at, with `:port` when not 443, such as `chat.example.org`. Required when any gate is not closed. **Other deployments remember the key they find at this name, so never change it.** |
+| `domain` | none | This deployment's name among deployments: the domain it is served at, with `:port` when not 443, such as `chat.example.org`. Required before any gate opens. **Other deployments remember the key they find at this name, so it can never change:** the first server to start with it records it in the database, and a server started with another, or with none, refuses to start and says which to set. |
 | `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing. |
 | `standing_grace_seconds` | `86400` | How long another deployment may go unreached before its users' sessions here end. |
-
-### `[federation.users]` and `[federation.bots]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `emigration` | `"closed"` | Whether this deployment's accounts may use other deployments: `closed`, `open`, `allowList`, or `blockList`. |
-| `immigration` | `"closed"` | Whether other deployments' accounts may use this one, the same way. |
-| `shared_list` | `false` | Both directions read one list; both gates must then be the same kind of list. |
-| `immigration_invite_required` | `false` | An account of another deployment arriving for the first time needs a registration invite. |
 
 ### `[federation.development]`
 
@@ -205,6 +159,47 @@ of a deployment anyone else uses.
 | --- | --- | --- |
 | `extra_root_certificates` | `[]` | PEM files of certificate authorities to trust, besides the system's, when calling other deployments. |
 | `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network. |
+
+## Deployment settings
+
+These are kept in the database. Holders of Manage deployment settings change them in the
+Administration Dashboard under **Settings**, and holders of Manage federation change the gates
+under **Federation**. From the terminal, `aspen-chat-server settings show` lists every one, and
+`aspen-chat-server settings set` changes those it is given, such as
+`settings set --registration-invite-required true --bots-max-per-user 5`; the terminal needs
+NATS, which tells every server at once. An invite-only deployment is made one this way before
+anyone has an account.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `display-name` | none | What the deployment calls itself: on its sign-in screens, as the account its notices come from, and to its users' authenticator apps and passkey prompts, which say "Aspen" without one. The dashboard also sets an icon beside it. An authenticator keeps the name it was given when it was added. |
+| `registration-invite-required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. An invite made in the dashboard may also name a community (a dual invite): each account it makes joins that community as it is made, and someone who already has an account just joins. Revoking a dual invite revokes its community invite too; revoking that community invite from the community leaves a plain registration invite. |
+| `require-two-factor` | `false` | Every account must have an authenticator app or a passkey. An account without one can do nothing but add one or sign out; turned on, the apps of those without one are asked to at once. |
+| `bots-enabled` | `true` | Whether people may make bots. Bots already made keep working either way. |
+| `bots-max-per-user` | `25` | The most bots one person may own. |
+| `everyone-mention-limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the deployment's own account (which cannot be signed in to, messaged, or blocked) and may turn it back on. `0` never turns it off. |
+| `custom-emoji-limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
+| `file-transfers` | `true` | Whether people may offer files to one another in calls. Transfers go between their devices, or through a voice server's relay (`[transfer]` in `voice_server.toml`); either way this deployment keeps a record of each offer and transfer for its moderators, never the file. `false` turns the whole feature off: no one can offer a file, whatever the channels' permissions, and calls in progress follow at once. |
+| `users-emigration`, `bots-emigration` | `closed` | Whether this deployment's accounts may use other deployments: `closed`, `open`, `allowList`, or `blockList`. See [Federation](federation.md). |
+| `users-immigration`, `bots-immigration` | `closed` | Whether other deployments' accounts may use this one, the same way. Closing or narrowing it signs out at once those it no longer admits. |
+| `users-shared-list`, `bots-shared-list` | `false` | Both directions read one list; both gates must then be the same kind of list. |
+| `users-immigration-invite-required`, `bots-immigration-invite-required` | `false` | An account of another deployment arriving for the first time needs a registration invite. |
+
+## Voice servers
+
+The voice servers calls run on are registered in the database. Holders of Manage voice servers
+add, change, disable, and remove them in the dashboard. From the terminal:
+
+- `aspen-chat-server voice-servers add NAME --url URL --capacity N` registers one, or gives the
+  one already registered by that name this address and capacity, so a deployment script may run
+  it every time it deploys. `url` is where clients reach it, as
+  `https://voice-1.chat.example.org`; `capacity` is the most people it carries at once, which
+  `voice_server estimate-capacity` suggests.
+- `voice-servers set NAME [--url URL] [--capacity N] [--enabled true|false]` changes one. A
+  disabled server is offered to no one joining a call; calls already on it go on.
+- `voice-servers remove NAME` removes one that holds no calls. Disable it first and let its calls
+  end, or remove it from the dashboard, which ends them.
+- `voice-servers list` lists them.
 
 ## `voice_server.toml`
 

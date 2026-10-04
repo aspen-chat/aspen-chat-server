@@ -148,7 +148,7 @@ pub async fn read_icon(state: &GlobalServerContext, id: IconId) -> app::Result<I
 const ICON_IN_USE_SQL: &str = "SELECT EXISTS (SELECT 1 FROM \"user\" WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM community WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM custom_emoji WHERE icon = $1) \
-     OR EXISTS (SELECT 1 FROM deployment_profile WHERE icon = $1) \
+     OR EXISTS (SELECT 1 FROM deployment_settings WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM report WHERE profile->>'icon' = $1::text) \
      OR EXISTS (SELECT 1 FROM message WHERE warning->'profile'->>'icon' = $1::text) AS in_use";
 

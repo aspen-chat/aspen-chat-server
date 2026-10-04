@@ -114,7 +114,7 @@ pub async fn login(
             if methods.totp {
                 offered.push(SecondFactorMethod::Totp);
             }
-            if methods.passkey && state.webauthn.is_some() {
+            if methods.passkey && state.config.auth.passkeys.is_some() {
                 offered.push(SecondFactorMethod::Passkey);
             }
             if methods.recovery_code {
@@ -226,16 +226,13 @@ pub struct PasskeySupport {
 )]
 pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<AuthMethods> {
     let auth = &state.config.auth;
+    let settings = state.settings();
     Json(AuthMethods {
-        passkeys: auth
-            .passkeys
-            .as_ref()
-            .filter(|_| state.webauthn.is_some())
-            .map(|passkeys| PasskeySupport {
-                rp_id: passkeys.rp_id.clone(),
-            }),
-        two_factor_required: auth.require_two_factor,
-        registration_invite_required: state.config.registration.invite_required,
+        passkeys: auth.passkeys.as_ref().map(|passkeys| PasskeySupport {
+            rp_id: passkeys.rp_id.clone(),
+        }),
+        two_factor_required: settings.require_two_factor,
+        registration_invite_required: settings.registration_invite_required,
         federation_domain: app::federation::own_domain(&state.config.federation).map(String::from),
         push: app::push::application_server_key(&state).map(|application_server_key| {
             crate::api::push::PushSupport {
@@ -741,7 +738,7 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
             GlobalServerContext,
         >>::from_request_parts(parts, state)
         .await?;
-        if session.caller.enrollment_required(&state.config.auth) {
+        if session.caller.enrollment_required(&state.settings()) {
             return Err(ApiError::new(ProblemCode::TwoFactorEnrollmentRequired));
         }
         Ok(session)

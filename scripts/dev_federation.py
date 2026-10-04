@@ -56,7 +56,8 @@ class Deployment:
     nats_port: int
     valkey_port: int
     metrics_port: int
-    federation: str
+    # `settings set` flags giving its federation gates, which are deployment settings.
+    gates: tuple[str, ...]
 
     @property
     def host(self) -> str:
@@ -81,20 +82,13 @@ class Deployment:
 
 # Alpha lets its users go only where it allows and takes anyone's; beta shares one block list
 # between both directions. Their bots stay home, but alpha takes others' bots unless blocked.
-ALPHA = Deployment("alpha", 8443, 4231, 6391, 19471, """
-[federation.users]
-emigration = "allowList"
-immigration = "open"
-[federation.bots]
-emigration = "closed"
-immigration = "blockList"
-""")
-BETA = Deployment("beta", 8444, 4232, 6392, 19472, """
-[federation.users]
-emigration = "blockList"
-immigration = "blockList"
-shared_list = true
-""")
+ALPHA = Deployment("alpha", 8443, 4231, 6391, 19471, (
+    "--users-emigration", "allowList", "--users-immigration", "open",
+    "--bots-emigration", "closed", "--bots-immigration", "blockList",
+))
+BETA = Deployment("beta", 8444, 4232, 6392, 19472, (
+    "--users-emigration", "blockList", "--users-immigration", "blockList", "--users-shared-list", "true",
+))
 DEPLOYMENTS = [ALPHA, BETA]
 
 
@@ -196,7 +190,6 @@ def write_config(deployment: Deployment) -> None:
         "enabled = false\n"
         "[federation]\n"
         f'domain = "{deployment.domain}"\n'
-        f"{deployment.federation.strip()}\n"
         "[federation.development]\n"
         f"extra_root_certificates = [{json.dumps(str(CA))}]\n"
         "allow_private_addresses = true\n"
@@ -342,6 +335,7 @@ def up(args: argparse.Namespace) -> None:
         migrated = run(str(bin_of(deployment) / "aspen-migrate"), "up", cwd=deployment.dir, env=clean_env())
         if migrated.returncode != 0:
             raise Failed(f"migrating {deployment.name} failed: {migrated.stderr[-1000:]}")
+        terminal(deployment, "settings", "set", *deployment.gates)
     for deployment in DEPLOYMENTS:
         if running_pid(deployment) is not None:
             say(f"{deployment.name} is already running")

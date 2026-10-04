@@ -308,7 +308,7 @@ async fn dm_joined(
     .await?;
     if !uses
         || !admits(
-            &state.config.federation,
+            &state.settings().federation,
             subject,
             Direction::Emigration,
             lists,

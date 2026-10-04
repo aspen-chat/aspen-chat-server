@@ -10,13 +10,18 @@
 //!   end, and it may sign in again if that changes.
 //!
 //! A standing this deployment does not know it takes as `refused`. Sessions also end when this
-//! deployment's own immigration gate no longer admits the home, and when the home has gone
-//! unreached for `standing_grace_seconds`. One server does each pass, under an advisory lock.
+//! deployment's own immigration gate no longer admits the home, at once when the gate changes
+//! ([`shut_out`]) and at each pass, and when the home has gone unreached for
+//! `standing_grace_seconds`. One server does each pass, under an advisory lock, while an
+//! immigration gate admits anyone.
 
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Statement, receive};
-use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};
+use crate::app::federation::{
+    Direction, Domain, FederationPolicy, Subject, admits, jws, lists_of, own_domain,
+};
 use crate::app::{self, UserId};
 use crate::database::schema::{refresh_token, user, user_foreign_deployment};
 use chrono::{DateTime, Duration, Utc};
@@ -147,7 +152,7 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
         .filter(user_foreign_deployment::domain.eq(from.as_str()))
         .load(&mut conn)
         .await?;
-    let config = &state.config.federation;
+    let policy = state.settings().federation;
     let users = asked
         .into_iter()
         .map(|sub| {
@@ -157,7 +162,7 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
                     let subject = if *bot { Subject::Bots } else { Subject::Users };
                     if !banned
                         && using.contains(id)
-                        && admits(config, subject, Direction::Emigration, &lists)
+                        && admits(&policy, subject, Direction::Emigration, &lists)
                     {
                         Standing::Good
                     } else {
@@ -188,16 +193,17 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
 // As a host: asking about the users from elsewhere signed in here
 // ---------------------------------------------------------------------------
 
-/// Runs a pass whenever one may be due, for as long as the server runs.
+/// Runs a pass whenever one may be due, for as long as the server runs, while an immigration gate
+/// admits anyone.
 pub fn spawn_confirmer(state: GlobalServerContext) {
-    if !state.config.federation.admits_anyone() {
-        return;
-    }
     tokio::spawn(async move {
         let interval = state.config.federation.standing_interval_seconds.max(1);
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval.min(300)));
         loop {
             tick.tick().await;
+            if !state.settings().federation.admits_anyone() {
+                continue;
+            }
             let (passed, noted) = app::events::noting(pass(&state)).await;
             app::events::settle(&state, noted, passed.is_err()).await;
             if let Err(error) = passed {
@@ -297,6 +303,7 @@ async fn confirm_home(
     users: Vec<Due>,
 ) -> app::Result<()> {
     let config = &state.config.federation;
+    let policy = state.settings().federation;
     let mut conn = state.connection_pool.get().await?;
     let lists = lists_of(&mut conn, std::slice::from_ref(home))
         .await?
@@ -309,7 +316,7 @@ async fn confirm_home(
         } else {
             Subject::Users
         };
-        admits(config, subject, Direction::Immigration, &lists)
+        admits(&policy, subject, Direction::Immigration, &lists)
     });
     for due in &closed {
         end_stay(state, &mut conn, due.id).await?;
@@ -421,15 +428,53 @@ async fn apply(
     Ok(())
 }
 
+/// Ends the sessions of the users from elsewhere whose homes `policy` no longer admits, for a
+/// change to the immigration gates that has committed. It reads only users with a session, so a
+/// second run finds nothing left to do.
+pub async fn shut_out(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    policy: &FederationPolicy,
+) -> app::Result<()> {
+    let staying: Vec<(UserId, Option<Domain>, bool)> = user::table
+        .select((user::id, user::home_domain, user::bot))
+        .filter(user::home_domain.is_not_null())
+        .filter(user::deleted_at.is_null())
+        .filter(diesel::dsl::exists(
+            refresh_token::table
+                .filter(refresh_token::user.eq(user::id))
+                .filter(refresh_token::expires.gt(diesel::dsl::now)),
+        ))
+        .load(conn)
+        .await?;
+    let homes: Vec<Domain> = staying
+        .iter()
+        .filter_map(|(_, home, _)| home.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let lists = lists_of(conn, &homes).await?;
+    for (id, home, bot) in staying {
+        let Some(home) = home else { continue };
+        let subject = if bot { Subject::Bots } else { Subject::Users };
+        let on = lists.get(&home).map(Vec::as_slice).unwrap_or_default();
+        if !admits(policy, subject, Direction::Immigration, on) {
+            end_stay(state, conn, id).await?;
+            tracing::info!(%home, user = %id.0, "ended the sessions of a user whose home this deployment no longer admits");
+        }
+    }
+    Ok(())
+}
+
 /// Ends a foreign user's sessions here, closing their event streams, and takes them out of
 /// their calls.
 async fn end_stay(
-    state: &GlobalServerContext,
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     user: UserId,
 ) -> app::Result<()> {
     app::login::revoke_all_sessions(state, conn, user).await?;
-    if let Err(e) = app::voice::kick_everywhere(state, user).await {
+    if let Err(e) = app::voice::kick_everywhere(state, conn, user).await {
         tracing::warn!(user = %user.0, error = %e, "could not take a user out of their calls");
     }
     Ok(())

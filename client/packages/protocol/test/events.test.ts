@@ -131,6 +131,7 @@ function harness(tokens: (string | null)[] = ["token-1", "token-2", "token-3"]) 
     onResyncRequired: () => log.push("resync"),
     onEvent: (e) => log.push(`event:${e.serverEvent}`),
     onInvalidEvent: () => log.push("invalid"),
+    onEnrollmentRequired: () => log.push("enroll"),
   });
   return { stream, timers, log, authCalls, sockets: FakeSocket.instances };
 }
@@ -280,6 +281,19 @@ describe("EventStream", () => {
     expect(authCalls).toEqual([false, true]);
     sockets[1]?.onopen?.();
     expect(sockets[1]?.sent).toEqual([{ type: "identify", sessionToken: "token-2" }]);
+  });
+
+  it("says when the deployment requires a second factor the account lacks", async () => {
+    const { stream, timers, log, sockets, authCalls } = harness();
+    stream.start();
+    await flush();
+    sockets[0]?.onopen?.();
+    sockets[0]?.onclose?.({ code: 4403, reason: "" });
+    expect(log).toEqual(["enroll", "lost:connection closed (4403)"]);
+    timers.advance(0);
+    await flush();
+    // The same token is good once the account has a factor.
+    expect(authCalls).toEqual([false, false]);
   });
 
   it("stops when there is no session to identify with", async () => {

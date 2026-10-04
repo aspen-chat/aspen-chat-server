@@ -21,6 +21,11 @@ const CLOSE_UNAUTHORIZED = 4401;
  * sign-ins are revoked with it: the next attempt refreshes, which signs the client out.
  */
 const CLOSE_BANNED = 4410;
+/**
+ * WebSocket close code the server uses when the deployment requires a second factor the account
+ * lacks, at `identify` or when it starts requiring one while the stream is open.
+ */
+const CLOSE_ENROLLMENT_REQUIRED = 4403;
 
 export type EventStreamStatus = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -45,6 +50,11 @@ export interface EventStreamHandlers {
   onResyncRequired?: () => void;
   /** A frame failed schema validation and was dropped. Only fires when `validate` is on. */
   onInvalidEvent?: (raw: unknown, errors: string) => void;
+  /**
+   * The server closed the stream because the deployment requires a second factor the account
+   * lacks. Reconnection goes on, and succeeds once the account has one.
+   */
+  onEnrollmentRequired?: () => void;
 }
 
 /** How many recent event ids are remembered for dropping repeated copies. */
@@ -83,7 +93,7 @@ export interface EventStreamOptions extends EventStreamHandlers {
  * A dropped connection enters an outage: `onConnectionLost` fires once, reconnection follows
  * `reconnectDelayMs`, and `onReady` fires again when the handshake succeeds. A `4401` close,
  * or a `4410` for a ban from the deployment, makes the next `authenticate` call ask for a fresh
- * token.
+ * token; a `4403` fires `onEnrollmentRequired`.
  */
 export class EventStream {
   #status: EventStreamStatus = "closed";
@@ -207,6 +217,9 @@ export class EventStream {
       }
       if (event.code === CLOSE_UNAUTHORIZED || event.code === CLOSE_BANNED) {
         this.#tokenRejected = true;
+      }
+      if (event.code === CLOSE_ENROLLMENT_REQUIRED) {
+        this.#options.onEnrollmentRequired?.();
       }
       this.#onDropped(
         event.reason.length > 0 ? event.reason : `connection closed (${String(event.code)})`,

@@ -23,8 +23,8 @@ enum MessageEnumSource {
         name: String,
         #[message_gen(secret)]
         password: String,
-        // The registration invite, needed when `[registration] invite_required` is set; see
-        // `app::registration_invite`.
+        // The registration invite, needed when the deployment setting
+        // `registration_invite_required` is on; see `app::registration_invite`.
         #[message_gen(secret)]
         invite_code: Option<String>,
         icon: Option<IconId>,

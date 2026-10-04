@@ -191,18 +191,39 @@ def check_standing() -> None:
     terminal(BETA, "admin", "allow", "moderateCommunities")
     rogue = sign_in(ALPHA, f"alpharogue{stamp}")
     status, roguish = sign_in_abroad(assertion_for(rogue))
-    api(BETA, "PUT", f"/admin/users/{roguish['userId']}/ban", token=moderator, expect=(201,))
+    api(BETA, "PUT", f"/admin/users/{roguish['userId']}/ban", {}, token=moderator, expect=(201,))
     expect(not abroad_alive(roguish["sessionToken"]), "a ban ends the user's sessions at beta")
     expect(problem(*sign_in_abroad(assertion_for(rogue))) == "403 federationRefused",
            "a banned user cannot sign in at beta again")
-    api(BETA, "PUT", f"/admin/users/{deleter_at_beta}/ban", token=moderator, expect=(404,))
+    api(BETA, "PUT", f"/admin/users/{deleter_at_beta}/ban", {}, token=moderator, expect=(404,))
     log = api(BETA, "GET", "/admin/moderation-log", token=moderator)
     entries = log if isinstance(log, list) else log.get("entries", log.get("data", []))
-    expect(any(e.get("action") == "banForeignUser" for e in entries), "the ban is in beta's moderation log")
+    expect(any(e.get("action") == "banUser" for e in entries), "the ban is in beta's moderation log")
     api(BETA, "DELETE", f"/admin/users/{roguish['userId']}/ban", token=moderator, expect=(204,))
     status, _ = sign_in_abroad(assertion_for(rogue))
     expect(status == 200, "once the ban is lifted they may sign in again")
     restart(BETA)
+
+
+def check_gates_live(traveller: str) -> None:
+    """Beta's administrator closes beta's immigration gate from the dashboard while one of alpha's
+    users is signed in there: their session ends at once, signing in is refused, and opening the
+    gate again lets them back, all without a restart."""
+    stamp = int(time.time())
+    beta_admin = sign_in(BETA, f"betagates{stamp}")
+    terminal(BETA, "admin", "grant", f"betagates{stamp}")
+    status, visit = sign_in_abroad(assertion_for(traveller))
+    expect(status == 200 and abroad_alive(visit["sessionToken"]), "alpha's traveller is signed in at beta")
+    closed = api(BETA, "PATCH", "/admin/federation", {"usersImmigration": "closed", "usersSharedList": False},
+                 token=beta_admin)
+    expect(closed["users"]["immigration"] == "closed", "beta's administrator closes beta's immigration gate")
+    expect(not abroad_alive(visit["sessionToken"]), "closing the gate ends the traveller's session at beta at once")
+    expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
+           "and beta refuses them while it is closed")
+    api(BETA, "PATCH", "/admin/federation", {"usersImmigration": "blockList", "usersSharedList": True},
+        token=beta_admin)
+    status, _ = sign_in_abroad(assertion_for(traveller))
+    expect(status == 200, "once the gate opens again they sign in at beta")
 
 
 def totp(secret: str, step_offset: int = 0) -> str:
@@ -306,8 +327,12 @@ def check_abroad(admin: str) -> None:
     check_dms_abroad(traveller)
     check_standing()
 
-    restart(BETA, {"ASPEN_AUTH__REQUIRE_TWO_FACTOR": "true",
-                   "ASPEN_FEDERATION__USERS__IMMIGRATION_INVITE_REQUIRED": "true"})
+    check_gates_live(traveller)
+
+    # Settings changed from the terminal reach the running servers without a restart, a moment
+    # after the command returns.
+    terminal(BETA, "settings", "set", "--require-two-factor", "true", "--users-immigration-invite-required", "true")
+    wait_until("beta reading its new settings", lambda: api(BETA, "GET", "/auth/methods")["twoFactorRequired"], 5)
     try:
         expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 strongerSignInRequired",
                "where beta requires two factors, a password sign-in at home is not enough")
@@ -330,4 +355,7 @@ def check_abroad(admin: str) -> None:
         expect(api(BETA, "GET", "/users/@me", token=arrived["sessionToken"])["homeDomain"] == ALPHA.domain,
                "and their session works")
     finally:
-        restart(BETA)
+        terminal(BETA, "settings", "set", "--require-two-factor", "false",
+                 "--users-immigration-invite-required", "false")
+        wait_until("beta reading its settings again",
+                   lambda: not api(BETA, "GET", "/auth/methods")["twoFactorRequired"], 5)

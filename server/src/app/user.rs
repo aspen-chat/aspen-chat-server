@@ -199,7 +199,7 @@ pub async fn create_user(
             return Err(e.into());
         }
     };
-    let invite_required = state.config.registration.invite_required;
+    let invite_required = state.settings().registration_invite_required;
     let invite_code = command
         .invite_code
         .as_deref()

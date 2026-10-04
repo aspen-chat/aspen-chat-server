@@ -18,8 +18,8 @@ use ring::clear_spent_rings;
 pub use ring::{decline_ring, read_channels_rings};
 use servers::reap_silent_servers;
 pub use servers::{
-    create_server, delete_server, join_offer, list_servers, report_failure, seed_servers,
-    update_server,
+    create_server, create_server_in, delete_idle_server, delete_server, join_offer, list_servers,
+    list_servers_in, report_failure, update_server, update_server_in,
 };
 use sessions::reap_idle_sessions;
 pub use sessions::{

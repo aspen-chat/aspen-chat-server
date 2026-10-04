@@ -52,6 +52,16 @@ class Checks:
             print(f"  FAIL  {what}{f'  ({detail})' if detail != '' else ''}", flush=True)
 
 
+def soon(condition, seconds: float = 5) -> bool:
+    """Whether `condition` holds within `seconds`."""
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 def of(events: list[dict], kind: str, **fields) -> list[dict]:
     return [e for e in events if e.get("serverEvent") == kind and all(e.get(k) == v for k, v in fields.items())]
 
@@ -183,6 +193,31 @@ def moves_and_categories(world: World, check: Checks) -> None:
           any(e.get("parentCategory", "unset") is None for e in of(got, "channel", id=lounge)) and world.member_sees(lounge))
 
 
+def join(token: str) -> WebSocket:
+    """Joins a call on the voice server with a join token."""
+    socket = WebSocket(f"ws://127.0.0.1:{PORTS.voice}/ws")
+    socket.send({"type": "identify", "token": token})
+    return socket
+
+
+def frame_of(socket: WebSocket, kind: str, seconds: float = 5) -> dict | None:
+    """The next frame of `kind` the voice server sends within `seconds`."""
+    deadline = time.monotonic() + seconds
+    while (left := deadline - time.monotonic()) > 0:
+        frame = socket.receive(left)
+        if frame is None and socket.closed is not None:
+            return None
+        if frame is not None and frame.get("type") == kind:
+            return frame
+    return None
+
+
+def in_call(world: World) -> bool:
+    """Whether the community's record of its calls shows the member in one."""
+    read = world.stack.api("GET", f"/communities/{world.community}?include=voice", token=world.owner["token"])
+    return any(p["user"] == world.member["id"] for p in read.get("included", {}).get("voiceParticipants", []))
+
+
 def calls(world: World, check: Checks) -> None:
     say("a call in progress as what the member may do there changes")
     stack = world.stack
@@ -196,29 +231,10 @@ def calls(world: World, check: Checks) -> None:
     wait_for("a voice server offer",
              lambda: stack.status("POST", f"/channels/{room}/voice/join", {}, world.member["token"]) == 200, 90)
 
-    def join(token: str) -> WebSocket:
-        socket = WebSocket(f"ws://127.0.0.1:{PORTS.voice}/ws")
-        socket.send({"type": "identify", "token": token})
-        return socket
-
-    def frame_of(socket: WebSocket, kind: str, seconds: float = 5) -> dict | None:
-        deadline = time.monotonic() + seconds
-        while (left := deadline - time.monotonic()) > 0:
-            frame = socket.receive(left)
-            if frame is None and socket.closed is not None:
-                return None
-            if frame is not None and frame.get("type") == kind:
-                return frame
-        return None
-
-    def recorded() -> bool:
-        read = stack.api("GET", f"/communities/{world.community}?include=voice", token=world.owner["token"])
-        return any(p["user"] == world.member["id"] for p in read.get("included", {}).get("voiceParticipants", []))
-
     first = offer()
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
-    wait_for("the call's record to show the member", recorded, 30)
+    wait_for("the call's record to show the member", lambda: in_call(world), 30)
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["speak"]})
     changed = frame_of(call, "grantsChanged")
     check("taking Speak away reaches the call at once", changed is not None and not changed["grants"]["speak"], changed)
@@ -295,6 +311,41 @@ def operators(world: World, check: Checks) -> None:
     check("and the new owner reads hidden channels", world.member_sees(hidden))
     stack.command("communities", "set-owner", world.community, world.owner["name"])
     world.stream.gather(0.5)
+
+
+def deployment_settings(world: World, check: Checks) -> None:
+    say("the deployment's settings, changed while people use it")
+    stack = world.stack
+    check("changing them takes Manage deployment settings",
+          stack.status("PATCH", "/admin/settings", {"fileTransfers": False}, world.owner["token"]) == 403)
+    stack.command("admin", "grant", world.owner["name"])
+    room = world.channel("files", ty="voice")
+    wait_for("a voice server offer",
+             lambda: stack.status("POST", f"/channels/{room}/voice/join", {}, world.member["token"]) == 200, 90)
+    call = join(stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["token"])
+    check("the member joins a call", frame_of(call, "ready") is not None)
+    wait_for("the call's record to show the member", lambda: in_call(world), 30)
+    world.as_owner("PATCH", "/admin/settings", {"fileTransfers": False})
+    changed = frame_of(call, "grantsChanged", 10)
+    check("turning file transfers off reaches a call at once",
+          changed is not None and not changed["grants"]["transferFiles"], changed)
+    check("and join offers grant them no more",
+          not stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["transferFiles"])
+    world.as_owner("PATCH", "/admin/settings", {"fileTransfers": True})
+    changed = frame_of(call, "grantsChanged", 10)
+    check("turning them on again reaches it too", changed is not None and changed["grants"]["transferFiles"], changed)
+    call.close()
+    stack.command("settings", "set", "--require-two-factor", "true")
+    world.stream.gather(3.0)
+    check("requiring two factors from the terminal closes the stream of a member without one",
+          world.stream.closed == 4403, world.stream.closed)
+    check("whose requests are refused until they add one",
+          stack.status("GET", "/users/@me", token=world.member["token"]) == 403)
+    stack.command("settings", "set", "--require-two-factor", "false")
+    # Every server reads a change as it commits, a moment after the command returns.
+    check("and once it is lifted their session works again",
+          soon(lambda: stack.status("GET", "/users/@me", token=world.member["token"]) == 200))
+    stack.command("admin", "revoke", world.owner["name"])
 
 
 def sign_ins(world: World, check: Checks) -> None:
@@ -438,7 +489,8 @@ def name_colours(world: World, check: Checks) -> None:
     world.stream.gather(0.5)
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             sign_ins, removal, name_colours, dual_invites, device_links]
+             deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check that changes to access reach everything already open.")

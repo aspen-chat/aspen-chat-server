@@ -22,9 +22,10 @@ import { useMessages } from "@/i18n/context";
 const DISPLAY_NAME_MAX_CHARS = 64;
 
 /**
- * How the deployment presents itself, for holders of Manage federation: the display name and
- * icon its sign-in screen welcomes people with (`DeploymentWelcome`). An empty name is saved as
- * none, which welcomes people without one.
+ * How the deployment presents itself, for holders of Manage deployment settings: the display
+ * name and icon its sign-in screen welcomes people with (`DeploymentWelcome`), which also names
+ * its system account and what authenticators call it. An empty name is saved as none, which
+ * welcomes people without one.
  */
 export function DeploymentProfileSection() {
   const m = useMessages();

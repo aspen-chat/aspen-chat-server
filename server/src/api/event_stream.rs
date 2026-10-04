@@ -27,7 +27,9 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::app;
 use crate::app::UserId;
 use crate::app::context::GlobalServerContext;
+use crate::app::deployment_settings::DeploymentSettings;
 use crate::app::event_feed::{Delivery, FeedEvent, StreamEnd, Subscription};
+use crate::app::two_factor::Caller;
 use crate::app::user::UserPg;
 use crate::t;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
@@ -40,7 +42,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 use tracing::{debug, error, warn};
 
 /// How long a freshly upgraded socket may stay silent before it is closed for not identifying.
@@ -98,7 +102,8 @@ pub enum EventStreamErrorCode {
     /// was open, which the `signInsEnded` event before this frame tells of. Close code 4401.
     Unauthorized,
     /// The server requires a second factor the account has not added yet; the session may only
-    /// add one. Close code 4403.
+    /// add one. Sent at `identify`, and to an open stream when the deployment starts requiring
+    /// one. Close code 4403.
     TwoFactorEnrollmentRequired,
     /// No `identify` frame arrived within the allowed time. Close code 4408.
     IdentifyTimeout,
@@ -237,6 +242,8 @@ fn count_connect(outcome: &'static str) {
 }
 
 async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
+    // Taken before `identify` checks the settings, so a change after that check is seen.
+    let settings = state.settings.subscribe();
     let session = match identify(&mut socket, &state).await {
         Ok(session) => session,
         Err(Rejection(code)) => {
@@ -274,18 +281,14 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
         log_send_error(&e);
         return;
     }
-    pump_events(
-        socket,
-        subscription,
-        &state,
-        session.user.id,
-        session.user.bot,
-    )
-    .await;
+    let Identified { user, caller, .. } = session;
+    pump_events(socket, subscription, &state, &user, &caller, settings).await;
 }
 
 struct Identified {
     user: UserPg,
+    /// The session, as it stood when the stream was identified.
+    caller: Caller,
     /// The sign-in the session belongs to (`app::login::sign_in_id`).
     sign_in: String,
     resume_after: Option<u64>,
@@ -327,13 +330,14 @@ async fn identify(
     let (user, caller) = app::user::user_for_token(state, &session_token)
         .await?
         .ok_or(Rejection(EventStreamErrorCode::Unauthorized))?;
-    if caller.enrollment_required(&state.config.auth) {
+    if caller.enrollment_required(&state.settings()) {
         return Err(Rejection(EventStreamErrorCode::TwoFactorEnrollmentRequired));
     }
     app::user_status::mark_user_online(state, &user);
     Ok(Identified {
         user,
         sign_in: app::login::sign_in_id(&caller.refresh_token),
+        caller,
         resume_after,
     })
 }
@@ -380,13 +384,20 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
     }
 }
 
+/// Delivers the event feed to the socket until either side ends it, for `caller`'s session of
+/// `user_row`. `settings` is this server's copy of the deployment's settings: when the deployment starts requiring a second
+/// factor the session's account lacked when it identified, the stream closes, and the client's
+/// next `identify` decides afresh, so one that added a factor meanwhile reconnects.
 async fn pump_events(
     mut socket: WebSocket,
     mut subscription: Subscription,
     state: &GlobalServerContext,
-    user: UserId,
-    bot: bool,
+    user_row: &UserPg,
+    caller: &Caller,
+    mut settings: watch::Receiver<Arc<DeploymentSettings>>,
 ) {
+    let user = user_row.id;
+    let bot = user_row.bot;
     let mut ping_interval =
         tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
     let mut unanswered_pings: u32 = 0;
@@ -433,6 +444,17 @@ async fn pump_events(
                         StreamEnd::SignedOut => EventStreamErrorCode::Unauthorized,
                     };
                     reject(&mut socket, code).await;
+                    return;
+                }
+            },
+            changed = settings.changed() => {
+                // The server is stopping when its copy of the settings is gone.
+                if changed.is_err() {
+                    return;
+                }
+                let owes_factor = caller.enrollment_required(&settings.borrow_and_update());
+                if owes_factor {
+                    reject(&mut socket, EventStreamErrorCode::TwoFactorEnrollmentRequired).await;
                     return;
                 }
             },

@@ -1,8 +1,8 @@
 //! Federation over HTTP: this deployment's published document at `/.well-known/aspen`, the
-//! Administration Dashboard's directory of other deployments under `/admin/federation`, which
-//! takes Manage federation, and signing in abroad: assertions for this deployment's users, the
-//! sign-in of other deployments' users here, and the avatars other deployments copy
-//! (`app::federation`).
+//! Administration Dashboard's gates and directory of other deployments under
+//! `/admin/federation`, which take Manage federation, and signing in abroad: assertions for this
+//! deployment's users, the sign-in of other deployments' users here, and the avatars other
+//! deployments copy (`app::federation`).
 
 use crate::api::admin::AdminUser;
 use crate::api::auth::{LoginResponse, SessionUser};
@@ -11,11 +11,12 @@ use crate::api::extract::double_option;
 use crate::api::extract::{Created, Json, NoContent, Path, Query};
 use crate::api::{API_PREFIX, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS};
 use crate::app::context::GlobalServerContext;
+use crate::app::deployment_settings::SettingsChange;
 use crate::app::federation::abroad::{self, ForeignDeployment, Issued};
 use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{
-    self, ContactOutcome, DeploymentDocument, Direction, Domain, FederationList, Gates, Origin,
-    Subject,
+    self, ContactOutcome, DeploymentDocument, Direction, Domain, FederationList, Gate, Gates,
+    Origin, Subject,
 };
 use crate::app::{self, IconId, UserId, deployment::DeploymentPermission};
 use axum::extract::State;
@@ -48,7 +49,8 @@ pub async fn well_known(State(state): State<GlobalServerContext>) -> ApiResult<R
     }
 }
 
-/// This deployment's part in federation, as `[federation]` in aspen.toml sets it.
+/// This deployment's part in federation: its domain and key, from `[federation]` in aspen.toml,
+/// and its gates, which are deployment settings.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FederationOverview {
@@ -64,6 +66,11 @@ pub struct FederationOverview {
     pub users_shared_list: bool,
     /// Whether bots' two directions read one list.
     pub bots_shared_list: bool,
+    /// Whether a user of another deployment arriving here for the first time needs a
+    /// registration invite.
+    pub users_immigration_invite_required: bool,
+    /// Whether a bot of another deployment arriving here for the first time needs one.
+    pub bots_immigration_invite_required: bool,
     /// The lists the gates read, in the order the dashboard shows them.
     pub lists_in_force: Vec<FederationList>,
     /// The document this deployment publishes, as other deployments read it; `null` without a
@@ -90,7 +97,12 @@ pub async fn get_federation(
     AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<FederationOverview>> {
     access.require(DeploymentPermission::ManageFederation)?;
+    Ok(Json(overview(&state).await?))
+}
+
+async fn overview(state: &GlobalServerContext) -> ApiResult<FederationOverview> {
     let config = &state.config.federation;
+    let policy = state.settings().federation;
     let key = federation::current_key(
         state
             .connection_pool
@@ -100,19 +112,77 @@ pub async fn get_federation(
             .as_mut(),
     )
     .await?;
-    Ok(Json(FederationOverview {
+    Ok(FederationOverview {
         domain: federation::own_domain(config).map(String::from),
         key_fingerprint: key.as_ref().map(|k| federation::fingerprint(&k.public_key)),
         key_created_at: key.map(|k| k.created_at),
-        users: (&config.users).into(),
-        bots: (&config.bots).into(),
-        users_shared_list: config.users.shared_list,
-        bots_shared_list: config.bots.shared_list,
-        lists_in_force: FederationList::all_in_force(config),
-        document: federation::document(&state).await?,
+        users: (&policy.users).into(),
+        bots: (&policy.bots).into(),
+        users_shared_list: policy.users.shared_list,
+        bots_shared_list: policy.bots.shared_list,
+        users_immigration_invite_required: policy.users.immigration_invite_required,
+        bots_immigration_invite_required: policy.bots.immigration_invite_required,
+        lists_in_force: FederationList::all_in_force(&policy),
+        document: federation::document(state).await?,
         protocol: Protocol::ours(),
         software: Software::ours(),
-    }))
+    })
+}
+
+/// A change to the gates. An absent field is unchanged.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederationUpdateRequest {
+    pub users_emigration: Option<Gate>,
+    pub users_immigration: Option<Gate>,
+    /// Both of users' gates must then read the same kind of list.
+    pub users_shared_list: Option<bool>,
+    pub users_immigration_invite_required: Option<bool>,
+    pub bots_emigration: Option<Gate>,
+    pub bots_immigration: Option<Gate>,
+    pub bots_shared_list: Option<bool>,
+    pub bots_immigration_invite_required: Option<bool>,
+}
+
+impl From<FederationUpdateRequest> for SettingsChange {
+    fn from(request: FederationUpdateRequest) -> Self {
+        Self {
+            users_emigration: request.users_emigration,
+            users_immigration: request.users_immigration,
+            users_shared_list: request.users_shared_list,
+            users_immigration_invite_required: request.users_immigration_invite_required,
+            bots_emigration: request.bots_emigration,
+            bots_immigration: request.bots_immigration,
+            bots_shared_list: request.bots_shared_list,
+            bots_immigration_invite_required: request.bots_immigration_invite_required,
+            ..Self::default()
+        }
+    }
+}
+
+/// Changes the gates, for every server at once. Users of other deployments whose homes an
+/// immigration gate no longer admits are signed out. Takes Manage federation.
+#[utoipa::path(
+    patch,
+    path = "/admin/federation",
+    tag = TAG_ADMIN,
+    request_body = FederationUpdateRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = FederationOverview),
+        (status = BAD_REQUEST, description = "A gate opened on a deployment without a domain, or a shared list whose gates read different kinds of list", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage federation", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn update_federation(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Json(request): Json<FederationUpdateRequest>,
+) -> ApiResult<Json<FederationOverview>> {
+    app::deployment_settings::update_as(&state, &access, request.into()).await?;
+    Ok(Json(overview(&state).await?))
 }
 
 /// Who may cross between this deployment and another, as the gates and its lists decide now.
@@ -163,9 +233,9 @@ pub struct FederatedDeployment {
 
 impl FederatedDeployment {
     fn new(state: &GlobalServerContext, listed: federation::Listed) -> Self {
-        let config = &state.config.federation;
+        let policy = state.settings().federation;
         let admits =
-            |subject, direction| federation::admits(config, subject, direction, &listed.lists);
+            |subject, direction| federation::admits(&policy, subject, direction, &listed.lists);
         let admission = Admission {
             users_emigration: admits(Subject::Users, Direction::Emigration),
             users_immigration: admits(Subject::Users, Direction::Immigration),
@@ -533,8 +603,8 @@ pub async fn accept_key(
     Ok(Json(FederatedDeployment::new(&state, listed)))
 }
 
-/// Puts a known deployment on a list. Any list may be edited; only those `[federation]` puts in
-/// force are read.
+/// Puts a known deployment on a list. Any list may be edited; only those the gates put in force
+/// are read.
 #[utoipa::path(
     put,
     path = "/admin/federation/deployments/{domain}/lists/{list}",

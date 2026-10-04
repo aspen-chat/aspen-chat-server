@@ -14,6 +14,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
           "manageVoiceServers",
           "manageDeploymentRoles",
           "manageFederation",
+          "manageDeploymentSettings",
         ],
         roles: [deploymentAdministrator],
       }),
@@ -32,6 +33,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
             "manageVoiceServers",
             "manageDeploymentRoles",
             "manageFederation",
+            "manageDeploymentSettings",
           ],
         },
       ],
@@ -59,6 +61,17 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       () => admin.updateProfile(request.postDataJSON() as { displayName?: string | null }),
     ],
     ["GET", /^\/admin\/federation$/, admin.federation.overview],
+    [
+      "PATCH",
+      /^\/admin\/federation$/,
+      () => admin.federation.update(request.postDataJSON() as Record<string, string | boolean>),
+    ],
+    ["GET", /^\/admin\/settings$/, admin.settings],
+    [
+      "PATCH",
+      /^\/admin\/settings$/,
+      () => admin.updateSettings(request.postDataJSON() as Record<string, number | boolean>),
+    ],
     ["GET", /^\/admin\/federation\/deployments$/, () => admin.federation.list(url)],
     [
       "POST",

@@ -663,16 +663,15 @@ pub async fn settle(state: &GlobalServerContext, noted: Noted, failed: bool) {
 }
 
 /// `settle` for work with no server context, an operator command: on `conn`, waiting for each
-/// recheck, where `file_transfers` is `[voice] file_transfers`.
+/// recheck.
 pub async fn settle_in(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
-    file_transfers: bool,
     noted: Noted,
     failed: bool,
 ) {
     for which in noted.rechecks {
-        if let Err(e) = app::voice::recheck_in(state, conn, file_transfers, which).await {
+        if let Err(e) = app::voice::recheck_in(state, conn, which).await {
             tracing::error!(?which, "could not recheck who may stay in calls: {e}");
         }
     }

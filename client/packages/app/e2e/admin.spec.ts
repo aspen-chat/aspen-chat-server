@@ -23,7 +23,8 @@ const TAB_OF: Record<string, string> = {
   Users: "Users",
   Communities: "Communities",
   "Moderation log": "Moderation log",
-  "Deployment profile": "Profile",
+  "Deployment profile": "Settings",
+  Policies: "Settings",
 };
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Administration sections" });
@@ -207,4 +208,22 @@ test("the deployment profile renames the server its sign-in screen welcomes peop
   await save.click();
   expect((await saved).postDataJSON()).toEqual({ displayName: null });
   await expect(profile.getByRole("button", { name: "Add icon" })).toBeVisible();
+});
+
+test("the policies send only what changed, and reach the server at once", async ({ page }) => {
+  const policies = await openSection(page, "Policies");
+  const twoFactor = policies.getByRole("checkbox", { name: /Every account needs a second factor/ });
+  await expect(twoFactor).not.toBeChecked();
+  const save = policies.getByRole("button", { name: "Save" });
+  await expect(save).toBeDisabled();
+  await policies.getByText("Every account needs a second factor").click();
+  await policies.getByRole("textbox", { name: "Bots per person" }).fill("5");
+  const saved = page.waitForRequest(
+    (request) => request.method() === "PATCH" && request.url().endsWith("/api/v1/admin/settings"),
+  );
+  await save.click();
+  expect((await saved).postDataJSON()).toEqual({ requireTwoFactor: true, botsMaxPerUser: 5 });
+  await expect(policies.getByRole("status")).toHaveText("Saved.");
+  await expect(twoFactor).toBeChecked();
+  await expect(save).toBeDisabled();
 });

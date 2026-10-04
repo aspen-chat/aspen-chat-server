@@ -40,7 +40,7 @@ pub async fn read_emoji(
 
 /// Adds an emoji from an icon uploaded first (`POST /icons`, a PNG, JPEG, WebP, or GIF of at
 /// most 256 KiB and 128 by 128), named uniquely within the community. Takes Manage custom
-/// emoji; the community may hold at most `[communities] custom_emoji_limit`.
+/// emoji; the community may hold at most the deployment setting `customEmojiLimit`.
 #[utoipa::path(
     post,
     path = "/communities/{community}/emoji",

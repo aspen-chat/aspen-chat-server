@@ -2,7 +2,7 @@
 //! ([`Domain`]) and proves what it says with an Ed25519 key pair, whose public half it
 //! publishes at `https://{domain}/.well-known/aspen` ([`DeploymentDocument`]) with its policy.
 //!
-//! The policy is two gates each for users and for bots (`[federation]` in aspen.toml): who may
+//! The policy is two gates each for users and for bots (deployment settings): who may
 //! go from here to other deployments (emigration) and who may come here from them
 //! (immigration). A gate is closed, open, or governed by a list of deployments that it allows or
 //! blocks ([`FederationList`]); with `shared_list`, both directions read one list.
@@ -36,7 +36,9 @@ pub use domain::{Domain, own_domain};
 pub use keys::{
     DeploymentDocument, Gates, Rotation, current_key, document, ensure_key, fingerprint, rotate_key,
 };
-pub use policy::{Direction, FederationList, Subject, admits};
+pub use policy::{
+    Direction, FederationList, FederationPolicy, Gate, MigrationRules, Subject, admits,
+};
 
 /// Where a deployment publishes its [`DeploymentDocument`].
 pub const WELL_KNOWN_PATH: &str = "/.well-known/aspen";

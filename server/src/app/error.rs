@@ -32,6 +32,10 @@ pub enum Error {
     NatsKeyValue(#[from] async_nats::jetstream::context::CreateKeyValueError),
     #[error("error while listing a NATS key-value bucket's keys {0}")]
     NatsKeys(#[from] async_nats::jetstream::kv::WatchError),
+    #[error("error while writing to a NATS key-value bucket {0}")]
+    NatsKeyValuePut(#[from] async_nats::jetstream::kv::PutError),
+    #[error("error while watching a NATS key-value bucket {0}")]
+    NatsKeyValueWatch(#[from] async_nats::jetstream::kv::WatcherError),
     #[error("could not send a voice command: {0}")]
     VoiceCommand(#[source] async_nats::client::PublishError),
     #[error("event published with the wrong scope: {0}")]

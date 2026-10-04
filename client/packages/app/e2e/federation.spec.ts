@@ -28,10 +28,30 @@ test("the section shows this deployment's identity and gates", async ({ page }) 
   const federation = page.getByRole("region", { name: "Federation" });
   await expect(federation.getByText("aspen.example.com")).toBeVisible();
   await expect(federation.getByText("SHA256:this-deployment")).toBeVisible();
-  const gates = federation.getByRole("group", { name: "Gates" });
-  await expect(gates.getByRole("row").filter({ hasText: "Users" })).toContainText("Allow list");
-  await expect(gates.getByRole("row").filter({ hasText: "Users" })).toContainText("Open");
-  await expect(gates.getByRole("row").filter({ hasText: "Bots" })).toContainText("Closed");
+  const gates = federation.getByRole("form", { name: "Gates" });
+  const users = gates.getByRole("group", { name: "Users" });
+  await expect(users.getByRole("button", { name: /Going elsewhere/ })).toContainText("Allow list");
+  await expect(users.getByRole("button", { name: /Coming here/ })).toContainText("Open");
+  const bots = gates.getByRole("group", { name: "Bots" });
+  await expect(bots.getByRole("button", { name: /Coming here/ })).toContainText("Closed");
+});
+
+test("an administrator closes a gate, sending only that change", async ({ page }) => {
+  const gates = page.getByRole("form", { name: "Gates" });
+  const save = gates.getByRole("button", { name: "Save gates" });
+  await expect(save).toBeDisabled();
+  await gates
+    .getByRole("group", { name: "Users" })
+    .getByRole("button", { name: /Coming here/ })
+    .click();
+  await page.getByRole("option", { name: "Closed" }).click();
+  const saved = page.waitForRequest(
+    (request) => request.method() === "PATCH" && request.url().endsWith("/api/v1/admin/federation"),
+  );
+  await save.click();
+  expect((await saved).postDataJSON()).toEqual({ usersImmigration: "closed" });
+  await expect(gates.getByRole("status")).toHaveText("Saved.");
+  await expect(save).toBeDisabled();
 });
 
 test("an administrator adds a deployment, which is contacted and pinned at once", async ({

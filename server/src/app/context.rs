@@ -23,8 +23,6 @@ pub struct GlobalServerContext {
     pub media_store: Arc<app::media_store::MediaStore>,
     pub config: Arc<AspenConfig>,
     pub rate_limiter: Arc<app::rate_limit::RateLimiter>,
-    /// The WebAuthn relying party, when `[auth.passkeys]` is configured.
-    pub webauthn: Option<Arc<webauthn_rs::Webauthn>>,
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<app::ChannelId, app::events::ChannelHome>>>,
@@ -37,6 +35,15 @@ pub struct GlobalServerContext {
     pub event_feed: app::event_feed::EventFeed,
     /// What every call to another deployment is made with (`app::federation::fetch`).
     pub federation_client: reqwest::Client,
+    /// This server's copy of the deployment's settings (`app::deployment_settings`).
+    pub settings: app::deployment_settings::SettingsCache,
+}
+
+impl GlobalServerContext {
+    /// The deployment's settings as this server last read them.
+    pub fn settings(&self) -> std::sync::Arc<app::deployment_settings::DeploymentSettings> {
+        self.settings.current()
+    }
 }
 
 impl GlobalServerContext {
@@ -88,23 +95,34 @@ impl GlobalServerContext {
         valkey.init().await?;
 
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
-        let webauthn = app::passkey::relying_party(&config.auth)?;
+        // Checked now so that a mistake in `[auth.passkeys]` stops the server as it starts.
+        app::passkey::relying_party(&config.auth, app::deployment_settings::DEFAULT_NAME)?;
         let federation_client = app::federation::fetch::client(&config.federation)?;
+        let connection_pool = {
+            let conn_manager =
+                AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
+            let pool = Pool::builder(conn_manager);
+            match config.database_pool_size {
+                Some(size) => pool.max_size(size),
+                None => pool,
+            }
+            .build()?
+        };
+        let settings = {
+            let mut conn = connection_pool.get().await?;
+            app::deployment_settings::pin_domain(
+                conn.as_mut(),
+                app::federation::own_domain(&config.federation).as_ref(),
+            )
+            .await?;
+            app::deployment_settings::load(conn.as_mut()).await?
+        };
 
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
             channel_presence: Arc::default(),
             connected_members: Arc::default(),
-            connection_pool: {
-                let conn_manager =
-                    AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-                let pool = Pool::builder(conn_manager);
-                match config.database_pool_size {
-                    Some(size) => pool.max_size(size),
-                    None => pool,
-                }
-                .build()?
-            },
+            connection_pool,
             event_feed: app::event_feed::EventFeed::start(
                 context.clone(),
                 config.event_queue_size,
@@ -114,19 +132,19 @@ impl GlobalServerContext {
             valkey,
             media_store,
             rate_limiter: Arc::new(rate_limiter),
-            webauthn,
             federation_client,
+            settings: app::deployment_settings::SettingsCache::new(settings),
             config: config.into(),
         })
     }
 }
 
-/// Starts the app's background tasks: the poll closer, the voice report listener and reaper, the
-/// fleet heartbeat, the federation standing confirmer, and the push dispatcher, seeding the voice
-/// servers and making the federation and push keys where they are missing.
+/// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
+/// listener and reaper, the fleet heartbeat, the federation standing confirmer, and the push
+/// dispatcher, making the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
+    app::deployment_settings::spawn_watcher(context.clone());
     app::poll::spawn_closer(context.clone());
-    app::voice::seed_servers(context).await?;
     app::voice::spawn_report_listener(context.clone()).await?;
     app::voice::spawn_reaper(context.clone());
     app::fleet::spawn_heartbeat(context.clone());

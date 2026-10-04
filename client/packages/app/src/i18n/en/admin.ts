@@ -14,7 +14,7 @@ export const admin = {
   registration: "Registration",
   inviteOnly: "Invite only",
   openRegistration: "Open to anyone",
-  registrationHint: "Set by [registration] invite_required in aspen.toml",
+  registrationHint: "Changed under Settings",
   growth: "Growth",
   growthRange: "Range",
   ranges: {
@@ -170,12 +170,13 @@ export const admin = {
   },
   invite: "Invite",
   members: "Members",
-  profile: "Profile",
+  settings: "Settings",
   profileTitle: "Deployment profile",
-  profileHint: "The name and icon this server's sign-in screen welcomes people with.",
+  profileHint:
+    "The name and icon this server's sign-in screen welcomes people with. The name is also what its notices come from and what authenticator apps and passkey prompts call it.",
   displayName: "Display name",
   displayNameHint:
-    "Up to 64 characters. Left empty, people are welcomed to “our Aspen Chat instance”.",
+    "Up to 64 characters. Left empty, people are welcomed to “our Aspen Chat instance”, and notices and authenticators say “Aspen”.",
   saveDisplayName: "Save",
   savingDisplayName: "Saving…",
   displayNameSaved: "Saved.",
@@ -184,4 +185,25 @@ export const admin = {
   addDeploymentIcon: "Add icon",
   changeDeploymentIcon: "Change icon",
   removeDeploymentIcon: "Remove icon",
+  policiesTitle: "Policies",
+  policiesHint: "What this server allows. A change reaches every server at once.",
+  registrationInviteRequired: "Registration takes an invite",
+  registrationInviteRequiredHint:
+    "New accounts need a registration invite. Accounts already made are unaffected.",
+  requireTwoFactor: "Every account needs a second factor",
+  requireTwoFactorHint:
+    "People without one can only add one, or sign out, until they do. Their open apps are asked to at once.",
+  botsEnabled: "People may make bots",
+  botsEnabledHint: "Bots already made keep working either way.",
+  botsMaxPerUser: "Bots per person",
+  everyoneMentionLimit: "Members before Mention everyone is turned off",
+  everyoneMentionLimitHint:
+    "A community this large has Mention everyone taken from its everyone role, and its owner is told why. 0 never.",
+  customEmojiLimit: "Custom emoji per community",
+  fileTransfersAllowed: "People may send files in calls",
+  fileTransfersAllowedHint:
+    "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",
+  saveSettings: "Save",
+  savingSettings: "Saving…",
+  settingsSaved: "Saved.",
 } as const;

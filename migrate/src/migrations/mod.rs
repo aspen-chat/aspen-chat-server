@@ -80,3 +80,4 @@ pub mod m20261003_233932_deleted_category_leftovers;
 pub mod m20261004_001047_attachment_uploader;
 pub mod m20261004_044609_dual_invites;
 pub mod m20261004_062257_role_colors;
+pub mod m20261004_070339_deployment_settings;

@@ -1,8 +1,8 @@
 export const federation = {
   title: "Federation",
-  hint: "Other Aspen deployments, and whether this one's users and bots may use them or theirs may use this one. The gates are set in aspen.toml under [federation]; the lists they read are kept here.",
+  hint: "Other Aspen deployments, and whether this one's users and bots may use them or theirs may use this one: the gates, and the lists they read.",
   notFederating:
-    "This deployment takes no part in federation. Set a domain under [federation] in aspen.toml to publish its key.",
+    "This deployment takes no part in federation. Its operators set a domain under [federation] in aspen.toml to publish its key and open its gates.",
   domain: "Domain",
   key: "Key",
   copyKey: "Copy fingerprint",
@@ -15,6 +15,13 @@ export const federation = {
   users: "Users",
   bots: "Bots",
   sharedList: "One list for both ways",
+  sharedListHint: "Both gates then read one list, so they must be the same kind of list.",
+  immigrationInviteRequired: "A first arrival needs a registration invite",
+  gatesHint:
+    "Closing a gate, or narrowing it, signs out at once the visitors from deployments it no longer admits.",
+  saveGates: "Save gates",
+  savingGates: "Saving…",
+  gatesSaved: "Saved.",
   gate: {
     closed: "Closed",
     open: "Open",

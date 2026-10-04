@@ -1,8 +1,8 @@
 //! The deployment's own account, which sends people notices from the deployment itself, such as
 //! a community owner's when `app::everyone_limit` turns Mention everyone off.
 //!
-//! It is one row of `user` with `system` set, made the first time a notice is sent, called by
-//! `[system_account] display_name`, and labelled as the system wherever it is named. It has no
+//! It is one row of `user` with `system` set, made the first time a notice is sent, called what
+//! the deployment is called (`app::deployment_settings`), and labelled as the system wherever it is named. It has no
 //! password or token, so nothing signs in as it, and its username is outside the ones people
 //! sign in and are found by (`user_name_key` leaves it out). Its notices are ordinary messages
 //! of a one-to-one DM, which it alone may start and which needs no shared community; the person
@@ -22,11 +22,10 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 /// The system account's username, which no one else's can clash with.
 pub const USERNAME: &str = "system";
 
-/// The system account, made the first time it is needed and called by what the configuration
-/// says now. Those holding its record see a new name when they next read it: it belongs to no
-/// community, so no event of its profile reaches anyone.
+/// The system account, made the first time it is needed and called what the deployment is
+/// called. Renaming the deployment renames it (`app::deployment_settings::update`).
 pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> app::Result<UserId> {
-    let display_name = state.config.system_account.display_name.trim().to_string();
+    let display_name = state.settings().name().to_string();
     let now = Utc::now();
     diesel::insert_into(user::table)
         .values(UserPg {
@@ -57,17 +56,11 @@ pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> ap
         .do_nothing()
         .execute(conn)
         .await?;
-    let (id, shown): (UserId, Option<String>) = user::table
-        .select((user::id, user::display_name))
+    let id: UserId = user::table
+        .select(user::id)
         .filter(user::system)
         .first(conn)
         .await?;
-    if shown.as_deref() != Some(display_name.as_str()) {
-        diesel::update(user::table.filter(user::id.eq(id)))
-            .set(user::display_name.eq(&display_name))
-            .execute(conn)
-            .await?;
-    }
     Ok(id)
 }
 

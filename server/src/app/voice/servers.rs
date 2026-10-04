@@ -8,6 +8,7 @@ use crate::api::voice::VoiceSessionEndReason;
 use crate::app;
 use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use crate::app::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::app::{ChannelId, UserId, VoiceServerId};
 use crate::database::schema::{channel, voice_server, voice_server_failure, voice_session};
@@ -18,9 +19,9 @@ use diesel::{
     SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::seq::SliceRandom;
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 use voice_protocol::token::{Grants, JoinClaims, sign};
 
@@ -36,48 +37,37 @@ struct VoiceServerFailure {
 // ---------------------------------------------------------------------------------------------
 // Registry
 
-/// Installs the servers listed in `aspen.toml`, matched by name: a listed server is created or
-/// has its address and capacity updated, and nothing is removed, so an operator can also add
-/// servers through the API.
-pub async fn seed_servers(state: &GlobalServerContext) -> app::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
-    for seed in &state.config.voice.servers {
-        let row = VoiceServer {
-            id: VoiceServerId::new(),
-            name: seed.name.clone(),
-            url: seed.url.clone(),
-            capacity: i32::try_from(seed.capacity).unwrap_or(i32::MAX),
-            enabled: true,
-            created_at: Utc::now(),
-            last_report_at: None,
-            reported_participants: 0,
-        };
-        diesel::insert_into(voice_server::table)
-            .values(&row)
-            .on_conflict(voice_server::name)
-            .do_update()
-            .set((
-                voice_server::url.eq(&row.url),
-                voice_server::capacity.eq(row.capacity),
-            ))
-            .execute(conn.as_mut())
-            .await?;
-        info!(name = seed.name, url = seed.url, "voice server seeded");
-    }
-    Ok(())
+pub async fn list_servers(state: &GlobalServerContext) -> app::Result<Vec<VoiceServer>> {
+    list_servers_in(state.connection_pool.get().await?.as_mut()).await
 }
 
-pub async fn list_servers(state: &GlobalServerContext) -> app::Result<Vec<VoiceServer>> {
-    let mut conn = state.connection_pool.get().await?;
+/// Every registered server, by name.
+pub async fn list_servers_in(conn: &mut AsyncPgConnection) -> app::Result<Vec<VoiceServer>> {
     Ok(voice_server::table
         .select(VoiceServer::as_select())
         .order(voice_server::name)
-        .load(conn.as_mut())
+        .load(conn)
         .await?)
 }
 
 pub async fn create_server(
     state: &GlobalServerContext,
+    name: String,
+    url: String,
+    capacity: i32,
+) -> app::Result<VoiceServer> {
+    create_server_in(
+        state.connection_pool.get().await?.as_mut(),
+        name,
+        url,
+        capacity,
+    )
+    .await
+}
+
+/// Registers a server, enabled. A name already taken is a unique violation.
+pub async fn create_server_in(
+    conn: &mut AsyncPgConnection,
     name: String,
     url: String,
     capacity: i32,
@@ -92,10 +82,9 @@ pub async fn create_server(
         last_report_at: None,
         reported_participants: 0,
     };
-    let mut conn = state.connection_pool.get().await?;
     diesel::insert_into(voice_server::table)
         .values(&row)
-        .execute(conn.as_mut())
+        .execute(conn)
         .await?;
     Ok(row)
 }
@@ -105,12 +94,19 @@ pub async fn update_server(
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> app::Result<VoiceServer> {
-    let mut conn = state.connection_pool.get().await?;
+    update_server_in(state.connection_pool.get().await?.as_mut(), id, changes).await
+}
+
+pub async fn update_server_in(
+    conn: &mut AsyncPgConnection,
+    id: VoiceServerId,
+    changes: VoiceServerChangeset,
+) -> app::Result<VoiceServer> {
     Ok(diesel::update(voice_server::table)
         .filter(voice_server::id.eq(id))
         .set(changes)
         .returning(VoiceServer::as_select())
-        .get_result(conn.as_mut())
+        .get_result(conn)
         .await?)
 }
 
@@ -150,6 +146,43 @@ pub async fn delete_server(state: &GlobalServerContext, id: VoiceServerId) -> ap
         super::reports::forget_server(state, id).await;
     }
     removed
+}
+
+/// Removes a server that holds no calls, for the terminal, which cannot end calls since that
+/// records them as each server does. One that holds calls is a conflict: disabling it lets them
+/// end without new ones starting there, and the dashboard removes it at once, ending them.
+pub async fn delete_idle_server(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    id: VoiceServerId,
+) -> app::Result<()> {
+    conn.transaction(|conn| {
+        async move {
+            let calls: i64 = voice_session::table
+                .filter(voice_session::voice_server.eq(id))
+                .count()
+                .get_result(conn)
+                .await?;
+            if calls > 0 {
+                return Err(app::Error::Conflict(t!(
+                    "voiceServerHoldsCalls",
+                    calls = calls
+                )));
+            }
+            let deleted = diesel::delete(voice_server::table)
+                .filter(voice_server::id.eq(id))
+                .execute(conn)
+                .await?;
+            if deleted == 0 {
+                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await?;
+    super::reports::forget_server(state, id).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -272,7 +305,7 @@ pub async fn join_offer(
         share_screen,
         camera,
         transfer_files,
-    } = grants_of(voice.file_transfers, &access);
+    } = grants_of(state.settings().file_transfers, &access);
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,
@@ -297,7 +330,7 @@ pub async fn join_offer(
 }
 
 /// What someone with `access` to a channel may do in its call besides listen and watch, where
-/// `[voice] file_transfers` is `file_transfers`.
+/// the deployment setting `file_transfers` is `file_transfers`.
 pub(super) fn grants_of(file_transfers: bool, access: &ChannelAccess) -> Grants {
     Grants {
         speak: access.has(Permissions::SPEAK),

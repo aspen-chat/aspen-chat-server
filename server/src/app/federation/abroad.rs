@@ -126,7 +126,12 @@ pub async fn issue(
     } else {
         Subject::Users
     };
-    if !admits(config, subject, Direction::Emigration, &lists) {
+    if !admits(
+        &state.settings().federation,
+        subject,
+        Direction::Emigration,
+        &lists,
+    ) {
         return Err(app::Error::FederationRefused(t!(
             "federationEmigrationClosed",
             domain = audience.as_str()
@@ -230,7 +235,8 @@ pub async fn sign_in(
     token: &str,
     invite_code: Option<&str>,
 ) -> app::Result<Session> {
-    let config = &state.config.federation;
+    let settings = state.settings();
+    let policy = &settings.federation;
     let Received {
         claims,
         from: home,
@@ -242,7 +248,7 @@ pub async fn sign_in(
     } else {
         Subject::Users
     };
-    if !admits(config, subject, Direction::Immigration, &lists) {
+    if !admits(policy, subject, Direction::Immigration, &lists) {
         return Err(refused(&home, Direction::Immigration));
     }
     // A bot has no second factor anywhere; a person must have proved more than a password.
@@ -257,7 +263,7 @@ pub async fn sign_in(
             t!("statementInconsistent", domain = home.as_str()),
         ));
     }
-    if state.config.auth.require_two_factor && !claims.profile.bot && !claims.method.strong() {
+    if settings.require_two_factor && !claims.profile.bot && !claims.method.strong() {
         return Err(app::Error::StrongerSignInRequired);
     }
     check_profile(&claims.profile).map_err(|error| {
@@ -270,10 +276,7 @@ pub async fn sign_in(
             t!("statementProfile", domain = home.as_str(), detail = detail),
         )
     })?;
-    let rules = match subject {
-        Subject::Users => &config.users,
-        Subject::Bots => &config.bots,
-    };
+    let rules = policy.rules(subject);
     let mut conn = state.connection_pool.get().await?;
     let (user, previous_icon, joined) = arrive(
         state,

@@ -72,14 +72,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                 .await
             };
             let (set, noted) = set;
-            crate::app::events::settle_in(
-                &publisher,
-                &mut conn,
-                config.voice.file_transfers,
-                noted,
-                set.is_err(),
-            )
-            .await;
+            crate::app::events::settle_in(&publisher, &mut conn, noted, set.is_err()).await;
             set.map_err(|e| anyhow::anyhow!("{e}"))?;
             tracing::info!(%id, %username, operator = operator(), "set a community's owner");
             println!("{username} now owns community {id}");

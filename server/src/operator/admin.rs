@@ -54,14 +54,7 @@ pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
     let mut conn = database(config).await?;
     let publisher = publisher(config).await?;
     let (result, noted) = noting(run(&publisher, &mut conn, command)).await;
-    settle_in(
-        &publisher,
-        &mut conn,
-        config.voice.file_transfers,
-        noted,
-        result.is_err(),
-    )
-    .await;
+    settle_in(&publisher, &mut conn, noted, result.is_err()).await;
     result
 }
 

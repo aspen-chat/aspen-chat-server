@@ -344,6 +344,9 @@ export class AspenSync {
           this.#setStatus("reconnecting");
         }
       },
+      onEnrollmentRequired: () => {
+        options.client.noticeEnrollmentRequired();
+      },
     };
     if (options.validateEvents !== undefined) {
       streamOptions.validate = options.validateEvents;

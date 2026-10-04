@@ -85,9 +85,10 @@ pub async fn receive<T: Statement>(
         .await?
         .remove(&from)
         .unwrap_or_default();
+    let policy = state.settings().federation;
     let admitted = directions.iter().any(|direction| {
-        admits(config, Subject::Users, *direction, &lists)
-            || admits(config, Subject::Bots, *direction, &lists)
+        admits(&policy, Subject::Users, *direction, &lists)
+            || admits(&policy, Subject::Bots, *direction, &lists)
     });
     if !admitted {
         return Err(refused(

@@ -99,8 +99,8 @@ pub struct AdminOverview {
     /// Accounts made in the last seven days.
     pub new_users_this_week: i64,
     pub communities: i64,
-    /// Whether creating an account takes a registration invite (`[registration]
-    /// invite_required`).
+    /// Whether creating an account takes a registration invite (the deployment setting
+    /// `registrationInviteRequired`).
     pub registration_invite_required: bool,
 }
 
@@ -126,7 +126,7 @@ pub async fn get_overview(
         users: overview.users,
         new_users_this_week: overview.new_users_this_week,
         communities: overview.communities,
-        registration_invite_required: state.config.registration.invite_required,
+        registration_invite_required: state.settings().registration_invite_required,
     }))
 }
 
