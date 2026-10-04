@@ -189,6 +189,7 @@ def check_standing() -> None:
     moderator = sign_in(BETA, f"betamod{stamp}")
     terminal(BETA, "admin", "grant", f"betamod{stamp}")
     terminal(BETA, "admin", "allow", "moderateCommunities")
+    terminal(BETA, "admin", "allow", "banUsers")
     rogue = sign_in(ALPHA, f"alpharogue{stamp}")
     status, roguish = sign_in_abroad(assertion_for(rogue))
     api(BETA, "PUT", f"/admin/users/{roguish['userId']}/ban", {}, token=moderator, expect=(201,))
