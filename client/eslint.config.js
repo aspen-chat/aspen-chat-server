@@ -15,6 +15,7 @@ export default tseslint.config(
       "**/out/",
       "**/release/",
       "packages/protocol/src/generated/",
+      "packages/app/src/generated/",
       "packages/mobile/ios/",
       "packages/mobile/android/",
     ],

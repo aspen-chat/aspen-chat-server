@@ -13,5 +13,7 @@ test-results/
 .env.*.local
 # Output of `pnpm codegen`; regenerated from ../openapi.yaml and ../event_schema.json.
 packages/protocol/src/generated/
+# Written by packages/app/fallbackFonts.ts from the Fontsource packages when Vite starts.
+packages/app/src/generated/
 # The Android and iOS projects are kept, with their permissions, signing team, and push code;
 # each ignores its own build output and copied web assets.

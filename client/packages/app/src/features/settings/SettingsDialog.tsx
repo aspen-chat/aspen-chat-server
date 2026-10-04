@@ -42,6 +42,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
 import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { DeveloperSection } from "@/features/settings/DeveloperSection";
+import { FontsSection } from "@/features/settings/FontsSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
 import { NotificationsSection } from "@/features/settings/NotificationsSection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
@@ -58,8 +59,8 @@ import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
 
 /**
  * The user's preferences: first the account's sign-in and security settings; then the
- * microphone and speaker voice chat uses and the speaker for notification sounds, and the
- * appearance, all kept with this install; the language, kept with the account; the people the
+ * microphone and speaker voice chat uses and the speaker for notification sounds, the
+ * appearance, and the fonts text and code are drawn in, all kept with this install; the language, kept with the account; the people the
  * user has blocked; developer mode, with the user's bots; and the way out of the account. Sections for
  * account-wide preferences slot in beside them.
  */
@@ -94,6 +95,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                     <ThemePicker />
                     <MotionSpeedSlider />
                   </section>
+                  <FontsSection />
                   <NotificationsSection />
                   <LanguageSection />
                   <BlockedUsersSection />

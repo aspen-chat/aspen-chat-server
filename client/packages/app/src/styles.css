@@ -14,7 +14,21 @@
  * drawn on, in every palette and both schemes; `e2e/accessibility.spec.ts` checks it with axe.
  */
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  /* Text is drawn in Inclusive Sans and code in Intel One Mono, both bundled (`main.tsx`),
+     unless the user chose a font of their own on this install (`theme/fonts.ts`), which comes
+     first. What that lacks falls back to the bundled face, then to bundled Noto faces
+     (`fallbackFonts.ts`): Noto Sans for Cyrillic, Greek, and Devanagari, Noto Color Emoji, a
+     Noto Sans for each other script, and the CJK faces in the order the page's language
+     prefers; then to the system's. Code takes the system's monospace faces before the Noto
+     ones, which are proportional. */
+  --font-sans:
+    var(--font-text-chosen, "Inclusive Sans Variable"), "Inclusive Sans Variable",
+    "Noto Sans Variable", var(--font-emoji), var(--font-scripts), var(--font-han), ui-sans-serif,
+    system-ui, sans-serif;
+  --font-mono:
+    var(--font-code-chosen, "Intel One Mono Variable"), "Intel One Mono Variable",
+    var(--font-emoji), ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Variable",
+    var(--font-scripts), var(--font-han), monospace;
 
   --color-surface: var(--palette-surface);
   --color-surface-raised: var(--palette-surface-raised);
@@ -176,7 +190,7 @@ body {
   white-space: pre-wrap;
 }
 .message-body code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.875em;
   border-radius: 0.25rem;
   padding: 0.1em 0.3em;
@@ -324,6 +338,11 @@ body {
 }
 
 /* The emoji picker (`emoji-picker-react`) styles itself through these variables. */
+/* The picker names system emoji fonts of its own, `!important`; it draws in the one messages
+   and reactions are drawn in instead, so an emoji looks the same picked as sent. */
+.emoji-picker .epr-emoji-native {
+  font-family: var(--font-emoji) !important;
+}
 .emoji-picker.epr-main {
   --epr-bg-color: var(--color-surface-raised);
   --epr-category-label-bg-color: var(--color-surface-raised);

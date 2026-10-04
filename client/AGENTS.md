@@ -61,6 +61,7 @@ commit, as with comments.
 - [`composer-and-drafts.md`](docs/architecture/composer-and-drafts.md): the message box's layout and keys, keeping the bottom edge, Jump to latest, and drafts.
 - [`custom-emoji.md`](docs/architecture/custom-emoji.md): a community's emoji in messages, completion, reactions, and the Emoji tab.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
+- [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
 - [`message-list.md`](docs/architecture/message-list.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
@@ -207,6 +208,10 @@ commit, as with comments.
   each pair shows is the root's `color-scheme`: `light dark`, following the system, unless the
   user chose Light or Dark under Appearance (`applyThemeMode`, kept per install like the
   palette). Nothing may read `prefers-color-scheme` itself, since that ignores the user's choice.
+- Type comes only from `font-sans` and `font-mono` (`--font-sans` and `--font-mono` in
+  `src/styles.css`), never a family named in a component: the user may choose their own font
+  for either (`docs/architecture/fonts.md`), and the stacks hold the bundled fallbacks for every
+  script and for emoji.
 - Icon-only controls get a `Tooltip` (`src/features/layout/Tooltip.tsx`) whose text is also their
   `aria-label`, so the tooltip and the accessible name never disagree.
 - Something done and done with, where nothing on the page will say so (text copied), is said in

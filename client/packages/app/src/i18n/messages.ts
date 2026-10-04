@@ -16,6 +16,7 @@ import { expiry } from "./en/expiry";
 import { federation } from "./en/federation";
 import { files } from "./en/files";
 import { folders } from "./en/folders";
+import { fonts } from "./en/fonts";
 import { gallery } from "./en/gallery";
 import { layout } from "./en/layout";
 import { members } from "./en/members";
@@ -84,6 +85,7 @@ export const en = {
   crop,
   changeCommunityIcon: "Change community icon",
   settings,
+  fonts,
   files,
   voice,
   profile,
