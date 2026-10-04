@@ -43,4 +43,8 @@ export const deploymentPermissionNames = {
     name: "Message any user",
     hint: "Start a DM with anyone, whatever communities they share and whoever blocked whom. Needed to warn someone.",
   },
+  managePlugins: {
+    name: "Manage plugins",
+    hint: "Turn installed plugins on and off for the whole server, change their settings, and choose where they run and in what order. Installing them is done on the server itself.",
+  },
 } as const;

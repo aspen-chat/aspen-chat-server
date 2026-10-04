@@ -56,6 +56,7 @@ function post(publish: Publish, content: string, tags: string[] = []) {
     editedAt: null,
     linkPreviews: [],
     linkedMessages: [],
+    alteredBy: [],
     kind: "standard",
     poll: null,
     thread: null,

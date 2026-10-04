@@ -76,4 +76,8 @@ export const permissionNames = {
     name: "Mention everyone",
     hint: "Tag @everyone, telling everyone who can see the channel.",
   },
+  managePlugins: {
+    name: "Manage plugins",
+    hint: "Turn this server's plugins on and off here, change their settings, and read them.",
+  },
 } as const;

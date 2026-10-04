@@ -41,6 +41,13 @@ export type CommandParameter = components["schemas"]["Parameter"];
 export type ParameterType = components["schemas"]["ParameterType"];
 /** A command as sent: which bot's, its name, and its arguments as the server reads them. */
 export type Invocation = components["schemas"]["Invocation"];
+/**
+ * A plugin the deployment runs, as every client knows it: what it is, and its text in the
+ * reader's language, from which its annotations, `alteredBy`, and settings forms are drawn.
+ */
+export type PluginInfo = components["schemas"]["PluginInfo"];
+/** One of a plugin's settings, as a form draws it. */
+export type SettingField = components["schemas"]["SettingField"];
 
 export type Listener = () => void;
 
@@ -69,6 +76,10 @@ export type Listener = () => void;
  * - `channelAccess:<channelId>`: what the caller may do in one channel
  * - `pins:<channelId>`: a channel's pinned messages, once loaded
  * - `commands:<channelId>`: the commands of the bots that can see a channel, once loaded
+ * - `annotations:<messageId>`: what plugins say about a message
+ * - `userAnnotations:<userId>`: what plugins say about a person, once loaded
+ * - `plugins`: the plugins the deployment runs
+ * - `communityPlugins:<communityId>`: a community's use of each plugin, once loaded
  */
 export type Topic = string;
 

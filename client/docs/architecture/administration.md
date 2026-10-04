@@ -51,4 +51,4 @@
   `name@domain`. Holders of Ban users ban anyone but the system account and themselves from the
   deployment, and lift bans, there (`UserBanControl`, `UserBanDialog`; see Reports), and it
   filters to those banned. The Reports and Report categories tabs are described under
-  Reports.
+  Reports, and the Plugins tab, for `viewDashboard` or `managePlugins`, under Plugins.

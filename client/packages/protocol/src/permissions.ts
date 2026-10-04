@@ -32,6 +32,7 @@ export const COMMUNITY_PERMISSIONS: readonly Permission[] = [
   "addBots",
   "manageCustomEmoji",
   "banMembers",
+  "managePlugins",
 ];
 
 /** Permissions a channel or category override may allow or deny. */

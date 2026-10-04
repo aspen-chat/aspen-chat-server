@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useChannel, useChannelRemoved, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
 import { DmHeader } from "@/features/dms/DmHeader";
+import { DmPluginNotice } from "@/features/plugins/Annotations";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Composer } from "@/features/messages/Composer";
 import { PinsButton } from "@/features/messages/PinsButton";
@@ -121,6 +122,7 @@ export function ChannelScreen() {
             <PinsButton channelId={channelId} channelName={channel.name} home={home} />
           </ChannelHeader>
         )}
+        {isDm(channel) && <DmPluginNotice />}
         {isDm(channel) && <DmCall channel={channel} />}
         {loadError !== null && (
           <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">

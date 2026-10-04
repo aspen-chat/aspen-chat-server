@@ -208,3 +208,14 @@ test("the deployment profile renames the server its sign-in screen welcomes peop
   expect((await saved).postDataJSON()).toEqual({ displayName: null });
   await expect(profile.getByRole("button", { name: "Add icon" })).toBeVisible();
 });
+
+test("the plugins tab lists what is installed, what each may do, and what it keeps", async ({
+  page,
+}) => {
+  const section = await openSection(page, "Plugins");
+  await expect(section.getByRole("heading", { name: /Word filter/ })).toBeVisible();
+  await expect(section).toContainText("Change what people write before it is sent");
+  await expect(section).toContainText("Keeps a count of each channel's messages.");
+  // Without Manage plugins, nothing here changes anything.
+  await expect(section.getByRole("button", { name: "Turn off" })).toHaveCount(0);
+});

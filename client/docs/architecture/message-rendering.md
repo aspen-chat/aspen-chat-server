@@ -31,3 +31,6 @@
   list of player hosts the client will frame; extend both together. Twitch's player needs the
   embedding hostname as `parent`, which `playerSrc` adds. The player iframe is sandboxed and
   only created after the reader presses play.
+- What the deployment's plugins say about a message shows beneath it as chips
+  (`MessageAnnotations`), and a message a plugin changed is marked "(changed by …)" beside the
+  edited mark (`AlteredBy`); see Plugins.

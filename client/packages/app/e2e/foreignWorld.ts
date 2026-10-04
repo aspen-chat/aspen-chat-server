@@ -182,6 +182,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
             editedAt: null,
             linkPreviews: [],
             linkedMessages: [],
+            alteredBy: [],
             kind: "standard",
             poll: null,
             thread: null,

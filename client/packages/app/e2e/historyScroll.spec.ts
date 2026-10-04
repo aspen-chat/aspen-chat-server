@@ -68,6 +68,7 @@ function messageOf(n: number): { record: Record<string, unknown>; picture: Pictu
       editedAt: null,
       linkPreviews: [],
       linkedMessages: [],
+      alteredBy: [],
       kind: "standard",
       poll: null,
       thread: null,

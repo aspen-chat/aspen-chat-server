@@ -95,7 +95,10 @@ export type {
   ReadState,
   VoiceParticipantState,
   Topic,
+  PluginInfo,
+  SettingField,
 } from "./storeTypes";
+export { pluginKey, pluginText } from "./plugins";
 export {
   AdminApi,
   type AdminCommunityEntry,
@@ -137,6 +140,8 @@ export {
   type ProfileSnapshot,
   type Report,
   type Resolution,
+  type AdminPlugin,
+  type AdminPluginUpdateRequest,
 } from "./admin";
 export {
   ACTIVITY_INTERVAL_MS,
@@ -170,9 +175,14 @@ export type {
   PollOptionResult,
   PollWriteIn,
   CommunityBan,
+  CommunityPlugin,
   CustomEmoji,
+  MessageAnnotation,
+  PluginText,
   Role,
+  Severity,
   User,
+  UserAnnotation,
   UserCommunity,
   UserOnlineStatus,
   VoiceParticipant,

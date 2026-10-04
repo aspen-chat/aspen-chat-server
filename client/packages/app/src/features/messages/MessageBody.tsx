@@ -4,6 +4,7 @@ import { imageUrls, isImageUrl, onlyImageLinks } from "@/features/messages/image
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
+import { AlteredBy } from "@/features/plugins/Annotations";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { useMessages } from "@/i18n/context";
@@ -14,7 +15,8 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 
 /**
  * What a message says and holds, drawn the same wherever it is shown (the channel, the pins
- * list): its text as Markdown with its tags, marked when edited, its poll, its pictures and
+ * list): its text as Markdown with its tags, marked when edited or changed by a plugin, its
+ * poll, its pictures and
  * files, and cards for its links. A message that is nothing but links to pictures shows the
  * pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
@@ -87,6 +89,7 @@ export function MessageBody({
               {m.edited}
             </span>
           )}
+          <AlteredBy pluginIds={message.alteredBy} />
         </div>
       )}
       {!still && message.kind === "poll" && message.poll != null && (

@@ -15,7 +15,7 @@
 
 import { AdminApi, adminRead } from "./admin";
 import { EventStream, type EventStreamOptions } from "./events";
-import type { CustomEmoji, ServerEvent } from "./generated/events";
+import type { CommunityPlugin, CustomEmoji, ServerEvent } from "./generated/events";
 import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
@@ -232,6 +232,8 @@ export class AspenSync {
   readonly #windowLoads = new Map<string, Promise<void>>();
   /** Reads of what a message links to, under way, by the message linking. */
   readonly #linkLoads = new Map<string, Promise<void>>();
+  /** The read of the plugin catalogue in flight, which every ask shares. */
+  #pluginLoad: Promise<void> | null = null;
   readonly #userLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -799,6 +801,7 @@ export class AspenSync {
             "reactions",
             "linked",
             "warnings",
+            "annotations",
           ],
         },
       },
@@ -808,7 +811,125 @@ export class AspenSync {
     }
     this.store.ingest({ ...result.data.included, messages: [result.data.data] });
     this.store.setReactions([result.data.data.id], result.data.included.reactions ?? []);
+    this.store.setAnnotations([result.data.data.id], result.data.included.messageAnnotations ?? []);
     return result.data.data;
+  }
+
+  /**
+   * Reads the plugins the deployment runs again, as when an event names one this client does
+   * not know of. Several asks share a read.
+   */
+  loadPlugins(): Promise<void> {
+    if (this.#pluginLoad !== null) {
+      return this.#pluginLoad;
+    }
+    this.#pluginLoad = this.#client.api
+      .GET("/api/v1/plugins")
+      .then((result) => {
+        if (result.data === undefined) {
+          throw new ApiProblemError(problemOf(result.error, result.response));
+        }
+        this.store.setPlugins(result.data);
+      })
+      .finally(() => {
+        this.#pluginLoad = null;
+      });
+    return this.#pluginLoad;
+  }
+
+  /** Whether `event` names a plugin the catalogue does not hold. */
+  #namesUnknownPlugin(event: ServerEvent): boolean {
+    const unknown = (id: string) => this.store.plugin(id) === undefined;
+    switch (event.serverEvent) {
+      case "messageAnnotation":
+      case "userAnnotation":
+        return event.type === "create" && unknown(event.plugin);
+      case "message":
+        return (
+          (event.type === "create" || event.type === "update") &&
+          (event.alteredBy ?? []).some(unknown)
+        );
+      default:
+        return false;
+    }
+  }
+
+  /** Reads what plugins say about a person. */
+  async loadUserAnnotations(userId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/users/{user}/annotations", {
+      params: { path: { user: userId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.setUserAnnotations(userId, result.data);
+  }
+
+  /** Reads a community's use of each plugin, which takes Manage plugins. */
+  async loadCommunityPlugins(communityId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/plugins", {
+      params: { path: { community: communityId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.setCommunityPlugins(communityId, result.data);
+  }
+
+  /**
+   * Turns a plugin on in a community, with `settings` laid over any it had, bringing in its
+   * account holding `grant`.
+   */
+  async enableCommunityPlugin(
+    communityId: string,
+    pluginId: string,
+    settings: Record<string, unknown>,
+    grant: readonly Permission[],
+  ): Promise<CommunityPlugin> {
+    const result = await this.#client.api.PUT("/api/v1/communities/{community}/plugins/{plugin}", {
+      params: { path: { community: communityId, plugin: pluginId } },
+      body: { settings, grant: [...grant] },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.putCommunityPlugin(result.data);
+    return result.data;
+  }
+
+  /** Changes a plugin's settings in a community; `null` restores a setting's default. */
+  async configureCommunityPlugin(
+    communityId: string,
+    pluginId: string,
+    patch: Record<string, unknown>,
+  ): Promise<CommunityPlugin> {
+    const result = await this.#client.api.PATCH(
+      "/api/v1/communities/{community}/plugins/{plugin}",
+      {
+        params: { path: { community: communityId, plugin: pluginId } },
+        body: patch,
+      },
+    );
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.putCommunityPlugin(result.data);
+    return result.data;
+  }
+
+  /** Turns a plugin off in a community, taking its account out. */
+  async disableCommunityPlugin(communityId: string, pluginId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/communities/{community}/plugins/{plugin}",
+      { params: { path: { community: communityId, plugin: pluginId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const held = this.store.communityPlugins(communityId)?.find((p) => p.plugin === pluginId);
+    if (held !== undefined) {
+      this.store.putCommunityPlugin({ ...held, enabled: false });
+    }
   }
 
   /**
@@ -2317,7 +2438,7 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms, admin, blocks] = await Promise.all([
+      const [me, communities, dms, admin, blocks, plugins] = await Promise.all([
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
@@ -2347,6 +2468,7 @@ export class AspenSync {
         this.#client.api.GET("/api/v1/users/@me/blocks", {
           params: { query: { include: ["users"] } },
         }),
+        this.#client.api.GET("/api/v1/plugins"),
       ]);
       if (generation !== this.#generation) {
         return false;
@@ -2378,6 +2500,8 @@ export class AspenSync {
       this.store.ingest(blocks.data.included);
       this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
       this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
+      // A deployment without plugins, or one that does not say, runs none.
+      this.store.setPlugins(plugins.data ?? []);
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );
@@ -2579,6 +2703,9 @@ export class AspenSync {
     const retagged = this.#unreadTagsChangedBy(event);
     const blockChanged =
       event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
+    if (this.#namesUnknownPlugin(event)) {
+      void this.loadPlugins().catch(() => undefined);
+    }
     this.store.applyEvent(event);
     if (blockChanged) {
       this.#blockChanged();
@@ -2844,6 +2971,7 @@ export class AspenSync {
             "reactions",
             "linked",
             "warnings",
+            "annotations",
           ],
         },
       },
@@ -2855,6 +2983,14 @@ export class AspenSync {
     this.store.setReactions(
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],
+    );
+    // Annotations come for the messages read and for those the read names (echoes' replies).
+    this.store.setAnnotations(
+      [
+        ...result.data.data.map((m) => m.id),
+        ...(result.data.included.messages ?? []).map((m) => m.id),
+      ],
+      result.data.included.messageAnnotations ?? [],
     );
     return result.data.data;
   }

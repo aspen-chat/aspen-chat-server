@@ -52,6 +52,8 @@ export type ProfileAspect = components["schemas"]["ProfileAspect"];
 export type ProfileSnapshot = components["schemas"]["ProfileSnapshot"];
 export type Report = components["schemas"]["Report"];
 export type Resolution = components["schemas"]["Resolution"];
+export type AdminPlugin = components["schemas"]["AdminPlugin"];
+export type AdminPluginUpdateRequest = components["schemas"]["AdminPluginUpdateRequest"];
 
 /** A page of one of the dashboard's lists. */
 export interface AdminListQuery<S extends string> {
@@ -471,5 +473,30 @@ export class AdminApi {
         },
       }),
     );
+  }
+
+  /** Every installed plugin, on or off, in the order they decide messages in. */
+  async plugins(): Promise<AdminPlugin[]> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/plugins"));
+  }
+
+  /** Turns an installed plugin on or off, changes its mode, or configures it. */
+  async updatePlugin(pluginId: string, patch: AdminPluginUpdateRequest): Promise<AdminPlugin> {
+    return adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/plugins/{plugin}", {
+        params: { path: { plugin: pluginId } },
+        body: patch,
+      }),
+    );
+  }
+
+  /** Orders the installed plugins, first to decide first. */
+  async orderPlugins(pluginIds: readonly string[]): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/admin/plugin-order", {
+      body: { plugins: [...pluginIds] },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 }

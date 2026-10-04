@@ -74,6 +74,7 @@ function message(n: number, channelId = general.id, author = me.id): Message {
     poll: null,
     mentions: { users: [], roles: [], everyone: false },
     linkedMessages: [],
+    alteredBy: [],
   };
 }
 
@@ -1540,5 +1541,101 @@ describe("RecordStore notifications", () => {
     store.replaceMutes([]);
     store.setBlocked(bob.id, true);
     expect(store.notifies(plain)).toBe(false);
+  });
+});
+
+describe("RecordStore plugins", () => {
+  const filter = {
+    id: "org.example.filter",
+    version: "1.0.0",
+    name: "Filter",
+    description: "Filters",
+    mode: "optIn" as const,
+    dms: false,
+    principal: null,
+    principalPermissions: [],
+    communitySettings: [],
+    messages: { watched: "Watched" },
+  };
+
+  function note(n: number, messageId: string, plugin = filter.id) {
+    return {
+      id: id(5000 + n),
+      message: messageId,
+      plugin,
+      kind: `kind${String(n)}`,
+      severity: "notice" as const,
+      label: { key: "watched" },
+    };
+  }
+
+  it("holds a message's annotations as reads list them, and only of plugins it runs", () => {
+    const store = bootstrapped();
+    store.setPlugins([filter]);
+    const first = message(1);
+    store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
+    store.setAnnotations([first.id], [note(1, first.id), note(2, first.id, "org.example.gone")]);
+    expect(store.annotations(first.id).map((a) => a.kind)).toEqual(["kind1"]);
+    // A read that lists none for the message leaves it with none.
+    store.setAnnotations([first.id], []);
+    expect(store.annotations(first.id)).toEqual([]);
+  });
+
+  it("applies annotation events, finding an update's message by the annotation", () => {
+    const store = bootstrapped();
+    store.setPlugins([filter]);
+    const first = message(1);
+    store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
+    const listener = vi.fn();
+    store.subscribe(`annotations:${first.id}`, listener);
+    store.applyEvent({ serverEvent: "messageAnnotation", type: "create", ...note(1, first.id) });
+    expect(store.annotations(first.id)).toHaveLength(1);
+    store.applyEvent({
+      serverEvent: "messageAnnotation",
+      type: "update",
+      id: id(5001),
+      severity: "warning",
+    });
+    expect(store.annotations(first.id)[0]?.severity).toBe("warning");
+    store.applyEvent({ serverEvent: "messageAnnotation", type: "delete", id: id(5001) });
+    expect(store.annotations(first.id)).toEqual([]);
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops a message's annotations with the message", () => {
+    const store = bootstrapped();
+    store.setPlugins([filter]);
+    const first = message(1);
+    store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
+    store.setAnnotations([first.id], [note(1, first.id)]);
+    store.applyEvent({ serverEvent: "message", type: "delete", id: first.id });
+    expect(store.annotations(first.id)).toEqual([]);
+  });
+
+  it("hides a plugin's annotations once the catalogue no longer lists it", () => {
+    const store = bootstrapped();
+    store.setPlugins([filter]);
+    const first = message(1);
+    store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
+    store.setAnnotations([first.id], [note(1, first.id)]);
+    expect(store.annotations(first.id)).toHaveLength(1);
+    store.setPlugins([]);
+    expect(store.annotations(first.id)).toEqual([]);
+  });
+
+  it("keeps a community's plugin settings current for its managers", () => {
+    const store = bootstrapped();
+    expect(store.communityPlugins(aspen.id)).toBeUndefined();
+    store.setCommunityPlugins(aspen.id, [
+      { community: aspen.id, plugin: filter.id, enabled: false, settings: {}, secretsSet: [] },
+    ]);
+    store.applyEvent({
+      serverEvent: "communityPlugin",
+      type: "update",
+      community: aspen.id,
+      plugin: filter.id,
+      enabled: true,
+    });
+    expect(store.communityPlugins(aspen.id)?.[0]?.enabled).toBe(true);
   });
 });

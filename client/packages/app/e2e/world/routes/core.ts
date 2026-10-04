@@ -28,7 +28,7 @@ import {
 } from "../fixtures";
 import { type Asked, type WorldRoute, reply } from "../reply";
 
-/** The routes of signing in, the community and its channels, messages, emoji, bots, bans, blocks, muting, notifications, and invites. */
+/** The routes of signing in, the community and its channels, messages, emoji, bots, bans, blocks, plugins, muting, notifications, and invites. */
 export function coreRoutes({
   route,
   request,
@@ -311,6 +311,10 @@ export function coreRoutes({
       new RegExp(`^/communities/${community}/members/[^/@][^/]*$`),
       () => reply({ community, user: path.split("/").pop(), sortIndex: null, roles: [] }, 201),
     ],
+    // The deployment runs no plugins, and they say nothing about anyone; `plugins.spec.ts`
+    // answers these itself.
+    ["GET", /^\/plugins$/, () => []],
+    ["GET", /^\/users\/[^/]+\/annotations$/, () => []],
     // Blocking answers as the server does, and tells the caller's devices by event.
     [
       "GET",

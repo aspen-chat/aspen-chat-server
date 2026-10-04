@@ -154,6 +154,7 @@ export const message = (
   editedAt: null,
   linkPreviews: [],
   linkedMessages: [],
+  alteredBy: [],
   kind: "standard",
   poll: null,
   thread: null,
