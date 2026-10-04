@@ -14,7 +14,7 @@
   regional CJK faces. Code takes the system's monospace faces before
   the Noto ones, which are proportional. `fallbackFonts.ts`, a Vite plugin, says which
   families are bundled and which are left out and why, and writes two stylesheets from the
-  Fontsource packages when Vite starts (into `src/generated/`, which is not kept in git):
+  Fontsource packages and the emoji fonts when Vite starts (into `src/generated/`, which is not kept in git):
   `fontFaces.css`, each family's own script slices as WOFF2, some 600 kB of rules that
   `main.tsx` imports dynamically so they never hold up the first paint, and `fontStacks.css`,
   the custom properties the stacks are built on (`--font-emoji`, `--font-scripts`,
@@ -24,13 +24,28 @@
   Hong Kong Chinese, and a message does not say which it is in, so `--font-han` puts the
   regional face first for the page's language (`<html lang>`, which follows the language Aspen
   is shown in), and Simplified, Traditional, Hong Kong, Japanese, Korean otherwise.
-- Noto Color Emoji carries both COLR and SVG colour tables, so every browser draws it in colour,
-  Safari included. The emoji picker names system emoji fonts of its own with `!important`;
+- No one colour-font format is drawn by every engine, so Noto Color Emoji is bundled twice, from
+  Google's own releases (`googlefonts/noto-emoji`) rather than Fontsource, whose build carries
+  only SVG glyphs, which Chromium and WebKit on an iPhone draw blank: Google's COLRv1 build
+  (about 2 MB), which Chromium and Firefox draw, and its bitmap build with the pictures moved
+  into an `sbix` table (about 9.5 MB), which WebKit draws and which is the format of Apple's own
+  emoji. The one `@font-face` lists both with `tech()`, so each browser fetches only the one it
+  draws. Each is one whole file, not `unicode-range` slices: a sequence (a family, a skin tone,
+  a flag) is one ligature, and WebKit draws it apart when its characters come from different
+  slices. `scripts/noto_emoji.py` builds them into `packages/app/fonts/noto-color-emoji/`, kept
+  in git with the licence and a `manifest.json` naming the upstream commit and its files'
+  hashes; `build` makes the same files again from that commit, and `update` builds from the
+  newest commit that changed the fonts. `.github/workflows/emoji-font.yml` runs `update` every
+  week and opens a pull request when upstream has changed them, so they never wait on someone
+  remembering. `e2e/fonts.spec.ts` draws emoji in the face and checks the pixels are coloured
+  and a family of four takes one advance, since a colour font can load and still draw nothing.
+- The emoji picker names system emoji fonts of its own with `!important`;
   `styles.css` overrides it with `--font-emoji`, so an emoji looks the same picked as sent.
 - Each build carries every bundled font's licence at `licenses/fonts.txt`, gathered by the
-  plugin from each `@fontsource` dependency.
-- Bundled fonts come to about 31 MB of WOFF2 in the build, nearly all of it CJK and emoji. The
-  web client fetches only the slices a page draws; the desktop and mobile apps ship them all.
+  plugin from each `@fontsource` dependency and the emoji fonts' directory.
+- Bundled fonts come to about 39 MB of WOFF2 in the build, nearly all of it CJK and emoji. The
+  web client fetches only the slices a page draws, and of the emoji fonts the one its browser
+  draws, whole, once the page shows an emoji; the desktop and mobile apps ship them all.
 
 ## The user's own fonts
 

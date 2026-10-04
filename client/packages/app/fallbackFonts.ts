@@ -7,14 +7,17 @@ import type { Plugin } from "vite";
 /**
  * The faces Aspen falls back to for whatever its own typefaces do not draw: a Noto Sans for
  * every script in present-day use for a language of more than ten thousand living speakers
- * (Noto Serif Tibetan for Tibetan, which has no Noto Sans face), the five regional Noto Sans
- * CJK faces, and Noto Color Emoji, all bundled from Fontsource.
+ * (Noto Serif Tibetan for Tibetan, which has no Noto Sans face) and the five regional Noto Sans
+ * CJK faces, bundled from Fontsource, and Noto Color Emoji, built from Google's own releases by
+ * `scripts/noto_emoji.py` into `fonts/noto-color-emoji/` (Fontsource's build of it carries only
+ * SVG glyphs, which Chromium and WebKit on an iPhone draw blank).
  *
  * Fontsource's own stylesheets would bring each family's Latin, Cyrillic, maths, and symbol
  * slices too, which Inclusive Sans and Noto Sans already draw, and its static packages name a
  * WOFF beside every WOFF2. So this plugin writes two stylesheets from them when Vite starts:
  * `src/generated/fontFaces.css`, each family's own script slices (named, or numbered where a
- * large family is cut by Unicode range) in WOFF2 alone, some 600 kB of rules that `main.tsx`
+ * large family is cut by Unicode range) in WOFF2 alone and the emoji face, some 600 kB of rules
+ * that `main.tsx`
  * loads without holding up the first paint; and `src/generated/fontStacks.css`, the custom
  * properties `styles.css` builds its font stacks on, loaded with the page: `--font-emoji`,
  * `--font-scripts` (in the order below), and `--font-han`, whose regional face comes first for
@@ -147,10 +150,9 @@ const scripts: Family[] = [
 const han: Record<Han, Family> = Object.fromEntries(
   HAN.map((id) => [id, { name: `@fontsource-variable/noto-sans-${id}`, id: `noto-sans-${id}` }]),
 ) as Record<Han, Family>;
-const emoji: Family = { name: "@fontsource/noto-color-emoji", id: "noto-color-emoji" };
-
 const here = dirname(fileURLToPath(import.meta.url));
 const generated = join(here, "src/generated");
+const emojiDirectory = join(here, "fonts/noto-color-emoji");
 const require = createRequire(import.meta.url);
 
 /** Each `@font-face` in a Fontsource stylesheet, after the comment naming its slice. */
@@ -186,6 +188,37 @@ function faces(family: Family): { css: string; fontFamily: string } {
   return { css: rules.join("\n"), fontFamily };
 }
 
+/** What `scripts/noto_emoji.py` writes beside the emoji fonts it builds. */
+interface EmojiManifest {
+  colrv1: string;
+  sbix: string;
+}
+
+const EMOJI_FAMILY = "Noto Color Emoji";
+
+/**
+ * The emoji face: Google's COLRv1 build for the browsers that draw COLRv1 (Chromium and Firefox),
+ * and its bitmaps as `sbix` for the rest (WebKit), which `tech()` lets each browser choose
+ * between without fetching the other. Each is one whole file: WebKit draws a sequence (a family,
+ * a skin tone, a flag) apart when its characters come from different `unicode-range` slices.
+ */
+function emojiFace(): { css: string; fontFamily: string } {
+  const manifest = JSON.parse(
+    readFileSync(join(emojiDirectory, "manifest.json"), "utf8"),
+  ) as EmojiManifest;
+  const directory = relative(generated, emojiDirectory).split("\\").join("/");
+  const css = `@font-face {
+  font-family: ${quoted(EMOJI_FAMILY)};
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src:
+    url("${directory}/${manifest.colrv1}") format("woff2") tech(color-COLRv1),
+    url("${directory}/${manifest.sbix}") format("woff2") tech(color-sbix);
+}`;
+  return { css, fontFamily: EMOJI_FAMILY };
+}
+
 function quoted(name: string): string {
   return `"${name}"`;
 }
@@ -198,7 +231,7 @@ function generate(): { faces: string; stacks: string } {
     Han,
     ReturnType<typeof faces>
   >;
-  const emojiFaces = faces(emoji);
+  const emojiFaces = emojiFace();
   const hanStack = (first?: Han) =>
     [...(first === undefined ? [] : [first]), ...HAN.filter((id) => id !== first)]
       .map((id) => quoted(hanFaces[id].fontFamily))
@@ -244,18 +277,21 @@ function write(name: string, css: string): void {
 }
 
 /**
- * The licence of every font the app bundles, each `@fontsource` dependency's, which the SIL Open
- * Font License asks to travel with the fonts.
+ * The licence of every font the app bundles, each `@fontsource` dependency's and the emoji
+ * fonts', which the SIL Open Font License asks to travel with the fonts.
  */
 function licenses(): string {
   const manifest = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
-  return Object.keys(manifest.dependencies)
+  const fontsource = Object.keys(manifest.dependencies)
     .filter((name) => name.startsWith("@fontsource"))
     .sort()
-    .map((name) => {
-      const license = readFileSync(join(dirname(require.resolve(name)), "LICENSE"), "utf8");
+    .map((name) => ({ name, file: join(dirname(require.resolve(name)), "LICENSE") }));
+  const emoji = { name: EMOJI_FAMILY, file: join(emojiDirectory, "LICENSE") };
+  return [...fontsource, emoji]
+    .map(({ name, file }) => {
+      const license = readFileSync(file, "utf8");
       return `${name}\n${"=".repeat(name.length)}\n\n${license.trim()}\n`;
     })
     .join("\n\n");

@@ -125,6 +125,8 @@ Federation, letting a user of one deployment use others, is being built in phase
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build. Clippy warnings fail the build.
 
+`.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and opens a pull request (see `client/docs/architecture/fonts.md`). Its pull requests start CI only when the repository has an `EMOJI_FONT_TOKEN` secret; the workflow file says why.
+
 ### CLI Flags
 
 - `--gen-openapi-schema` — Generate schema files and exit; it reads no configuration

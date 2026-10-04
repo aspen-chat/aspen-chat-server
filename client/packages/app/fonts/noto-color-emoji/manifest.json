@@ -1,0 +1,15 @@
+{
+  "comment": "Written by client/scripts/noto_emoji.py; do not edit.",
+  "source": {
+    "repository": "googlefonts/noto-emoji",
+    "commit": "1ffdd21391dd1f25c081fa93a9dea0c7c029442b",
+    "committed": "2026-09-17T17:50:48Z",
+    "files": {
+      "2D/fonts/Noto-COLRv1.ttf": "b8e25ea68db82f9e4d0aee921f4420be2be39887bd5c893a2ad98710531f9d0c",
+      "2D/fonts/NotoColorEmoji.ttf": "15671215ab769fdc7162a045d56fd7d7e477c51b04e6b3c761d914d8fdd6cc44",
+      "LICENSE": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b"
+    }
+  },
+  "colrv1": "noto-color-emoji.colrv1.woff2",
+  "sbix": "noto-color-emoji.sbix.woff2"
+}
