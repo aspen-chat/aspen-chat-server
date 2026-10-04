@@ -4,13 +4,24 @@
 //! Dashboard (`app::admin`), and the terminal makes the first (`aspen-chat-server invites`),
 //! since an invite-only deployment has no administrator until someone registers. Each account
 //! records the invite it was made with (`user.registered_with`).
+//!
+//! A dual invite is a registration invite that also names an invite to a community
+//! (`community_invite`): the account it makes joins that community in the same transaction. Its
+//! maker needs Manage registration invites and, in the community, Create invites, since the
+//! community invite is theirs like any other; the community lists it among its invites, and
+//! revoking it there leaves a plain registration invite, while revoking the dual invite revokes
+//! both.
 
-use crate::app::{self, UserId};
-use crate::database::schema::registration_invite;
+use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
+use crate::app::{self, CommunityId, UserId};
+use crate::database::schema::{community, invite, registration_invite};
 use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use std::collections::HashMap;
 
 /// The most accounts one invite may create.
 pub const MAX_USES: i32 = 1000;
@@ -38,6 +49,8 @@ pub struct RegistrationInvite {
     pub note: Option<String>,
     /// When its last use was taken; `None` while it has uses left.
     pub used_up_at: Option<DateTime<Utc>>,
+    /// The community invite each account it makes is joined with, for a dual invite.
+    pub community_invite: Option<String>,
 }
 
 impl RegistrationInvite {
@@ -62,52 +75,198 @@ impl RegistrationInvite {
     }
 }
 
-/// Makes an invite for `max_uses` accounts, lasting `expires_in` when given.
+/// How many accounts an invite makes, for how long, and what it is for.
+pub struct Terms {
+    pub max_uses: i32,
+    /// How long it lasts; for good when `None`.
+    pub expires_in: Option<chrono::Duration>,
+    pub note: Option<String>,
+}
+
+impl Terms {
+    /// Checks the terms against the limits, trimming the note and dropping a blank one.
+    fn validated(self) -> app::Result<Self> {
+        if !(1..=MAX_USES).contains(&self.max_uses) {
+            return Err(app::Error::Validation(t!(
+                "registrationInviteUses",
+                max = MAX_USES
+            )));
+        }
+        if self
+            .expires_in
+            .is_some_and(|d| d <= chrono::Duration::zero() || d.num_days() > MAX_EXPIRY_DAYS)
+        {
+            return Err(app::Error::Validation(t!(
+                "registrationInviteExpiry",
+                max = MAX_EXPIRY_DAYS
+            )));
+        }
+        let note = self
+            .note
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty());
+        if note
+            .as_ref()
+            .is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS)
+        {
+            return Err(app::Error::Validation(t!(
+                "registrationInviteNoteLength",
+                max = MAX_NOTE_CHARS
+            )));
+        }
+        Ok(Self { note, ..self })
+    }
+}
+
+/// Makes an invite on `terms`.
 pub async fn create(
     conn: &mut AsyncPgConnection,
     created_by: Option<UserId>,
-    max_uses: i32,
-    expires_in: Option<chrono::Duration>,
-    note: Option<String>,
+    terms: Terms,
 ) -> app::Result<RegistrationInvite> {
-    if !(1..=MAX_USES).contains(&max_uses) {
-        return Err(app::Error::Validation(t!(
-            "registrationInviteUses",
-            max = MAX_USES
-        )));
-    }
-    if expires_in.is_some_and(|d| d <= chrono::Duration::zero() || d.num_days() > MAX_EXPIRY_DAYS) {
-        return Err(app::Error::Validation(t!(
-            "registrationInviteExpiry",
-            max = MAX_EXPIRY_DAYS
-        )));
-    }
-    let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
-    if note
-        .as_ref()
-        .is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS)
-    {
-        return Err(app::Error::Validation(t!(
-            "registrationInviteNoteLength",
-            max = MAX_NOTE_CHARS
-        )));
-    }
+    insert(conn, created_by, terms.validated()?, None).await
+}
+
+/// Makes a dual invite on `terms`: a registration invite whose accounts join `community`,
+/// through an invite to it from `admin`, who needs Create invites there. The community invite
+/// expires with the registration invite.
+pub async fn create_dual(
+    state: &GlobalServerContext,
+    admin: UserId,
+    community: CommunityId,
+    terms: Terms,
+) -> app::Result<RegistrationInvite> {
+    let terms = terms.validated()?;
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let expires_at = terms.expires_in.map(|d| Utc::now() + d);
+            let community_invite =
+                app::invite::insert(state, conn, admin, community, None, expires_at).await?;
+            insert(conn, Some(admin), terms, Some(community_invite.code)).await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+async fn insert(
+    conn: &mut AsyncPgConnection,
+    created_by: Option<UserId>,
+    terms: Terms,
+    community_invite: Option<String>,
+) -> app::Result<RegistrationInvite> {
     let now = Utc::now();
     let invite = RegistrationInvite {
         code: app::invite::generate_invite_code(),
         created_by,
         created_at: now,
-        expires_at: expires_in.map(|d| now + d),
-        max_uses,
+        expires_at: terms.expires_in.map(|d| now + d),
+        max_uses: terms.max_uses,
         uses: 0,
         revoked_at: None,
-        note,
+        note: terms.note,
         used_up_at: None,
+        community_invite,
     };
     diesel::insert_into(registration_invite::table)
         .values(&invite)
         .execute(conn)
         .await?;
+    Ok(invite)
+}
+
+/// The community a dual invite's accounts join, as the dashboard shows it.
+#[derive(Debug, Clone)]
+pub struct InvitedCommunity {
+    pub id: CommunityId,
+    pub name: String,
+    /// The community invite's code.
+    pub invite: String,
+    /// Whether the community invite still works: not revoked or expired, and the community not
+    /// deleted.
+    pub usable: bool,
+}
+
+/// The communities `invites` lead to, by registration invite code, in one query; a plain
+/// registration invite has none.
+pub async fn invited_communities(
+    conn: &mut AsyncPgConnection,
+    invites: &[RegistrationInvite],
+) -> app::Result<HashMap<String, InvitedCommunity>> {
+    let wanted: Vec<&str> = invites
+        .iter()
+        .filter_map(|i| i.community_invite.as_deref())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(HashMap::new());
+    }
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        String,
+        CommunityId,
+        String,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    )> = invite::table
+        .inner_join(community::table)
+        .filter(invite::code.eq_any(&wanted))
+        .select((
+            invite::code,
+            community::id,
+            community::name,
+            invite::expires_at,
+            invite::deleted_at,
+            community::deleted_at,
+        ))
+        .load(conn)
+        .await?;
+    let now = Utc::now();
+    let by_invite: HashMap<String, InvitedCommunity> = rows
+        .into_iter()
+        .map(
+            |(code, id, name, expires_at, revoked_at, community_deleted_at)| {
+                let usable = revoked_at.is_none()
+                    && community_deleted_at.is_none()
+                    && expires_at.is_none_or(|expires| expires > now);
+                (
+                    code.clone(),
+                    InvitedCommunity {
+                        id,
+                        name,
+                        invite: code,
+                        usable,
+                    },
+                )
+            },
+        )
+        .collect();
+    Ok(invites
+        .iter()
+        .filter_map(|i| {
+            let community = by_invite.get(i.community_invite.as_deref()?)?;
+            Some((i.code.clone(), community.clone()))
+        })
+        .collect())
+}
+
+/// A usable invite, as `GET /registration-invites/{code}` shows it to someone about to
+/// register: the community invite they would join with, if any. Not found for a code that is
+/// unknown or does not work.
+pub async fn read_usable(
+    state: &GlobalServerContext,
+    code: &str,
+) -> app::Result<RegistrationInvite> {
+    let mut conn = state.connection_pool.get().await?;
+    let invite: RegistrationInvite = registration_invite::table
+        .select(RegistrationInvite::as_select())
+        .filter(registration_invite::code.eq(code))
+        .first(conn.as_mut())
+        .await?;
+    if !invite.usable(Utc::now()) {
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    }
     Ok(invite)
 }
 
@@ -146,29 +305,45 @@ pub async fn list(
         .await?)
 }
 
-/// Revokes an invite, so it creates no more accounts; those it already made are kept. Not
-/// found for an unknown code; revoking one twice keeps the first time.
-pub async fn revoke(conn: &mut AsyncPgConnection, code: &str) -> app::Result<RegistrationInvite> {
-    let invite: RegistrationInvite = registration_invite::table
-        .select(RegistrationInvite::as_select())
-        .filter(registration_invite::code.eq(code))
-        .first(conn)
-        .await?;
-    if invite.revoked_at.is_some() {
-        return Ok(invite);
-    }
-    Ok(
-        diesel::update(registration_invite::table.filter(registration_invite::code.eq(code)))
+/// Revokes an invite, so it creates no more accounts, and a dual invite's community invite
+/// with it; the accounts it already made are kept. Not found for an unknown code; revoking one
+/// twice keeps the first time.
+pub async fn revoke(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    code: &str,
+) -> app::Result<RegistrationInvite> {
+    conn.transaction(|conn| {
+        async move {
+            let invite: RegistrationInvite = registration_invite::table
+                .select(RegistrationInvite::as_select())
+                .filter(registration_invite::code.eq(code))
+                .for_update()
+                .first(conn)
+                .await?;
+            if invite.revoked_at.is_some() {
+                return Ok(invite);
+            }
+            if let Some(community_invite) = &invite.community_invite {
+                app::invite::delete(state, conn, community_invite).await?;
+            }
+            Ok(diesel::update(
+                registration_invite::table.filter(registration_invite::code.eq(code)),
+            )
             .set(registration_invite::revoked_at.eq(Some(Utc::now())))
             .returning(RegistrationInvite::as_select())
             .get_result(conn)
-            .await?,
-    )
+            .await?)
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Uses `code` for one new account, on `conn`, which must be inside the registration's
-/// transaction: the row is locked, so concurrent registrations cannot overdraw it.
-pub async fn redeem(conn: &mut AsyncPgConnection, code: &str) -> app::Result<()> {
+/// transaction: the row is locked, so concurrent registrations cannot overdraw it. Returns the
+/// community invite the account joins with, for a dual invite (`join_invited`).
+pub async fn redeem(conn: &mut AsyncPgConnection, code: &str) -> app::Result<Option<String>> {
     let invite: Option<RegistrationInvite> = registration_invite::table
         .select(RegistrationInvite::as_select())
         .filter(registration_invite::code.eq(code))
@@ -187,10 +362,38 @@ pub async fn redeem(conn: &mut AsyncPgConnection, code: &str) -> app::Result<()>
                 ))
                 .execute(conn)
                 .await?;
-            Ok(())
+            Ok(invite.community_invite)
         }
         _ => Err(app::Error::RegistrationInviteInvalid),
     }
+}
+
+/// Adds the account `user`, just made with a dual invite, to the community of
+/// `community_invite`, on `conn`, inside the transaction that made it. A community invite that
+/// no longer works is passed over, since the registration invite alone still made the account;
+/// the community joined is returned for `app::everyone_limit::after_join` once the transaction
+/// commits.
+pub async fn join_invited(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    community_invite: &str,
+) -> app::Result<Option<CommunityId>> {
+    let community = match app::invite::validate_invite(conn, community_invite).await {
+        Ok(community) => community,
+        Err(app::Error::Validation(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let deleted: bool = community::table
+        .find(community)
+        .select(community::deleted_at.is_not_null())
+        .first(conn)
+        .await?;
+    if deleted {
+        return Ok(None);
+    }
+    app::community::add_member(state, conn, user, community, &[]).await?;
+    Ok(Some(community))
 }
 
 #[cfg(test)]
@@ -208,6 +411,7 @@ mod tests {
             revoked_at: None,
             note: None,
             used_up_at: None,
+            community_invite: None,
         }
     }
 

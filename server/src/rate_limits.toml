@@ -55,8 +55,20 @@ endpoints = [
   "GET /auth/passkey-ceremonies/{ceremony}",
   "POST /auth/passkey-ceremonies/{ceremony}/credential",
   "POST /auth/passkey-ceremonies/{ceremony}/claim",
+  "POST /auth/device-links",
+  "POST /auth/device-links/{link}/scan",
 ]
 limits = { ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" } }
+
+# Asked every couple of seconds while a sign-in code shows (`app::device_link`), for a minute
+# at most; counted per code, so a device making codes one after another is held by the
+# `sign_in` limit on making them.
+[rate_limits.groups.device_link_polling]
+endpoints = [
+  "GET /auth/device-links/{link}",
+  "POST /auth/device-links/{link}/claim",
+]
+limits = { ip_per_link = { requests = 60, per_seconds = 60, burst = 10 } }
 
 # Changing how an account signs in.
 [rate_limits.groups.security]
@@ -347,6 +359,10 @@ user = { requests = 20, per_seconds = 3600, burst = 5 }
 [rate_limits.endpoints."GET /invites/{code}"]
 # Guessing invite codes.
 user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."GET /registration-invites/{code}"]
+# Guessing registration invite codes, which anyone may try.
+ip = { requests = 30, per_seconds = 60, burst = 10 }
 
 [rate_limits.endpoints."POST /users/@me/dms"]
 user = { requests = 30, per_seconds = 600, burst = 10 }

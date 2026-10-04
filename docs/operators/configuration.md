@@ -50,6 +50,12 @@ addresses are the clients' and must be reachable by them.
 | --- | --- | --- |
 | `allowed_origins` | `[]` | Page origins that may call the API from a browser, such as `["https://app.example.org"]`. Empty sends no CORS headers, which is right when the web client is served from the API's own origin. `["*"]` allows every origin, which is safe because Aspen authenticates with a header, never a cookie, but suits development only. A deployment whose [federation](federation.md) immigration gate admits anyone allows every origin regardless, since its visitors' web clients live elsewhere. |
 
+## `[web_client]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `url` | none | Where your web client is served, such as `https://chat.example.org` (a path is allowed; a query or fragment is not). Invite links, registration links, and the QR codes for invites and for signing in from another device all point here, so they open on any phone or computer that follows or scans them. Left out, the web client points them at the address it is served from, and the desktop and mobile apps share `aspen://` links, which open only where Aspen is installed. Set it whenever you serve the web client. |
+
 ## `[auth]`
 
 | Setting | Default | |
@@ -73,7 +79,7 @@ Passkeys are offered only when this section is present.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `invite_required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. |
+| `invite_required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. An invite made in the dashboard may also name a community (a dual invite): each account it makes joins that community as it is made, and someone who already has an account just joins. Revoking a dual invite revokes its community invite too; revoking that community invite from the community leaves a plain registration invite. |
 
 ## `[bots]`
 

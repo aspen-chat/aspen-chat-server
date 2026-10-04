@@ -1,6 +1,6 @@
 //! `invites create`, `list`, and `revoke`: registration invites (`app::registration_invite`).
 
-use super::{database, operator};
+use super::{database, operator, publisher};
 use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow};
 use clap::Subcommand;
@@ -22,7 +22,8 @@ pub enum InvitesCommand {
     },
     /// List the newest registration invites.
     List,
-    /// Revoke a registration invite; accounts it made are kept.
+    /// Revoke a registration invite, and a dual invite's community invite with it; accounts it
+    /// made are kept.
     Revoke {
         /// The invite's code.
         code: String,
@@ -41,7 +42,12 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             let expires_in = expires.map(|d| {
                 chrono::Duration::from_std(Duration::from(d)).unwrap_or(chrono::Duration::MAX)
             });
-            let invite = registration_invite::create(&mut conn, None, uses, expires_in, note)
+            let terms = registration_invite::Terms {
+                max_uses: uses,
+                expires_in,
+                note,
+            };
+            let invite = registration_invite::create(&mut conn, None, terms)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(code = %invite.code, operator = operator(), "made a registration invite");
@@ -65,8 +71,12 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
                 } else {
                     "spent"
                 };
+                let joins = invite
+                    .community_invite
+                    .map(|code| format!("  joins with {code}"))
+                    .unwrap_or_default();
                 println!(
-                    "{}  {}/{} used  {state}  {}",
+                    "{}  {}/{} used  {state}{joins}  {}",
                     invite.code,
                     invite.uses,
                     invite.max_uses,
@@ -75,7 +85,8 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             }
         }
         InvitesCommand::Revoke { code } => {
-            registration_invite::revoke(&mut conn, &code)
+            let publisher = publisher(config).await?;
+            registration_invite::revoke(&publisher, &mut conn, &code)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(%code, operator = operator(), "revoked a registration invite");

@@ -510,6 +510,7 @@ diesel::table! {
         revoked_at -> Nullable<Timestamptz>,
         note -> Nullable<Text>,
         used_up_at -> Nullable<Timestamptz>,
+        community_invite -> Nullable<Text>,
     }
 }
 
@@ -759,6 +760,7 @@ diesel::joinable!(read_state -> channel (channel));
 diesel::joinable!(read_state -> user (user));
 diesel::joinable!(recovery_code -> user (user));
 diesel::joinable!(refresh_token -> user (user));
+diesel::joinable!(registration_invite -> invite (community_invite));
 diesel::joinable!(report -> report_case (case));
 diesel::joinable!(report -> report_category (category));
 diesel::joinable!(report -> user (reporter));

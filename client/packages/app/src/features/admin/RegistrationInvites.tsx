@@ -5,6 +5,7 @@ import {
   ClockCountdownIcon,
   CopyIcon,
   ProhibitIcon,
+  QrCodeIcon,
   UserCircleCheckIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useRef, useState } from "react";
@@ -24,7 +25,7 @@ import {
   SelectValue,
   TextField,
 } from "react-aria-components";
-import { useSync } from "@/api/hooks";
+import { useCommunitiesWhere, useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Status, Table } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
@@ -45,7 +46,10 @@ import {
   selectButtonClass,
   selectPopoverClass,
 } from "@/features/invites/dialog";
+import { registrationPath } from "@/features/invites/inviteCode";
 import { copyText } from "@/features/layout/clipboard";
+import { InviteQr } from "@/features/qr/InviteQr";
+import { useShareUrl } from "@/features/qr/shareLinks";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
@@ -67,17 +71,9 @@ const smallButtonClass =
   "hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
- * The page a registration invite opens, to share, where the app is served from a web address;
- * `null` in the desktop and mobile shells, whose own addresses mean nothing to anyone else.
+ * Making, listing, and revoking the invites that create accounts, each with its link and QR code;
+ * one made here shows its QR code at once. A dual invite also joins a community, named beside it.
  */
-function inviteLink(code: string): string | null {
-  const { protocol, origin } = window.location;
-  return protocol === "http:" || protocol === "https:"
-    ? `${origin}/register?invite=${encodeURIComponent(code)}`
-    : null;
-}
-
-/** Making, listing, and revoking the invites that create accounts. */
 export function RegistrationInvites({
   inviteRequired,
 }: {
@@ -90,6 +86,7 @@ export function RegistrationInvites({
   const load = useCallback(() => sync.admin.registrationInvites(), [sync]);
   const invites = useAdminRead(load);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [showing, setShowing] = useState<string | null>(null);
   const now = invites.at;
   return (
     <Section
@@ -97,7 +94,12 @@ export function RegistrationInvites({
       title={m.admin.invites}
       hint={inviteRequired === false ? m.admin.invitesHintOpen : m.admin.invitesHint}
     >
-      <CreateInvite onCreated={invites.reload} />
+      <CreateInvite
+        onCreated={(code) => {
+          invites.reload();
+          setShowing(code);
+        }}
+      />
       {invites.error !== null && <ReadFailed error={invites.error} onRetry={invites.reload} />}
       {invites.data?.length === 0 ? (
         <p className="text-sm text-ink-muted">{m.admin.noInvites}</p>
@@ -129,6 +131,9 @@ export function RegistrationInvites({
               </Cell>
               <Cell>
                 <span className="line-clamp-2 break-words">{invite.note ?? ""}</span>
+                {invite.community != null && (
+                  <CommunityJoined invite={invite} community={invite.community} />
+                )}
               </Cell>
               <Cell>{day(invite.createdAt)}</Cell>
               <Cell>
@@ -137,6 +142,18 @@ export function RegistrationInvites({
               <Cell>
                 <span className="flex justify-end gap-1">
                   {invite.usable && <CopyInvite code={invite.code} />}
+                  {invite.usable && (
+                    <Button
+                      aria-label={format(m.qr.inviteLabel, { code: invite.code })}
+                      onPress={() => {
+                        setShowing(invite.code);
+                      }}
+                      className={smallButtonClass}
+                    >
+                      <QrCodeIcon size={14} aria-hidden="true" />
+                      {m.qr.qrCode}
+                    </Button>
+                  )}
                   {invite.usable && (
                     <Button
                       aria-label={format(m.admin.revokeLabel, { code: invite.code })}
@@ -155,6 +172,12 @@ export function RegistrationInvites({
           ))}
         </Table>
       )}
+      <QrDialog
+        code={showing}
+        onClose={() => {
+          setShowing(null);
+        }}
+      />
       <RevokeDialog
         code={revoking}
         onClose={() => {
@@ -163,6 +186,26 @@ export function RegistrationInvites({
         onRevoked={invites.reload}
       />
     </Section>
+  );
+}
+
+/**
+ * The community a dual invite joins. While the dual invite still makes accounts, a community
+ * invite that no longer works is called out, since those accounts would join nothing.
+ */
+function CommunityJoined({
+  invite,
+  community,
+}: {
+  invite: RegistrationInvite;
+  community: NonNullable<RegistrationInvite["community"]>;
+}) {
+  const m = useMessages();
+  const gone = invite.usable && !community.usable;
+  return (
+    <span className={"block text-xs " + (gone ? "text-danger" : "text-ink-muted")}>
+      {format(gone ? m.qr.dualJoinsGone : m.qr.dualJoins, { community: community.name })}
+    </span>
   );
 }
 
@@ -180,34 +223,79 @@ function InviteStatus({ invite, now }: { invite: RegistrationInvite; now: number
   return <Status icon={CheckCircleIcon} tone="text-online" label={m.admin.usable} />;
 }
 
-/** Copies an invite's link, or its code where there is no link to share. */
+/** Copies an invite's link (`shareUrl`), once the deployment has said where links point. */
 function CopyInvite({ code }: { code: string }) {
   const m = useMessages();
+  const share = useShareUrl();
   const [copied, setCopied] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
-  const link = inviteLink(code);
   return (
     <Button
       ref={button}
+      isDisabled={share === null}
       onPress={() => {
-        if (button.current !== null) {
-          void copyText(link ?? code, button.current).then(setCopied);
+        if (button.current !== null && share !== null) {
+          void copyText(share(registrationPath(code)), button.current).then(setCopied);
         }
       }}
       className={smallButtonClass}
     >
       <CopyIcon size={14} aria-hidden="true" />
-      {copied ? m.admin.copied : link === null ? m.admin.copyCode : m.admin.copyLink}
+      {copied ? m.admin.copied : m.admin.copyLink}
     </Button>
   );
 }
 
-function CreateInvite({ onCreated }: { onCreated: () => void }) {
+/** An invite's link and QR code, opened from its row or on its making. */
+function QrDialog({ code, onClose }: { code: string | null; onClose: () => void }) {
+  const m = useMessages();
+  const share = useShareUrl();
+  const link = code === null || share === null ? null : share(registrationPath(code));
+  return (
+    <ModalOverlay
+      isOpen={code !== null}
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+      isDismissable
+      className={overlayClass}
+    >
+      <Modal className={modalClass}>
+        <Dialog className={dialogClass}>
+          <DialogHeading>{format(m.qr.inviteLabel, { code: code ?? "" })}</DialogHeading>
+          {link !== null && code !== null && (
+            <>
+              <code className="break-all rounded bg-surface px-2 py-1 font-mono text-xs select-all">
+                {link}
+              </code>
+              <InviteQr
+                link={link}
+                label={format(m.qr.inviteLabel, { code })}
+                fileName={`aspen-registration-${code}`}
+              />
+            </>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+}
+
+/** The `community` choice that makes a plain registration invite. */
+const NO_COMMUNITY = "none";
+
+function CreateInvite({ onCreated }: { onCreated: (code: string) => void }) {
   const m = useMessages();
   const sync = useSync();
+  // A dual invite's community invite is the caller's own, so only communities where they may
+  // make invites are offered.
+  const communities = useCommunitiesWhere("createInvites");
   const [uses, setUses] = useState(1);
   const [expiry, setExpiry] = useState<string>("week");
   const [note, setNote] = useState("");
+  const [community, setCommunity] = useState<string>(NO_COMMUNITY);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -216,13 +304,14 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
     setError(null);
     try {
       const seconds = EXPIRIES.find((e) => e.key === expiry)?.seconds ?? null;
-      await sync.admin.createRegistrationInvite({
+      const made = await sync.admin.createRegistrationInvite({
         maxUses: uses,
         ...(seconds === null ? {} : { expiresInSeconds: seconds }),
         ...(note.trim() === "" ? {} : { note: note.trim() }),
+        ...(community === NO_COMMUNITY ? {} : { community }),
       });
       setNote("");
-      onCreated();
+      onCreated(made.code);
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     }
@@ -283,6 +372,33 @@ function CreateInvite({ onCreated }: { onCreated: () => void }) {
           <Input placeholder={m.admin.notePlaceholder} className={inputClass} />
         </TextField>
       </div>
+      {communities.length > 0 && (
+        <Select
+          value={community}
+          onChange={(key) => {
+            setCommunity(String(key));
+          }}
+          className={fieldClass + " sm:max-w-sm"}
+        >
+          <Label className={labelClass}>{m.qr.dualCommunity}</Label>
+          <Button className={selectButtonClass + " py-2"}>
+            <SelectValue />
+            <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />
+          </Button>
+          <Popover className={selectPopoverClass}>
+            <ListBox>
+              <ListBoxItem id={NO_COMMUNITY} className={optionClass}>
+                {m.qr.dualNoCommunity}
+              </ListBoxItem>
+              {communities.map((c) => (
+                <ListBoxItem key={c.id} id={c.id} textValue={c.name} className={optionClass}>
+                  {c.name}
+                </ListBoxItem>
+              ))}
+            </ListBox>
+          </Popover>
+        </Select>
+      )}
       {error !== null && (
         <p role="alert" className={alertClass}>
           {error}

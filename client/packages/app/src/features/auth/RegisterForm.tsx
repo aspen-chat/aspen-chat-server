@@ -1,12 +1,14 @@
 import { ApiProblemError } from "@aspen/protocol";
-import { useState, type SyntheticEvent } from "react";
+import { useEffect, useState, type SyntheticEvent } from "react";
 import { Button, FieldError, Form, Input, Label, Text, TextField } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { useAuthMethods } from "@/features/auth/authMethods";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
+import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 /**
  * Creates an account, then signs in with the same credentials so the user lands in the app
@@ -32,6 +34,7 @@ export function RegisterForm({
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const joins = useDualInviteCommunity(initialInvite);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -90,6 +93,18 @@ export function RegisterForm({
       className="flex w-full max-w-sm flex-col gap-4"
     >
       <h1 className="text-2xl font-semibold">{m.registerHeading}</h1>
+      {joins === undefined ? (
+        <div aria-busy="true">
+          <LoadingLabel />
+          <Skeleton className="h-5 w-3/4" />
+        </div>
+      ) : (
+        joins !== null && (
+          <p className="text-sm text-ink-muted">
+            {format(m.qr.registerJoins, { community: joins })}
+          </p>
+        )
+      )}
       {askInvite && (
         <TextField
           name="invite"
@@ -188,4 +203,39 @@ export function RegisterForm({
       </p>
     </Form>
   );
+}
+
+/**
+ * The name of the community a dual invite's account joins as it is made, read before anyone signs
+ * in; `null` for no invite, a plain one, or one that no longer works, and `undefined` while it is
+ * read.
+ */
+function useDualInviteCommunity(invite: string | undefined): string | null | undefined {
+  const client = useAspenClient();
+  const [name, setName] = useState<string | null | undefined>(
+    invite === undefined ? null : undefined,
+  );
+  useEffect(() => {
+    if (invite === undefined) {
+      return;
+    }
+    let live = true;
+    client.registrationInvite(invite).then(
+      (read) => {
+        const community = read.included.communities?.[0];
+        if (live) {
+          setName(read.data.communityInvite != null ? (community?.name ?? null) : null);
+        }
+      },
+      () => {
+        if (live) {
+          setName(null);
+        }
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, invite]);
+  return name;
 }

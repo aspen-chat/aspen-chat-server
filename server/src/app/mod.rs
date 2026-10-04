@@ -29,6 +29,7 @@ pub mod custom_emoji;
 pub mod deployment;
 pub mod deployment_profile;
 pub mod deployment_role;
+pub mod device_link;
 pub mod dm;
 pub mod ephemeral_token;
 mod error;

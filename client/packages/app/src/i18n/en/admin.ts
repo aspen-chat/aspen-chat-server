@@ -80,7 +80,6 @@ export const admin = {
   expired: "Expired",
   revoked: "Revoked",
   copyLink: "Copy link",
-  copyCode: "Copy code",
   copied: "Copied",
   revoke: "Revoke",
   revokeLabel: "Revoke invite {code}",

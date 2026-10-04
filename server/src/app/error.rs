@@ -115,6 +115,13 @@ pub enum Error {
     PasskeyRejected(String),
     #[error("the sign-in ticket is unknown, expired, or used")]
     InvalidTicket,
+    /// A device link (`app::device_link`) is unknown, expired, already claimed, or not the
+    /// caller's.
+    #[error("the sign-in code is unknown or expired")]
+    DeviceLinkExpired,
+    /// A device link was already scanned by another device.
+    #[error("the sign-in code was already scanned")]
+    DeviceLinkUsed,
     #[error("the request needs a session")]
     Unauthenticated,
     #[error("webauthn error {0}")]

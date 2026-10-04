@@ -35,10 +35,18 @@
   its latest value at the end, a crosshair and readout on hover and from the arrow keys, and the
   table view carries every value. The user and community lists sort from their headings
   (`aria-sort`) and page by offset, 15 rows by default, with the page size chosen beside them. A
-  registration invite copies as `/register?invite=CODE` where the app has a web address, or as
-  its code in the shells. That link opens the create-account screen with the code filled in,
-  and `RegisterForm` asks for a code whenever `GET /auth/methods` says the server requires one
-  (`useAuthMethods`).
+  registration invite copies as its link, `/register?invite=CODE` under the deployment's web
+  client (`shareUrl`, see QR codes), and each usable one opens its link and QR code
+  (`QrDialog`), as one just made does at once. The form may name a community, among those where
+  the caller may make invites (`useCommunitiesWhere("createInvites")`), to make a dual invite,
+  and the list names each dual invite's community, in red while the invite still makes accounts
+  but its community invite no longer works. A community's invite dialog makes dual invites too,
+  for those with Manage registration invites ("Also create an account", `MadeDualInvite`). The
+  link opens the create-account screen with the code filled in, saying which community a dual
+  invite joins (`GET /registration-invites/{code}`), and `RegisterForm` asks for a code whenever
+  `GET /auth/methods` says the server requires one (`useAuthMethods`). Signed in, the same link
+  (which is also where creating the account lands) goes on to a dual invite's community invite
+  screen, or home (`RegisterLanding`).
 - The Administration Dashboard's user directory shows a user of another deployment as
   `name@domain`. Holders of Ban users ban anyone but the system account and themselves from the
   deployment, and lift bans, there (`UserBanControl`, `UserBanDialog`; see Reports), and it

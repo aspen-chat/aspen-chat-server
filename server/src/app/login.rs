@@ -248,6 +248,31 @@ pub async fn issue_session(
     method: SignInMethod,
     foreign: bool,
 ) -> app::Result<Session> {
+    issue(state, conn, user_id, method, foreign, Utc::now()).await
+}
+
+/// Starts a sign-in given by another of the user's sign-ins (`app::device_link`): it proved what
+/// that one did, `method`, and was last verified when that one was, so a device signed in this
+/// way is no stronger than the one that gave it and makes no security change without verifying
+/// again.
+pub async fn issue_linked_session(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    method: SignInMethod,
+    verified_at: DateTime<Utc>,
+) -> app::Result<Session> {
+    issue(state, conn, user_id, method, false, verified_at).await
+}
+
+async fn issue(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    method: SignInMethod,
+    foreign: bool,
+    verified_at: DateTime<Utc>,
+) -> app::Result<Session> {
     use crate::database::schema::{refresh_token, session};
     let session_token = make_token();
     let refresh_token = make_token();
@@ -262,7 +287,7 @@ pub async fn issue_session(
                     refresh_token::dsl::token.eq(refresh_token),
                     refresh_token::dsl::user.eq(user_id),
                     refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
-                    refresh_token::dsl::verified_at.eq(now),
+                    refresh_token::dsl::verified_at.eq(verified_at),
                     refresh_token::dsl::method.eq(method),
                 ))
                 .execute(conn)

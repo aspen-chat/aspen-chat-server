@@ -7,7 +7,8 @@ trunk, wider gaps) for the sizes where fine detail turns to mud. The gaps are cu
 leaves beneath rather than painted, so the mark sits on any background. Wherever an icon may be
 transparent it is the bare mark; where the platform needs a solid icon (an iPhone's home screen,
 Android's adaptive icon and splash, macOS's Dock) the mark sits on a charcoal tile, since a pale
-tile swallows the pale trunk. Everything else is laid out from those two: the brand art in `client/brand/`, the web client's favicons, the desktop
+tile swallows the pale trunk. A third drawing, the line mark, traces the same leaves and trunk in
+black strokes alone, for the middle of Aspen's QR codes. Everything else is laid out from those: the brand art in `client/brand/`, the web client's favicons, the desktop
 app's icons for each platform, the Android launcher, notification, and splash images, and the
 favicon inlined in the server's passkey page.
 
@@ -17,6 +18,7 @@ Run it from anywhere after changing the mark: `client/scripts/export_icons.py`. 
 
 from __future__ import annotations
 
+import math
 import re
 import subprocess
 import tempfile
@@ -114,6 +116,92 @@ def mark(
         f'<circle cx="{rx_}" cy="{ry}" r="{rr}" fill="{colour(GOLD)}" mask="url(#{key}-right)"/>'
         f'<circle cx="{tx}" cy="{ty}" r="{tr}" fill="{colour(EMERALD)}"/>'
         f"</g>"
+    )
+
+
+def line_mark(detail: Detail, cx: float, cy: float, height: float, stroke: float) -> str:
+    """The mark as black line art, `height` tall overall, centred on (cx, cy): the outline of
+    each leaf where the leaves drawn over it leave it showing, and of the trunk below them, as
+    plain stroked paths with no fill, masks, or bark marks. It is what sits in the middle of
+    Aspen's QR codes, on the white patch they leave for it, so it is one colour and survives
+    being printed or photographed. `stroke` is the line's width at that height."""
+    leaves = [detail.left, detail.right, detail.top]  # bottom to top, as `mark` stacks them
+    pad = stroke / 2
+    scale = (height - stroke) / (detail.bottom_edge - detail.top_edge)
+    transform = (
+        f"translate({cx - 128 * scale:.3f} {cy - height / 2 + pad - detail.top_edge * scale:.3f}) "
+        f"scale({scale:.5f})"
+    )
+
+    def covered(point: tuple[float, float], above: list[tuple[float, float, float]]) -> bool:
+        return any(math.dist(point, (x, y)) < r - 1e-9 for x, y, r in above)
+
+    def on(leaf: tuple[float, float, float], angle: float) -> tuple[float, float]:
+        x, y, r = leaf
+        return (x + r * math.cos(angle), y + r * math.sin(angle))
+
+    def edge(leaf, above, inside: float, outside: float) -> float:
+        """Where the leaf's outline passes under a leaf above, between an angle where it is
+        covered and one where it shows."""
+        for _ in range(60):
+            middle = (inside + outside) / 2
+            if covered(on(leaf, middle), above):
+                inside = middle
+            else:
+                outside = middle
+        return outside
+
+    paths = []
+    steps = 720
+    for index, leaf in enumerate(leaves):
+        above = leaves[index + 1 :]
+        x, y, r = leaf
+        angles = [2 * math.pi * i / steps for i in range(steps)]
+        shows = [not covered(on(leaf, a), above) for a in angles]
+        if all(shows):
+            paths.append(f"M{x - r:.3f} {y:.3f}A{r} {r} 0 1 1 {x + r:.3f} {y:.3f}A{r} {r} 0 1 1 {x - r:.3f} {y:.3f}Z")
+            continue
+        # Each run of showing samples is one arc, from where the outline comes out from under a
+        # leaf above to where it goes under again.
+        start = shows.index(False)
+        runs, run = [], None
+        for i in range(1, steps + 1):
+            k = (start + i) % steps
+            if shows[k] and run is None:
+                run = k
+            elif not shows[k] and run is not None:
+                runs.append((run, k))
+                run = None
+        for first, after in runs:
+            step = 2 * math.pi / steps
+            begin = edge(leaf, above, first * step - step, first * step)
+            end_ = edge(leaf, above, after * step, after * step - step)
+            if end_ < begin:
+                end_ += 2 * math.pi
+            (bx, by), (ex, ey) = on(leaf, begin), on(leaf, end_)
+            large = 1 if end_ - begin > math.pi else 0
+            paths.append(f"M{bx:.3f} {by:.3f}A{r} {r} 0 {large} 1 {ex:.3f} {ey:.3f}")
+    # The trunk's sides rise until they go under the lowest leaves; its foot is rounded.
+    tx, ty, tw, th, trx = detail.trunk
+    def rises_to(side: float) -> float:
+        low, high = ty, ty + th
+        for _ in range(60):
+            middle = (low + high) / 2
+            if covered((side, middle), leaves):
+                low = middle
+            else:
+                high = middle
+        return high
+    foot = ty + th
+    paths.append(
+        f"M{tx} {rises_to(tx):.3f}V{foot - trx}A{trx} {trx} 0 0 0 {tx + trx} {foot}"
+        f"H{tx + tw - trx}A{trx} {trx} 0 0 0 {tx + tw} {foot - trx}V{rises_to(tx + tw):.3f}"
+    )
+    return (
+        f'<g transform="{transform}" fill="none" stroke="#000000" stroke-width="{stroke / scale:.3f}" '
+        f'stroke-linecap="round" stroke-linejoin="round">'
+        + "".join(f'<path d="{d}"/>' for d in paths)
+        + "</g>"
     )
 
 
@@ -296,6 +384,7 @@ def passkey_page() -> None:
 def brand() -> None:
     write(BRAND / "aspen-mark.svg", svg(164, 198, mark(FULL, 82, 99, 198, "m")))
     write(BRAND / "aspen-mark-small.svg", svg(176, 202, mark(SMALL, 88, 101, 202, "m")))
+    write(BRAND / "aspen-mark-line.svg", svg(176, 202, line_mark(SMALL, 88, 101, 202, 10)))
     write(BRAND / "aspen-icon.svg", tile(1024))
     write(BRAND / "aspen-wordmark.svg", wordmark(INK, HAZEL))
     write(BRAND / "aspen-wordmark-dark.svg", wordmark(PAPER, BARK))

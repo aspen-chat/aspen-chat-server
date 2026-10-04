@@ -17,6 +17,8 @@ the stack runs its own of.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import shutil
 import sys
 import time
@@ -328,8 +330,85 @@ def removal(world: World, check: Checks) -> None:
     check("nor hear them", not world.hears_message(open_channel))
 
 
+def dual_invites(world: World, check: Checks) -> None:
+    say("dual invites: an account made and joined at once, and both parts revoked")
+    stack = world.stack
+    check("making one takes Manage registration invites",
+          stack.status("POST", "/admin/registration-invites", {"community": world.community},
+                       world.member["token"]) == 403)
+    stack.command("admin", "grant", world.owner["name"])
+    stranger = world.account("stranger")
+    stack.command("admin", "grant", stranger["name"])
+    # Refused as not found, or, where the administrators also moderate, for lacking Create invites.
+    check("and a community its maker may invite to",
+          stack.status("POST", "/admin/registration-invites", {"community": world.community},
+                       stranger["token"]) in (403, 404))
+    dual = world.as_owner("POST", "/admin/registration-invites", {"maxUses": 2, "community": world.community})
+    invite = dual["community"]["invite"]
+    world.stream.gather(0.5)
+    newcomer = f"new{world.run}"
+    stack.api("POST", "/users", {"name": newcomer, "password": PASSWORD, "inviteCode": dual["code"]})
+    joined = world.sign_in(newcomer)
+    mine = stack.api("GET", "/users/@me/communities", token=joined["token"])
+    ids = [c["id"] for c in (mine["data"] if isinstance(mine, dict) else mine)]
+    check("the account it makes is in the community", world.community in ids, ids)
+    check("and members hear it join", bool(of(world.stream.gather(1.0), "userCommunity", type="create")))
+    world.as_owner("DELETE", f"/invites/{invite}")
+    late = f"late{world.run}"
+    stack.api("POST", "/users", {"name": late, "password": PASSWORD, "inviteCode": dual["code"]})
+    mine = stack.api("GET", "/users/@me/communities", token=world.sign_in(late)["token"])
+    ids = [c["id"] for c in (mine["data"] if isinstance(mine, dict) else mine)]
+    check("its community invite revoked, it makes accounts that join nothing", world.community not in ids, ids)
+    again = world.as_owner("POST", "/admin/registration-invites", {"community": world.community})
+    # Invites are announced to those who manage them, the owner among them.
+    owner_stream = stack.events(world.owner["token"])
+    owner_stream.gather(0.5)
+    world.as_owner("DELETE", f"/admin/registration-invites/{again['code']}")
+    check("revoking a dual invite revokes its community invite",
+          stack.status("GET", f"/invites/{again['community']['invite']}", token=world.owner["token"]) == 404)
+    check("and the community's invite managers hear that invite go",
+          bool(of(owner_stream.gather(1.0), "invite", type="delete", code=again["community"]["invite"])))
+    check("the registration link stops working",
+          stack.status("GET", f"/registration-invites/{again['code']}") == 404)
+    stack.command("admin", "revoke", world.owner["name"])
+    stack.command("admin", "revoke", stranger["name"])
+
+
+def device_links(world: World, check: Checks) -> None:
+    say("sign-in codes: the giving sign-in ending before the code is claimed")
+    stack = world.stack
+    verifier = "v" * 43
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+    def offered(giver: dict) -> str:
+        link = stack.api("POST", "/auth/device-links", {}, giver["token"])["id"]
+        stack.api("POST", f"/auth/device-links/{link}/scan", {"deviceName": "Phone", "codeChallenge": challenge})
+        stack.api("PUT", f"/auth/device-links/{link}/approval", token=giver["token"])
+        return link
+
+    def claim(link: str) -> int:
+        return stack.status("POST", f"/auth/device-links/{link}/claim", {"codeVerifier": verifier})
+
+    giver = world.sign_in(world.member["name"])
+    link = offered(giver)
+    stack.api("POST", "/auth/logout", {"refreshToken": giver["refresh"]}, giver["token"])
+    check("a code approved by a sign-in that then signs out signs nothing in", claim(link) == 404)
+    giver = world.sign_in(world.member["name"])
+    link = offered(giver)
+    stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD, "newPassword": PASSWORD + "!"},
+              world.member["token"])
+    check("nor one approved before a password change elsewhere", claim(link) == 404)
+    stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
+              world.member["token"])
+    link = offered(world.member)
+    got = stack.api("POST", f"/auth/device-links/{link}/claim", {"codeVerifier": verifier})
+    check("one whose giver stands signs in", got.get("status") == "signedIn", got)
+    check("as the giver", got.get("userId") == world.member["id"], got)
+    check("and once", claim(link) == 404)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             sign_ins, removal]
+             sign_ins, removal, dual_invites, device_links]
 
 
 def main() -> None:

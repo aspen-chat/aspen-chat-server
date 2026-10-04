@@ -1,6 +1,7 @@
 import { RouterProvider } from "@tanstack/react-router";
 import { useState } from "react";
 import { AspenProvider } from "@/api/AspenProvider";
+import { useOpenAppLinks } from "@/api/appLinks";
 import { defaultServerUrl, detectShell, rememberServerUrl } from "@/config";
 import { ServerForm } from "@/features/auth/ServerForm";
 import { ServerChoiceContext } from "@/features/auth/serverChoice";
@@ -16,15 +17,24 @@ export function App() {
   const [serverUrl, setServerUrl] = useState<string | null>(() => defaultServerUrl());
   const [choosingServer, setChoosingServer] = useState(false);
 
+  function choose(url: string) {
+    rememberServerUrl(url);
+    setServerUrl(url);
+    setChoosingServer(false);
+  }
+
+  // A sign-in code opened before any server is chosen names the one to use.
+  useOpenAppLinks((link) => {
+    if (serverUrl === null) {
+      choose(link.server);
+    }
+  });
+
   if (serverUrl === null || choosingServer) {
     return (
       <main className="flex min-h-full items-center justify-center p-6">
         <ServerForm
-          onSubmit={(url) => {
-            rememberServerUrl(url);
-            setServerUrl(url);
-            setChoosingServer(false);
-          }}
+          onSubmit={choose}
           {...(serverUrl === null
             ? {}
             : {
@@ -48,6 +58,7 @@ export function App() {
               : () => {
                   setChoosingServer(true);
                 },
+          switchServer: detectShell() === "web" ? null : choose,
         }}
       >
         <RouterProvider router={router} />

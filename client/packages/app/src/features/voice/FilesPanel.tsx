@@ -7,7 +7,8 @@ import { outlineButtonClass } from "@/features/auth/styles";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { handleOf } from "@/features/users/profile";
 import { OfferFileDialog, ReceiveFileDialog } from "@/features/voice/FileDialogs";
-import { formatSize, formatTimeLeft, safeFileName } from "@/features/voice/files";
+import { formatSize, formatTimeLeft } from "@/features/voice/files";
+import { saveFile } from "@/features/layout/saveFile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { PersonName } from "@/features/users/PersonName";
@@ -33,17 +34,6 @@ function useNow(ticking: boolean, changed: unknown): number {
     };
   }, [ticking, changed]);
   return now;
-}
-
-function save(file: Blob, name: string): void {
-  const url = URL.createObjectURL(file);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = safeFileName(name);
-  link.click();
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 60_000);
 }
 
 /**
@@ -304,7 +294,7 @@ function Transfer({ transfer }: { transfer: TransferState }) {
             <Button
               onPress={() => {
                 if (transfer.file !== null) {
-                  save(transfer.file, transfer.name);
+                  void saveFile(transfer.file, transfer.name);
                 }
               }}
               className={smallButtonClass}

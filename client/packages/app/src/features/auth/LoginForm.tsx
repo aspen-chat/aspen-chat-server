@@ -11,6 +11,7 @@ import { Button, FieldError, Form, Input, Label, TextField } from "react-aria-co
 import { useAspenClient } from "@/api/context";
 import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
+import { OtherDeviceSignIn } from "./OtherDeviceSignIn";
 import { usePasskeyTransport } from "./passkeyTransport";
 import { SecondFactorFields } from "./SecondFactorFields";
 import {
@@ -36,7 +37,8 @@ function failure(e: unknown): string | null {
 
 /**
  * Signing in to the currently selected server: a username and password, then a second factor
- * when the account has two-factor sign-in on; or a passkey on its own. Failures show the
+ * when the account has two-factor sign-in on; or a passkey on its own; or another device, by a
+ * QR code (`OtherDeviceSignIn`). Failures show the
  * server's localized Problem text. Which server it is shows above it (`DeploymentWelcome`).
  */
 export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
@@ -159,13 +161,13 @@ function PasswordStep({
           {pending === "password" ? m.signingIn : m.signIn}
         </Button>
       </Form>
+      <div className="flex items-center gap-3 text-xs text-ink-muted" aria-hidden="true">
+        <span className="h-px flex-1 bg-line" />
+        {m.orDivider}
+        <span className="h-px flex-1 bg-line" />
+      </div>
       {transport !== null && (
         <>
-          <div className="flex items-center gap-3 text-xs text-ink-muted" aria-hidden="true">
-            <span className="h-px flex-1 bg-line" />
-            {m.orDivider}
-            <span className="h-px flex-1 bg-line" />
-          </div>
           <Button
             isDisabled={pending !== null}
             onPress={() => {
@@ -182,6 +184,7 @@ function PasswordStep({
           </Button>
         </>
       )}
+      <OtherDeviceSignIn className={outlineButtonClass} />
       <p className="text-sm text-ink-muted">
         {m.noAccountYet}{" "}
         <Button onPress={onSwitchToRegister} className={linkButtonClass}>

@@ -1,4 +1,4 @@
-import { router } from "@/router";
+import { shareUrl } from "@/features/qr/shareLinks";
 
 /** Server-side invite code rules: alphanumeric, 1 to 16 characters. */
 const CODE = /^[A-Za-z0-9]{1,16}$/;
@@ -11,21 +11,24 @@ export interface InviteRef {
 }
 
 /**
- * The link to share for an invite of the deployment named `domain` (`null` when that
- * deployment takes no part in federation, so has no domain to name). It opens this client's
- * invite route with `?at=` naming the deployment, so whoever opens it, whatever their home, is
- * taken to the right one. On the web it is a plain URL and in a shell it carries the route
- * after a `#`, which the same route handles when pasted back in.
+ * The route to share for an invite of the deployment named `domain` (`null` when that
+ * deployment takes no part in federation, so has no domain to name): this client's invite
+ * route with `?at=` naming the deployment, so whoever opens it, whatever their home, is taken to
+ * the right one. `shareUrl` makes it a link.
  */
-export function shareableInviteLink(code: string, domain: string | null): string {
+export function invitePath(code: string, domain: string | null): string {
   const at = domain === null ? "" : `?at=${encodeURIComponent(domain).replace(/%3A/gi, ":")}`;
-  const href = router.history.createHref(`/invite/${encodeURIComponent(code)}${at}`);
-  return new URL(href, window.location.href).toString();
+  return `/invite/${encodeURIComponent(code)}${at}`;
+}
+
+/** The route to share for a registration invite, which opens the create-account screen. */
+export function registrationPath(code: string): string {
+  return `/register?invite=${encodeURIComponent(code)}`;
 }
 
 /** What an invite link from this client looks like, for the join field's placeholder. */
 export function inviteLinkExample(): string {
-  return `${shareableInviteLink("", null)}…`;
+  return `${shareUrl(invitePath("", null), null)}…`;
 }
 
 function domainOf(encoded: string): string | null {

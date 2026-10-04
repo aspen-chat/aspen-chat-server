@@ -50,6 +50,16 @@ export type TypedSecondFactor = Schemas["TypedSecondFactor"];
 export type ReauthenticationMethod = Schemas["ReauthenticationMethod"];
 export type AuthMethods = Schemas["AuthMethods"];
 export type DeploymentProfile = Schemas["DeploymentProfile"];
+export type DeviceLink = Schemas["DeviceLink"];
+export type DeviceLinkScan = Schemas["DeviceLinkScan"];
+export type DeviceLinkProgress = Schemas["DeviceLinkProgress"];
+export type RegistrationInviteRead = Schemas["Sideloaded_RegistrationInvitePreview"];
+
+/** Where a sign-in code stands, for the device it signs in. A `signedIn` session is stored. */
+export type DeviceLinkClaim =
+  | { status: "waiting" }
+  | { status: "scanned"; deviceName: string }
+  | { status: "signedIn"; session: Session };
 
 /** How a password sign-in ended. */
 export type LoginOutcome =
@@ -186,6 +196,119 @@ export class AspenClient {
   /** How the deployment presents itself: its display name and icon. Needs no session. */
   async deploymentProfile(): Promise<DeploymentProfile> {
     return unwrap(await this.api.GET(`${API_PREFIX}/deployment`));
+  }
+
+  /**
+   * A usable registration invite, with the community a dual invite joins sideloaded. Needs no
+   * session. Throws `ApiProblemError` (`notFound`) for one that is unknown or no longer works.
+   */
+  async registrationInvite(code: string): Promise<RegistrationInviteRead> {
+    return unwrap(
+      await this.api.GET(`${API_PREFIX}/registration-invites/{code}`, {
+        params: { path: { code }, query: { include: ["community"] } },
+      }),
+    );
+  }
+
+  /**
+   * Starts a sign-in code (`/auth/device-links`). Signed in, it offers this account to a phone
+   * that scans it; signed out, it asks a signed-in phone for a sign-in, naming this device
+   * `deviceName`, and `verifier` is what to claim it with (`claimDeviceLink`).
+   */
+  async startDeviceLink(
+    deviceName?: string,
+  ): Promise<{ link: DeviceLink; verifier: string | null }> {
+    if (this.session !== null) {
+      return {
+        link: unwrap(await this.api.POST(`${API_PREFIX}/auth/device-links`, { body: {} })),
+        verifier: null,
+      };
+    }
+    const { verifier, challenge } = await pkcePair();
+    const link = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/device-links`, {
+        body: { codeChallenge: challenge, ...(deviceName === undefined ? {} : { deviceName }) },
+      }),
+    );
+    return { link, verifier };
+  }
+
+  /**
+   * Scans a sign-in code. Signed in, it grants a device asking for a sign-in (confirm with
+   * `approveDeviceLink`); signed out, it asks to be signed in, naming this device `deviceName`,
+   * and `verifier` is what to claim with.
+   */
+  async scanDeviceLink(
+    id: string,
+    deviceName: string,
+  ): Promise<{ scan: DeviceLinkScan; verifier: string | null }> {
+    if (this.session !== null) {
+      const scan = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/device-links/{link}/scan`, {
+          params: { path: { link: id } },
+          body: {},
+        }),
+      );
+      return { scan, verifier: null };
+    }
+    const { verifier, challenge } = await pkcePair();
+    const scan = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/device-links/{link}/scan`, {
+        params: { path: { link: id } },
+        body: { deviceName, codeChallenge: challenge },
+      }),
+    );
+    return { scan, verifier };
+  }
+
+  /** Where a sign-in code this signed-in device shows stands. */
+  async deviceLinkProgress(id: string): Promise<DeviceLinkProgress> {
+    return unwrap(
+      await this.api.GET(`${API_PREFIX}/auth/device-links/{link}`, {
+        params: { path: { link: id } },
+      }),
+    );
+  }
+
+  /** Confirms the device a sign-in code is for, signing it in to this account. */
+  async approveDeviceLink(id: string): Promise<void> {
+    const result = await this.api.PUT(`${API_PREFIX}/auth/device-links/{link}/approval`, {
+      params: { path: { link: id } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Ends a sign-in code before it signs anyone in: declining it, or giving up on it. */
+  async cancelDeviceLink(id: string): Promise<void> {
+    const result = await this.api.DELETE(`${API_PREFIX}/auth/device-links/{link}`, {
+      params: { path: { link: id } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Asks for the sign-in a code promises this device, with the verifier it was started or
+   * scanned with; once the other device confirms, the session is stored.
+   */
+  async claimDeviceLink(id: string, verifier: string): Promise<DeviceLinkClaim> {
+    const claimed = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/device-links/{link}/claim`, {
+        params: { path: { link: id } },
+        body: { codeVerifier: verifier },
+      }),
+    );
+    switch (claimed.status) {
+      case "signedIn":
+        return { status: "signedIn", session: this.#adopt(claimed) };
+      case "scanned":
+        return { status: "scanned", deviceName: claimed.deviceName };
+      case "waiting":
+        return { status: "waiting" };
+    }
   }
 
   /**

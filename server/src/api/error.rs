@@ -62,6 +62,12 @@ pub enum ProblemCode {
     LastSecondFactor,
     /// The authenticator's response to a passkey ceremony did not verify.
     PasskeyRejected,
+    /// A sign-in code (`/auth/device-links`) is unknown, has expired, or was already used to
+    /// sign in. Make a new one.
+    DeviceLinkExpired,
+    /// A sign-in code was already scanned by another device. Whoever scanned it may be
+    /// waiting for the signed-in device to confirm them, which it should not.
+    DeviceLinkUsed,
     /// Passkeys are not configured on this server.
     PasskeysUnavailable,
     /// Registration: the requested username is already in use.
@@ -133,6 +139,8 @@ impl ProblemCode {
             }
             ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
+            ProblemCode::DeviceLinkExpired => StatusCode::NOT_FOUND,
+            ProblemCode::DeviceLinkUsed => StatusCode::CONFLICT,
             ProblemCode::NotFound => StatusCode::NOT_FOUND,
             ProblemCode::Conflict
             | ProblemCode::PollClosed
@@ -171,6 +179,8 @@ impl ProblemCode {
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
+            ProblemCode::DeviceLinkExpired => t!("problemDeviceLinkExpired"),
+            ProblemCode::DeviceLinkUsed => t!("problemDeviceLinkUsed"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
             ProblemCode::CustomEmojiNameTaken => t!("customEmojiNameTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
@@ -290,6 +300,12 @@ impl From<app::Error> for ApiError {
             app::Error::TooManyAttempts => Self::new(ProblemCode::TooManyAttempts),
             app::Error::LastSecondFactor => Self::new(ProblemCode::LastSecondFactor),
             app::Error::InvalidTicket => Self::new(ProblemCode::InvalidToken),
+            app::Error::DeviceLinkExpired => {
+                Self::new(ProblemCode::DeviceLinkExpired).with_detail(t!("deviceLinkExpiredDetail"))
+            }
+            app::Error::DeviceLinkUsed => {
+                Self::new(ProblemCode::DeviceLinkUsed).with_detail(t!("deviceLinkUsedDetail"))
+            }
             app::Error::PasskeysUnavailable => Self::new(ProblemCode::PasskeysUnavailable),
             app::Error::PasskeyRejected(reason) => {
                 tracing::debug!(reason, "passkey rejected");

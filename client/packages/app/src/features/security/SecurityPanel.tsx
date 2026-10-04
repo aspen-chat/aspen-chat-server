@@ -10,6 +10,8 @@ import { Button, FieldError, Form, Input, Label, Text, TextField } from "react-a
 import { useAspenClient } from "@/api/context";
 import { useMe } from "@/api/hooks";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
+import { OtherDeviceSignIn } from "@/features/auth/OtherDeviceSignIn";
+import { detectShell } from "@/config";
 import {
   alertClass,
   fieldClass,
@@ -24,7 +26,7 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import * as api from "./api";
-import { QrCode } from "./QrCode";
+import { QrCode } from "@/features/qr/QrCode";
 import { RecoveryCodesDialog } from "./RecoveryCodesDialog";
 import { ReauthProvider } from "./reauth";
 import { useReauth } from "./reauthContext";
@@ -41,8 +43,8 @@ function errorText(e: unknown): string | null {
 const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
 
 /**
- * The password, authenticator app, passkeys, and recovery codes. Changes that need a fresh verification ask
- * for one first.
+ * The password, authenticator app, passkeys, recovery codes, and signing in other devices by a QR
+ * code. Changes that need a fresh verification ask for one first.
  */
 export function SecurityPanel({ transport }: { transport: PasskeyTransport | null }) {
   const m = useMessages();
@@ -113,6 +115,11 @@ function Sections({
       <AuthenticatorSection settings={settings} change={change} />
       <PasskeySection settings={settings} transport={transport} change={change} />
       <RecoverySection settings={settings} change={change} />
+      {/* A user of another deployment signs devices in at home; an account still owing a
+          second factor has no sign-in to give. */}
+      {me?.homeDomain == null && client.session?.twoFactorEnrollmentRequired !== true && (
+        <OtherDevicesSection />
+      )}
       <RecoveryCodesDialog
         codes={codes}
         onClose={() => {
@@ -600,6 +607,22 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
         </Button>
       </div>
     </li>
+  );
+}
+
+/** Signing a phone in from this computer, or a computer in from this phone, by a QR code. */
+function OtherDevicesSection() {
+  const m = useMessages();
+  return (
+    <section aria-labelledby="security-devices" className={planeClass}>
+      <SectionHeading id="security-devices">{m.deviceLink.heading}</SectionHeading>
+      <p className={hintClass}>
+        {detectShell() === "mobile" ? m.deviceLink.sectionHintPhone : m.deviceLink.sectionHint}
+      </p>
+      <OtherDeviceSignIn
+        className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}
+      />
+    </section>
   );
 }
 

@@ -210,54 +210,72 @@ pub async fn create_user(
     let password_hash = hash_password(command.password.to_string()).await?;
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
-    conn.transaction(|conn| {
-        async move {
-            // The invite is used in the transaction that makes the account, so an invite with
-            // one use left makes one account however many register with it at once. Where
-            // invites are optional, one that no longer works is ignored rather than refused.
-            let registered_with = match invite_code {
-                Some(code) => match registration_invite::redeem(conn.as_mut(), code).await {
-                    Ok(()) => Some(code.to_string()),
-                    Err(app::Error::RegistrationInviteInvalid) if !invite_required => None,
-                    Err(e) => return Err(e),
-                },
-                None => None,
-            };
-            diesel::insert_into(user::table)
-                .values(UserPg {
-                    id: new_user_id,
-                    name: command.name.clone(),
-                    icon: command.icon.map(MaybeLoaded::NotLoaded),
-                    password_hash,
-                    created_at: now,
-                    last_seen_at: now,
-                    deleted_at: None,
-                    display_name: command.display_name.clone(),
-                    pronouns: command.pronouns.clone(),
-                    bio: command.bio.clone(),
-                    status_text: command.status.as_ref().map(|s| s.text.clone()),
-                    status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
-                    bot: false,
-                    system: false,
-                    bot_owner: None,
-                    bot_public: false,
-                    home_domain: None,
-                    home_id: None,
-                    home_icon: None,
-                })
-                .execute(conn.as_mut())
-                .await?;
-            if registered_with.is_some() {
-                diesel::update(user::table.filter(user::id.eq(new_user_id)))
-                    .set(user::registered_with.eq(registered_with))
+    let state = &state;
+    let joined = conn
+        .transaction(|conn| {
+            async move {
+                // The invite is used in the transaction that makes the account, so an invite with
+                // one use left makes one account however many register with it at once. Where
+                // invites are optional, one that no longer works is ignored rather than refused.
+                let (registered_with, community_invite) = match invite_code {
+                    Some(code) => match registration_invite::redeem(conn.as_mut(), code).await {
+                        Ok(community_invite) => (Some(code.to_string()), community_invite),
+                        Err(app::Error::RegistrationInviteInvalid) if !invite_required => {
+                            (None, None)
+                        }
+                        Err(e) => return Err(e),
+                    },
+                    None => (None, None),
+                };
+                diesel::insert_into(user::table)
+                    .values(UserPg {
+                        id: new_user_id,
+                        name: command.name.clone(),
+                        icon: command.icon.map(MaybeLoaded::NotLoaded),
+                        password_hash,
+                        created_at: now,
+                        last_seen_at: now,
+                        deleted_at: None,
+                        display_name: command.display_name.clone(),
+                        pronouns: command.pronouns.clone(),
+                        bio: command.bio.clone(),
+                        status_text: command.status.as_ref().map(|s| s.text.clone()),
+                        status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
+                        bot: false,
+                        system: false,
+                        bot_owner: None,
+                        bot_public: false,
+                        home_domain: None,
+                        home_id: None,
+                        home_icon: None,
+                    })
                     .execute(conn.as_mut())
                     .await?;
+                if registered_with.is_some() {
+                    diesel::update(user::table.filter(user::id.eq(new_user_id)))
+                        .set(user::registered_with.eq(registered_with))
+                        .execute(conn.as_mut())
+                        .await?;
+                }
+                match community_invite {
+                    Some(community_invite) => {
+                        registration_invite::join_invited(
+                            state,
+                            conn.as_mut(),
+                            new_user_id,
+                            &community_invite,
+                        )
+                        .await
+                    }
+                    None => Ok::<_, app::Error>(None),
+                }
             }
-            Ok::<_, app::Error>(())
-        }
-        .scope_boxed()
-    })
-    .await?;
+            .scope_boxed()
+        })
+        .await?;
+    if let Some(community) = joined {
+        app::everyone_limit::after_join(state, community).await;
+    }
     Ok(new_user_id)
 }
 

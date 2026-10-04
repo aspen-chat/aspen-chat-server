@@ -20,6 +20,7 @@ pub(crate) mod community;
 pub(crate) mod custom_emoji;
 pub(crate) mod deployment;
 pub(crate) mod deployment_profile;
+pub(crate) mod device_link;
 pub(crate) mod dm;
 pub(crate) mod error;
 mod event_stream;
@@ -103,10 +104,11 @@ pub const TAG_REPORTS: &str = "reports";
         poll::PollInclude,
         poll::PollOption,
         poll::PollVote,
-        invite::InviteInclude
+        invite::InviteInclude,
+        invite::RegistrationInviteInclude
     )),
     tags(
-        (name = TAG_AUTH, description = "Signing in (password, second factor, passkey), re-verifying, signing out, and session refresh"),
+        (name = TAG_AUTH, description = "Signing in (password, second factor, passkey, or from another device by a QR code), re-verifying, signing out, and session refresh"),
         (name = TAG_USERS, description = "Accounts. `@me` addresses the calling user."),
         (name = TAG_SECURITY, description = "A user's second factors: authenticator app, passkeys, and recovery codes"),
         (name = TAG_COMMUNITIES, description = "Communities and their membership"),
@@ -201,6 +203,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::get_passkey_ceremony))
         .routes(routes!(auth::complete_passkey_ceremony))
         .routes(routes!(auth::claim_passkey_ceremony))
+        .routes(routes!(device_link::start_device_link))
+        .routes(routes!(
+            device_link::get_device_link,
+            device_link::cancel_device_link
+        ))
+        .routes(routes!(device_link::scan_device_link))
+        .routes(routes!(device_link::approve_device_link))
+        .routes(routes!(device_link::claim_device_link))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
         .routes(routes!(user::create_user))
@@ -272,6 +282,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             invite::update_invite,
             invite::revoke_invite
         ))
+        .routes(routes!(invite::get_registration_invite))
         .routes(routes!(
             category::get_category,
             category::update_category,

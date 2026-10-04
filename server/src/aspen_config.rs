@@ -46,6 +46,8 @@ pub struct AspenConfig {
     pub federation: FederationConfig,
     #[serde(default)]
     pub push: PushConfig,
+    #[serde(default)]
+    pub web_client: WebClientConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -484,6 +486,45 @@ pub struct VoiceServerSeed {
     pub capacity: u32,
 }
 
+/// The web client people open in a browser.
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct WebClientConfig {
+    /// Where this deployment's web client is served, such as `https://chat.example.org`: the
+    /// address that links and QR codes for invites and signing in name (`GET /deployment` gives
+    /// it to clients), so they open on any device that scans or follows them. Left out, the web
+    /// client names the address it is served from, and the desktop and mobile apps name `aspen:`
+    /// links, which open only where Aspen is installed.
+    pub url: Option<String>,
+}
+
+impl WebClientConfig {
+    /// Refuses a `url` that is not an absolute `http` or `https` address, or that carries a
+    /// query, fragment, or credentials, which the links built on it would garble; trims a
+    /// trailing slash.
+    fn validate(&mut self) -> Result<(), config::ConfigError> {
+        let Some(given) = &self.url else {
+            return Ok(());
+        };
+        let invalid = || {
+            config::ConfigError::Message(format!(
+                "web_client.url {given:?} must be an http or https address with no query,                  fragment, or credentials"
+            ))
+        };
+        let parsed = url::Url::parse(given).map_err(|_| invalid())?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(invalid());
+        }
+        self.url = Some(parsed.as_str().trim_end_matches('/').to_string());
+        Ok(())
+    }
+}
+
 /// Cross-Origin Resource Sharing.
 ///
 /// Browsers (including the Electron and Capacitor shells, which are browsers) refuse to read a
@@ -575,12 +616,35 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.federation.validate()?;
+    loaded.web_client.validate()?;
     Ok(loaded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_web_client_url_is_an_http_address_without_a_trailing_slash() {
+        let check = |url: &str| {
+            let mut config = WebClientConfig {
+                url: Some(url.to_string()),
+            };
+            config.validate().map(|()| config.url.unwrap())
+        };
+        assert_eq!(
+            check("https://chat.example.org/").unwrap(),
+            "https://chat.example.org"
+        );
+        assert_eq!(
+            check("https://example.org/aspen/").unwrap(),
+            "https://example.org/aspen"
+        );
+        assert!(check("aspen://invite").is_err());
+        assert!(check("https://example.org/?x=1").is_err());
+        assert!(check("https://example.org/#x").is_err());
+        assert!(check("chat.example.org").is_err());
+    }
 
     /// A section given in part keeps the defaults of what it leaves out, and a section left out
     /// is all defaults.

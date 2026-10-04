@@ -36,8 +36,10 @@ side and stacked, each for light and dark grounds), the web client's `favicon.sv
 `.ico` for Windows, and a 1024 PNG on macOS's icon grid, from which electron-builder makes the
 `.icns`), the Android launcher icons (legacy, round, and adaptive, with a monochrome layer for
 themed icons), the status bar icon `ic_stat_aspen` that push notifications use, the splash
-images, and the favicon inlined in the server's passkey page. Change the mark there and run it
-again; never edit its outputs by hand. It needs `rsvg-convert` and ImageMagick's `magick`.
+images, the favicon inlined in the server's passkey page, and the line mark
+(`brand/aspen-mark-line.svg`: the same leaves and trunk traced in black strokes, no fill or bark)
+that sits in the middle of every QR code. Change the mark there and run it again; never edit
+its outputs by hand. It needs `rsvg-convert` and ImageMagick's `magick`.
 
 ## The server contract is generated, never hand-written
 
@@ -70,13 +72,14 @@ commit, as with comments.
 - [`presence.md`](docs/architecture/presence.md): polling statuses and reporting activity.
 - [`profiles-and-icons.md`](docs/architecture/profiles-and-icons.md): icon upload and cropping, profile fields, and the profile card.
 - [`push.md`](docs/architecture/push.md): waking phones: the app's subscriptions, Android's handler, and iOS's notification service extension.
+- [`qr-codes.md`](docs/architecture/qr-codes.md): drawing codes with the line mark, saving them, invites' codes, the addresses links name, and the phone's scanner.
 - [`rail-and-channel-list.md`](docs/architecture/rail-and-channel-list.md): drag-and-drop reordering, folders on the rail, and folded categories.
 - [`reactions.md`](docs/architecture/reactions.md): reaction summaries, chips, and the reactions dialog.
 - [`reports.md`](docs/architecture/reports.md): reporting messages and profiles, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.
-- [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser.
+- [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser, and signing in from another device by a QR code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, echoes, DMs and group DMs, the DM list, and the system account's DM.
 - [`unread-and-muting.md`](docs/architecture/unread-and-muting.md): read states, unread marks, marking read, the New Messages line, and muting.
@@ -241,6 +244,9 @@ commit, as with comments.
   `navigator.clipboard` directly: the Clipboard API is missing on a page served over plain HTTP,
   such as a dev server a phone reaches by address, and `copyText` falls back to a copy that
   works there and in iOS Safari.
+- Save a file with `saveFile` (`src/features/layout/saveFile.ts`), never a download link of
+  your own: the mobile apps' web views cannot follow one, and `saveFile` hands the file to the
+  system's picker there.
 - Nothing may depend on hover, which a touch screen does not have. A control revealed on hover is
   also revealed by focus, or offered another way on a touch screen: a message's actions
   (`MessageActions`, icons at `ACTION_ICON`) show on hover or focus where there is a pointer, in

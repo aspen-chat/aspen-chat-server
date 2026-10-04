@@ -69,7 +69,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Aspen uses the microphone when you join a voice call.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Aspen uses the camera when you turn it on in a call, or take a picture to send.</string>
+	<string>Aspen uses the camera when you turn it on in a call, take a picture to send, or scan a QR code to sign in or join a community.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Aspen connects to servers on your local network when you sign in to one there.</string>
 	<key>NSAppTransportSecurity</key>
