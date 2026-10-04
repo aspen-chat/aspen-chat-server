@@ -9,6 +9,7 @@ import {
   rubberBand,
   shown,
   spring,
+  thumb,
 } from "./scrollPhysics";
 
 describe("bounds", () => {
@@ -98,5 +99,29 @@ describe("VelocityTracker", () => {
     tracker.add(0, 0);
     tracker.add(100, 50);
     expect(tracker.velocity(300)).toBe(0);
+  });
+});
+
+describe("thumb", () => {
+  const sizes = { viewportHeight: 400, contentHeight: 1600, trackHeight: 392, minHeight: 24 };
+
+  it("is as tall as the share of the content in view, and runs the track's length", () => {
+    const range = bounds(1600, 400);
+    expect(thumb(range.min, range, sizes)).toEqual({ height: 98, top: 0, shown: true });
+    expect(thumb(range.max, range, sizes)).toEqual({ height: 98, top: 294, shown: true });
+  });
+
+  it("is never shorter than its least height", () => {
+    const range = bounds(160_000, 400);
+    expect(thumb(0, range, { ...sizes, contentHeight: 160_000 }).height).toBe(24);
+  });
+
+  it("fills the track, unshown, for content that fits", () => {
+    const range = bounds(300, 400);
+    expect(thumb(range.min, range, { ...sizes, contentHeight: 300 })).toEqual({
+      height: 392,
+      top: 0,
+      shown: false,
+    });
   });
 });

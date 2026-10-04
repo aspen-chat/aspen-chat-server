@@ -317,10 +317,11 @@ commit, as with comments.
   params with `useParams`; navigate with `Link` and `Navigate` rather than by building URLs.
   The message components live under both trees, so they take the channel's home (a community
   id, or `null` for a DM) and build their links with `src/features/messages/links.ts`. A message link's id segment leaves the URL once the reader scrolls on
-  their own (wheel, touch, scrollbar, or a navigation key, tracked in `MessageList.tsx`); scroll
+  their own (wheel, touch, scrollbar, or a navigation key, tracked by `ListScroller`); scroll
   events the browser fires for layout changes, image loads, or scripted scrolling do not count,
   and dropping the segment never reloads the window. History pages in on its own, well ahead
-  of the reader (`loadOlder` / `loadNewer`, `HISTORY_PAGE_SIZE` messages at a time): within
+  of the reader (`useHistoryPaging`, through `AspenSync`'s `loadOlder` / `loadNewer`,
+  `HISTORY_PAGE_SIZE` messages at a time): within
   `LOAD_AHEAD_SCREENS` of the end they are heading for, as their own wheel, finger, or keys
   last moved the list, and never at the end behind them (within `LOAD_UNSURE_SCREENS` of either
   while that is unknown): a page read at one end of a full window drops messages from the

@@ -214,7 +214,7 @@ function moves(before: Record<string, number>, after: Record<string, number>): n
 /**
  * The two ways the list's box is scrolled: by the browser, as everywhere but iOS, and by the
  * list itself, as on iOS, which Chromium is made to stand in for by claiming the property
- * `MessageList` knows iOS by. Both must keep the view still the same.
+ * the list knows iOS by (`OWNS_SCROLLING`). Both must keep the view still the same.
  */
 const SCROLLERS = [
   { name: "", ios: false },

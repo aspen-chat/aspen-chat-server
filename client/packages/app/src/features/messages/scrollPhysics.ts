@@ -1,7 +1,7 @@
 /**
  * The arithmetic of a list that scrolls itself: how a finger's travel becomes an offset, how
  * fast the list coasts once the finger lifts, and how far past its ends it may be pulled. Pure
- * functions over numbers, so `MessageList` owns the offset and the DOM only shows it.
+ * functions over numbers, so `ListScroller` owns the offset and the DOM only shows it.
  *
  * Offsets grow downwards, like a scroll position: 0 shows the top of the content, and the
  * largest offset shows its bottom.
@@ -81,6 +81,32 @@ export function spring(from: number, to: number, elapsedMs: number): number {
   const t = Math.min(1, elapsedMs / SPRING_MS);
   const eased = 1 - Math.pow(1 - t, 3);
   return from + (to - from) * eased;
+}
+
+/**
+ * The indicator's thumb for a list at `offset`, within its range: how tall it is on a track
+ * `trackHeight` long, as the share of the content in view and never under `minHeight`, and how
+ * far down the track it stands. Content that fits whole fills the track, and no indicator is
+ * shown for it.
+ */
+export function thumb(
+  offset: number,
+  range: { min: number; max: number },
+  sizes: { viewportHeight: number; contentHeight: number; trackHeight: number; minHeight: number },
+): { height: number; top: number; shown: boolean } {
+  const span = range.max - range.min;
+  if (span <= 0) {
+    return { height: sizes.trackHeight, top: 0, shown: false };
+  }
+  const height = Math.max(
+    sizes.minHeight,
+    (sizes.viewportHeight / sizes.contentHeight) * sizes.trackHeight,
+  );
+  return {
+    height,
+    top: ((offset - range.min) / span) * (sizes.trackHeight - height),
+    shown: true,
+  };
 }
 
 /**

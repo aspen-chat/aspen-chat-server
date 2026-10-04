@@ -1,7 +1,8 @@
 # The message list's scrolling
 
-On iOS and iPadOS the list scrolls itself (`OWNS_SCROLLING` in `MessageList.tsx`, with the
-arithmetic in `scrollPhysics.ts`): its box hides its overflow, so no finger, wheel, or key
+On iOS and iPadOS the list scrolls itself (`OWNS_SCROLLING` in `listScroller.ts`, whose
+`ListScroller` holds the list's position and everything that sets it, with the arithmetic in
+`scrollPhysics.ts`): its box hides its overflow, so no finger, wheel, or key
 scrolls it, and the list takes those itself and sets the box's scroll position from them,
 with its own coasting, spring at the ends, and indicator. A box the browser scrolls for the
 user is the one thing that cannot be kept still there: iOS scrolls such a box in a process of
@@ -59,3 +60,15 @@ next is not counted), counting as a jump any frame in which it moved by other th
 list meant (`scrollDiagnostics.ts`, shown over the
 list by `ScrollDiagnosticsPanel` with a copy of the record); it is how the pan's override
 was found.
+
+The code is in parts, each with one concern. `MessageList.tsx` renders the rows and joins the
+rest. `ListScroller` (`listScroller.ts`) is a plain class, outside React's renders, that holds
+the position and every step that sets it: noting and holding the still row, the pin to the
+bottom, going to a linked message, the observers of the rows and the viewport, and on iOS the
+fingers, wheel, keys, coasting, spring, and indicator. Its two hooks give it what each render
+knows before it places the view (`useListPosition`), so its handlers, observers, and running
+flings always act on the latest render's window and callbacks. `useHistoryPaging`
+(`historyPaging.ts`) decides when a page is read, and is asked whenever the view moves or is
+placed afresh; `useShownWindow` holds a change to the window while a deleted message's space
+closes and shows it as a transition; `useNewMessagesLine` places the "New Messages" line;
+`useReadMarking` marks what is seen as read.
