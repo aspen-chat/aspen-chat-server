@@ -42,7 +42,7 @@ bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromSqlRow, AsExpression)]
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub struct Permissions: i64 {
-        // Across the community.
+        // Across the community, bits 0 to 31.
         const MANAGE_COMMUNITY = 1 << 0;
         const MANAGE_CHANNELS = 1 << 1;
         const MANAGE_CATEGORIES = 1 << 2;
@@ -59,33 +59,35 @@ bitflags::bitflags! {
         const BAN_MEMBERS = 1 << 13;
         const CHANGE_NICKNAME = 1 << 14;
         const MANAGE_NICKNAMES = 1 << 15;
+        const MANAGE_PLUGINS = 1 << 16;
 
-        // In a channel, and adjustable per channel and category.
-        const VIEW_CHANNEL = 1 << 16;
-        const SEND_MESSAGES = 1 << 17;
-        const ATTACH_FILES = 1 << 18;
-        const ADD_REACTIONS = 1 << 19;
-        const START_THREADS = 1 << 20;
-        const SEND_IN_THREADS = 1 << 21;
-        const CREATE_POLLS = 1 << 22;
-        const JOIN_VOICE = 1 << 23;
-        const SPEAK = 1 << 24;
-        const SHARE_SCREEN = 1 << 25;
-        const MENTION_MEMBERS = 1 << 26;
-        const MENTION_ROLES = 1 << 27;
-        const MENTION_EVERYONE = 1 << 28;
-        const TRANSFER_FILES = 1 << 29;
-        const USE_CAMERA = 1 << 30;
+        // In a channel, and adjustable per channel and category, bits 32 to 62.
+        const VIEW_CHANNEL = 1 << 32;
+        const SEND_MESSAGES = 1 << 33;
+        const ATTACH_FILES = 1 << 34;
+        const ADD_REACTIONS = 1 << 35;
+        const START_THREADS = 1 << 36;
+        const SEND_IN_THREADS = 1 << 37;
+        const CREATE_POLLS = 1 << 38;
+        const JOIN_VOICE = 1 << 39;
+        const SPEAK = 1 << 40;
+        const SHARE_SCREEN = 1 << 41;
+        const MENTION_MEMBERS = 1 << 42;
+        const MENTION_ROLES = 1 << 43;
+        const MENTION_EVERYONE = 1 << 44;
+        const TRANSFER_FILES = 1 << 45;
+        const USE_CAMERA = 1 << 46;
     }
 }
 
 app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
-    /// Every permission that holds across the community.
-    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 16) - 1);
-    /// Every permission an override may adjust.
-    pub const CHANNEL: Self = Self::from_bits_retain(((1 << 31) - 1) & !((1 << 16) - 1));
+    /// Every permission that holds across the community: those named in bits 0 to 31.
+    pub const COMMUNITY: Self = Self::all().intersection(Self::from_bits_retain((1 << 32) - 1));
+    /// Every permission an override may adjust: those named in bits 32 to 62.
+    pub const CHANNEL: Self =
+        Self::all().intersection(Self::from_bits_retain(i64::MAX & !((1 << 32) - 1)));
 
     /// The everyone role of a new community: taking part, tagging one another, inviting
     /// others, and choosing a nickname. Tagging roles and everyone at once is left to
@@ -150,6 +152,7 @@ pub enum Permission {
     BanMembers,
     ChangeNickname,
     ManageNicknames,
+    ManagePlugins,
     ViewChannel,
     SendMessages,
     AttachFiles,
@@ -188,6 +191,7 @@ impl Permission {
             Permission::BanMembers => Permissions::BAN_MEMBERS,
             Permission::ChangeNickname => Permissions::CHANGE_NICKNAME,
             Permission::ManageNicknames => Permissions::MANAGE_NICKNAMES,
+            Permission::ManagePlugins => Permissions::MANAGE_PLUGINS,
             Permission::ViewChannel => Permissions::VIEW_CHANNEL,
             Permission::SendMessages => Permissions::SEND_MESSAGES,
             Permission::AttachFiles => Permissions::ATTACH_FILES,
@@ -427,6 +431,7 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
             Permission::BanMembers => "permissionBanMembers",
             Permission::ChangeNickname => "permissionChangeNickname",
             Permission::ManageNicknames => "permissionManageNicknames",
+            Permission::ManagePlugins => "permissionManagePlugins",
             Permission::ViewChannel => "permissionViewChannel",
             Permission::SendMessages => "permissionSendMessages",
             Permission::AttachFiles => "permissionAttachFiles",
@@ -988,9 +993,9 @@ mod tests {
 
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
-        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 1_744_781_320);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_483_544);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_483_647);
+        assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 114_344_914_337_800);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 140_733_193_453_464);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 140_733_193_519_103);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

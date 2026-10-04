@@ -8,7 +8,8 @@
   replay a connection starts with. `NotifyOnMessages` (`src/features/notifications`), for every
   deployment the user uses, plays the chime (`chime.ts`, a two-note sound made in code, through
   the notification speaker) and, when `DESKTOP_NOTIFICATIONS` is on and the browser allows, shows
-  the system's notification (`describe`), which opens the message; nothing for the conversation
+  the system's notification (`describe`), which opens the message, and tells of plugins' notices
+  (`onPluginNotice`) the same way (see Plugins); nothing for the conversation
   in view, and no system notification in the mobile app, whose phone push wakes. A channel's menu
   sets its level ("Notify me about"), community settings the community's
   (`CommunityNotifications`), and Settings the two device preferences (`NotificationsSection`).

@@ -67,6 +67,12 @@ export type PushPointer =
       readonly kind: "deleted";
       readonly channel: string;
       readonly message: string;
+    }
+  | {
+      readonly kind: "notice";
+      readonly channel: string;
+      readonly notice: string;
+      readonly badge?: number;
     };
 
 const encode = (bytes: Uint8Array): string =>
@@ -175,8 +181,17 @@ export function parsePointer(plaintext: Uint8Array): PushPointer | null {
   if (typeof value !== "object" || value === null) {
     return null;
   }
-  const { v, kind, channel, message, badge } = value as Record<string, unknown>;
-  if (v !== 1 || typeof channel !== "string" || typeof message !== "string") {
+  const { v, kind, channel, message, notice, badge } = value as Record<string, unknown>;
+  if (v !== 1 || typeof channel !== "string") {
+    return null;
+  }
+  if (kind === "notice") {
+    if (typeof notice !== "string") {
+      return null;
+    }
+    return typeof badge === "number" ? { kind, channel, notice, badge } : { kind, channel, notice };
+  }
+  if (typeof message !== "string") {
     return null;
   }
   if (kind === "deleted") {

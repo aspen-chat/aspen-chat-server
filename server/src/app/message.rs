@@ -12,11 +12,14 @@ use crate::app::mention::{self, Mentions};
 use crate::app::message_link::{self, MessageLinks};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::plugin::card::Card;
+use crate::app::plugin::intercept;
+use crate::app::plugin::manifest::InterceptHook;
 use crate::app::report::Warning;
 use crate::app::user::User;
 use crate::app::{
     AttachmentId, ChannelId, CommunityId, EventScope, PollId, UserId, publish_event, read_state,
-    thread,
+    system_account, thread,
 };
 use crate::app::{MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
@@ -64,6 +67,11 @@ pub struct Message {
     pub linked_messages: MessageLinks,
     /// For a `Warning`, what it warns about (`app::report`).
     pub warning: Option<Warning>,
+    /// The plugins that rewrote its text as it was posted or last edited
+    /// (`app::plugin::intercept`).
+    pub altered_by: Vec<Option<String>>,
+    /// For a message of a plugin's account, the card it shows (`app::plugin::card`).
+    pub card: Option<Card>,
 }
 
 /// The message's wire record, with the relations it carries from child tables.
@@ -90,6 +98,8 @@ pub fn record(
         command_bot: row.command_bot,
         linked_messages: row.linked_messages.0.clone(),
         warning: row.warning.clone(),
+        altered_by: row.altered_by.iter().flatten().cloned().collect(),
+        card: row.card.clone(),
     }
 }
 
@@ -156,6 +166,8 @@ pub enum Posting {
     Command(Invocation),
     /// A moderator's warning, about what it names (`app::report`).
     Warning(Box<Warning>),
+    /// Text with a card beneath it, which only a plugin's account posts (`app::plugin::card`).
+    Card(Card),
 }
 
 /// Posts a message. In a thread it counts toward the thread's summary, and with
@@ -170,12 +182,47 @@ pub async fn create_message(
     echo_to_parent: bool,
     posting: Posting,
 ) -> Result<Message, app::Error> {
-    let (command, warning) = match posting {
-        Posting::Text => (None, None),
-        Posting::Command(invocation) => (Some(invocation), None),
-        Posting::Warning(warning) => (None, Some(*warning)),
+    let (command, warning, card) = match posting {
+        Posting::Text => (None, None, None),
+        Posting::Command(invocation) => (Some(invocation), None, None),
+        Posting::Warning(warning) => (None, Some(*warning), None),
+        Posting::Card(card) => (None, None, Some(card)),
     };
     let mut conn = state.connection_pool.get().await?;
+    // Plugins decide text before the transaction that saves it opens, so a slow one holds no
+    // lock; what the author may not post never reaches them. Commands and warnings are not
+    // theirs to decide, nor the system account's notices.
+    let (content, altered_by) = if command.is_none() && warning.is_none() {
+        let running = intercept::wanted(
+            state,
+            conn.as_mut(),
+            InterceptHook::MessageCreate,
+            channel_id,
+        )
+        .await?;
+        if running.is_empty() || system_account::is(conn.as_mut(), author).await? {
+            (content, Vec::new())
+        } else {
+            let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
+            access.require(access.send_permission())?;
+            let decided = intercept::decide(
+                state,
+                InterceptHook::MessageCreate,
+                running,
+                intercept::Draft {
+                    author,
+                    access: &access,
+                    content,
+                    attachments: &attachments,
+                    editing: None,
+                },
+            )
+            .await?;
+            (decided.content, decided.altered_by)
+        }
+    } else {
+        (content, Vec::new())
+    };
     let message = conn
         .transaction(|conn| {
             async move {
@@ -188,6 +235,10 @@ pub async fn create_message(
                     )
                     .first(conn.as_mut())
                     .await?;
+                // A plugin's channel holds the plugin's contents, not messages.
+                if target.ty == ChannelType::Plugin {
+                    return Err(app::Error::Validation(t!("pluginChannelHasNoMessages")));
+                }
                 let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
                 access.require(access.send_permission())?;
                 if !attachments.is_empty() {
@@ -266,6 +317,8 @@ pub async fn create_message(
                     command_bot: command.as_ref().map(|invocation| invocation.bot),
                     linked_messages,
                     warning,
+                    altered_by: altered_by.into_iter().map(Some).collect(),
+                    card,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -458,6 +511,7 @@ pub struct MessageChangeset {
     pub edited_at: Option<chrono::DateTime<Utc>>,
     pub mentions: Option<Mentions>,
     pub linked_messages: Option<MessageLinks>,
+    pub altered_by: Option<Vec<Option<String>>>,
 }
 
 pub async fn update_message(
@@ -489,6 +543,39 @@ pub async fn update_message(
     if kind == MessageKind::Command {
         return Err(app::Error::Validation(t!("commandNotEditable")));
     }
+    // Plugins decide new text as they decide a new message's, and the edit records who
+    // rewrote it.
+    let mut command = command;
+    let mut altered_by = None;
+    if let Some(content) = command.content.take() {
+        let running =
+            intercept::wanted(state, conn.as_mut(), InterceptHook::MessageEdit, channel_id).await?;
+        let attachments = match &command.attachments {
+            Some(attachments) => attachments.clone(),
+            None => {
+                message_attachment::table
+                    .select(message_attachment::attachment_id)
+                    .filter(message_attachment::message_id.eq(id))
+                    .load(conn.as_mut())
+                    .await?
+            }
+        };
+        let decided = intercept::decide(
+            state,
+            InterceptHook::MessageEdit,
+            running,
+            intercept::Draft {
+                author: caller,
+                access: &access,
+                content,
+                attachments: &attachments,
+                editing: Some(id),
+            },
+        )
+        .await?;
+        command.content = Some(decided.content);
+        altered_by = Some(decided.altered_by);
+    }
     let content_changed = command.content.is_some();
     let new_content_for_refetch = command.content.clone();
     let (message, attachments, previews_cleared) = conn
@@ -519,6 +606,9 @@ pub async fn update_message(
                         edited_at: content_changed.then(Utc::now),
                         mentions: mentions.clone(),
                         linked_messages: linked_messages.clone(),
+                        altered_by: altered_by
+                            .clone()
+                            .map(|by| by.into_iter().map(Some).collect()),
                     })
                     .filter(message::id.eq(id).and(message::deleted_at.is_null()))
                     .returning(Message::as_select())
@@ -582,6 +672,8 @@ pub async fn update_message(
                         thread: None,
                         mentions,
                         linked_messages: linked_messages.map(|links| links.0),
+                        altered_by,
+                        card: None,
                     }),
                 )
                 .await?;
@@ -898,6 +990,8 @@ pub async fn remove_attachment(
                     thread: None,
                     mentions: None,
                     linked_messages: None,
+                    altered_by: None,
+                    card: None,
                 }),
             )
             .await?;

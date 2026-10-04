@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { useSources, type Source } from "./everywhere";
 import { detectShell } from "@/config";
-import { messageLink, threadLink } from "@/features/messages/links";
+import { channelLink, messageLink, threadLink } from "@/features/messages/links";
 import { AspenPush, loadState, type NotificationTarget } from "./pushBridge";
 
 /**
@@ -66,14 +66,16 @@ export function WakeThisPhone() {
         ({ notification }) => {
           const target = notification.data as Partial<NotificationTarget> | undefined;
           const source = latest.current.find((s) => s.client.baseUrl === target?.origin);
-          if (source === undefined || target?.channel == null || target.message == null) {
+          if (source === undefined || target?.channel == null) {
             return;
           }
           const home = { domain: source.domain, community: target.community ?? null };
           void navigate(
-            target.parentChannel == null
-              ? messageLink(home, target.channel, target.message)
-              : threadLink(home, target.parentChannel, target.channel),
+            target.parentChannel != null
+              ? threadLink(home, target.parentChannel, target.channel)
+              : target.message != null
+                ? messageLink(home, target.channel, target.message)
+                : channelLink(home, target.channel),
           );
         },
       );

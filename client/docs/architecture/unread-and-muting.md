@@ -27,6 +27,7 @@
   "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) holds two
   submenus, Mute (one of the offered lengths, or, while muted, until when and Unmute) and
   Notifications (naming the level in force), above the channel's other actions; it opens on a
-  right click on a text channel's or DM's row, or from the row's `ChannelMenuButton`, which
+  right click on the row of a text channel, a DM, or a channel of a plugin's kind (whose plugin's
+  notices its mute and level govern), or from the row's `ChannelMenuButton`, which
   keyboards and touch screens use, since a long press on a row starts dragging it. It opens
   beside the row, and below it on a one-pane screen, where there is no room beside it.

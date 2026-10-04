@@ -50,6 +50,8 @@ pub struct UserPg {
     pub home_icon: Option<uuid::Uuid>,
     /// The hue of the highest deployment role they hold that has one (`app::deployment_role`).
     pub name_hue: Option<i16>,
+    /// For a plugin's principal, the plugin's id (`app::plugin::principal`).
+    pub plugin: Option<String>,
 }
 
 impl UserPg {
@@ -251,6 +253,7 @@ pub async fn create_user(
                         home_domain: None,
                         home_id: None,
                         home_icon: None,
+                        plugin: None,
                     })
                     .execute(conn.as_mut())
                     .await?;
@@ -506,6 +509,8 @@ pub(crate) async fn retire(
     app::login::revoke_all_sessions(state, conn, id).await?;
     app::two_factor::remove_all(conn, id).await?;
     app::bot::orphan_bots_of(state, conn, id).await?;
+    // What plugins kept about them goes with them.
+    app::plugin::storage::forget(conn, app::plugin::storage::Scope::User(id)).await?;
     diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))
         .execute(conn)
         .await?;

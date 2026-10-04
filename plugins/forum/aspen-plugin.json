@@ -1,0 +1,40 @@
+{
+  "id": "org.aspenchat.forum",
+  "version": "1.0.0",
+  "api": 1,
+  "component": "target/wasm32-wasip2/release/aspen_forum.wasm",
+  "assets": "views",
+  "name": "name",
+  "description": "description",
+  "author": "The Aspen authors",
+  "homepage": "https://github.com/aspen-chat/aspen-chat-server",
+  "defaultLanguage": "en",
+  "messages": {
+    "en": {
+      "name": "Forum",
+      "description": "Boards of posts and replies, for conversations that last longer than a chat.",
+      "retention": "Keeps each board's posts and replies until they are deleted, or the board is.",
+      "boardName": "Board",
+      "newPost": "New post",
+      "title": "Title",
+      "body": "What you want to say",
+      "post": "Post",
+      "reply": "Reply",
+      "replies": "%{count} replies",
+      "noReplies": "No replies yet",
+      "empty": "Nothing has been posted here yet.",
+      "back": "All posts",
+      "delete": "Delete",
+      "cannotPost": "You can read this board, but not post to it.",
+      "failed": "That did not work. Try again in a moment.",
+      "loading": "Loading…",
+      "someone": "Someone"
+    }
+  },
+  "permissions": ["storage", "routes", "events", "views", "channelTypes"],
+  "channelTypes": {
+    "board": { "name": "boardName", "view": "board.html", "glyph": "board" }
+  },
+  "storageQuota": 52428800,
+  "retention": "retention"
+}

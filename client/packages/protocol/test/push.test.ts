@@ -59,6 +59,13 @@ describe("parsePointer", () => {
       channel: "c",
       message: "m",
     });
+    expect(read({ v: 1, kind: "notice", channel: "c", notice: "n", badge: 1 })).toEqual({
+      kind: "notice",
+      channel: "c",
+      notice: "n",
+      badge: 1,
+    });
+    expect(read({ v: 1, kind: "notice", channel: "c", message: "m" })).toBeNull();
     expect(read({ v: 1, kind: "call", channel: "c", message: "m" })).toBeNull();
     expect(read({ v: 2, kind: "message", channel: "c", message: "m" })).toBeNull();
   });

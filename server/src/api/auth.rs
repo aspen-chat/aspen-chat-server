@@ -239,7 +239,7 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
                 application_server_key,
             }
         }),
-        protocol: app::federation::protocol::Protocol::ours(),
+        protocol: app::federation::protocol::Protocol::with_plugins(&state.plugins),
         software: app::federation::protocol::Software::ours(),
     })
 }

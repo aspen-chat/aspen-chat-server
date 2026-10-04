@@ -37,6 +37,8 @@ pub struct GlobalServerContext {
     pub federation_client: reqwest::Client,
     /// This server's copy of the deployment's settings (`app::deployment_settings`).
     pub settings: app::deployment_settings::SettingsCache,
+    /// The plugins this server runs (`app::plugin`).
+    pub plugins: Arc<app::plugin::Plugins>,
 }
 
 impl GlobalServerContext {
@@ -134,14 +136,16 @@ impl GlobalServerContext {
             rate_limiter: Arc::new(rate_limiter),
             federation_client,
             settings: app::deployment_settings::SettingsCache::new(settings),
+            plugins: Arc::new(app::plugin::Plugins::new()?),
             config: config.into(),
         })
     }
 }
 
 /// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
-/// listener and reaper, the fleet heartbeat, the federation standing confirmer, and the push
-/// dispatcher, making the federation and push keys where they are missing.
+/// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
+/// dispatcher, and the plugins with their observers, making the federation and push keys where
+/// they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
     app::deployment_settings::spawn_watcher(context.clone());
     app::poll::spawn_closer(context.clone());
@@ -154,5 +158,6 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     app::federation::standing::spawn_confirmer(context.clone());
     app::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     app::push::spawn_dispatcher(context.clone());
+    app::plugin::registry::start(context).await?;
     Ok(())
 }

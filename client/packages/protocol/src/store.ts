@@ -43,6 +43,7 @@ import type {
   NotificationLevel,
   NotificationSetting,
   Pin,
+  PluginInfo,
   ReactionSummary,
   Reactions,
   ReadState,
@@ -56,10 +57,12 @@ import type {
   ChannelOverride,
   Community,
   CommunityBan,
+  CommunityPlugin,
   CustomEmoji,
   DeploymentPermission,
   Invite,
   Message,
+  MessageAnnotation,
   Poll,
   Role,
   ServerEvent,
@@ -67,6 +70,7 @@ import type {
   VoiceRing,
   VoiceSession,
   User,
+  UserAnnotation,
   UserCommunity,
 } from "./generated/events";
 import type { components } from "./generated/openapi";
@@ -99,6 +103,8 @@ const NO_PERMISSIONS: PermissionSet = new Set();
 const MAX_ARRIVALS = 200;
 
 const EMPTY_OVERRIDES: readonly never[] = [];
+const NO_ANNOTATIONS: readonly never[] = [];
+const NO_PLUGINS: readonly PluginInfo[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
 
@@ -207,6 +213,15 @@ export class RecordStore {
   /** When messages deleted while the app was open went, for drawing them going. */
   readonly #departures = new Map<string, number>();
   readonly #commands = new Map<string, readonly BotCommands[]>();
+  /** What plugins say about each message, by message and then by annotation id. */
+  readonly #annotations = new Map<string, Map<string, MessageAnnotation>>();
+  /** Which message each held annotation is about, for the events that name only the id. */
+  readonly #annotated = new Map<string, string>();
+  /** What plugins say about each person whose annotations were read, by person and id. */
+  readonly #userAnnotations = new Map<string, Map<string, UserAnnotation>>();
+  #plugins: readonly PluginInfo[] = NO_PLUGINS;
+  /** A community's use of each plugin, by community and plugin, for its plugins' managers. */
+  readonly #communityPlugins = new Map<string, Map<string, CommunityPlugin>>();
   /** `community/user -> role ids` each member holds besides everyone's, as far as known. */
   readonly #memberRoles = new Map<string, readonly string[]>();
   /** `community/user -> nickname` of each member known to have one there. */
@@ -603,6 +618,52 @@ export class RecordStore {
    * Topic `commands:<channelId>`: each bot that can see the channel and has commands, with
    * them, or `undefined` until loaded or once something that may change them has happened.
    */
+  /**
+   * What the plugins the deployment runs say about a message, oldest first. An annotation of a
+   * plugin it no longer runs is passed over.
+   */
+  annotations(messageId: string): readonly MessageAnnotation[] {
+    return this.#memoized(`annotations:${messageId}`, () => {
+      const held = this.#annotations.get(messageId);
+      if (held === undefined) {
+        return NO_ANNOTATIONS;
+      }
+      return Array.from(held.values())
+        .filter((a) => this.plugin(a.plugin) !== undefined)
+        .sort((a, b) => a.id.localeCompare(b.id));
+    });
+  }
+
+  /** What the plugins the deployment runs say about a person; `undefined` until read. */
+  userAnnotations(userId: string): readonly UserAnnotation[] | undefined {
+    return this.#memoized(`userAnnotations:${userId}`, () => {
+      const held = this.#userAnnotations.get(userId);
+      if (held === undefined) {
+        return undefined;
+      }
+      return Array.from(held.values())
+        .filter((a) => this.plugin(a.plugin) !== undefined)
+        .sort((a, b) => a.id.localeCompare(b.id));
+    });
+  }
+
+  /** The plugins the deployment runs, in its order. */
+  plugins(): readonly PluginInfo[] {
+    return this.#plugins;
+  }
+
+  plugin(id: string): PluginInfo | undefined {
+    return this.#plugins.find((p) => p.id === id);
+  }
+
+  /** A community's use of each plugin, for its plugins' managers; `undefined` until read. */
+  communityPlugins(communityId: string): readonly CommunityPlugin[] | undefined {
+    return this.#memoized(`communityPlugins:${communityId}`, () => {
+      const held = this.#communityPlugins.get(communityId);
+      return held === undefined ? undefined : Array.from(held.values());
+    });
+  }
+
   commands(channelId: string): readonly BotCommands[] | undefined {
     return this.#commands.get(channelId);
   }
@@ -1209,6 +1270,17 @@ export class RecordStore {
         this.#touch(`reactions:${messageId}`);
       }
       this.#reactions.clear();
+      for (const messageId of Array.from(this.#annotations.keys())) {
+        this.#clearAnnotations(messageId);
+      }
+      for (const userId of this.#userAnnotations.keys()) {
+        this.#touch(`userAnnotations:${userId}`);
+      }
+      this.#userAnnotations.clear();
+      for (const communityId of this.#communityPlugins.keys()) {
+        this.#touch(`communityPlugins:${communityId}`);
+      }
+      this.#communityPlugins.clear();
       for (const pollId of this.#polls.keys()) {
         this.#touch(`poll:${pollId}`);
       }
@@ -1717,6 +1789,11 @@ export class RecordStore {
       this.#members.clear();
       this.#memberOf.clear();
       this.#reactions.clear();
+      this.#annotations.clear();
+      this.#annotated.clear();
+      this.#userAnnotations.clear();
+      this.#communityPlugins.clear();
+      this.#plugins = NO_PLUGINS;
       this.#polls.clear();
       this.#myVotes.clear();
       this.#myWriteIns.clear();
@@ -2084,6 +2161,68 @@ export class RecordStore {
         case "botCommandsChanged":
         case "botCommandInvoked":
           // A bot's own stream hears of invocations; its commands follow below.
+          break;
+        case "messageAnnotation":
+          if (event.type === "create") {
+            this.#putAnnotation(created(event));
+          } else {
+            const messageId = this.#annotated.get(event.id);
+            const held = messageId === undefined ? undefined : this.#annotations.get(messageId);
+            const current = held?.get(event.id);
+            if (messageId !== undefined && held !== undefined && current !== undefined) {
+              if (event.type === "update") {
+                held.set(event.id, mergePatch(current, event));
+              } else {
+                held.delete(event.id);
+                this.#annotated.delete(event.id);
+              }
+              this.#touch(`annotations:${messageId}`);
+            }
+          }
+          break;
+        case "userAnnotation":
+          if (event.type === "create") {
+            const annotation = created(event);
+            const held = this.#userAnnotations.get(annotation.user);
+            if (held !== undefined) {
+              held.set(annotation.id, annotation);
+              this.#touch(`userAnnotations:${annotation.user}`);
+            }
+          } else {
+            for (const [userId, held] of this.#userAnnotations) {
+              const current = held.get(event.id);
+              if (current === undefined) {
+                continue;
+              }
+              if (event.type === "update") {
+                held.set(event.id, mergePatch(current, event));
+              } else {
+                held.delete(event.id);
+              }
+              this.#touch(`userAnnotations:${userId}`);
+            }
+          }
+          break;
+        case "communityPlugin": {
+          const held = this.#communityPlugins.get(event.community);
+          if (held === undefined) {
+            break;
+          }
+          if (event.type === "create") {
+            held.set(event.plugin, created(event));
+          } else if (event.type === "update") {
+            const current = held.get(event.plugin);
+            if (current !== undefined) {
+              held.set(event.plugin, mergePatch(current, event));
+            }
+          } else {
+            held.delete(event.plugin);
+          }
+          this.#touch(`communityPlugins:${event.community}`);
+          break;
+        }
+        case "pluginEvent":
+          // A plugin's own events are for views of its own, which this client does not run.
           break;
       }
       if (this.#commands.size > 0 && this.#changesCommands(event)) {
@@ -2884,6 +3023,88 @@ export class RecordStore {
    * Installs the reactions a message read brought for `messageIds`, replacing what was held for
    * each; a message the read brought no summary for has none.
    */
+  /**
+   * Installs what plugins say about `messageIds`, as a read that asked for annotations
+   * returned them: every message it read has exactly the annotations listed for it.
+   */
+  setAnnotations(messageIds: readonly string[], annotations: readonly MessageAnnotation[]): void {
+    this.#batch(() => {
+      for (const id of messageIds) {
+        this.#clearAnnotations(id);
+      }
+      for (const annotation of annotations) {
+        this.#putAnnotation(annotation);
+      }
+    });
+  }
+
+  /** Installs what plugins say about a person, as `GET /users/{user}/annotations` answered. */
+  setUserAnnotations(userId: string, annotations: readonly UserAnnotation[]): void {
+    this.#batch(() => {
+      this.#userAnnotations.set(userId, new Map(annotations.map((a) => [a.id, a])));
+      this.#touch(`userAnnotations:${userId}`);
+    });
+  }
+
+  /** Installs the plugins the deployment runs, as `GET /plugins` answered. */
+  setPlugins(plugins: readonly PluginInfo[]): void {
+    this.#batch(() => {
+      this.#plugins = plugins;
+      this.#touch("plugins");
+      // Annotations are shown only for plugins the deployment runs.
+      for (const id of this.#annotations.keys()) {
+        this.#touch(`annotations:${id}`);
+      }
+      for (const id of this.#userAnnotations.keys()) {
+        this.#touch(`userAnnotations:${id}`);
+      }
+    });
+  }
+
+  /** Installs a community's use of each plugin, as its plugins' managers read it. */
+  setCommunityPlugins(communityId: string, plugins: readonly CommunityPlugin[]): void {
+    this.#batch(() => {
+      this.#communityPlugins.set(communityId, new Map(plugins.map((p) => [p.plugin, p])));
+      this.#touch(`communityPlugins:${communityId}`);
+    });
+  }
+
+  /** Stores one community's use of one plugin, as a write answered it. */
+  putCommunityPlugin(record: CommunityPlugin): void {
+    this.#batch(() => {
+      let held = this.#communityPlugins.get(record.community);
+      if (held === undefined) {
+        held = new Map();
+        this.#communityPlugins.set(record.community, held);
+      }
+      held.set(record.plugin, record);
+      this.#touch(`communityPlugins:${record.community}`);
+    });
+  }
+
+  #putAnnotation(annotation: MessageAnnotation): void {
+    let held = this.#annotations.get(annotation.message);
+    if (held === undefined) {
+      held = new Map();
+      this.#annotations.set(annotation.message, held);
+    }
+    held.set(annotation.id, annotation);
+    this.#annotated.set(annotation.id, annotation.message);
+    this.#touch(`annotations:${annotation.message}`);
+  }
+
+  #clearAnnotations(messageId: string): void {
+    const held = this.#annotations.get(messageId);
+    if (held === undefined) {
+      return;
+    }
+    for (const id of held.keys()) {
+      this.#annotated.delete(id);
+    }
+    this.#annotations.delete(messageId);
+    this.#touch(`annotations:${messageId}`);
+  }
+
   setReactions(messageIds: readonly string[], summaries: readonly ReactionSummary[]): void {
     this.#batch(() => {
       const byMessage = new Map<string, Map<string, EmojiReactions>>();
@@ -2982,6 +3203,7 @@ export class RecordStore {
     if (this.#reactions.delete(id)) {
       this.#touch(`reactions:${id}`);
     }
+    this.#clearAnnotations(id);
     // Deleting the message a poll is shown in ends the poll on the server too.
     if (message.kind === "poll" && message.poll != null) {
       this.#removePoll(message.poll);
@@ -3032,6 +3254,7 @@ export class RecordStore {
     if (this.#reactions.delete(id)) {
       this.#touch(`reactions:${id}`);
     }
+    this.#clearAnnotations(id);
   }
 
   #putInvite(invite: Invite): void {

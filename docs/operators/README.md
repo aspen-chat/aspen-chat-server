@@ -7,6 +7,7 @@ machine, or millions across a fleet. Nothing in it assumes you have read the cod
   TLS, serving the web client, voice servers, and the first administrator.
 - [Configuration](configuration.md): every setting of `aspen.toml` and `voice_server.toml`.
 - [Federation](federation.md): letting your users use other deployments, and theirs yours.
+- [Plugins](plugins.md): installing plugins, granting what they ask, and where they run.
 - [Backups](backups.md): what to keep, what can be lost, and restoring.
 - [Troubleshooting](troubleshooting.md): what each error people see means and what to do,
   and what to check when something does not work.

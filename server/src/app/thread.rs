@@ -67,7 +67,7 @@ pub async fn open_thread(
                 ChannelType::Thread => {
                     return Err(app::Error::Validation(t!("threadInThread")));
                 }
-                ChannelType::Voice => {
+                ChannelType::Voice | ChannelType::Plugin => {
                     return Err(app::Error::Validation(t!("threadNotHere")));
                 }
             }
@@ -86,6 +86,7 @@ pub async fn open_thread(
                 reply_count: 0,
                 last_reply_at: None,
                 dm_key: None,
+                plugin_type: None,
             };
             diesel::insert_into(channel::table)
                 .values(&thread)
@@ -119,6 +120,8 @@ pub async fn open_thread(
                     thread: Some(Some(thread.id)),
                     mentions: None,
                     linked_messages: None,
+                    altered_by: None,
+                    card: None,
                 }),
             )
             .await?;
@@ -270,6 +273,8 @@ pub async fn echo(
         command_bot: None,
         linked_messages: Default::default(),
         warning: None,
+        altered_by: Vec::new(),
+        card: None,
     };
     diesel::insert_into(message::table)
         .values(&echo)

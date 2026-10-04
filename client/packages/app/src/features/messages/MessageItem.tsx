@@ -23,6 +23,7 @@ import { useNameColor } from "@/features/users/nameColor";
 import { MessageMedia } from "@/features/messages/Attachments";
 import { Markdown } from "@/features/messages/Markdown";
 import { MessageBody } from "@/features/messages/MessageBody";
+import { MessageAnnotations } from "@/features/plugins/Annotations";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
@@ -380,6 +381,7 @@ export const MessageItem = memo(function MessageItem({
           />
         )}
         {!editing && <LinkedMessages message={message} />}
+        {!editing && <MessageAnnotations messageId={id} />}
         <ReactionChips
           messageId={id}
           canReact={permissions.has("addReactions")}

@@ -103,6 +103,7 @@ pub(crate) async fn create_community(
                     ty,
                     community: community.id,
                     parent_category: None,
+                    plugin_type: None,
                 };
                 app::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
             }
@@ -249,6 +250,9 @@ pub(crate) async fn delete_community(
             if deleted == 0 {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
+            // What plugins kept about it goes with it.
+            app::plugin::storage::forget(conn.as_mut(), app::plugin::storage::Scope::Community(id))
+                .await?;
             publish_event(
                 state,
                 conn.as_mut(),
@@ -552,7 +556,7 @@ pub(crate) async fn leave_community(
 /// it in the same transaction; a bot's own role there goes too. Nothing happens when they are
 /// not a member.
 pub(crate) async fn end_membership(
-    state: &GlobalServerContext,
+    state: &impl app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user: UserId,
     community: CommunityId,
@@ -653,7 +657,7 @@ pub(crate) async fn read_community_members(
         r#"
         SELECT community, sort_index, nickname, id, name, password_hash, icon, created_at, last_seen_at,
                deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
-               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue
+               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue, plugin
         FROM (
             SELECT cu.community, cu.sort_index, cu.nickname, u.*,
                    ROW_NUMBER() OVER (
@@ -779,7 +783,7 @@ pub(crate) async fn search_community_members(
         SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon, u.name_hue
+               u.home_id, u.home_icon, u.name_hue, u.plugin
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
@@ -868,7 +872,7 @@ pub(crate) async fn read_community_member(
         SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon, u.name_hue
+               u.home_id, u.home_icon, u.name_hue, u.plugin
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND cu."user" = $2 AND u.deleted_at IS NULL

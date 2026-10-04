@@ -245,6 +245,8 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         command_bot: None,
         linked_messages: Default::default(),
         warning: None,
+        altered_by: Vec::new(),
+        card: None,
     }
 }
 

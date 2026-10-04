@@ -124,7 +124,7 @@ async fn overview(state: &GlobalServerContext) -> ApiResult<FederationOverview> 
         bots_immigration_invite_required: policy.bots.immigration_invite_required,
         lists_in_force: FederationList::all_in_force(&policy),
         document: federation::document(state).await?,
-        protocol: Protocol::ours(),
+        protocol: Protocol::with_plugins(&state.plugins),
         software: Software::ours(),
     })
 }

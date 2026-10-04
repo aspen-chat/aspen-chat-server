@@ -16,6 +16,7 @@ import type {
   Community,
   CommunityBan,
   CommunityPermissions,
+  CommunityPlugin,
   CustomEmoji,
   DeploymentPermission,
   Icon,
@@ -23,11 +24,13 @@ import type {
   KeptMessage,
   LinkedMessage,
   Message,
+  MessageAnnotation,
   MessageWindow,
   NotificationLevel,
   Permission,
   PermissionSet,
   Pin,
+  PluginInfo,
   Poll,
   PreferenceDefinition,
   Reactions,
@@ -37,6 +40,7 @@ import type {
   SyncStatus,
   Topic,
   User,
+  UserAnnotation,
   VoiceCallState,
 } from "@aspen/protocol";
 import { DEVELOPER_MODE, ID_WIZARD } from "@aspen/protocol";
@@ -718,4 +722,68 @@ export function useCommands(channelId: string | null): readonly BotCommands[] | 
     }
   }, [sync, channelId, commands]);
   return commands;
+}
+
+/** The plugins the deployment runs, from which what they say is drawn. */
+export function usePlugins(): readonly PluginInfo[] {
+  return useTopic("plugins", (s) => s.plugins());
+}
+
+/** The plugin that shows a channel of a plugin's kind, and the kind; `undefined` for none. */
+export function usePluginKind(
+  channel: Channel,
+): { plugin: PluginInfo; kind: PluginInfo["channelTypes"][number] } | undefined {
+  const plugins = usePlugins();
+  if (channel.ty !== "plugin") {
+    return undefined;
+  }
+  for (const plugin of plugins) {
+    const kind = plugin.channelTypes.find((k) => k.pluginType === channel.pluginType);
+    if (kind !== undefined) {
+      return { plugin, kind };
+    }
+  }
+  return undefined;
+}
+
+/** One plugin the deployment runs, or `undefined` for one it does not. */
+export function usePlugin(id: string): PluginInfo | undefined {
+  return useTopic("plugins", (s) => s.plugin(id));
+}
+
+/** What the plugins the deployment runs say about a message. */
+export function useAnnotations(messageId: string): readonly MessageAnnotation[] {
+  return useTopic(`annotations:${messageId}`, (s) => s.annotations(messageId));
+}
+
+/**
+ * What the plugins the deployment runs say about a person, read when first asked for;
+ * `undefined` while it is read.
+ */
+export function useUserAnnotations(userId: string): readonly UserAnnotation[] | undefined {
+  const sync = useSync();
+  const annotations = useTopic(`userAnnotations:${userId}`, (s) => s.userAnnotations(userId));
+  useEffect(() => {
+    if (annotations === undefined) {
+      void sync.loadUserAnnotations(userId).catch(() => undefined);
+    }
+  }, [sync, userId, annotations]);
+  return annotations;
+}
+
+/**
+ * A community's use of each plugin, for a holder of Manage plugins, read when first asked for;
+ * `undefined` while it is read.
+ */
+export function useCommunityPlugins(communityId: string): readonly CommunityPlugin[] | undefined {
+  const sync = useSync();
+  const plugins = useTopic(`communityPlugins:${communityId}`, (s) =>
+    s.communityPlugins(communityId),
+  );
+  useEffect(() => {
+    if (plugins === undefined) {
+      void sync.loadCommunityPlugins(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, plugins]);
+  return plugins;
 }

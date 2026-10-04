@@ -104,6 +104,18 @@ Passkeys are offered only when this section is present.
 | `session_silence_seconds` | `86400` | A voice server that has not reported for this long has its calls ended. Long on purpose: a call is worth more than tidiness after a brief network fault. |
 | `idle_session_seconds` | `86400` | A call that never had two people in it at once ends after this long, so a forgotten client cannot hold a place on a voice server. |
 
+## `[plugins]`
+
+How plugins run; which are installed, and their settings, are in the database (see
+[Plugins](plugins.md)).
+
+| Setting | Default | |
+| --- | --- | --- |
+| `intercept_millis` | `25` | How long a plugin has to decide a message about to be saved. Its author waits for it, so keep it short. |
+| `observe_millis` | `10000` | How long a plugin has to handle something that happened, such as checking a new message's pictures with another service. |
+| `route_millis` | `3000` | How long a plugin has to answer a request to one of its routes. |
+| `memory_mib` | `64` | The most memory one call of a plugin may use. |
+
 ## `[push]`
 
 | Setting | Default | |

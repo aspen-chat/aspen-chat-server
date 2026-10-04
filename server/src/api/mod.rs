@@ -35,6 +35,7 @@ pub(crate) mod message_enum;
 pub(crate) mod metrics;
 pub mod notification_setting;
 pub(crate) mod passkey_page;
+pub(crate) mod plugin;
 pub mod poll;
 pub mod push;
 pub(crate) mod rate_limit;
@@ -79,6 +80,7 @@ pub const TAG_ROLES: &str = "roles";
 pub const TAG_CUSTOM_EMOJI: &str = "custom emoji";
 pub const TAG_BANS: &str = "bans";
 pub const TAG_REPORTS: &str = "reports";
+pub const TAG_PLUGINS: &str = "plugins";
 
 #[derive(OpenApi)]
 #[openapi(
@@ -128,6 +130,7 @@ pub const TAG_REPORTS: &str = "reports";
         (name = TAG_ATTACHMENTS, description = "Files attached to messages (two-phase direct-to-storage upload)"),
         (name = TAG_ICONS, description = "User and community icons (two-phase direct-to-storage upload)"),
         (name = TAG_DEPLOYMENT, description = "How the deployment presents itself: its display name and icon"),
+        (name = TAG_PLUGINS, description = "The deployment's plugins: their catalogue, communities turning them on and configuring them, what they say about people, and the dashboard's view of them. Each plugin's own routes, `/plugins/{plugin}/routes/{*path}`, are the plugin's and not described here."),
     )
 )]
 struct ApiDoc;
@@ -460,6 +463,34 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(icon::init_icon_upload))
         .routes(routes!(icon::confirm_icon_upload))
         .routes(routes!(icon::get_icon, icon::delete_icon))
+        .routes(routes!(plugin::list_plugins))
+        .routes(routes!(plugin::list_community_plugins))
+        .routes(routes!(
+            plugin::enable_community_plugin,
+            plugin::configure_community_plugin,
+            plugin::disable_community_plugin
+        ))
+        .routes(routes!(plugin::list_user_annotations))
+        .routes(routes!(plugin::list_admin_plugins))
+        .routes(routes!(plugin::update_admin_plugin))
+        .routes(routes!(plugin::order_plugins))
+        .routes(routes!(plugin::press_card_button))
+        .routes(routes!(plugin::read_plugin_notice))
+        // A plugin's routes, its views' files, and its capability URLs are its own, so they are
+        // not in the OpenAPI document.
+        .route(rate_limit::PLUGIN_ASSET, axum::routing::get(plugin::asset))
+        .route(
+            rate_limit::PLUGIN_CAPABILITY,
+            axum::routing::get(plugin::capability),
+        )
+        .route(
+            rate_limit::PLUGIN_ROUTE,
+            axum::routing::get(plugin::route)
+                .post(plugin::route)
+                .put(plugin::route)
+                .patch(plugin::route)
+                .delete(plugin::route),
+        )
         // The event stream is a WebSocket and has no OpenAPI representation; its frames are
         // described by `event_schema.json`.
         .route("/events", any(event_stream::event_stream))

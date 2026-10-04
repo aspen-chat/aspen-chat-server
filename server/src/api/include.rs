@@ -112,6 +112,10 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub attachments: Option<Vec<Attachment>>,
+    /// What plugins say about the messages of the read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub message_annotations: Option<Vec<crate::api::message_enum::MessageAnnotation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub polls: Option<Vec<Poll>>,

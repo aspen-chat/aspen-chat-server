@@ -1,7 +1,8 @@
 # Bots and their commands
 
 - Bots are users with `bot` set, marked by `BotBadge` wherever they are named (messages, the
-  member list, their card, which also says who made them, the admin users directory). Nothing
+  member list, their card, which also says who made them, or for a plugin's own account which
+  plugin it belongs to (see Plugins), the admin users directory). Nothing
   in the app signs in as a bot; bots use the API with their tokens. Developer mode is the
   account preference `DEVELOPER_MODE`, turned on in Settings. With it comes the ID wizard
   (`ID_WIZARD`, on unless turned off; `useIdWizard`): everything with an id offers to copy it

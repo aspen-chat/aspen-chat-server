@@ -81,5 +81,9 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261004_044609_dual_invites::M,
     &migrations::m20261004_062257_role_colors::M,
     &migrations::m20261004_070339_deployment_settings::M,
+    &migrations::m20261004_072804_plugins::M,
+    &migrations::m20261004_091749_plugin_views::M,
     &migrations::m20261004_100025_nicknames::M,
+    &migrations::m20261004_203118_permission_ranges::M,
+    &migrations::m20261004_203124_manage_plugins_permission::M,
 ];

@@ -212,6 +212,8 @@ pub(super) async fn record_call(
         command_bot: None,
         linked_messages: Default::default(),
         warning: None,
+        altered_by: Vec::new(),
+        card: None,
     };
     diesel::insert_into(message::table)
         .values(&row)

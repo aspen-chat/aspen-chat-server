@@ -9,6 +9,7 @@ import {
   SpeakerHighIcon,
 } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { PluginGlyph } from "@/features/plugins/PluginChannel";
 import { useId, useRef, useState } from "react";
 import {
   Button,
@@ -26,6 +27,7 @@ import {
   useCategories,
   useMe,
   useMemberRoles,
+  usePluginKind,
   useChannels,
   useCollapsed,
   useMute,
@@ -309,7 +311,7 @@ function ChannelGroup({
       }
       onAction={(key) => {
         const channel = channels.find((c) => c.id === key);
-        if (channel?.ty === "text") {
+        if (channel?.ty === "text" || channel?.ty === "plugin") {
           void navigate(channelLink({ domain, community: channel.community ?? "" }, channel.id));
         } else if (channel?.ty === "voice") {
           void navigate(channelLink({ domain, community: channel.community ?? "" }, channel.id));
@@ -370,7 +372,8 @@ export const unreadMarkClass = "rounded-md border border-accent bg-accent/20 tex
  * make its 4px top and bottom, 6px and the border its 8px sides, less the 1px the row keeps at
  * its edges. A muted channel is dimmed, carries a muted bell whose tooltip says until when, and
  * is never marked unread, though the count of unread messages that tag the reader shows on it
- * as on any other. A text channel's menu opens on a right click or from its options button.
+ * as on any other. The menu of a text channel, or of one a plugin shows, opens on a right click
+ * or from its options button.
  */
 function ChannelLabel({ channel, current }: { channel: Channel; current: boolean }) {
   const m = useMessages();
@@ -381,11 +384,12 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   const manage = useCan(channel.community, "manageChannels");
   // A moderator of the server may rename and delete any channel, and nothing else here.
   const moderator = useDeploymentCan("moderateCommunities");
+  const kind = usePluginKind(channel);
   const label = useRef<HTMLSpanElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<"access" | "rename" | "delete" | null>(null);
   const marked = unread && !muted && !current;
-  const hasMenu = channel.ty === "text" || manage || moderator;
+  const hasMenu = channel.ty === "text" || channel.ty === "plugin" || manage || moderator;
   const close = (open: boolean) => {
     if (!open) {
       setDialog(null);
@@ -420,6 +424,8 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
     >
       {channel.ty === "text" ? (
         <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
+      ) : channel.ty === "plugin" ? (
+        <PluginGlyph glyph={kind?.kind.glyph} size={16} className="shrink-0 text-ink-faint" />
       ) : (
         <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
       )}
@@ -451,7 +457,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             anchorRef={label}
             isOpen={menuOpen}
             onOpenChange={setMenuOpen}
-            mutable={channel.ty === "text"}
+            mutable={channel.ty === "text" || channel.ty === "plugin"}
             {...(manage
               ? {
                   onAccess: () => {

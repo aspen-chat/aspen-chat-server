@@ -105,6 +105,7 @@ impl From<app::user::User> for User {
             home_domain: user.user_pg.home_domain.map(String::from),
             home_id: user.user_pg.home_id,
             name_hue: user.user_pg.name_hue,
+            plugin: user.user_pg.plugin,
         }
     }
 }
@@ -157,6 +158,7 @@ pub async fn create_user(
             home_domain: None,
             home_id: None,
             name_hue: None,
+            plugin: None,
         },
     ))
 }

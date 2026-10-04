@@ -32,6 +32,7 @@ import { MemberPicker } from "@/features/community-settings/MemberPicker";
 import { EmojiPanel } from "@/features/community-settings/EmojiPanel";
 import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
+import { PluginsPanel } from "@/features/plugins/PluginsPanel";
 import {
   dangerButtonClass,
   dangerPlaneClass,
@@ -57,8 +58,9 @@ const tabClass =
 
 /**
  * The community's settings, from the gear in its sidebar: its name, its owner (who alone may
- * hand it on or delete it) and the way out of it, its roles, and its members. Every member can
- * open it; each part offers only what they may do.
+ * hand it on or delete it) and the way out of it, its roles, its members, its emoji, and, for
+ * holders of Manage plugins, the deployment's plugins. Every member can open it; each part
+ * offers only what they may do.
  */
 export function CommunitySettingsDialog({
   community,
@@ -71,6 +73,7 @@ export function CommunitySettingsDialog({
   const access = useAccess(community.id);
   const manageRoles = access?.has("manageRoles") ?? false;
   const roleTab = manageRoles || (access?.has("assignRoles") ?? false);
+  const pluginTab = access?.has("managePlugins") === true;
   return (
     <DialogTrigger>
       <Tooltip text={m.communitySettings.open}>
@@ -100,6 +103,11 @@ export function CommunitySettingsDialog({
                 <Tab id="emoji" className={tabClass}>
                   {m.communitySettings.emojiTab}
                 </Tab>
+                {pluginTab && (
+                  <Tab id="plugins" className={tabClass}>
+                    {m.plugins.tab}
+                  </Tab>
+                )}
               </TabList>
               <TabPanel id="overview" className="outline-none">
                 <Overview community={community} />
@@ -115,6 +123,11 @@ export function CommunitySettingsDialog({
               <TabPanel id="emoji" className="outline-none">
                 <EmojiPanel communityId={community.id} />
               </TabPanel>
+              {pluginTab && (
+                <TabPanel id="plugins" className="outline-none">
+                  <PluginsPanel communityId={community.id} />
+                </TabPanel>
+              )}
             </Tabs>
           </Dialog>
         </Modal>

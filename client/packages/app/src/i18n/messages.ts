@@ -27,6 +27,7 @@ import { palettes } from "./en/palettes";
 import { permissionGroups } from "./en/permissionGroups";
 import { permissionNames } from "./en/permissionNames";
 import { pins } from "./en/pins";
+import { plugins } from "./en/plugins";
 import { poll } from "./en/poll";
 import { profile } from "./en/profile";
 import { qr } from "./en/qr";
@@ -262,6 +263,7 @@ export const en = {
   search,
   folders,
   pins,
+  plugins,
   federation,
   deploymentPermissionNames,
   permissionGroups,

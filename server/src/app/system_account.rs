@@ -50,6 +50,7 @@ pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> ap
             home_domain: None,
             home_id: None,
             home_icon: None,
+            plugin: None,
         })
         .on_conflict(user::system)
         .filter_target(user::system.eq(true))
@@ -62,6 +63,17 @@ pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> ap
         .first(conn)
         .await?;
     Ok(id)
+}
+
+/// Whether `user` is the system account.
+pub async fn is(conn: &mut AsyncPgConnection, user_id: UserId) -> app::Result<bool> {
+    Ok(user::table
+        .select(user::system)
+        .filter(user::id.eq(user_id))
+        .first::<bool>(conn)
+        .await
+        .optional()?
+        .unwrap_or(false))
 }
 
 /// Sends `recipient` a notice from the system account, in their DM with it, made on first use.

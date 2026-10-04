@@ -47,4 +47,8 @@ export const deploymentPermissionNames = {
     name: "Manage deployment settings",
     hint: "Change the server's name and icon, and its policies: registration invites, second factors, bots, community limits, and files in calls.",
   },
+  managePlugins: {
+    name: "Manage plugins",
+    hint: "Turn installed plugins on and off for the whole server, change their settings, and choose where they run and in what order. Installing them is done on the server itself.",
+  },
 } as const;

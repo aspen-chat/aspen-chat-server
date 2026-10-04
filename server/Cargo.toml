@@ -83,6 +83,11 @@ bitflags = "2.13.2"
 console-subscriber = { version = "0.5.0", optional = true }
 imagesize = "0.15.0"
 regex = "1.13.1"
+# Plugins (`app::plugin`): WebAssembly components run in a sandbox, metered and bounded. The
+# WASI host gives a component built for `wasm32-wasip2` the system interfaces its standard
+# library imports, with nothing behind them: no files, sockets, environment, or arguments.
+wasmtime = { version = "49.0.2", default-features = false, features = ["async", "cranelift", "component-model", "runtime", "std", "pooling-allocator", "parallel-compilation"] }
+wasmtime-wasi = { version = "49.0.2", default-features = false, features = ["p2"] }
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

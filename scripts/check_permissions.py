@@ -20,12 +20,13 @@ import argparse
 import base64
 import hashlib
 import shutil
+import subprocess
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-from stack import Failed, Ports, Stack, WebSocket, start_services, wait_for, wait_for_services
+from stack import REPO, Failed, Ports, Stack, WebSocket, start_services, wait_for, wait_for_services
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
               transfer=13578, relay_min=46100, relay_max=46199)
@@ -604,9 +605,154 @@ def stop_reviewing(world: World) -> None:
     world.stack.command("admin", "revoke", world.owner["name"])
 
 
+WORD_FILTER_ID = "org.aspenchat.wordfilter"
+CALENDAR_ID = "org.aspenchat.calendar"
+
+
+def example(name: str) -> Path:
+    """An example plugin's manifest, its component built for `wasm32-wasip2` first."""
+    directory = REPO / "plugins" / name
+    built = subprocess.run(
+        ["cargo", "build", "--release", "--target", "wasm32-wasip2"],
+        cwd=directory, capture_output=True, text=True,
+    )
+    if built.returncode != 0:
+        raise Failed(f"the example plugin {name} did not build (rustup target add wasm32-wasip2?): {built.stderr[-800:]}")
+    return directory / "aspen-plugin.json"
+
+
+def word_filter() -> Path:
+    return example("word_filter")
+
+
+def plugins(world: World, check: Checks) -> None:
+    say("a plugin's notes, events, routes, settings, and account")
+    stack = world.stack
+    stack.command("plugins", "install", str(word_filter()), "--yes")
+    stack.command("plugins", "enable", WORD_FILTER_ID)
+    time.sleep(1.5)
+    watched = world.channel("plugin-watched")
+    world.stream.gather(0.5)
+    turned_on = world.as_owner("PUT", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}",
+                               {"settings": {"watchWords": ["pineapple"]}, "grant": ["viewChannel", "sendMessages"]})
+    check("the owner turns it on", turned_on.get("enabled") is True, turned_on)
+    got = world.stream.gather(1.0)
+    check("its settings there do not reach a member without Manage plugins", not of(got, "communityPlugin"),
+          [e["serverEvent"] for e in got])
+    check("nor may the member read them",
+          stack.status("GET", f"/communities/{world.community}/plugins", token=world.member["token"]) == 403)
+    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=world.member["token"])
+                     if p["id"] == WORD_FILTER_ID)
+    check("its account joined the community",
+          stack.status("GET", f"/communities/{world.community}/members/{principal}", token=world.owner["token"]) == 200)
+
+    posted = world.post(watched, "pineapple on pizza")
+    got = world.stream.gather(3.0)
+    check("its note on a message reaches the member who reads it", bool(of(got, "messageAnnotation", message=posted)),
+          [e["serverEvent"] for e in got])
+    check("as does its event in the channel", bool(of(got, "pluginEvent", channel=watched)))
+    count = f"/plugins/{WORD_FILTER_ID}/routes/channels/{watched}/count"
+    check("its route answers the member about the channel", stack.status("GET", count, token=world.member["token"]) == 200)
+
+    world.as_owner("PUT", f"/channels/{watched}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(1.0)
+    hidden = world.post(watched, "pineapple again")
+    got = world.stream.gather(3.0)
+    check("once the member loses the channel, its notes there stop reaching them",
+          not of(got, "messageAnnotation", message=hidden), [e["serverEvent"] for e in got])
+    check("and its events there", not of(got, "pluginEvent", channel=watched))
+    check("its route no longer answers them about the channel",
+          stack.status("GET", count, token=world.member["token"]) == 404)
+    check("but still answers the owner", stack.status("GET", count, token=world.owner["token"]) == 200)
+    check("nor can they read the note through the message",
+          stack.status("GET", f"/messages/{hidden}?include=annotations", token=world.member["token"]) in (403, 404))
+
+    managers = world.role("Plugin managers", ["managePlugins"])
+    world.give(managers)
+    world.stream.gather(1.0)
+    world.as_owner("PATCH", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}", {"watchWords": ["kiwi"]})
+    got = world.stream.gather(1.0)
+    check("given Manage plugins, the member hears its settings change",
+          bool(of(got, "communityPlugin", plugin=WORD_FILTER_ID)), [e["serverEvent"] for e in got])
+    check("and may read them",
+          stack.status("GET", f"/communities/{world.community}/plugins", token=world.member["token"]) == 200)
+
+    world.as_owner("DELETE", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}")
+    got = world.stream.gather(1.0)
+    check("turning it off takes its account out",
+          stack.status("GET", f"/communities/{world.community}/members/{principal}", token=world.owner["token"]) == 404)
+    check("which the member hears", bool(of(got, "userCommunity", user=principal)), [e["serverEvent"] for e in got])
+    stack.command("plugins", "disable", WORD_FILTER_ID)
+
+
+def calendar_channels(world: World, check: Checks) -> None:
+    say("a plugin's channel, its notices, its cards, and a private URL")
+    stack = world.stack
+    stack.command("plugins", "install", str(example("calendar")), "--yes")
+    stack.command("plugins", "enable", CALENDAR_ID)
+    time.sleep(1.5)
+    announce = world.channel("announcements")
+    world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
+                   {"settings": {"announceChannel": announce}, "grant": ["viewChannel", "sendMessages"]})
+    calendar = world.as_owner("POST", "/channels", {
+        "name": "events", "ty": "plugin", "pluginType": f"{CALENDAR_ID}:calendar",
+        "community": world.community, "sortIndex": 3})["id"]
+    events = f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/events"
+    check("a member reads the plugin's channel through its routes",
+          stack.status("GET", events, token=world.member["token"]) == 200)
+    feed = stack.api("POST", f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/feed", None,
+                     world.member["token"])["path"]
+    check("and follows their private URL without signing in",
+          stack.status("GET", f"{stack.base}{feed}") == 200)
+    soon = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+    world.as_owner("POST", events, {"title": "Planning", "start": soon})
+    time.sleep(1.0)
+    card = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]
+    press = f"/messages/{card['id']}/card/buttons/rsvp"
+    check("the event's card is posted by the plugin's account", card.get("card") is not None, card)
+    check("a member who reads it may press its button", stack.status("POST", press, token=world.member["token"]) == 200)
+
+    # An event whose reminder falls due in a few seconds, which the member says they go to.
+    later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600 + 8))
+    world.as_owner("POST", events, {"title": "Soon", "start": later})
+    time.sleep(0.5)
+    soon_card = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]
+    stack.api("POST", f"/messages/{soon_card['id']}/card/buttons/rsvp", None, world.member["token"])
+    owner_stream = stack.events(world.owner["token"])
+    owner_stream.gather(0.2)
+
+    world.as_owner("PUT", f"/channels/{calendar}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.as_owner("PUT", f"/channels/{announce}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    check("once they lose the plugin's channel, its routes answer them nothing of it",
+          stack.status("GET", events, token=world.member["token"]) == 404)
+    check("nor does their private URL", stack.status("GET", f"{stack.base}{feed}") == 404)
+    check("nor may they press a card they can no longer read",
+          stack.status("POST", press, token=world.member["token"]) in (403, 404))
+    got = world.stream.gather(12.0)
+    check("nor do its notices reach them, though they said they would go",
+          not of(got, "pluginNotice"), [e["serverEvent"] for e in got])
+    check("while someone who may still view it is told",
+          bool(of(owner_stream.gather(1.0), "pluginNotice", channel=calendar)))
+    world.as_owner("DELETE", f"/channels/{calendar}/overrides/{world.everyone}")
+    world.as_owner("DELETE", f"/channels/{announce}/overrides/{world.everyone}")
+    world.stream.gather(0.5)
+    check("given the channel back, their private URL answers again",
+          stack.status("GET", f"{stack.base}{feed}") == 200)
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "banUsers")
+    world.as_owner("PUT", f"/admin/users/{world.member['id']}/ban", {})
+    check("banned from the deployment, their private URL answers nothing",
+          stack.status("GET", f"{stack.base}{feed}") == 404)
+    world.as_owner("DELETE", f"/admin/users/{world.member['id']}/ban")
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+    stack.command("plugins", "disable", CALENDAR_ID)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
              deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames]
+             nicknames, plugins, calendar_channels]
 
 
 def main() -> None:

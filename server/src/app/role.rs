@@ -294,7 +294,7 @@ fn check_everyone_plain(everyone: bool, hue: Option<i16>, hoist: bool) -> app::R
 /// Gives the roles of a community dense positions in the order `order` lists them (everyone's
 /// first, at 0), announcing each whose position changed.
 async fn renumber(
-    state: &GlobalServerContext,
+    state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     community_id: CommunityId,
     order: &[RoleRow],
@@ -400,7 +400,7 @@ pub(crate) async fn insert_role(
 /// Deletes the role a bot was given when it was added to `community_id`, as the bot leaves,
 /// inside the caller's transaction.
 pub(crate) async fn delete_bot_role(
-    state: &GlobalServerContext,
+    state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     community_id: CommunityId,
     bot: UserId,

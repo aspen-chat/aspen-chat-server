@@ -39,6 +39,8 @@ pub struct AspenConfig {
     pub push: PushConfig,
     #[serde(default)]
     pub web_client: WebClientConfig,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -284,6 +286,25 @@ pub struct PushConfig {
     /// Whether apps may ask to be woken, and messages wake them.
     #[default = true]
     pub enabled: bool,
+}
+
+/// How plugins run (`app::plugin`): how long each call may take and how much memory it may use.
+/// Which plugins are installed, and their settings, are in the database.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct PluginsConfig {
+    /// How long a plugin has to decide a message about to be saved, which its author waits on.
+    #[default = 25]
+    pub intercept_millis: u64,
+    /// How long a plugin has to handle something it observes.
+    #[default = 10_000]
+    pub observe_millis: u64,
+    /// How long a plugin has to answer a request to one of its routes.
+    #[default = 3_000]
+    pub route_millis: u64,
+    /// The most memory one call of a plugin may use, in MiB.
+    #[default = 64]
+    pub memory_mib: u64,
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the

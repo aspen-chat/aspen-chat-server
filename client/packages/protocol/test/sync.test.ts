@@ -68,6 +68,7 @@ function message(n: number, author = me.id): Message {
     poll: null,
     mentions: { users: [], roles: [], everyone: false },
     linkedMessages: [],
+    alteredBy: [],
   };
 }
 
@@ -84,6 +85,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
     "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [] }),
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
+    "/api/v1/plugins": () => json([]),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -294,6 +296,7 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/dms",
       "/api/v1/users/@me/admin",
       "/api/v1/users/@me/blocks",
+      "/api/v1/plugins",
       "/api/v1/users/%40me/preferences",
       "/api/v1/users/statuses",
     ]);
@@ -430,7 +433,7 @@ describe("AspenSync", () => {
       ...bootstrapResponses(),
       [`/api/v1/channels/${general.id}/messages`]: (url) => {
         expect(url.searchParams.get("include")).toBe(
-          "authors,memberships,attachments,polls,threads,echoes,reactions,linked,warnings",
+          "authors,memberships,attachments,polls,threads,echoes,reactions,linked,warnings,annotations",
         );
         if (url.searchParams.get("before") !== null) {
           return json({ data: [message(50)], included: { users: [], attachments: [] } });

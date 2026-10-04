@@ -6,7 +6,10 @@ import type { Permission } from "@aspen/protocol";
  * are also the ones a channel's access settings adjust.
  */
 export const PERMISSION_GROUPS = [
-  { key: "community", permissions: ["manageCommunity", "manageChannels", "manageCategories"] },
+  {
+    key: "community",
+    permissions: ["manageCommunity", "manageChannels", "manageCategories", "managePlugins"],
+  },
   {
     key: "members",
     permissions: [

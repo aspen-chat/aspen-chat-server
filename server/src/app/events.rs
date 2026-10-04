@@ -133,7 +133,22 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::VoiceParticipant(_)
         | ServerEvent::VoiceRing(_)
         | ServerEvent::VoiceSessionEnded { .. }
-        | ServerEvent::VoiceSpeaking { .. } => ScopeKind::Channel,
+        | ServerEvent::VoiceSpeaking { .. }
+        | ServerEvent::MessageAnnotation(_) => ScopeKind::Channel,
+        // A plugin's event goes where the plugin said: a channel, a community, or one user.
+        ServerEvent::PluginEvent {
+            channel: Some(_), ..
+        } => ScopeKind::Channel,
+        ServerEvent::PluginEvent {
+            channel: None,
+            community: Some(_),
+            ..
+        } => ScopeKind::Community,
+        ServerEvent::PluginEvent {
+            channel: None,
+            community: None,
+            ..
+        } => ScopeKind::User,
         ServerEvent::Community(_)
         | ServerEvent::Channel(_)
         | ServerEvent::Category(_)
@@ -143,6 +158,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::CommunityBan(_)
         | ServerEvent::ChannelOverride(_)
         | ServerEvent::CategoryOverride(_)
+        | ServerEvent::CommunityPlugin(_)
         | ServerEvent::CommunityResync { .. } => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,
         ServerEvent::UserPreferencesChanged { .. }
@@ -156,8 +172,11 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::DeploymentAccessChanged { .. }
         | ServerEvent::AccountBanned { .. }
         | ServerEvent::SignInsEnded { .. }
-        | ServerEvent::ReportsChanged { .. } => ScopeKind::User,
-        ServerEvent::User(_) | ServerEvent::BotCommandsChanged { .. } => ScopeKind::UserEverywhere,
+        | ServerEvent::ReportsChanged { .. }
+        | ServerEvent::PluginNotice { .. } => ScopeKind::User,
+        ServerEvent::User(_)
+        | ServerEvent::BotCommandsChanged { .. }
+        | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
     }
 }
 
@@ -411,7 +430,8 @@ async fn governing_channel(
 /// Who besides the holders of a permission may receive an event: the permission it needs, and
 /// the one member who receives it without. An invite is its code, so every event about one
 /// reaches only those who may manage invites and whoever made it; a ban is a moderation
-/// record, reaching those who may ban.
+/// record, reaching those who may ban; a community's use of a plugin reaches those who may
+/// manage plugins.
 async fn audience(
     conn: &mut AsyncPgConnection,
     event: &ServerEvent,
@@ -419,6 +439,10 @@ async fn audience(
     use crate::api::message_enum::server_event::InviteEvent;
     if let ServerEvent::CommunityBan(_) = event {
         return Ok(Some((Permission::BanMembers, None)));
+    }
+    // A community's settings for a plugin are its managers' to read.
+    if let ServerEvent::CommunityPlugin(_) = event {
+        return Ok(Some((Permission::ManagePlugins, None)));
     }
     let ServerEvent::Invite(event) = event else {
         return Ok(None);
@@ -624,7 +648,15 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::CategoryCollapseChanged { .. }
         | ServerEvent::SignInsEnded { .. }
         | ServerEvent::ReportsChanged { .. }
-        | ServerEvent::BotCommandsChanged { .. } => Vec::new(),
+        | ServerEvent::BotCommandsChanged { .. }
+        // What plugins say and publish never changes who may see or do anything, and a
+        // community turning one on changes access only through the principal's membership,
+        // which is announced as any is.
+        | ServerEvent::MessageAnnotation(_)
+        | ServerEvent::UserAnnotation(_)
+        | ServerEvent::CommunityPlugin(_)
+        | ServerEvent::PluginEvent { .. }
+        | ServerEvent::PluginNotice { .. } => Vec::new(),
     }
 }
 

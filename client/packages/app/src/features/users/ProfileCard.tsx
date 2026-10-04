@@ -49,6 +49,7 @@ import { useDomain, channelLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { ReportModal } from "@/features/reports/ReportDialog";
+import { PluginAccount, UserAnnotations } from "@/features/plugins/Annotations";
 import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/features/users/Nickname";
 import { useNameIn } from "@/features/users/nameIn";
 
@@ -62,7 +63,9 @@ import { useNameIn } from "@/features/users/nameIn";
  * else's nickname to those who may, and reporting it to anyone. Inside the reader's one-to-one DM with them it offers no way to message them, which is
  * where the reader already is. A block takes away messaging and calling, except for a holder of
  * Message any user, who reaches anyone. The system account's card offers none of these: it
- * sends notices, and is not messaged, called, blocked, or reported.
+ * sends notices, and is not messaged, called, blocked, or reported. What the deployment's
+ * plugins say about the person shows beneath who they are, and a plugin's own account names
+ * its plugin.
  */
 export function ProfileCard({ user }: { user: User }) {
   const m = useMessages();
@@ -105,12 +108,17 @@ export function ProfileCard({ user }: { user: User }) {
             )}
           </div>
         </div>
-        {user.bot && <BotMaker ownerId={user.botOwner ?? null} />}
+        {user.plugin != null ? (
+          <PluginAccount pluginId={user.plugin} />
+        ) : (
+          user.bot && <BotMaker ownerId={user.botOwner ?? null} />
+        )}
         {user.status != null && (
           <p className="text-sm break-words" aria-label={m.profile.statusLabel}>
             {statusLine(user.status)}
           </p>
         )}
+        <UserAnnotations userId={user.id} />
       </div>
       {user.bio != null && (
         <section className={planeSurfaceClass}>

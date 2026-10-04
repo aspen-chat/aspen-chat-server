@@ -34,6 +34,7 @@ export const COMMUNITY_PERMISSIONS: readonly Permission[] = [
   "banMembers",
   "changeNickname",
   "manageNicknames",
+  "managePlugins",
 ];
 
 /** Permissions a channel or category override may allow or deny. */

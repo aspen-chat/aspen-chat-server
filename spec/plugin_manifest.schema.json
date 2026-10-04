@@ -1,0 +1,822 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manifest",
+  "description": "Everything a plugin declares.",
+  "type": "object",
+  "properties": {
+    "api": {
+      "description": "The version of the plugin interface it was built against.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "assets": {
+      "description": "The directory, relative to the manifest, whose files are its views' (`views`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attachmentLimit": {
+      "description": "The largest attachment it may read, in bytes, with `attachments.read`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "author": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channelTypes": {
+      "description": "The kinds of channel it adds, by name (`channelTypes`).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ChannelTypeDecl"
+      }
+    },
+    "communitySettings": {
+      "description": "What each community that turns it on configures.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SettingField"
+      }
+    },
+    "component": {
+      "description": "The component's file, relative to the manifest.",
+      "type": "string"
+    },
+    "defaultLanguage": {
+      "description": "The language every key is given in, a BCP 47 tag.",
+      "type": "string"
+    },
+    "description": {
+      "description": "A key of `messages` saying what it does.",
+      "type": "string"
+    },
+    "homepage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hooks": {
+      "description": "Which hooks it answers.",
+      "$ref": "#/$defs/Hooks",
+      "default": {
+        "intercept": {},
+        "observe": []
+      }
+    },
+    "hosts": {
+      "description": "The hosts it may call over HTTPS, with `network`.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "id": {
+      "description": "A domain its author controls, reversed (`org.example.nocursing`).",
+      "type": "string"
+    },
+    "messages": {
+      "description": "Its text in each language it speaks: language tag, then key, then text, with `%{name}`\nfor what is filled in.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    },
+    "name": {
+      "description": "A key of `messages` naming it.",
+      "type": "string"
+    },
+    "permissions": {
+      "description": "What it may do.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PluginPermission"
+      },
+      "uniqueItems": true
+    },
+    "principal": {
+      "description": "Its own account, with `act`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Principal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retention": {
+      "description": "A key of `messages` saying what it keeps of what it sees, and for how long.",
+      "type": "string"
+    },
+    "settings": {
+      "description": "What the operator configures.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SettingField"
+      }
+    },
+    "storageQuota": {
+      "description": "The bytes of storage it may keep, with `storage`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "version": {
+      "description": "Its version, in semver.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "api",
+    "component",
+    "name",
+    "description",
+    "defaultLanguage",
+    "messages",
+    "retention"
+  ],
+  "$defs": {
+    "ChannelTypeDecl": {
+      "description": "A kind of channel a plugin adds.",
+      "type": "object",
+      "properties": {
+        "glyph": {
+          "description": "What clients draw beside such a channel's name.",
+          "$ref": "#/$defs/Glyph",
+          "default": "board"
+        },
+        "name": {
+          "description": "A key of `messages` naming the kind.",
+          "type": "string"
+        },
+        "view": {
+          "description": "The page among its assets that shows a channel of the kind.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "view"
+      ]
+    },
+    "ChoiceOption": {
+      "description": "One option of a `choice`.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "A key of the plugin's messages naming it.",
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "Command": {
+      "description": "One command: what people type after `/`, what it does, and what it takes.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What it does, in the bot's own language, 1 to 100 characters.",
+          "type": "string"
+        },
+        "descriptions": {
+          "description": "The description in other languages, by BCP 47 tag, which a client shows in place of\n`description` when its language matches.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "name": {
+          "description": "What people type after `/`: 1 to 32 printable characters of any script, but no\nwhitespace or emoji. Unique among the bot's commands, ignoring case.",
+          "type": "string"
+        },
+        "parameters": {
+          "description": "What it takes, in order; optional ones come last.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "Failure": {
+      "description": "What happens to a record when its plugin fails to decide it.",
+      "oneOf": [
+        {
+          "description": "As if it allowed it.",
+          "type": "string",
+          "const": "open"
+        },
+        {
+          "description": "As if it refused it.",
+          "type": "string",
+          "const": "closed"
+        }
+      ]
+    },
+    "Glyph": {
+      "description": "The pictures clients draw beside a plugin's channel.",
+      "type": "string",
+      "enum": [
+        "board",
+        "calendar",
+        "list",
+        "chat"
+      ]
+    },
+    "Hooks": {
+      "description": "The hooks a plugin answers.",
+      "type": "object",
+      "properties": {
+        "intercept": {
+          "description": "The records it decides before they are saved, and what happens when it fails to.",
+          "type": "object",
+          "properties": {
+            "message.create": {
+              "$ref": "#/$defs/InterceptPolicy"
+            },
+            "message.edit": {
+              "$ref": "#/$defs/InterceptPolicy"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "observe": {
+          "description": "What it is told of after it happens.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ObserveHook"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "InterceptPolicy": {
+      "description": "How an intercepting hook fails.",
+      "type": "object",
+      "properties": {
+        "failure": {
+          "$ref": "#/$defs/Failure"
+        }
+      },
+      "required": [
+        "failure"
+      ]
+    },
+    "ObserveHook": {
+      "description": "What a plugin is told of.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "message.create",
+            "message.edit",
+            "message.delete"
+          ]
+        },
+        {
+          "description": "A command sent to its principal.",
+          "type": "string",
+          "const": "command.invoke"
+        },
+        {
+          "description": "A community turned it on.",
+          "type": "string",
+          "const": "plugin.enable"
+        },
+        {
+          "description": "A community turned it off.",
+          "type": "string",
+          "const": "plugin.disable"
+        },
+        {
+          "description": "One of its timers fell due.",
+          "type": "string",
+          "const": "timer.fire"
+        }
+      ]
+    },
+    "Parameter": {
+      "description": "One thing a command takes.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What to give it, 1 to 100 characters.",
+          "type": "string"
+        },
+        "descriptions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "name": {
+          "description": "Its name, shown while it is typed; the same rules as a command's.",
+          "type": "string"
+        },
+        "optional": {
+          "description": "Whether it may be left out; only the last parameters may be.",
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "description": "For a `regex` parameter, and only for one: what a value must match whole.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "What it must be, which the server checks before the bot hears of it.",
+          "$ref": "#/$defs/ParameterType"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "type"
+      ]
+    },
+    "ParameterType": {
+      "description": "What a parameter's value must be.",
+      "oneOf": [
+        {
+          "description": "Someone's id; a client completes it from the people there.",
+          "type": "string",
+          "const": "userId"
+        },
+        {
+          "description": "A channel's id, one the person invoking may view.",
+          "type": "string",
+          "const": "channelId"
+        },
+        {
+          "description": "A message's id, one the person invoking may read.",
+          "type": "string",
+          "const": "messageId"
+        },
+        {
+          "description": "A community's id, one the person invoking belongs to.",
+          "type": "string",
+          "const": "communityId"
+        },
+        {
+          "description": "A role's id, of the community the command is invoked in.",
+          "type": "string",
+          "const": "roleId"
+        },
+        {
+          "description": "A file the person invoking attaches to the command.",
+          "type": "string",
+          "const": "attachmentId"
+        },
+        {
+          "description": "A deployment's domain, as federation names deployments.",
+          "type": "string",
+          "const": "deploymentHost"
+        },
+        {
+          "description": "One emoji.",
+          "type": "string",
+          "const": "react"
+        },
+        {
+          "description": "Any text; as the last parameter it takes the rest of what was typed.",
+          "type": "string",
+          "const": "any"
+        },
+        {
+          "description": "Text that matches the parameter's `pattern` whole.",
+          "type": "string",
+          "const": "regex"
+        }
+      ]
+    },
+    "Permission": {
+      "description": "Something a member may be allowed to do. The first group holds across the community; the\nsecond is what a channel or category override may allow or deny.",
+      "type": "string",
+      "enum": [
+        "manageCommunity",
+        "manageChannels",
+        "manageCategories",
+        "createInvites",
+        "manageInvites",
+        "manageRoles",
+        "assignRoles",
+        "removeMembers",
+        "manageMessages",
+        "pinMessages",
+        "manageCalls",
+        "addBots",
+        "manageCustomEmoji",
+        "banMembers",
+        "changeNickname",
+        "manageNicknames",
+        "managePlugins",
+        "viewChannel",
+        "sendMessages",
+        "attachFiles",
+        "addReactions",
+        "startThreads",
+        "sendInThreads",
+        "createPolls",
+        "joinVoice",
+        "speak",
+        "shareScreen",
+        "mentionMembers",
+        "mentionRoles",
+        "mentionEveryone",
+        "transferFiles",
+        "useCamera"
+      ]
+    },
+    "PluginPermission": {
+      "description": "What a plugin may do, as its manifest asks and the operator grants.",
+      "oneOf": [
+        {
+          "description": "Be shown messages in the hooks it answers.",
+          "type": "string",
+          "const": "messages.read"
+        },
+        {
+          "description": "Change a message's text before it is saved.",
+          "type": "string",
+          "const": "messages.rewrite"
+        },
+        {
+          "description": "Refuse a message before it is saved.",
+          "type": "string",
+          "const": "messages.refuse"
+        },
+        {
+          "description": "Attach annotations to messages.",
+          "type": "string",
+          "const": "messages.annotate"
+        },
+        {
+          "description": "Attach annotations to people's profiles.",
+          "type": "string",
+          "const": "users.annotate"
+        },
+        {
+          "description": "Read the bytes of attachments of messages it is shown.",
+          "type": "string",
+          "const": "attachments.read"
+        },
+        {
+          "description": "Run in DMs, which the operator grants by name.",
+          "type": "string",
+          "const": "dms"
+        },
+        {
+          "description": "Call the hosts its manifest lists.",
+          "type": "string",
+          "const": "network"
+        },
+        {
+          "description": "Keep data of its own.",
+          "type": "string",
+          "const": "storage"
+        },
+        {
+          "description": "Answer requests at routes of its own.",
+          "type": "string",
+          "const": "routes"
+        },
+        {
+          "description": "Publish events of its own.",
+          "type": "string",
+          "const": "events"
+        },
+        {
+          "description": "Have an account of its own, its principal, and act through it.",
+          "type": "string",
+          "const": "act"
+        },
+        {
+          "description": "Serve pages of its own, its assets, to people's apps.",
+          "type": "string",
+          "const": "views"
+        },
+        {
+          "description": "Add the kinds of channel its manifest declares.",
+          "type": "string",
+          "const": "channelTypes"
+        },
+        {
+          "description": "Be called back at times it sets.",
+          "type": "string",
+          "const": "timers"
+        },
+        {
+          "description": "Tell people of something, as Aspen tells them of a message.",
+          "type": "string",
+          "const": "notify"
+        },
+        {
+          "description": "Give a person a private URL of their own to one of its routes.",
+          "type": "string",
+          "const": "capabilities"
+        }
+      ]
+    },
+    "Principal": {
+      "description": "A plugin's own account.",
+      "type": "object",
+      "properties": {
+        "commands": {
+          "description": "The commands it answers, as a bot publishes them (`spec/bot_commands.schema.json`).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Command"
+          }
+        },
+        "displayName": {
+          "description": "A key of `messages` it is called by.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "The community permissions it asks for where it is turned on.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Permission"
+          }
+        },
+        "username": {
+          "description": "Its username.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "displayName"
+      ]
+    },
+    "SettingField": {
+      "description": "One setting.",
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "Its value until one is given."
+        },
+        "description": {
+          "description": "A key of the plugin's messages saying more.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "A key of the plugin's messages naming it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "What the plugin calls it: letters and digits, starting with a letter.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether it must be given; a field with a default never needs to be.",
+          "type": "boolean",
+          "default": false
+        },
+        "secret": {
+          "description": "For a `text` field, kept out of every read and log: only the plugin receives it.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "boolean"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "max": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "min": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "type": {
+              "type": "string",
+              "const": "integer"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One line of text.",
+          "type": "object",
+          "properties": {
+            "maxLength": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Text of several lines.",
+          "type": "object",
+          "properties": {
+            "maxLength": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "longText"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Lines of text, one entry each.",
+          "type": "object",
+          "properties": {
+            "maxItems": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "textList"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of `options`.",
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChoiceOption"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "choice"
+            }
+          },
+          "required": [
+            "type",
+            "options"
+          ]
+        },
+        {
+          "description": "One of the community's roles (community settings only).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "role"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Some of the community's roles (community settings only).",
+          "type": "object",
+          "properties": {
+            "maxItems": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "roleList"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of the community's channels (community settings only).",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "channel"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Some of the community's channels (community settings only).",
+          "type": "object",
+          "properties": {
+            "maxItems": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "channelList"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ],
+      "required": [
+        "name",
+        "label"
+      ]
+    }
+  }
+}

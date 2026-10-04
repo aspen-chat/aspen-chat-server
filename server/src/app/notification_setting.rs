@@ -210,7 +210,7 @@ async fn check_target(
                 .await?;
             if !matches!(
                 ty,
-                ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm
+                ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin
             ) {
                 return Err(app::Error::Validation(t!("notificationSettingKind")));
             }

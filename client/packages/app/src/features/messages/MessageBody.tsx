@@ -4,6 +4,8 @@ import { imageUrls, isImageUrl, onlyImageLinks } from "@/features/messages/image
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
+import { AlteredBy } from "@/features/plugins/Annotations";
+import { PluginCard } from "@/features/plugins/PluginCard";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { useMessages } from "@/i18n/context";
@@ -14,11 +16,12 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 
 /**
  * What a message says and holds, drawn the same wherever it is shown (the channel, the pins
- * list): its text as Markdown with its tags, marked when edited, its poll, its pictures and
- * files, and cards for its links. A message that is nothing but links to pictures shows the
+ * list): its text as Markdown with its tags, marked when edited or changed by a plugin, its
+ * poll or plugin's card, its pictures and files, and cards for its links. A message that is nothing but links to pictures shows the
  * pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
- * `still` draws it for reference only, as another message shows it: no poll to vote in.
+ * `still` draws it for reference only, as another message shows it: no poll to vote in, no
+ * card's buttons to press.
  */
 export function MessageBody({
   message,
@@ -87,11 +90,13 @@ export function MessageBody({
               {m.edited}
             </span>
           )}
+          <AlteredBy pluginIds={message.alteredBy} />
         </div>
       )}
       {!still && message.kind === "poll" && message.poll != null && (
         <PollCard pollId={message.poll} />
       )}
+      <PluginCard message={message} still={still} />
       <MessageMedia
         attachmentIds={message.attachments}
         linkedImages={linkedImages}

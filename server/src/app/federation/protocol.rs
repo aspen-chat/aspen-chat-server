@@ -41,6 +41,17 @@ impl Protocol {
         }
     }
 
+    /// This deployment's, with each plugin it runs named as a capability by the plugin's id
+    /// (`app::plugin`), so other deployments and their clients know which annotation kinds and
+    /// events to expect.
+    pub fn with_plugins(plugins: &crate::app::plugin::Plugins) -> Self {
+        let mut protocol = Protocol::ours();
+        protocol
+            .capabilities
+            .extend(plugins.loaded().iter().map(|p| p.id.clone()));
+        protocol
+    }
+
     /// Its versions as people read them: `1`, or `2–4`.
     pub fn range(&self) -> String {
         if self.minimum == self.version {

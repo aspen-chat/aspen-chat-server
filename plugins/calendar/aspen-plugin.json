@@ -1,0 +1,72 @@
+{
+  "id": "org.aspenchat.calendar",
+  "version": "1.0.0",
+  "api": 1,
+  "component": "target/wasm32-wasip2/release/aspen_calendar.wasm",
+  "assets": "views",
+  "name": "name",
+  "description": "description",
+  "author": "The Aspen authors",
+  "homepage": "https://github.com/aspen-chat/aspen-chat-server",
+  "defaultLanguage": "en",
+  "messages": {
+    "en": {
+      "name": "Calendar",
+      "description": "Events for a community: who is going, a reminder before each starts, and a feed for calendar apps.",
+      "retention": "Keeps each calendar's events, and who is going to each, until they are deleted or the calendar is.",
+      "calendarName": "Calendar",
+      "principalName": "Calendar",
+      "announceChannel": "Where to announce new events",
+      "announceChannelDescription": "Each new event is posted there with a button to say you are going.",
+      "cardTitle": "%{title}",
+      "when": "When",
+      "going": "Going",
+      "rsvp": "Going / not going",
+      "startingSoon": "“%{title}” starts in ten minutes.",
+      "newEvent": "New event",
+      "title": "What",
+      "start": "When",
+      "add": "Add event",
+      "goingButton": "I'm going",
+      "notGoingButton": "Not going",
+      "goingCount": "%{count} going",
+      "empty": "No events yet.",
+      "subscribe": "Follow in your calendar app",
+      "subscribeHint": "This address is yours alone: anyone with it sees this calendar as you do.",
+      "copy": "Copy",
+      "failed": "That did not work. Try again in a moment.",
+      "cannotAdd": "You can see this calendar, but not add to it."
+    }
+  },
+  "permissions": [
+    "storage",
+    "routes",
+    "events",
+    "views",
+    "channelTypes",
+    "act",
+    "timers",
+    "notify",
+    "capabilities"
+  ],
+  "hooks": { "observe": ["timer.fire"] },
+  "channelTypes": {
+    "calendar": { "name": "calendarName", "view": "calendar.html", "glyph": "calendar" }
+  },
+  "communitySettings": [
+    {
+      "name": "announceChannel",
+      "type": "channel",
+      "label": "announceChannel",
+      "description": "announceChannelDescription"
+    }
+  ],
+  "principal": {
+    "username": "calendar",
+    "displayName": "principalName",
+    "permissions": ["viewChannel", "sendMessages"],
+    "commands": []
+  },
+  "storageQuota": 52428800,
+  "retention": "retention"
+}

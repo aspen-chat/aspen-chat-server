@@ -77,6 +77,9 @@ pub enum MessageInclude {
     /// each holds there, as `included.userCommunities`, so a reader can draw each author's name
     /// in their roles' colour. Authors of DMs, and those who have left, have none.
     Memberships,
+    /// What plugins say about the messages, and about the other messages the read names, as
+    /// `included.messageAnnotations`.
+    Annotations,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -164,7 +167,7 @@ async fn sideload_messages(
         .chain(linked_records.iter())
         .chain(warned.iter().flatten().map(|w| &w.message))
         .collect();
-    let (users, attachments, polls, threads, channels, reactions, memberships) = tokio::try_join!(
+    let (users, attachments, polls, threads, channels, reactions, memberships, annotations) = tokio::try_join!(
         async {
             let authors = include.contains(MessageInclude::Authors);
             let mentions = include.contains(MessageInclude::Mentions);
@@ -259,6 +262,22 @@ async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::Annotations) {
+                // Every message named here is one the caller may read.
+                let ids: Vec<MessageId> = named
+                    .iter()
+                    .map(|m| m.id)
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                app::plugin::annotation::of_messages(state, &ids)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes, own_write_ins) = match polls {
         Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
@@ -309,6 +328,7 @@ async fn sideload_messages(
         warned_messages: warned,
         reactions,
         user_communities: memberships,
+        message_annotations: annotations,
         ..Included::default()
     })
 }

@@ -58,7 +58,7 @@ pub async fn mute(
         .await?;
     if !matches!(
         ty,
-        ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm
+        ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin
     ) {
         return Err(app::Error::Validation(t!("channelMuteKind")));
     }

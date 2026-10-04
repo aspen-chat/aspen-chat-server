@@ -43,6 +43,9 @@ export interface AspenClientOptions {
  */
 export const RATE_LIMIT_RETRY_MAX_MS = 5_000;
 
+/** The methods a plugin's view may call its routes with. */
+const PLUGIN_ROUTE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
 export type SessionListener = (session: Session | null) => void;
 
 export type SecondFactorMethod = Schemas["SecondFactorMethod"];
@@ -556,6 +559,47 @@ export class AspenClient {
       sessionTokenExpires: body.sessionTokenExpires,
     });
     return true;
+  }
+
+  /**
+   * Calls a plugin's route as the signed-in user, for a plugin's view (`spec/plugins.md`,
+   * Views). Plugins' routes are each plugin's own, outside the OpenAPI document, so the URL is
+   * built here, each segment of `path` encoded; the session's token is sent as for any request.
+   * A route under `aspen/` is the server's alone to call, and answers not found.
+   */
+  async pluginRoute(
+    plugin: string,
+    request: { method: string; path: string; query?: string; body?: string; contentType?: string },
+  ): Promise<{ status: number; contentType: string | null; body: string }> {
+    // The path comes from a plugin's page, which must not reach beyond the plugin's routes:
+    // `.` and `..` would be resolved away by the URL, so they are refused, as is a method
+    // a route is never called with.
+    const segments = request.path.split("/").filter((segment) => segment !== "");
+    if (
+      segments.some((segment) => segment === "." || segment === "..") ||
+      !PLUGIN_ROUTE_METHODS.has(request.method)
+    ) {
+      return { status: 400, contentType: null, body: "" };
+    }
+    const path = segments.map(encodeURIComponent).join("/");
+    const query = request.query === undefined || request.query === "" ? "" : `?${request.query}`;
+    const url = `${this.baseUrl}${API_PREFIX}/plugins/${encodeURIComponent(plugin)}/routes/${path}${query}`;
+    const headers: Record<string, string> = {};
+    if (request.body !== undefined) {
+      headers["content-type"] = request.contentType ?? "application/json";
+    }
+    const response = await this.#authenticatedFetch(
+      new Request(url, {
+        method: request.method,
+        headers,
+        ...(request.body === undefined ? {} : { body: request.body }),
+      }),
+    );
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+      body: await response.text(),
+    };
   }
 
   async #authenticatedFetch(request: Request): Promise<Response> {

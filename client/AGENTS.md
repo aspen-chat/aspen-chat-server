@@ -68,6 +68,7 @@ commit, as with comments.
 - [`message-list.md`](docs/architecture/message-list.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
 - [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, and system notifications.
+- [`plugins.md`](docs/architecture/plugins.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
 - [`polls.md`](docs/architecture/polls.md): poll records, votes, closing, and write-ins.
 - [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, and Settings.
 - [`presence.md`](docs/architecture/presence.md): polling statuses and reporting activity.

@@ -105,6 +105,7 @@ diesel::table! {
         reply_count -> Int4,
         last_reply_at -> Nullable<Timestamptz>,
         dm_key -> Nullable<Text>,
+        plugin_type -> Nullable<Text>,
     }
 }
 
@@ -152,6 +153,17 @@ diesel::table! {
         user -> Uuid,
         community -> Uuid,
         role -> Uuid,
+    }
+}
+
+diesel::table! {
+    community_plugin (community, plugin) {
+        community -> Uuid,
+        plugin -> Text,
+        enabled -> Bool,
+        settings -> Jsonb,
+        updated_at -> Timestamptz,
+        updated_by -> Nullable<Uuid>,
     }
 }
 
@@ -353,6 +365,22 @@ diesel::table! {
         command_bot -> Nullable<Uuid>,
         linked_messages -> Array<Nullable<Uuid>>,
         warning -> Nullable<Jsonb>,
+        altered_by -> Array<Nullable<Text>>,
+        card -> Nullable<Jsonb>,
+    }
+}
+
+diesel::table! {
+    message_annotation (id) {
+        id -> Uuid,
+        plugin -> Text,
+        message -> Uuid,
+        kind -> Text,
+        severity -> Text,
+        label -> Jsonb,
+        detail -> Nullable<Jsonb>,
+        link -> Nullable<Text>,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -422,6 +450,76 @@ diesel::table! {
         channel -> Uuid,
         timestamp -> Timestamptz,
         sort_index -> Int4,
+    }
+}
+
+diesel::table! {
+    plugin (id) {
+        id -> Text,
+        version -> Text,
+        manifest -> Jsonb,
+        component -> Nullable<Bytea>,
+        granted -> Array<Nullable<Text>>,
+        mode -> Text,
+        enabled -> Bool,
+        position -> Int4,
+        settings -> Jsonb,
+        storage_bytes -> Int8,
+        installed_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        removed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    plugin_asset (plugin, path) {
+        plugin -> Text,
+        path -> Text,
+        content_type -> Text,
+        bytes -> Bytea,
+    }
+}
+
+diesel::table! {
+    plugin_capability (secret) {
+        secret -> Text,
+        plugin -> Text,
+        user -> Uuid,
+        name -> Text,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    plugin_notice (id) {
+        id -> Uuid,
+        plugin -> Text,
+        user -> Uuid,
+        channel -> Uuid,
+        message -> Nullable<Uuid>,
+        text -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    plugin_storage (plugin, scope_kind, scope, key) {
+        plugin -> Text,
+        scope_kind -> Text,
+        scope -> Uuid,
+        key -> Text,
+        value -> Bytea,
+    }
+}
+
+diesel::table! {
+    plugin_timer (plugin, key) {
+        plugin -> Text,
+        key -> Text,
+        due -> Timestamptz,
+        payload -> Text,
+        attempts -> Int4,
+        claimed_until -> Nullable<Timestamptz>,
     }
 }
 
@@ -623,6 +721,21 @@ diesel::table! {
         ban_reason -> Nullable<Text>,
         banned_until -> Nullable<Timestamptz>,
         name_hue -> Nullable<Int2>,
+        plugin -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    user_annotation (id) {
+        id -> Uuid,
+        plugin -> Text,
+        user -> Uuid,
+        kind -> Text,
+        severity -> Text,
+        label -> Jsonb,
+        detail -> Nullable<Jsonb>,
+        link -> Nullable<Text>,
+        updated_at -> Timestamptz,
     }
 }
 
@@ -733,6 +846,9 @@ diesel::joinable!(channel_override -> community_role (role));
 diesel::joinable!(community -> user (owner));
 diesel::joinable!(community_ban -> community (community));
 diesel::joinable!(community_member_role -> community_role (role));
+diesel::joinable!(community_plugin -> community (community));
+diesel::joinable!(community_plugin -> plugin (plugin));
+diesel::joinable!(community_plugin -> user (updated_by));
 diesel::joinable!(community_role -> community (community));
 diesel::joinable!(community_role -> user (bot));
 diesel::joinable!(community_user -> community (community));
@@ -757,6 +873,8 @@ diesel::joinable!(mention -> community_role (target_role));
 diesel::joinable!(mention -> message (message));
 diesel::joinable!(mention -> user (target_user));
 diesel::joinable!(message -> poll (poll));
+diesel::joinable!(message_annotation -> message (message));
+diesel::joinable!(message_annotation -> plugin (plugin));
 diesel::joinable!(message_attachment -> attachment (attachment_id));
 diesel::joinable!(message_attachment -> message (message_id));
 diesel::joinable!(message_link_preview -> message (message_id));
@@ -769,6 +887,15 @@ diesel::joinable!(notification_setting -> user (user));
 diesel::joinable!(passkey -> user (user));
 diesel::joinable!(pin -> channel (channel));
 diesel::joinable!(pin -> message (message_id));
+diesel::joinable!(plugin_asset -> plugin (plugin));
+diesel::joinable!(plugin_capability -> plugin (plugin));
+diesel::joinable!(plugin_capability -> user (user));
+diesel::joinable!(plugin_notice -> channel (channel));
+diesel::joinable!(plugin_notice -> message (message));
+diesel::joinable!(plugin_notice -> plugin (plugin));
+diesel::joinable!(plugin_notice -> user (user));
+diesel::joinable!(plugin_storage -> plugin (plugin));
+diesel::joinable!(plugin_timer -> plugin (plugin));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
 diesel::joinable!(poll_option -> poll (poll));
@@ -792,6 +919,9 @@ diesel::joinable!(report_case -> community (community));
 diesel::joinable!(report_case -> message (message));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
+diesel::joinable!(user -> plugin (plugin));
+diesel::joinable!(user_annotation -> plugin (plugin));
+diesel::joinable!(user_annotation -> user (user));
 diesel::joinable!(user_deployment_role -> deployment_role (role));
 diesel::joinable!(user_deployment_role -> user (user));
 diesel::joinable!(user_foreign_deployment -> user (user));
@@ -821,6 +951,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community,
     community_ban,
     community_member_role,
+    community_plugin,
     community_role,
     community_user,
     custom_emoji,
@@ -836,12 +967,19 @@ diesel::allow_tables_to_appear_in_same_query!(
     invite,
     mention,
     message,
+    message_annotation,
     message_attachment,
     message_link_preview,
     moderation_log,
     notification_setting,
     passkey,
     pin,
+    plugin,
+    plugin_asset,
+    plugin_capability,
+    plugin_notice,
+    plugin_storage,
+    plugin_timer,
     poll,
     poll_option,
     poll_vote,
@@ -858,6 +996,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     session,
     totp_secret,
     user,
+    user_annotation,
     user_block,
     user_deployment_role,
     user_foreign_deployment,

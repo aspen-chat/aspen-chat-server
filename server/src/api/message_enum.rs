@@ -6,9 +6,11 @@ use crate::app::channel::ChannelType;
 use crate::app::deployment::DeploymentPermission;
 use crate::app::message::MessageKind;
 use crate::app::permissions::Permission;
+use crate::app::plugin::PluginText;
+use crate::app::plugin::annotation::Severity;
 use crate::app::{
-    AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId, MessageId, PollId,
-    ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
+    AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId,
+    MessageId, PollId, ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
 };
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -65,6 +67,10 @@ enum MessageEnumSource {
         // `app::deployment_role`.
         #[message_gen(server_authoritative = "mutable")]
         name_hue: Option<i16>,
+        // For a plugin's own account, its principal, the plugin's id: a bot no person owns,
+        // which acts only for the plugin (`app::plugin::principal`).
+        #[message_gen(server_authoritative)]
+        plugin: Option<String>,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.
@@ -223,6 +229,16 @@ enum MessageEnumSource {
         // profile as the reports found it. See `app::report`.
         #[message_gen(server_authoritative)]
         warning: Option<crate::app::report::Warning>,
+        // The plugins that rewrote its text as it was posted or last edited, in the order they
+        // ran (`app::plugin::intercept`), so every client can say it was changed and by what;
+        // an edit announces the new set with its `Update` event.
+        #[message_gen(server_authoritative = "mutable")]
+        altered_by: Vec<String>,
+        // For a message of a plugin's account, the card it shows beneath its text: fields and
+        // buttons, drawn from the plugin's catalogue. Only the plugin changes it, announced
+        // by the message's `Update` event. See `app::plugin::card`.
+        #[message_gen(server_authoritative = "mutable")]
+        card: Option<crate::app::plugin::card::Card>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -313,6 +329,11 @@ enum MessageEnumSource {
         // would be; they are then the channel's overrides like any other.
         #[message_gen(secret)]
         overrides: Option<Vec<crate::app::role::RoleOverride>>,
+        // For a channel of `ty` `plugin`, the kind a plugin adds (`org.example.forums:board`),
+        // which a plugin running in the community must declare; its contents are the plugin's,
+        // which clients show by its view. See `app::plugin::channel_type`.
+        #[message_gen(permanent)]
+        plugin_type: Option<String>,
     },
     Category {
         #[message_gen(id)]
@@ -504,6 +525,92 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         banned_at: chrono::DateTime<Utc>,
     },
+    // What a plugin says about a message: one of each kind per plugin and message, published
+    // in the message's channel, so whoever may read the message sees it and nobody else does.
+    // Clients draw it from the plugin's catalogue (`GET /plugins`). See
+    // `app::plugin::annotation`.
+    #[message_gen(no_commands)]
+    MessageAnnotation {
+        #[message_gen(id)]
+        id: AnnotationId,
+        #[message_gen(server_authoritative)]
+        message: MessageId,
+        #[message_gen(server_authoritative)]
+        plugin: String,
+        #[message_gen(server_authoritative)]
+        kind: String,
+        #[message_gen(server_authoritative = "mutable")]
+        severity: Severity,
+        #[message_gen(server_authoritative = "mutable")]
+        label: PluginText,
+        #[message_gen(server_authoritative = "mutable")]
+        detail: Option<PluginText>,
+        #[message_gen(server_authoritative = "mutable")]
+        link: Option<String>,
+    },
+    // What a plugin says about a person, which reaches whoever shares a community with them, as
+    // their profile does. See `app::plugin::annotation`.
+    #[message_gen(no_commands)]
+    UserAnnotation {
+        #[message_gen(id)]
+        id: AnnotationId,
+        #[message_gen(server_authoritative)]
+        user: UserId,
+        #[message_gen(server_authoritative)]
+        plugin: String,
+        #[message_gen(server_authoritative)]
+        kind: String,
+        #[message_gen(server_authoritative = "mutable")]
+        severity: Severity,
+        #[message_gen(server_authoritative = "mutable")]
+        label: PluginText,
+        #[message_gen(server_authoritative = "mutable")]
+        detail: Option<PluginText>,
+        #[message_gen(server_authoritative = "mutable")]
+        link: Option<String>,
+    },
+    // A community's use of a plugin: whether it turned it on, and its settings there without
+    // their secrets, which only holders of Manage plugins receive. See
+    // `app::plugin::community`.
+    #[message_gen(no_commands)]
+    CommunityPlugin {
+        #[message_gen(id = "client_authoritative")]
+        community: CommunityId,
+        #[message_gen(id = "client_authoritative")]
+        plugin: String,
+        #[message_gen(server_authoritative = "mutable")]
+        enabled: bool,
+        #[message_gen(server_authoritative = "mutable")]
+        settings: serde_json::Value,
+        // The secret settings that are set, whose values are never read back.
+        #[message_gen(server_authoritative = "mutable")]
+        secrets_set: Vec<String>,
+    },
+    // A plugin's own event: `kind` and `payload` are the plugin's, published to whoever may
+    // view `channel`, to `community`'s members, or with neither to one user. See
+    // `spec/plugins.md`.
+    // A plugin told the person of something in `channel`, about `message` if given; only they
+    // receive it, and their apps show it as a notification. `text` is the plugin's, drawn from
+    // its catalogue. See `app::plugin::notice`.
+    #[message_gen(custom_event)]
+    PluginNotice {
+        id: crate::app::PluginNoticeId,
+        plugin: String,
+        channel: ChannelId,
+        community: Option<CommunityId>,
+        // For a notice in a thread, the channel the thread is in.
+        parent_channel: Option<ChannelId>,
+        text: PluginText,
+        message: Option<MessageId>,
+    },
+    #[message_gen(custom_event)]
+    PluginEvent {
+        plugin: String,
+        kind: String,
+        channel: Option<ChannelId>,
+        community: Option<CommunityId>,
+        payload: serde_json::Value,
+    },
     #[message_gen(no_commands)]
     Invite {
         #[message_gen(id = "client_authoritative")]
@@ -588,6 +695,8 @@ mod tests {
             thread: None,
             mentions: None,
             linked_messages: None,
+            altered_by: None,
+            card: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -608,6 +717,8 @@ mod tests {
             thread: None,
             mentions: None,
             linked_messages: None,
+            altered_by: None,
+            card: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),
