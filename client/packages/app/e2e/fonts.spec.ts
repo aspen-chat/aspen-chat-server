@@ -126,6 +126,40 @@ test("text Aspen's own faces lack is drawn in the bundled Noto faces", async ({ 
     );
 });
 
+// A colour font can load and still draw nothing, where the browser does not draw its kind of
+// colour glyphs, so this draws emoji in the bundled face and looks at the pixels. A sequence
+// (here a family of four) drawn whole takes one advance; drawn apart, four.
+test("emoji are drawn in colour, sequences whole", async ({ page }) => {
+  await signInToWorld(page);
+  const drawn = await page.evaluate(async () => {
+    const font = '64px "Noto Color Emoji"';
+    const family = "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}";
+    await document.fonts.load(font, `\u{1F600}${family}`);
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 96;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (context === null) {
+      throw new Error("no 2D canvas");
+    }
+    context.font = font;
+    context.textBaseline = "middle";
+    context.fillText("\u{1F600}", 8, 48);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let coloured = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r = 0, g = 0, b = 0, a = 0] = data.slice(i, i + 4);
+      if (a > 128 && Math.max(r, g, b) - Math.min(r, g, b) > 64) {
+        coloured += 1;
+      }
+    }
+    const one = context.measureText("\u{1F600}").width;
+    return { coloured, sequenceInAdvances: context.measureText(family).width / one };
+  });
+  expect(drawn.coloured).toBeGreaterThan(500);
+  expect(drawn.sequenceInAdvances).toBeCloseTo(1, 1);
+});
+
 test("the regional Han face comes first for the page's language", async ({ page }) => {
   await signInToWorld(page);
   const first = () =>

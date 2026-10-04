@@ -206,9 +206,6 @@ importers:
       '@fontsource-variable/noto-serif-tibetan':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/noto-color-emoji':
-        specifier: ^5.3.2
-        version: 5.3.2
       '@fontsource/noto-sans-batak':
         specifier: ^5.3.1
         version: 5.3.1
@@ -1212,9 +1209,6 @@ packages:
 
   '@fontsource-variable/noto-serif-tibetan@5.3.0':
     resolution: {integrity: sha512-up1G7oIPtAFIDH6JgUMl1zWSuEet9b6p61dneNr6+MQjfuZXlxqQRisqgmabjlEWlta9QCxVpp70fvEyQwv+hQ==}
-
-  '@fontsource/noto-color-emoji@5.3.2':
-    resolution: {integrity: sha512-rO15sQ45Dc28hMAMz1X1oSOWxcbqNL+CiHHJ7JPn1gmfiGIuR/QyLuHqBrXivSYHsHVTXGT/m6/DuQ42s5xQkw==}
 
   '@fontsource/noto-sans-batak@5.3.1':
     resolution: {integrity: sha512-Uby+Je0Rpz78JH0g9XIDRxINrcIzjEX7p4xQ4O2v3t4EcTCTZN50KyW3CiUtWp197i0Qanm75Z4YFntQ6cXRag==}
@@ -4976,8 +4970,6 @@ snapshots:
   '@fontsource-variable/noto-sans@5.3.0': {}
 
   '@fontsource-variable/noto-serif-tibetan@5.3.0': {}
-
-  '@fontsource/noto-color-emoji@5.3.2': {}
 
   '@fontsource/noto-sans-batak@5.3.1': {}
 

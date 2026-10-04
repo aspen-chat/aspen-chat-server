@@ -1,0 +1,74 @@
+# Every week: looks for a newer Noto Color Emoji in googlefonts/noto-emoji and, when there is one,
+# builds the app's emoji fonts from it (`client/scripts/noto_emoji.py update`) and proposes them as
+# a pull request, so they never wait on someone remembering to update them. A week with nothing
+# new changes nothing; a run that cannot find the fonts upstream fails, which GitHub reports to
+# whoever last changed this schedule.
+#
+# Pull requests opened with the workflow's own token do not start other workflows, so CI would not
+# run on them. With an `EMOJI_FONT_TOKEN` secret (a fine-grained token with Contents and Pull
+# requests read and write on this repository), the branch is pushed and the pull request opened
+# as that token's owner, and CI runs as on any other. Without it, the workflow's token is used,
+# which needs "Allow GitHub Actions to create and approve pull requests" in the repository's
+# Actions settings, and CI has to be started by hand (closing and reopening the pull request does
+# it).
+
+name: Emoji font
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: emoji-font
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update Noto Color Emoji
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.EMOJI_FONT_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r client/scripts/noto_emoji.requirements.txt
+      - name: Build from the newest upstream fonts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 client/scripts/noto_emoji.py update
+      - name: Propose them
+        env:
+          GH_TOKEN: ${{ secrets.EMOJI_FONT_TOKEN || github.token }}
+        run: |
+          if [ -z "$(git status --porcelain client/packages/app/fonts/noto-color-emoji)" ]; then
+            echo "Nothing new upstream."
+            exit 0
+          fi
+          manifest=client/packages/app/fonts/noto-color-emoji/manifest.json
+          commit="$(jq -r .source.commit "$manifest")"
+          committed="$(jq -r .source.committed "$manifest")"
+          branch="emoji-font/${commit:0:12}"
+          if git ls-remote --exit-code origin "refs/heads/$branch" > /dev/null; then
+            echo "$branch is already proposed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add client/packages/app/fonts/noto-color-emoji
+          git commit -m "Noto Color Emoji from googlefonts/noto-emoji@${commit:0:12}" \
+            -m "Built by client/scripts/noto_emoji.py from the fonts upstream changed on $committed."
+          git push origin "$branch"
+          gh pr create --head "$branch" --base "${{ github.event.repository.default_branch }}" \
+            --title "Noto Color Emoji from googlefonts/noto-emoji@${commit:0:12}" \
+            --body "googlefonts/noto-emoji changed its fonts in https://github.com/googlefonts/noto-emoji/commit/$commit ($committed). This rebuilds the app's emoji fonts from it with \`client/scripts/noto_emoji.py update\`.
+
+          CI's \`emoji are drawn in colour, sequences whole\` test (\`client/packages/app/e2e/fonts.spec.ts\`) checks that they still draw. WebKit on an iPhone is the one engine CI cannot check; open a channel with a few emoji in Safari on one before merging if the upstream change was more than new emoji."
