@@ -53,6 +53,7 @@ pub mod notification_setting;
 pub mod outbound;
 pub mod passkey;
 pub mod permissions;
+pub mod plugin;
 pub mod poll;
 pub mod preferences;
 pub mod push;
@@ -273,6 +274,7 @@ id_type!(PushSubscriptionId);
 id_type!(ReportCaseId);
 id_type!(ReportId);
 id_type!(ReportCategoryId);
+id_type!(AnnotationId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

@@ -306,7 +306,7 @@ pub async fn document(state: &GlobalServerContext) -> app::Result<Option<Deploym
         keys: keys.into_iter().map(DocumentKey::from).collect(),
         users: (&config.users).into(),
         bots: (&config.bots).into(),
-        protocol: Protocol::ours(),
+        protocol: Protocol::with_plugins(&state.plugins),
         software: Some(Software::ours()),
     }))
 }

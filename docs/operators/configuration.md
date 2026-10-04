@@ -141,6 +141,18 @@ them in the dashboard.
 | `url` | required | Where clients reach it, as `https://voice-1.chat.example.org`. |
 | `capacity` | required | The most people it carries at once; `voice_server estimate-capacity` suggests one. |
 
+## `[plugins]`
+
+How plugins run; which are installed, and their settings, are in the database (see
+[Plugins](plugins.md)).
+
+| Setting | Default | |
+| --- | --- | --- |
+| `intercept_millis` | `25` | How long a plugin has to decide a message about to be saved. Its author waits for it, so keep it short. |
+| `observe_millis` | `10000` | How long a plugin has to handle something that happened, such as checking a new message's pictures with another service. |
+| `route_millis` | `3000` | How long a plugin has to answer a request to one of its routes. |
+| `memory_mib` | `64` | The most memory one call of a plugin may use. |
+
 ## `[push]`
 
 | Setting | Default | |

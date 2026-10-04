@@ -110,7 +110,7 @@ pub async fn get_federation(
         bots_shared_list: config.bots.shared_list,
         lists_in_force: FederationList::all_in_force(config),
         document: federation::document(&state).await?,
-        protocol: Protocol::ours(),
+        protocol: Protocol::with_plugins(&state.plugins),
         software: Software::ours(),
     }))
 }

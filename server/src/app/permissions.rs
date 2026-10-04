@@ -57,6 +57,7 @@ bitflags::bitflags! {
         const ADD_BOTS = 1 << 11;
         const MANAGE_CUSTOM_EMOJI = 1 << 12;
         const BAN_MEMBERS = 1 << 13;
+        const MANAGE_PLUGINS = 1 << 14;
 
         // In a channel, and adjustable per channel and category.
         const VIEW_CHANNEL = 1 << 16;
@@ -81,7 +82,7 @@ app::bigint_sql_traits!(Permissions);
 
 impl Permissions {
     /// Every permission that holds across the community.
-    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 14) - 1);
+    pub const COMMUNITY: Self = Self::from_bits_retain((1 << 15) - 1);
     /// Every permission an override may adjust.
     pub const CHANNEL: Self = Self::from_bits_retain(((1 << 31) - 1) & !((1 << 16) - 1));
 
@@ -143,6 +144,7 @@ pub enum Permission {
     AddBots,
     ManageCustomEmoji,
     BanMembers,
+    ManagePlugins,
     ViewChannel,
     SendMessages,
     AttachFiles,
@@ -179,6 +181,7 @@ impl Permission {
             Permission::AddBots => Permissions::ADD_BOTS,
             Permission::ManageCustomEmoji => Permissions::MANAGE_CUSTOM_EMOJI,
             Permission::BanMembers => Permissions::BAN_MEMBERS,
+            Permission::ManagePlugins => Permissions::MANAGE_PLUGINS,
             Permission::ViewChannel => Permissions::VIEW_CHANNEL,
             Permission::SendMessages => Permissions::SEND_MESSAGES,
             Permission::AttachFiles => Permissions::ATTACH_FILES,
@@ -411,6 +414,9 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
         Permissions::PIN_MESSAGES => "permissionPinMessages",
         Permissions::MANAGE_CALLS => "permissionManageCalls",
         Permissions::ADD_BOTS => "permissionAddBots",
+        Permissions::MANAGE_CUSTOM_EMOJI => "permissionManageCustomEmoji",
+        Permissions::BAN_MEMBERS => "permissionBanMembers",
+        Permissions::MANAGE_PLUGINS => "permissionManagePlugins",
         Permissions::VIEW_CHANNEL => "permissionViewChannel",
         Permissions::SEND_MESSAGES => "permissionSendMessages",
         Permissions::ATTACH_FILES => "permissionAttachFiles",
@@ -973,7 +979,7 @@ mod tests {
     fn the_templates_match_the_numbers_migrations_write() {
         assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 1_744_764_936);
         assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 2_147_434_392);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_434_495);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 2_147_450_879);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

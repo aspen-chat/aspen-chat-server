@@ -135,6 +135,9 @@ endpoints = [
   "PUT /admin/federation/deployments/{domain}/lists/{list}",
   "DELETE /admin/federation/deployments/{domain}/lists/{list}",
   "PATCH /deployment",
+  "GET /admin/plugins",
+  "PATCH /admin/plugins/{plugin}",
+  "PUT /admin/plugin-order",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -179,8 +182,23 @@ endpoints = [
   "DELETE /messages/{message}/pin",
   "DELETE /messages/{message}/reactions/{emoji}/{user}",
   "DELETE /messages/{message}/attachments/{attachment}",
+  "PUT /communities/{community}/plugins/{plugin}",
+  "PATCH /communities/{community}/plugins/{plugin}",
+  "DELETE /communities/{community}/plugins/{plugin}",
 ]
 limits = { user = { requests = 60, per_seconds = 60, burst = 20, bucket = "manage" } }
+
+# Plugins' own routes (`app::plugin::route`): each runs a plugin, which may call other hosts, so
+# each user's requests to one plugin are counted apart, and every user's together.
+[rate_limits.groups.plugin_routes]
+endpoints = [
+  "GET /plugins/{plugin}/routes/{*path}",
+  "POST /plugins/{plugin}/routes/{*path}",
+  "PUT /plugins/{plugin}/routes/{*path}",
+  "PATCH /plugins/{plugin}/routes/{*path}",
+  "DELETE /plugins/{plugin}/routes/{*path}",
+]
+limits = { user_per_plugin = { requests = 120, per_seconds = 60, burst = 30, bucket = "plugin_routes" }, per_plugin = { requests = 6000, per_seconds = 60, burst = 600, bucket = "plugin_routes_all" } }
 
 [rate_limits.endpoints."POST /auth/login"]
 # Guessing one account's password from many addresses.

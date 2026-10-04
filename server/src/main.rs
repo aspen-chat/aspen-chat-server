@@ -125,6 +125,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::FederationCommand,
     },
+    /// Operator commands for plugins: installing, configuring, ordering, and removing them.
+    Plugins {
+        #[clap(subcommand)]
+        action: operator::PluginsCommand,
+    },
 }
 
 thread_local! {
@@ -216,6 +221,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Invites { action } => operator::invites(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
             Command::Federation { action } => operator::federation(&config, action).await,
+            Command::Plugins { action } => operator::plugins(&config, action).await,
         };
     }
     let app = api::make_router(options.gen_openapi_schema).await?;

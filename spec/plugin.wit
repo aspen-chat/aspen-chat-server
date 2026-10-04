@@ -42,8 +42,10 @@ interface types {
     record attachment {
         id: id,
         file-name: string,
-        content-type: option<string>,
-        size: u64,
+        content-type: string,
+        /// A picture's size in pixels, as its uploader measured it.
+        width: option<u32>,
+        height: option<u32>,
     }
 
     /// A message about to be saved.

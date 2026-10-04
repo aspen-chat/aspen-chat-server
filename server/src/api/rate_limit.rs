@@ -35,8 +35,13 @@ pub const PASSKEY_PAGE: (&str, &str) = ("GET", "/auth/passkey");
 /// deployment uses, and not in the OpenAPI document.
 pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
 
+/// Plugins' own routes (`api::plugin::route`), which are not in the OpenAPI document.
+pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
+/// The methods plugins' routes answer.
+const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
-/// passkey page, and the federation document.
+/// passkey page, the federation document, and plugins' routes.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::api::openapi();
     let mut routes = Vec::new();
@@ -48,6 +53,9 @@ pub fn routes() -> Vec<Route> {
     }
     for (method, template) in [EVENT_STREAM_ROUTE, PASSKEY_PAGE, WELL_KNOWN] {
         routes.push(Route::new(method, template, Access::Anonymous));
+    }
+    for method in PLUGIN_ROUTE_METHODS {
+        routes.push(Route::new(method, PLUGIN_ROUTE, Access::Authenticated));
     }
     routes
 }

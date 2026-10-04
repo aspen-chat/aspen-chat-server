@@ -26,6 +26,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 - **TLS:** rustls (with self-signed cert generation via `rcgen` for development)
 - **Federation signatures:** `ring` (Ed25519 keys, compact JWS with EdDSA)
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice server (`turn`, from webrtc-rs)
+- **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi` giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)
 - **Allocator:** jemalloc (`tikv-jemallocator`) in both servers, replacing `malloc` for the whole process so C and C++ libraries (mediasoup's worker) use it too, with its background thread on (`malloc_conf` in each `main.rs`) so freed memory returns to the system when a server goes idle; its statistics are exported as `aspen_memory_*`
 
@@ -74,6 +75,7 @@ Federation, letting a user of one deployment use others, is being built in phase
    - `event_feed_shards` — how many tasks route events to this server's event stream connections (one per logical CPU by default; see Event routing)
    - `[federation]` — `domain` (this deployment's name among deployments, with `:port` when not 443; required once any gate opens, and never to change, since other deployments pin the key they find there), the gates `[federation.users]` and `[federation.bots]` (`emigration` and `immigration`, each `closed`, `open`, `allowList`, or `blockList`, `shared_list` for one list read both ways, and `immigration_invite_required`, whether a first arrival from elsewhere needs a registration invite), `standing_interval_seconds` and `standing_grace_seconds` (how often foreign users are confirmed with their homes, and how long an unreached home is tolerated), and `[federation.development]` (`extra_root_certificates`, `allow_private_addresses`) for deployments side by side on one machine; see Federation
    - `[push] enabled` — whether apps may ask to be woken and messages wake them (true by default); see Push
+   - `[plugins]` — `intercept_millis` (25), `observe_millis` (ten seconds), and `route_millis` (three seconds), how long a plugin's call may take to decide a message, handle an event, and answer a route, and `memory_mib` (64), the most one call may use; which plugins are installed, and their settings, are in the database (see Plugins)
    - `[web_client] url` — where the deployment's web client is served (`GET /deployment` gives it to clients), which invite links and the QR codes for invites and signing in from another device name; left out, the web client names its own address and the desktop and mobile apps `aspen://app/…` links
    - `[cors] allowed_origins` — page origins allowed to call the API from a browser (the web client, Electron, and Capacitor shells are all browsers); a deployment whose immigration gate admits anyone allows every origin (see Federation). `["*"]` allows every origin and is acceptable only in development; an empty list (the default) sends no CORS headers, which is correct when the API and the web client share an origin.
 
@@ -123,7 +125,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build. Clippy warnings fail the build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugin's format, lints, tests, and build for `wasm32-wasip2` (`plugins/word_filter`, a workspace of its own); the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build, and builds and installs the example plugin, so running it locally needs `rustup target add wasm32-wasip2`. Clippy warnings fail the build.
 
 ### CLI Flags
 
@@ -133,7 +135,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 - `--listen-addr` — Bind address (default `0.0.0.0`, repeatable)
 - `--port` — Port (default `443`)
 
-Operator subcommands read the same configuration, log to stderr, and exit: `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking, `admin grant|revoke|list|allow|deny` and `invites create|list|revoke`, described under Administration, `communities unowned|set-owner`, under Roles and permissions, and `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`, under Federation.
+Operator subcommands read the same configuration, log to stderr, and exit: `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking, `admin grant|revoke|list|allow|deny` and `invites create|list|revoke`, described under Administration, `communities unowned|set-owner`, under Roles and permissions, `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`, under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`, under Plugins.
 
 ## Architecture
 
@@ -206,6 +208,7 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/reports.md` — reports of messages and profiles, their categories, cases and their review, warnings, and what deleting a message keeps
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
 - `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
+- `docs/architecture/plugins.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, and principals
 
 ### Event Ordering Guarantee
 

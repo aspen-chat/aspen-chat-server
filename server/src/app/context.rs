@@ -35,6 +35,8 @@ pub struct GlobalServerContext {
     pub event_feed: app::event_feed::EventFeed,
     /// What every call to another deployment is made with (`app::federation::fetch`).
     pub federation_client: reqwest::Client,
+    /// The plugins this server runs (`app::plugin`).
+    pub plugins: Arc<app::plugin::Plugins>,
 }
 
 impl GlobalServerContext {
@@ -113,14 +115,16 @@ impl GlobalServerContext {
             rate_limiter: Arc::new(rate_limiter),
             webauthn,
             federation_client,
+            plugins: Arc::new(app::plugin::Plugins::new()?),
             config: config.into(),
         })
     }
 }
 
 /// Starts the app's background tasks: the poll closer, the voice report listener and reaper, the
-/// fleet heartbeat, the federation standing confirmer, and the push dispatcher, seeding the voice
-/// servers and making the federation and push keys where they are missing.
+/// fleet heartbeat, the federation standing confirmer, the push dispatcher, and the plugins with
+/// their observers, seeding the voice servers and making the federation and push keys where
+/// they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
     app::poll::spawn_closer(context.clone());
     app::voice::seed_servers(context).await?;
@@ -133,5 +137,6 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     app::federation::standing::spawn_confirmer(context.clone());
     app::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     app::push::spawn_dispatcher(context.clone());
+    app::plugin::registry::start(context).await?;
     Ok(())
 }

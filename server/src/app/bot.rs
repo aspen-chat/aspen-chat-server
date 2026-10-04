@@ -219,6 +219,7 @@ pub async fn create(
                         home_domain: None,
                         home_id: None,
                         home_icon: None,
+                        plugin: None,
                     })
                     .returning(UserPg::as_returning())
                     .get_result(conn.as_mut())
@@ -338,11 +339,12 @@ pub async fn transfer(
     Ok(with_online_status(state, vec![row]).await?.remove(0))
 }
 
-/// Deletes a bot: its owner may, and so may a holder of Manage bots once its owner is gone.
+/// Deletes a bot: its owner may, and so may a holder of Manage bots once its owner is gone. A
+/// plugin's account goes only with its plugin (`app::plugin::install`).
 pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    let owner: Option<UserId> = user::table
-        .select(user::bot_owner)
+    let (owner, plugin): (Option<UserId>, Option<String>) = user::table
+        .select((user::bot_owner, user::plugin))
         .filter(
             user::id
                 .eq(bot)
@@ -351,6 +353,9 @@ pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) ->
         )
         .first(conn.as_mut())
         .await?;
+    if plugin.is_some() {
+        return Err(app::Error::Validation(t!("botIsPlugin")));
+    }
     match owner {
         Some(owner) if owner == caller => {}
         Some(_) => return Err(app::Error::Forbidden(t!("botNotYours"))),

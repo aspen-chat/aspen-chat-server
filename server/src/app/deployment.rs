@@ -1,7 +1,8 @@
 //! What people may do across the whole deployment, rather than in one community: open the
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
-//! own roles, bots, federation with other deployments, and report categories, moderate any
-//! community, review reports, ban users from the deployment, and message anyone.
+//! own roles, bots, federation with other deployments, report categories, and installed
+//! plugins' settings, moderate any community, review reports, ban users from the deployment,
+//! and message anyone.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -46,6 +47,7 @@ bitflags::bitflags! {
         const MANAGE_REPORT_CATEGORIES = 1 << 8;
         const BAN_USERS = 1 << 9;
         const MESSAGE_ANY_USER = 1 << 10;
+        const MANAGE_PLUGINS = 1 << 11;
     }
 }
 
@@ -97,6 +99,7 @@ pub enum DeploymentPermission {
     ManageReportCategories,
     BanUsers,
     MessageAnyUser,
+    ManagePlugins,
 }
 
 impl DeploymentPermission {
@@ -115,6 +118,7 @@ impl DeploymentPermission {
             Self::ManageReportCategories => DeploymentPermissions::MANAGE_REPORT_CATEGORIES,
             Self::BanUsers => DeploymentPermissions::BAN_USERS,
             Self::MessageAnyUser => DeploymentPermissions::MESSAGE_ANY_USER,
+            Self::ManagePlugins => DeploymentPermissions::MANAGE_PLUGINS,
         }
     }
 
@@ -131,6 +135,7 @@ impl DeploymentPermission {
             Self::ManageReportCategories => t!("deploymentManageReportCategories"),
             Self::BanUsers => t!("deploymentBanUsers"),
             Self::MessageAnyUser => t!("deploymentMessageAnyUser"),
+            Self::ManagePlugins => t!("deploymentManagePlugins"),
         }
     }
 }
@@ -279,7 +284,10 @@ mod tests {
         );
         // What `admin grant` gives: the first seven but moderation, and Manage report
         // categories, as the migrations give existing administrators.
-        assert_eq!(DeploymentPermissions::ADMINISTRATOR.bits(), 111 | 256);
+        assert_eq!(
+            DeploymentPermissions::ADMINISTRATOR.bits(),
+            111 | 256 | 2048
+        );
     }
 
     #[test]

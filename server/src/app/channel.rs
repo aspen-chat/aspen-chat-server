@@ -622,6 +622,9 @@ pub(crate) async fn delete_channel(
             if deleted == 0 {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
+            // What plugins kept about it goes with it.
+            app::plugin::storage::forget(conn.as_mut(), app::plugin::storage::Scope::Channel(id))
+                .await?;
             publish_event(
                 state,
                 conn.as_mut(),

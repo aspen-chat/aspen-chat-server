@@ -79,4 +79,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261003_233932_deleted_category_leftovers::M,
     &migrations::m20261004_001047_attachment_uploader::M,
     &migrations::m20261004_044609_dual_invites::M,
+    &migrations::m20261004_072804_plugins::M,
 ];

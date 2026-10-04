@@ -46,6 +46,13 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `assertionInvalid` | A statement from another deployment was refused: its key changed without a handover, the signature does not match, it was meant for another deployment, it expired or is from the future (a clock is wrong), or it was used before. The detail says which. | For a changed key, see [Keys](federation.md#keys). For clocks, run NTP on every server. |
 | `strongerSignInRequired` | This deployment requires two factors, and the visitor signed in at home with a password alone. | They sign in at home with a second factor or a passkey. |
 
+### Plugins
+
+| Code | What it means | What to do |
+| --- | --- | --- |
+| `pluginRefused` | A plugin refused a message before it was saved; the detail is the plugin's reason, in the reader's language. | Nothing, unless the plugin is wrong: its community settings (or yours, `plugins show <id>`) decide what it refuses. |
+| `pluginUnavailable` | A plugin that must decide messages could not (it failed, or ran out of time), and its manifest says to refuse them then; or a plugin's route could not answer. The detail names the plugin. | The log has a line for each failure, with the plugin's id. Raise `[plugins] intercept_millis` if it only runs out of time; `plugins disable <id>` stops it meanwhile. |
+
 ### Everything else
 
 `badRequest`, `validation`, `notFound`, `forbidden`, `conflict`, `unauthorized`,

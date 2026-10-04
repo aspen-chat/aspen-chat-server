@@ -83,7 +83,9 @@ fn mask(content: &str, words: &[String]) -> String {
     let mut out = String::with_capacity(content.len());
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {
-        let listed = words.iter().any(|w| w.to_lowercase() == word.to_lowercase());
+        let listed = words
+            .iter()
+            .any(|w| w.to_lowercase() == word.to_lowercase());
         if listed {
             out.extend(std::iter::repeat_n('*', word.chars().count()));
         } else {
@@ -174,7 +176,10 @@ impl Guest for WordFilter {
                 // Run once this hook has answered.
                 let _ = host::send_message(
                     &alert,
-                    &format!("Refused a message from @{} for \"{word}\".", draft.author.username),
+                    &format!(
+                        "Refused a message from @{} for \"{word}\".",
+                        draft.author.username
+                    ),
                 );
             }
             return Verdict::Refuse(text("refused", &[("word", word)]));

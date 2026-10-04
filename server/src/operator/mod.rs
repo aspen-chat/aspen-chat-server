@@ -9,7 +9,8 @@
 //! which is how an invite-only deployment gets its first account (`app::registration_invite`).
 //! `federation` manages the directory of other deployments and this deployment's key
 //! (`app::federation`), as Manage federation does from the dashboard, and can also replace the
-//! key, which no account can.
+//! key, which no account can. `plugins` installs, configures, and removes plugins
+//! (`app::plugin::install`), which no account can install or grant permissions to.
 
 mod admin;
 mod bench;
@@ -17,6 +18,7 @@ mod communities;
 mod federation;
 mod invites;
 mod limits;
+mod plugins;
 
 pub use admin::{AdminCommand, admin};
 pub use bench::{BenchCommand, bench};
@@ -24,6 +26,7 @@ pub use communities::{CommunitiesCommand, communities};
 pub use federation::{FederationCommand, federation};
 pub use invites::{InvitesCommand, invites};
 pub use limits::{LimitsCommand, limits};
+pub use plugins::{PluginsCommand, plugins};
 
 use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result};

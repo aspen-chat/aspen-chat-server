@@ -384,6 +384,7 @@ async fn arrive(
                         home_domain: Some(home.clone()),
                         home_id: Some(claims.sub),
                         home_icon: None,
+                        plugin: None,
                     })
                     .execute(conn)
                     .await?;

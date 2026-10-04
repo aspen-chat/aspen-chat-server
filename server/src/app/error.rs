@@ -146,6 +146,16 @@ pub enum Error {
     StrongerSignInRequired,
     #[error("the server's event feed has stopped")]
     EventFeedStopped,
+    /// The plugin host could not do what it needed to (`app::plugin`).
+    #[error("plugin host error: {0}")]
+    Plugin(String),
+    /// A plugin refused what was about to be saved; the reason is the plugin's, in the reader's
+    /// language.
+    #[error("refused by a plugin: {0}")]
+    PluginRefused(Cow<'static, str>),
+    /// A plugin that must decide what is about to be saved could not; the detail names it.
+    #[error("a plugin could not decide: {0}")]
+    PluginUnavailable(Cow<'static, str>),
     #[error("tokio join error {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
 }

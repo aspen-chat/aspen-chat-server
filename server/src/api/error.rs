@@ -112,6 +112,12 @@ pub enum ProblemCode {
     /// Signing in abroad: this deployment requires two factors, and the sign-in at home used a
     /// password alone. Sign in at home with a second factor or a passkey first.
     StrongerSignInRequired,
+    /// A plugin of this deployment refused what was about to be saved; `detail` is its reason,
+    /// in the reader's language.
+    PluginRefused,
+    /// A plugin of this deployment that must decide what is about to be saved could not;
+    /// `detail` names it. Retrying shortly may succeed.
+    PluginUnavailable,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -156,6 +162,8 @@ impl ProblemCode {
                 StatusCode::FORBIDDEN
             }
             ProblemCode::AssertionInvalid => StatusCode::UNAUTHORIZED,
+            ProblemCode::PluginRefused => StatusCode::UNPROCESSABLE_ENTITY,
+            ProblemCode::PluginUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -198,6 +206,8 @@ impl ProblemCode {
             ProblemCode::FederationRefused => t!("problemFederationRefused"),
             ProblemCode::AssertionInvalid => t!("problemAssertionInvalid"),
             ProblemCode::StrongerSignInRequired => t!("problemStrongerSignInRequired"),
+            ProblemCode::PluginRefused => t!("problemPluginRefused"),
+            ProblemCode::PluginUnavailable => t!("problemPluginUnavailable"),
             ProblemCode::Internal => t!("tryAgainLater"),
         }
     }
@@ -352,6 +362,12 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::AssertionInvalid).with_detail(reason)
             }
             app::Error::StrongerSignInRequired => Self::new(ProblemCode::StrongerSignInRequired),
+            app::Error::PluginRefused(detail) => {
+                Self::new(ProblemCode::PluginRefused).with_detail(detail)
+            }
+            app::Error::PluginUnavailable(detail) => {
+                Self::new(ProblemCode::PluginUnavailable).with_detail(detail)
+            }
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }
