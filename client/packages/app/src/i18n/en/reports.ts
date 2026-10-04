@@ -110,7 +110,7 @@ export const reports = {
   resolveHint: "Choose one or more actions. The report is resolved for good once they're done.",
   warn: "Warn",
   warnHint:
-    "Sent to them as a DM from you, labelled as a moderator's warning, with what it's about.",
+    "Sent to them from the server's moderators, without your name, with what it's about. They can't reply to it.",
   warnTextLabel: "Your warning",
   ban: "Ban from the server",
   banHint: "They're signed out everywhere and can't sign in until the ban ends or is lifted.",

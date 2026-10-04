@@ -163,7 +163,8 @@ pub async fn transfer_bot(
     Ok(Json(User::from(bot)))
 }
 
-/// Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone.
+/// Deletes a bot: the caller's own, or, with Manage deployment settings, one whose owner is
+/// gone.
 #[utoipa::path(
     delete,
     path = "/bots/{bot}",
@@ -173,7 +174,7 @@ pub async fn transfer_bot(
     responses(
         (status = NO_CONTENT, description = "Deleted"),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot, or an ownerless one without Manage bots", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot, or an ownerless one without Manage deployment settings", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

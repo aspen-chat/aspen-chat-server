@@ -40,7 +40,7 @@ import { Directory } from "@/features/admin/Directory";
  * The deployment's users, searched by username or display name and sortable, or only those
  * banned, with the deployment roles each holds, bots marked, and bans shown. Those who may manage
  * deployment roles change them here, moderators open someone's DMs, holders of Ban users ban
- * and lift bans, and those who may manage bots delete a bot whose owner is gone.
+ * and lift bans, and those who may manage the deployment's settings delete a bot whose owner is gone.
  */
 export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
@@ -48,7 +48,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
   const sync = useSync();
   const manage = useDeploymentCan("manageDeploymentRoles");
   const moderator = useDeploymentCan("moderateCommunities");
-  const manageBots = useDeploymentCan("manageBots");
+  const deleteOwnerlessBots = useDeploymentCan("manageDeploymentSettings");
   const banUsers = useDeploymentCan("banUsers");
   const me = useMe();
   const [bannedOnly, setBannedOnly] = useState(false);
@@ -110,7 +110,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
           heading: m.admin.rolesColumn,
           cell: (user) => <UserRoles user={user} roles={roles} manage={manage} />,
         },
-        ...(moderator || manageBots || banUsers || bannedOnly
+        ...(moderator || deleteOwnerlessBots || banUsers || bannedOnly
           ? [
               {
                 heading: m.admin.actions,
@@ -120,7 +120,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
                     {((banUsers && !user.system && user.id !== me?.id) || user.ban != null) && (
                       <UserBanControl user={user} mayBan={banUsers} onChanged={reload} />
                     )}
-                    {manageBots && user.bot && user.botOwner == null && (
+                    {deleteOwnerlessBots && user.bot && user.botOwner == null && (
                       <DeleteOwnerlessBot user={user} />
                     )}
                   </span>

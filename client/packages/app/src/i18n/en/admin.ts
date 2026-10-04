@@ -110,9 +110,10 @@ export const admin = {
   deploymentRolesHint:
     "What people may do across this server. Holders of Manage deployment roles change roles below their own highest.",
   deploymentRoleOf: "Deployment roles of {name}",
+  includedPermission: "Included in {permission}.",
   moderationLog: "Moderation log",
   moderationLogHint:
-    "Every use of Moderate any community that a community's own permissions would not allow, and every DM read by someone not in it.",
+    "Bans, warnings, and what moderators removed; every use of Moderate any community that a community's own permissions would not allow; and every DM read by someone not in it.",
   noModeration: "Nothing yet.",
   fileTransfers: "File transfers",
   fileTransfersHint:

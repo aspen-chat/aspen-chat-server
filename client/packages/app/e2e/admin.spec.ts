@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { deploymentAdministrator } from "./world/fixtures";
 import { signInToWorld, standingInvite } from "./world";
 
 /**
@@ -185,6 +186,57 @@ test("deployment roles list, and the caller's own top role is theirs but not the
     users.getByRole("row").filter({ hasText: "Kate" }).getByText("Administrator"),
   ).toBeVisible();
   await expect((await openSection(page, "Moderation log")).getByText("Nothing yet.")).toBeVisible();
+});
+
+test("a permission that another includes shows as held, and fixed, while that one is chosen", async ({
+  page,
+}) => {
+  const json = (body: unknown) => ({ contentType: "application/json", body: JSON.stringify(body) });
+  const administrator = [
+    "viewDashboard",
+    "manageDeploymentRoles",
+    "moderateCommunities",
+    "removeContent",
+    "reviewReports",
+  ];
+  await page.route(/\/api\/v1\/users\/@me\/admin$/, (route) =>
+    route.fulfill(
+      json({
+        permissions: administrator,
+        roles: [deploymentAdministrator],
+        inclusions: [{ permission: "moderateCommunities", includes: ["removeContent"] }],
+      }),
+    ),
+  );
+  await page.route(/\/api\/v1\/admin\/roles$/, (route) =>
+    route.fulfill(
+      json([
+        {
+          id: "01a0e000-0000-7000-8000-00000000a001",
+          name: "Moderators",
+          position: 1,
+          permissions: ["reviewReports", "moderateCommunities"],
+        },
+        {
+          id: deploymentAdministrator,
+          name: "Administrator",
+          position: 2,
+          permissions: administrator,
+        },
+      ]),
+    ),
+  );
+  // The dashboard read the roles as it opened, so it reads them again with these in place.
+  await page.reload();
+  const roles = await openSection(page, "Deployment roles");
+  await roles.getByRole("row", { name: "Moderators" }).click();
+  const remove = roles.getByRole("checkbox", { name: /^Remove content/ });
+  await expect(remove).toBeChecked();
+  await expect(remove).toBeDisabled();
+  await expect(roles.getByText("Included in Moderate any community.")).toBeVisible();
+  await roles.getByRole("checkbox", { name: /^Moderate any community/ }).click({ force: true });
+  await expect(remove).not.toBeChecked();
+  await expect(remove).toBeEnabled();
 });
 
 test("the deployment profile renames the server its sign-in screen welcomes people to", async ({

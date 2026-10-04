@@ -108,6 +108,7 @@ export {
   type ApiServerHealth,
   type CommunitySort,
   type Fleet,
+  type AdminAccess,
   type DeploymentPermission,
   type DeploymentRole,
   type Growth,

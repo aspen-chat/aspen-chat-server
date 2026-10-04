@@ -1806,7 +1806,7 @@ export class AspenSync {
     }
   }
 
-  /** Deletes a bot: the caller's own, or, with Manage bots, one whose owner is gone. */
+  /** Deletes a bot: the caller's own, or, with Manage deployment settings, one whose owner is gone. */
   async deleteBot(botId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/bots/{bot}", {
       params: { path: { bot: botId } },

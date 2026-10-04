@@ -13,11 +13,12 @@
 //! `dismissed`, hidden but kept, until it is restored or reported again, either of which opens
 //! it again. Holders of Review reports read the cases, and the messages around a reported
 //! message (logged once for a DM's). Acting on an open case resolves it for good, with any of:
-//! a warning, sent as a DM from the reviewer (`MessageKind::Warning`, which takes Message any
-//! user); a ban from the deployment (`app::user_ban`, which takes Ban users); deleting the
-//! reported message, or clearing the reported nickname (each of which takes Moderate any
-//! community); and resetting the reported aspects of a profile (which takes Ban users). Nobody acts on a case about themselves, or about someone
-//! whose highest deployment role is not below theirs. Reports and cases are never deleted
+//! a warning, sent for the deployment's moderators by the system account
+//! (`MessageKind::Warning`, which Review reports allows, so every reviewer can act); deleting
+//! the reported message, clearing the reported nickname, or resetting the reported aspects of a
+//! profile (each of which takes Remove content); and a ban from the deployment (`app::user_ban`,
+//! which takes Ban users). Nobody acts on a case about themselves, or about someone whose
+//! highest deployment role is not below theirs. Reports and cases are never deleted
 //! through the API. Every change to what awaits review is announced to each holder of Review
 //! reports as `reportsChanged`.
 
@@ -1419,7 +1420,7 @@ pub async fn case_context(
 /// The actions a review takes on a case; at least one.
 #[derive(Debug, Clone, Default)]
 pub struct Actions {
-    /// The warning's words, sent as a DM from the reviewer.
+    /// The warning's words, sent by the system account.
     pub warn: Option<String>,
     pub ban: Option<UserBanRequest>,
     pub delete_message: bool,
@@ -1479,21 +1480,15 @@ pub async fn resolve(
     {
         return Err(app::Error::Validation(t!("reportNoAction")));
     }
-    if warn.is_some() {
-        access.require(DeploymentPermission::MessageAnyUser)?;
-    }
-    if actions.delete_message || actions.clear_nickname {
-        access.require(DeploymentPermission::ModerateCommunities)?;
+    if actions.delete_message || actions.clear_nickname || !actions.reset.is_empty() {
+        access.require(DeploymentPermission::RemoveContent)?;
     }
     if let Some(ban) = &actions.ban {
         access.require(DeploymentPermission::BanUsers)?;
         app::ban::validate(&ban.ban)?;
         if ban.ban.delete_messages_seconds.is_some() {
-            access.require(DeploymentPermission::ModerateCommunities)?;
+            access.require(DeploymentPermission::RemoveContent)?;
         }
-    }
-    if !actions.reset.is_empty() {
-        access.require(DeploymentPermission::BanUsers)?;
     }
     let (deleting, resetting, clearing) = (
         actions.delete_message,
@@ -1594,11 +1589,7 @@ async fn act(
     if actions.delete_message
         && let Some(message) = case.message
     {
-        match app::message::delete_message(state, access.user, message).await {
-            // Its author may have deleted it meanwhile.
-            Ok(()) | Err(app::Error::Diesel(diesel::result::Error::NotFound)) => {}
-            Err(e) => return Err(e),
-        }
+        delete_reported_message(state, access, message).await?;
         resolution.deleted_message = true;
     }
     if !actions.reset.is_empty() {
@@ -1666,9 +1657,9 @@ async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> app::Result<
     })
 }
 
-/// Sends `subject` a warning from the reviewer, in their DM, made on first use; Message any
-/// user reaches them whatever communities they share and whoever blocked whom. Returns the
-/// warning's message.
+/// Sends `subject` a warning from the system account, for the deployment's moderators, which
+/// reaches them whatever communities they share with anyone and whoever they blocked, and logs
+/// the reviewer who gave it. Returns the warning's message.
 async fn send_warning(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -1676,24 +1667,16 @@ async fn send_warning(
     text: String,
     warning: Warning,
 ) -> app::Result<MessageId> {
-    let (dm, _, _) = app::dm::open_dm(state, access.user, vec![subject]).await?;
-    let message = app::message::create_message(
-        state,
-        access.user,
-        dm.id,
-        text,
-        Vec::new(),
-        false,
-        Posting::Warning(Box::new(warning)),
-    )
-    .await?;
+    let message =
+        app::system_account::post(state, subject, text, Posting::Warning(Box::new(warning)))
+            .await?;
     let mut conn = state.connection_pool.get().await?;
     log_moderation(
         conn.as_mut(),
         access.user,
         ModerationAction::WarnUser,
         None,
-        Some(dm.id),
+        Some(*message.channel.id()),
         Some(subject.0.to_string()),
     )
     .await?;
@@ -1710,6 +1693,45 @@ fn placeholder_username() -> String {
             .collect()
     });
     format!("user-{suffix}")
+}
+
+/// Deletes the reported message wherever it is, which Remove content allows without the
+/// reviewer reaching its channel, and logs it. Its author may have deleted it meanwhile.
+async fn delete_reported_message(
+    state: &GlobalServerContext,
+    access: &DeploymentAccess,
+    id: MessageId,
+) -> app::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let channel: ChannelId = message::table
+                .select(message::channel)
+                .find(id)
+                .first(conn.as_mut())
+                .await?;
+            match app::message::soft_delete(state, conn.as_mut(), id).await {
+                Ok(()) => {}
+                Err(app::Error::Diesel(diesel::result::Error::NotFound)) => return Ok(()),
+                Err(e) => return Err(e),
+            }
+            let community = match channel_home(state, conn.as_mut(), channel).await? {
+                ChannelHome::Community { community, .. } => Some(community),
+                ChannelHome::Direct(_) => None,
+            };
+            log_moderation(
+                conn.as_mut(),
+                access.user,
+                ModerationAction::DeleteMessage,
+                community,
+                Some(channel),
+                Some(id.0.to_string()),
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Clears the named aspects of `subject`'s profile; a username becomes a placeholder, and the

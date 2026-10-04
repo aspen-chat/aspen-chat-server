@@ -22,7 +22,7 @@
   communities where the caller holds `addBots` and the suggested permissions the caller may
   give (Manage roles and Assign roles, and each permission held), and calls `AspenSync.addBot`.
   A role made for a bot says whose it is in the role editor and is offered for neither
-  deletion nor assigning. With `manageBots`, the admin users directory deletes ownerless bots.
+  deletion nor assigning. With `manageDeploymentSettings`, the admin users directory deletes ownerless bots.
 - Bots' commands (`src/features/commands`) are offered in the message box by `useCommandLine`,
   which the Composer runs beside `useTagging` and which turns tagging off while the draft
   begins with `/`. The channel's commands are store state (`RecordStore.commands`, topic

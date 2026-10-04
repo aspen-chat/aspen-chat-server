@@ -17,6 +17,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
           "manageDeploymentSettings",
         ],
         roles: [deploymentAdministrator],
+        inclusions: [{ permission: "moderateCommunities", includes: ["removeContent"] }],
       }),
     ],
     [

@@ -1,4 +1,4 @@
-import type { DeploymentPermission, DeploymentRole } from "@aspen/protocol";
+import type { AdminAccess, DeploymentPermission, DeploymentRole } from "@aspen/protocol";
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button, GridList, GridListItem, Input, Label, TextField } from "react-aria-components";
@@ -7,6 +7,7 @@ import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import type { AdminRead } from "@/features/admin/useAdminRead";
 import {
   DEPLOYMENT_PERMISSIONS,
+  includedBy,
   rankOf,
   type DeploymentRoles,
 } from "@/features/admin/deploymentRoleRecords";
@@ -172,6 +173,7 @@ export function DeploymentRolesSection({ read }: { read: AdminRead<DeploymentRol
             role={current}
             editable={manage && current.position < rank}
             held={new Set(data.mine.permissions)}
+            inclusions={data.mine.inclusions}
             onChanged={read.reload}
             onDeleted={() => {
               setSelected(null);
@@ -188,12 +190,14 @@ function DeploymentRoleEditor({
   role,
   editable,
   held,
+  inclusions,
   onChanged,
   onDeleted,
 }: {
   role: DeploymentRole;
   editable: boolean;
   held: ReadonlySet<DeploymentPermission>;
+  inclusions: AdminAccess["inclusions"];
   onChanged: () => void;
   onDeleted: () => void;
 }) {
@@ -258,25 +262,34 @@ function DeploymentRoleEditor({
         isDisabled={!editable}
       />
       <div ref={permissionList} className="grid gap-2 sm:grid-cols-2">
-        {DEPLOYMENT_PERMISSIONS.map((permission) => (
-          <ChoiceCheckbox
-            key={permission}
-            isSelected={permissions.has(permission)}
-            isDisabled={!editable || !held.has(permission)}
-            onChange={(selected) => {
-              const next = new Set(permissions);
-              if (selected) {
-                next.add(permission);
-              } else {
-                next.delete(permission);
+        {DEPLOYMENT_PERMISSIONS.map((permission) => {
+          const includer = includedBy(permission, permissions, inclusions);
+          return (
+            <ChoiceCheckbox
+              key={permission}
+              isSelected={includer !== undefined || permissions.has(permission)}
+              isDisabled={!editable || !held.has(permission) || includer !== undefined}
+              onChange={(selected) => {
+                const next = new Set(permissions);
+                if (selected) {
+                  next.add(permission);
+                } else {
+                  next.delete(permission);
+                }
+                setPermissions(next);
+              }}
+              label={m.deploymentPermissionNames[permission].name}
+              hint={
+                includer === undefined
+                  ? m.deploymentPermissionNames[permission].hint
+                  : format(m.admin.includedPermission, {
+                      permission: m.deploymentPermissionNames[includer].name,
+                    })
               }
-              setPermissions(next);
-            }}
-            label={m.deploymentPermissionNames[permission].name}
-            hint={m.deploymentPermissionNames[permission].hint}
-            className={UNIFORM_CHOICE_CLASS}
-          />
-        ))}
+              className={UNIFORM_CHOICE_CLASS}
+            />
+          );
+        })}
       </div>
       {error !== null && (
         <p role="alert" className={alertClass}>

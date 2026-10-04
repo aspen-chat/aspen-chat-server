@@ -58,9 +58,8 @@ export function ResolveDialog({
 }) {
   const m = useMessages();
   const sync = useSync();
-  const mayWarn = useDeploymentCan("messageAnyUser");
   const mayBan = useDeploymentCan("banUsers");
-  const moderator = useDeploymentCan("moderateCommunities");
+  const mayRemove = useDeploymentCan("removeContent");
   const foreign = subject?.homeDomain != null;
   const [warn, setWarn] = useState(false);
   const [warning, setWarning] = useState("");
@@ -93,7 +92,7 @@ export function ResolveDialog({
         ...(ban
           ? {
               ban: {
-                ...banRequest(banChoice, moderator),
+                ...banRequest(banChoice, mayRemove),
                 withOwner: subject?.bot === true && withOwner,
               },
             }
@@ -123,32 +122,30 @@ export function ResolveDialog({
         <Dialog className={dialogClass}>
           <DialogHeading>{format(m.reports.resolveHeading, { name: subjectName })}</DialogHeading>
           <p className="text-sm text-ink-muted">{m.reports.resolveHint}</p>
-          {mayWarn && (
-            <div className="flex flex-col gap-2">
-              <ChoiceCheckbox
-                isSelected={warn}
-                onChange={setWarn}
-                label={m.reports.warn}
-                hint={m.reports.warnHint}
-              />
-              {warn && (
-                <TextField
-                  value={warning}
-                  onChange={setWarning}
-                  maxLength={WARNING_MAX}
-                  isRequired
-                  className={fieldClass + " ms-6"}
-                >
-                  <Label className={labelClass}>{m.reports.warnTextLabel}</Label>
-                  <TextArea
-                    rows={3}
-                    className={inputClass + " max-h-48 resize-none field-sizing-content"}
-                  />
-                </TextField>
-              )}
-            </div>
-          )}
-          {c.kind === "message" && moderator && (
+          <div className="flex flex-col gap-2">
+            <ChoiceCheckbox
+              isSelected={warn}
+              onChange={setWarn}
+              label={m.reports.warn}
+              hint={m.reports.warnHint}
+            />
+            {warn && (
+              <TextField
+                value={warning}
+                onChange={setWarning}
+                maxLength={WARNING_MAX}
+                isRequired
+                className={fieldClass + " ms-6"}
+              >
+                <Label className={labelClass}>{m.reports.warnTextLabel}</Label>
+                <TextArea
+                  rows={3}
+                  className={inputClass + " max-h-48 resize-none field-sizing-content"}
+                />
+              </TextField>
+            )}
+          </div>
+          {c.kind === "message" && mayRemove && (
             <ChoiceCheckbox
               isSelected={remove}
               onChange={setRemove}
@@ -156,7 +153,7 @@ export function ResolveDialog({
               hint={m.reports.deleteMessageHint}
             />
           )}
-          {c.kind === "nickname" && moderator && (
+          {c.kind === "nickname" && mayRemove && (
             <ChoiceCheckbox
               isSelected={clearNickname}
               onChange={setClearNickname}
@@ -164,7 +161,7 @@ export function ResolveDialog({
               hint={m.reports.clearNicknameHint}
             />
           )}
-          {c.kind === "profile" && mayBan && (
+          {c.kind === "profile" && mayRemove && (
             <div className="flex flex-col gap-2">
               <ChoiceCheckbox
                 isSelected={reset}
@@ -204,7 +201,7 @@ export function ResolveDialog({
                   <BanFields
                     value={banChoice}
                     onChange={setBanChoice}
-                    mayDelete={moderator}
+                    mayDelete={mayRemove}
                     reasonHint={m.deployments.banReasonHint}
                     deleteLabel={m.deployments.banDeleteLabel}
                   />

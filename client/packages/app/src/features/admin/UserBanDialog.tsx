@@ -40,7 +40,7 @@ export function UserBanDialog({
 }) {
   const m = useMessages();
   const sync = useSync();
-  const mayDelete = useDeploymentCan("moderateCommunities");
+  const mayDelete = useDeploymentCan("removeContent");
   const [choice, setChoice] = useState<BanChoice>(NEW_BAN);
   const [withOwner, setWithOwner] = useState(false);
   const [busy, setBusy] = useState(false);

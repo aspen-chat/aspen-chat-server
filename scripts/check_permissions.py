@@ -592,15 +592,104 @@ def nicknames(world: World, check: Checks) -> None:
     check("and the warning names the nickname and its community",
           any((m.get("warning") or {}).get("nickname", {}).get("nickname") == "Aster" and
               m["warning"]["nickname"]["community"] == community for m in warned), warned)
+    check("coming from the system account, not the reviewer",
+          bool(warned) and all(m["author"] != world.owner["id"] for m in warned), warned)
     stop_reviewing(world)
 
 
 # What reviewing a nickname case and acting on it take, beyond the top deployment role.
-REVIEWING = ["reviewReports", "moderateCommunities", "messageAnyUser"]
+REVIEWING = ["reviewReports", "removeContent"]
+
+# The deployment permissions given deliberately, which `admin grant` alone never gives. Moderate
+# any community comes first, since denying Remove content while it is allowed is refused.
+MODERATION = ["moderateCommunities", "reviewReports", "removeContent", "banUsers", "messageAnyUser"]
+
+
+def review_powers(world: World, check: Checks) -> None:
+    say("reviewing reports: what each deployment permission allows on its own")
+    stack = world.stack
+    reported = world.channel("reported")
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+
+    def report(content: str) -> str:
+        posted = stack.api("POST", f"/channels/{reported}/messages", {"content": content, "attachments": []},
+                           world.member["token"])["id"]
+        stack.api("POST", f"/messages/{posted}/reports", {"category": category}, world.owner["token"])
+        return posted
+
+    first, second = report("first reportable thing"), report("second reportable thing")
+    reviewer = world.account("reviewer")
+    for permission in MODERATION:
+        stack.command("admin", "deny", permission)
+    stack.command("admin", "grant", reviewer["name"])
+    stack.command("admin", "allow", "reviewReports")
+
+    def status(method: str, path: str, body: dict | None = None) -> int:
+        return stack.status(method, path, body, reviewer["token"])
+
+    def case_of(message: str) -> str | None:
+        cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
+        return next((c["id"] for c in cases if c.get("message") == message), None)
+
+    case = case_of(first)
+    check("Review reports alone reads the cases", case is not None)
+    if case is None:
+        return stop_review_powers(world, reviewer)
+    resolution = f"/admin/reports/{case}/resolution"
+    check("but deletes nothing without Remove content",
+          status("POST", resolution, {"deleteMessage": True}) == 403)
+    check("nor bans without Ban users", status("POST", resolution, {"ban": {}}) == 403)
+    check("yet resolves a case with a warning",
+          status("POST", resolution, {"warn": "Please keep it civil."}) == 200)
+    dms = stack.api("GET", "/users/@me/dms", token=world.member["token"])
+    warned = [m for dm in (dms["data"] if isinstance(dms, dict) else dms)
+              for m in stack.api("GET", f"/channels/{dm['id']}/messages", token=world.member["token"])["data"]
+              if m.get("kind") == "warning"]
+    check("which reaches the person reported from the system account",
+          bool(warned) and all(m["author"] != reviewer["id"] for m in warned), warned)
+    check("and opens no DM of the reviewer's",
+          not stack.api("GET", "/users/@me/dms", token=reviewer["token"])["data"])
+
+    stack.command("admin", "allow", "removeContent")
+    case = case_of(second)
+    check("the reviewer cannot read the reported channel",
+          status("GET", f"/channels/{reported}/messages") in (403, 404))
+    world.stream.gather(0.5)
+    check("yet Remove content deletes the reported message there",
+          case is not None and status("POST", f"/admin/reports/{case}/resolution", {"deleteMessage": True}) == 200)
+    check("which the channel hears", bool(of(world.stream.gather(1.0), "message", type="delete", id=second)))
+
+    stack.command("admin", "deny", "removeContent")
+    stack.command("admin", "allow", "banUsers")
+    check("a ban that deletes messages takes Remove content besides Ban users",
+          status("PUT", f"/admin/users/{world.member['id']}/ban", {"deleteMessagesSeconds": 3600}) == 403)
+
+    check("View dashboard alone does not read the record of files sent in calls",
+          status("GET", "/admin/file-transfers") == 403)
+    stack.command("admin", "allow", "moderateCommunities")
+    check("Moderate any community does", status("GET", "/admin/file-transfers") == 200)
+    access = stack.api("GET", "/users/@me/admin", token=reviewer["token"])
+    check("and includes Remove content, which the caller is told",
+          "removeContent" in access["permissions"] and any(
+              i["permission"] == "moderateCommunities" and "removeContent" in i["includes"]
+              for i in access["inclusions"]), access)
+    try:
+        stack.command("admin", "deny", "removeContent")
+        refused = False
+    except Failed:
+        refused = True
+    check("the terminal refuses to deny what an allowed permission includes", refused)
+    stop_review_powers(world, reviewer)
+
+
+def stop_review_powers(world: World, reviewer: dict) -> None:
+    for permission in MODERATION:
+        world.stack.command("admin", "deny", permission)
+    world.stack.command("admin", "revoke", reviewer["name"])
 
 
 def stop_reviewing(world: World) -> None:
-    for permission in REVIEWING:
+    for permission in MODERATION:
         world.stack.command("admin", "deny", permission)
     world.stack.command("admin", "revoke", world.owner["name"])
 
@@ -752,7 +841,7 @@ def calendar_channels(world: World, check: Checks) -> None:
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
              deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, plugins, calendar_channels]
+             nicknames, review_powers, plugins, calendar_channels]
 
 
 def main() -> None:

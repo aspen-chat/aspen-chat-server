@@ -44,10 +44,11 @@
   the reported message outlined; the profile as reported beside how it is now; or the nickname
   as reported, in which community, and what it is now when the reviewer may read that
   community's members (`NicknameCase`)) and every report of it. Take action opens
-  `ResolveDialog`, offering only what the reviewer may do: Warn, with their words (Message any
-  user); delete the message, or clear the nickname (each Moderate any community); reset
-  chosen aspects of a profile of this deployment (Ban users); and ban from the server, through
-  the same `BanFields` as a community's ban (Ban users). Dismiss sets a case aside; the
+  `ResolveDialog`, offering only what the reviewer may do: Warn, with their words, which every reviewer
+  may and the system account sends without their name; delete the message, clear the
+  nickname, or reset chosen aspects of a profile of this deployment (each Remove content); and
+  ban from the server, through the same `BanFields` as a community's ban (Ban users, and
+  Remove content to delete their recent messages). Dismiss sets a case aside; the
   Dismissed list restores it. A case the reviewer may not act on (about them, or someone not
   below their rank) says another moderator must. The people and files the dashboard's reads
   name are put in the cache, so messages there draw as everywhere else; channels and

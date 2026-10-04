@@ -510,22 +510,23 @@ pub async fn get_report_context(
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReportResolutionRequest {
-    /// A warning in the reviewer's own words, sent to the subject as a DM from the reviewer, at
-    /// most `app::report::WARNING_MAX_CHARS` characters. Takes Message any user.
+    /// A warning in the reviewer's own words, sent to the subject by the system account for the
+    /// deployment's moderators, at most `app::report::WARNING_MAX_CHARS` characters. Review
+    /// reports allows it.
     #[serde(default)]
     pub warn: Option<String>,
     /// A ban from the deployment, as `PUT /admin/users/{user}/ban` takes it. Takes Ban users.
     #[serde(default)]
     pub ban: Option<UserBanRequest>,
-    /// For a message case, delete the message. Takes Moderate any community.
+    /// For a message case, delete the message. Takes Remove content.
     #[serde(default)]
     pub delete_message: bool,
     /// For a profile case of this deployment's user, the aspects to reset: each is cleared,
-    /// and a username replaced with a placeholder they are told to change. Takes Ban users.
+    /// and a username replaced with a placeholder they are told to change. Takes Remove
+    /// content.
     #[serde(default)]
     pub reset: Vec<ProfileAspect>,
-    /// For a nickname case, clear the nickname, whatever it is now. Takes Moderate any
-    /// community.
+    /// For a nickname case, clear the nickname, whatever it is now. Takes Remove content.
     #[serde(default)]
     pub clear_nickname: bool,
 }

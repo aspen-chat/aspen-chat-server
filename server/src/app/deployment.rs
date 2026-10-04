@@ -1,8 +1,8 @@
 //! What people may do across the whole deployment, rather than in one community: open the
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
-//! own roles, bots, federation with other deployments, report categories, settings, and
-//! installed plugins' settings, moderate any community, review reports, ban users from the
-//! deployment, and message anyone.
+//! own roles, federation with other deployments, report categories, settings, and installed
+//! plugins' settings, moderate any community, review reports, remove reported content, ban users
+//! from the deployment, and message anyone.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -10,12 +10,17 @@
 //! terminal (`aspen-chat-server admin`), which is how a deployment gets its first
 //! administrator and how the top role itself changes hands.
 //!
+//! Each permission does something whole on its own, and each step of a task takes the
+//! permission for what that step does. Where one permission is part of another, holding the
+//! greater gives the lesser (`DeploymentPermission::includes`), which a role editor shows.
+//!
 //! Moderate any community is the deployment's power over what its users post: it reads every
 //! community, channel, and DM, and may delete messages, attachments, and reactions, remove
-//! members (never an owner), rename and delete channels and communities. Each use that the
-//! community's own permissions would not have allowed, and every reading of a DM by someone not
-//! in it, is written to the moderation log (`moderation_log`). A change to what someone may do
-//! is published to them as `deploymentAccessChanged`, which their event stream follows.
+//! members (never an owner), rename and delete channels and communities. It includes Remove
+//! content, which acts only on what a report case or a ban names. Each use that the community's
+//! own permissions would not have allowed, and every reading of a DM by someone not in it, is
+//! written to the moderation log (`moderation_log`). A change to what someone may do is
+//! published to them as `deploymentAccessChanged`, which their event stream follows.
 
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment_role::roles_of_users;
@@ -41,7 +46,6 @@ bitflags::bitflags! {
         const MANAGE_VOICE_SERVERS = 1 << 2;
         const MANAGE_DEPLOYMENT_ROLES = 1 << 3;
         const MODERATE_COMMUNITIES = 1 << 4;
-        const MANAGE_BOTS = 1 << 5;
         const MANAGE_FEDERATION = 1 << 6;
         const REVIEW_REPORTS = 1 << 7;
         const MANAGE_REPORT_CATEGORIES = 1 << 8;
@@ -49,6 +53,7 @@ bitflags::bitflags! {
         const MESSAGE_ANY_USER = 1 << 10;
         const MANAGE_DEPLOYMENT_SETTINGS = 1 << 11;
         const MANAGE_PLUGINS = 1 << 12;
+        const REMOVE_CONTENT = 1 << 13;
     }
 }
 
@@ -59,8 +64,17 @@ impl DeploymentPermissions {
     /// grant` alone.
     pub const MODERATION: Self = Self::MODERATE_COMMUNITIES
         .union(Self::REVIEW_REPORTS)
+        .union(Self::REMOVE_CONTENT)
         .union(Self::BAN_USERS)
         .union(Self::MESSAGE_ANY_USER);
+
+    /// The permissions that open the user and community directories: viewing the dashboard,
+    /// and each moderation power, whose holders browse them to find what to act on.
+    pub const DIRECTORIES: Self = Self::VIEW_DASHBOARD
+        .union(Self::MODERATE_COMMUNITIES)
+        .union(Self::REVIEW_REPORTS)
+        .union(Self::REMOVE_CONTENT)
+        .union(Self::BAN_USERS);
 
     /// What the terminal's `admin grant` gives: everything but moderation.
     pub const ADMINISTRATOR: Self = Self::all().difference(Self::MODERATION);
@@ -68,6 +82,15 @@ impl DeploymentPermissions {
     /// Every bit that names a permission, and no other.
     pub fn valid(self) -> Self {
         Self::from_bits_truncate(self.bits())
+    }
+
+    /// These and every permission they include.
+    pub fn with_included(self) -> Self {
+        DeploymentPermission::ALL
+            .iter()
+            .filter(|p| self.contains(p.bits()))
+            .flat_map(|p| p.includes())
+            .fold(self, |all, p| all | p.bits())
     }
 }
 
@@ -94,9 +117,9 @@ pub enum DeploymentPermission {
     ManageVoiceServers,
     ManageDeploymentRoles,
     ModerateCommunities,
-    ManageBots,
     ManageFederation,
     ReviewReports,
+    RemoveContent,
     ManageReportCategories,
     BanUsers,
     MessageAnyUser,
@@ -114,7 +137,6 @@ impl DeploymentPermission {
             Self::ManageVoiceServers => DeploymentPermissions::MANAGE_VOICE_SERVERS,
             Self::ManageDeploymentRoles => DeploymentPermissions::MANAGE_DEPLOYMENT_ROLES,
             Self::ModerateCommunities => DeploymentPermissions::MODERATE_COMMUNITIES,
-            Self::ManageBots => DeploymentPermissions::MANAGE_BOTS,
             Self::ManageFederation => DeploymentPermissions::MANAGE_FEDERATION,
             Self::ReviewReports => DeploymentPermissions::REVIEW_REPORTS,
             Self::ManageReportCategories => DeploymentPermissions::MANAGE_REPORT_CATEGORIES,
@@ -122,17 +144,26 @@ impl DeploymentPermission {
             Self::MessageAnyUser => DeploymentPermissions::MESSAGE_ANY_USER,
             Self::ManageDeploymentSettings => DeploymentPermissions::MANAGE_DEPLOYMENT_SETTINGS,
             Self::ManagePlugins => DeploymentPermissions::MANAGE_PLUGINS,
+            Self::RemoveContent => DeploymentPermissions::REMOVE_CONTENT,
         }
     }
 
-    fn describe(self) -> std::borrow::Cow<'static, str> {
+    /// The permissions holding this one gives too, being part of it. None includes one that
+    /// includes others, so one step finds them all.
+    pub fn includes(self) -> &'static [Self] {
+        match self {
+            Self::ModerateCommunities => &[Self::RemoveContent],
+            _ => &[],
+        }
+    }
+
+    pub fn describe(self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::ViewDashboard => t!("deploymentViewDashboard"),
             Self::ManageRegistrationInvites => t!("deploymentManageRegistrationInvites"),
             Self::ManageVoiceServers => t!("deploymentManageVoiceServers"),
             Self::ManageDeploymentRoles => t!("deploymentManageDeploymentRoles"),
             Self::ModerateCommunities => t!("deploymentModerateCommunities"),
-            Self::ManageBots => t!("deploymentManageBots"),
             Self::ManageFederation => t!("deploymentManageFederation"),
             Self::ReviewReports => t!("deploymentReviewReports"),
             Self::ManageReportCategories => t!("deploymentManageReportCategories"),
@@ -140,6 +171,7 @@ impl DeploymentPermission {
             Self::MessageAnyUser => t!("deploymentMessageAnyUser"),
             Self::ManageDeploymentSettings => t!("deploymentManageDeploymentSettings"),
             Self::ManagePlugins => t!("deploymentManagePlugins"),
+            Self::RemoveContent => t!("deploymentRemoveContent"),
         }
     }
 }
@@ -196,6 +228,11 @@ impl DeploymentAccess {
         }
     }
 
+    /// Whether they hold any of `permissions`.
+    pub fn has_any(&self, permissions: DeploymentPermissions) -> bool {
+        self.permissions.intersects(permissions)
+    }
+
     pub fn require_holds(&self, permissions: DeploymentPermissions) -> app::Result<()> {
         if self.permissions.contains(permissions) {
             Ok(())
@@ -223,7 +260,8 @@ pub async fn deployment_access(
             .iter()
             .map(|(_, p)| *p)
             .collect::<DeploymentPermissions>()
-            .valid(),
+            .valid()
+            .with_included(),
     })
 }
 
@@ -286,12 +324,34 @@ mod tests {
             to_names(DeploymentPermissions::all()),
             DeploymentPermission::ALL.to_vec()
         );
-        // What `admin grant` gives: the first seven but moderation, Manage report categories,
-        // Manage deployment settings, and Manage plugins, as the migrations give existing
-        // administrators.
+        // What `admin grant` gives: View dashboard, Manage registration invites, voice servers,
+        // deployment roles, and federation, Manage report categories, Manage deployment
+        // settings, and Manage plugins, as the migrations give existing administrators.
         assert_eq!(
             DeploymentPermissions::ADMINISTRATOR.bits(),
-            111 | 256 | 2048 | 4096
+            1 | 2 | 4 | 8 | 64 | 256 | 2048 | 4096
+        );
+    }
+
+    /// `with_included` takes one step, which holds while no included permission includes more.
+    #[test]
+    fn inclusion_is_one_step() {
+        for permission in DeploymentPermission::ALL {
+            for included in permission.includes() {
+                assert!(
+                    included.includes().is_empty(),
+                    "{permission} includes {included}"
+                );
+            }
+        }
+        assert!(
+            DeploymentPermissions::MODERATE_COMMUNITIES
+                .with_included()
+                .contains(DeploymentPermissions::REMOVE_CONTENT)
+        );
+        assert_eq!(
+            DeploymentPermissions::REMOVE_CONTENT.with_included(),
+            DeploymentPermissions::REMOVE_CONTENT
         );
     }
 

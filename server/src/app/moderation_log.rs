@@ -1,7 +1,8 @@
 //! The moderation log (`moderation_log`): each use of Moderate any community that the
 //! community's own permissions would not have allowed, every reading of a DM by someone not in
-//! it, each ban from the deployment and its lifting, each warning and profile reset a report's
-//! review gave (`app::report`), and how the log is read back with what its ids name.
+//! it, each ban from the deployment and its lifting, each warning, deletion, nickname cleared,
+//! and profile reset a report's review gave (`app::report`), and how the log is read back with
+//! what its ids name.
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
@@ -49,7 +50,7 @@ pub enum ModerationAction {
     ReadReportContext,
 }
 
-/// Writes a use of Moderate any community to the moderation log, and to the server's own log.
+/// Writes a moderator's action to the moderation log, and to the server's own log.
 /// `subject` names what was acted on beyond the community and channel: a message, a user.
 pub async fn log_moderation(
     conn: &mut AsyncPgConnection,

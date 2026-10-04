@@ -6,7 +6,7 @@
 //! is sent as the bearer token of every request and of the event stream, and stands until its
 //! owner issues another. Its owner (`user.bot_owner`) renames it, issues its token, hands it on,
 //! and deletes it. An owner who deletes their account leaves their bots working and ownerless,
-//! and a holder of Manage bots may delete those.
+//! and a holder of Manage deployment settings may delete those.
 
 use crate::api::message_enum;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
@@ -340,8 +340,8 @@ pub async fn transfer(
     Ok(with_online_status(state, vec![row]).await?.remove(0))
 }
 
-/// Deletes a bot: its owner may, and so may a holder of Manage bots once its owner is gone. A
-/// plugin's account goes only with its plugin (`app::plugin::install`).
+/// Deletes a bot: its owner may, and so may a holder of Manage deployment settings once its
+/// owner is gone. A plugin's account goes only with its plugin (`app::plugin::install`).
 pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     let (owner, plugin): (Option<UserId>, Option<String>) = user::table
@@ -363,7 +363,7 @@ pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) ->
         None => {
             app::deployment::access_of(state, caller)
                 .await?
-                .require(DeploymentPermission::ManageBots)?;
+                .require(DeploymentPermission::ManageDeploymentSettings)?;
         }
     }
     let retired = conn

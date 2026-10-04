@@ -76,7 +76,13 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
       body: JSON.stringify(body),
     });
     await p.route(/\/api\/v1\/users\/@me\/admin$/, (route) =>
-      route.fulfill(json({ permissions: ["viewDashboard", "banUsers"], roles: [] })),
+      route.fulfill(
+        json({
+          permissions: ["viewDashboard", "banUsers"],
+          roles: [],
+          inclusions: [{ permission: "moderateCommunities", includes: ["removeContent"] }],
+        }),
+      ),
     );
     await p.route(/\/api\/v1\/admin\/users(\?.*)?$/, (route) =>
       route.fulfill(

@@ -9,7 +9,7 @@
 //! A ban takes Ban users and ranks by deployment roles: only someone whose highest role is below
 //! the banner's, never the banner themselves or the system account. It may carry a reason, an
 //! end, and the deletion of the person's messages anywhere on the deployment from the last hour
-//! or day, which takes Moderate any community besides. A bot may be banned with its owner. Each
+//! or day, which takes Remove content besides. A bot may be banned with its owner. Each
 //! ban and lift is written to the moderation log.
 
 use crate::api::message_enum::server_event::ServerEvent;
@@ -116,7 +116,7 @@ pub async fn ban_user(
     access.require(DeploymentPermission::BanUsers)?;
     let (reason, until) = validate(&request.ban)?;
     if request.ban.delete_messages_seconds.is_some() {
-        access.require(DeploymentPermission::ModerateCommunities)?;
+        access.require(DeploymentPermission::RemoveContent)?;
     }
     let mut conn = state.connection_pool.get().await?;
     let outcome = conn

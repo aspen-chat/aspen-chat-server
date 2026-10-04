@@ -1038,8 +1038,9 @@ pub enum MessageKind {
     /// A bot command its `author` invoked, as it was sent (`/name` and its arguments), to the
     /// bot `commandBot` names (see `app::bot_command`).
     Command,
-    /// A moderator's warning to the person `warning` names, sent by its `author` in their DM:
-    /// the moderator's own words as `content`, about what `warning` holds (see `app::report`).
+    /// A moderator's warning to the person `warning` names, sent for the deployment's
+    /// moderators by the system account in its DM with them: the reviewer's words as
+    /// `content`, about what `warning` holds (see `app::report`).
     Warning,
 }
 

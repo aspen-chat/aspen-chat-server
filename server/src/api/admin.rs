@@ -41,17 +41,10 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
     }
 }
 
-/// Refuses a caller who may not browse the user and community directories: those who view the
-/// dashboard, and moderators, who browse them to find what to look at.
+/// Refuses a caller who may not browse the user and community directories
+/// (`DeploymentPermissions::DIRECTORIES`).
 fn require_directories(access: &DeploymentAccess) -> app::Result<()> {
-    if [
-        DeploymentPermission::ModerateCommunities,
-        DeploymentPermission::BanUsers,
-        DeploymentPermission::ReviewReports,
-    ]
-    .into_iter()
-    .any(|p| access.has(p))
-    {
+    if access.has_any(DeploymentPermissions::DIRECTORIES) {
         Ok(())
     } else {
         access.require(DeploymentPermission::ViewDashboard)
@@ -62,9 +55,21 @@ fn require_directories(access: &DeploymentAccess) -> app::Result<()> {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminAccess {
+    /// What they hold, including what each of their permissions includes.
     pub permissions: Vec<DeploymentPermission>,
     /// The deployment roles they hold, lowest first.
     pub roles: Vec<DeploymentRoleId>,
+    /// Each permission that includes others, and those it includes, the same for everyone,
+    /// so a role editor shows a role's included permissions as held.
+    pub inclusions: Vec<DeploymentPermissionInclusion>,
+}
+
+/// A permission, and the permissions holding it gives too.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentPermissionInclusion {
+    pub permission: DeploymentPermission,
+    pub includes: Vec<DeploymentPermission>,
 }
 
 /// What the caller may do across the deployment, so a client knows what to offer, such as the
@@ -88,6 +93,14 @@ pub async fn get_admin_access(
     Ok(Json(AdminAccess {
         permissions: app::deployment::to_names(access.permissions),
         roles,
+        inclusions: DeploymentPermission::ALL
+            .iter()
+            .filter(|p| !p.includes().is_empty())
+            .map(|&permission| DeploymentPermissionInclusion {
+                permission,
+                includes: permission.includes().to_vec(),
+            })
+            .collect(),
     }))
 }
 
@@ -222,7 +235,7 @@ pub struct AdminUserEntry {
     /// The registration invite the account was made with, if one was.
     pub registered_with: Option<String>,
     /// Whether this is a bot, and who owns it: `null` for a bot whose owner deleted their
-    /// account, which a holder of Manage bots may delete.
+    /// account, which a holder of Manage deployment settings may delete.
     pub bot: bool,
     pub bot_owner: Option<UserId>,
     /// For a user of another deployment, that deployment's domain.
@@ -806,7 +819,7 @@ pub struct UserBanRequest {
     pub duration_seconds: Option<u32>,
     /// How far back the person's messages anywhere on the deployment, DMs included, are
     /// deleted with the ban: 3600 (the last hour) or 86400 (the last day); absent or `null` to
-    /// leave them. Takes Moderate any community.
+    /// leave them. Takes Remove content.
     #[serde(default)]
     pub delete_messages_seconds: Option<u32>,
     /// For a bot, ban its owner too, with the same reason, end, and deletion.
@@ -851,7 +864,7 @@ impl From<app::user_ban::UserBanned> for UserBanOutcome {
 /// the ban ends or is lifted. A bot's token is refused while it stands. Asked to, their messages
 /// from the last hour or day are deleted everywhere. Takes Ban users, over someone whose highest
 /// deployment role is below the caller's, never the caller or the system account; deleting
-/// messages takes Moderate any community too. A ban standing already is replaced (`200`).
+/// messages takes Remove content too. A ban standing already is replaced (`200`).
 /// Written to the moderation log.
 #[utoipa::path(
     put,
@@ -865,7 +878,7 @@ impl From<app::user_ban::UserBanned> for UserBanOutcome {
         (status = OK, description = "A ban that stood was replaced", body = UserBanOutcome),
         (status = BAD_REQUEST, description = "`validation`: the reason, duration, or deletion window, banning oneself or the system account, or `withOwner` for someone who is not a bot", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users (and Moderate any community to delete messages) or over someone of the caller's rank or above", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users (and Remove content to delete messages) or over someone of the caller's rank or above", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

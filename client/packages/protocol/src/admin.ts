@@ -37,6 +37,7 @@ export type CommunitySort = NonNullable<
 export type Growth = components["schemas"]["Growth"];
 export type DeploymentRole = components["schemas"]["DeploymentRole"];
 export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
+export type AdminAccess = components["schemas"]["AdminAccess"];
 export type ModerationEntry = components["schemas"]["ModerationEntry"];
 export type LoggedChannel = components["schemas"]["LoggedChannel"];
 export type LoggedMessage = components["schemas"]["LoggedMessage"];
@@ -417,7 +418,7 @@ export class AdminApi {
   }
 
   /** What the caller may do across the deployment, and the roles that give it. */
-  async deploymentAccess(): Promise<{ permissions: DeploymentPermission[]; roles: string[] }> {
+  async deploymentAccess(): Promise<AdminAccess> {
     return adminRead(await this.#client.api.GET("/api/v1/users/@me/admin"));
   }
 

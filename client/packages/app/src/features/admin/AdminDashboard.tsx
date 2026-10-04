@@ -68,7 +68,8 @@ function useAllowedTabs(): AdminTab[] {
     view ||
     permissions.has("moderateCommunities") ||
     permissions.has("banUsers") ||
-    permissions.has("reviewReports");
+    permissions.has("reviewReports") ||
+    permissions.has("removeContent");
   const allowed: Record<AdminTab, boolean> = {
     overview: view,
     fleet: view,
@@ -82,7 +83,7 @@ function useAllowedTabs(): AdminTab[] {
     federation: permissions.has("manageFederation"),
     plugins: view || permissions.has("managePlugins"),
     moderation: view,
-    transfers: view,
+    transfers: permissions.has("moderateCommunities"),
   };
   return ADMIN_TABS.filter((tab) => allowed[tab]);
 }

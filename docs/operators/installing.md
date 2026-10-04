@@ -201,11 +201,14 @@ aspen-chat-server admin grant <username>
 
 It needs the database and NATS, as the servers do: it announces the change to the account's open
 apps. It gives that account the deployment's top role, making an Administrator role with every
-permission but the moderation ones if there is none: `moderateCommunities` (reading and taking
-things out of any community or DM), `reviewReports` (the reports people make of messages,
-profiles, and nicknames), `banUsers` (banning accounts from the whole deployment), and `messageAnyUser`
-(messaging anyone, which a moderator's warning takes). `admin allow <permission>` lets the top
-role do each of them too. From then on, administrators manage everything else from the
+permission but the moderation ones if there is none: `moderateCommunities` (reading everything in
+any community or DM, the record of files sent in calls, and taking things out; it includes
+`removeContent`), `reviewReports` (the reports people make of messages, profiles, and
+nicknames, and warning the people reported), `removeContent` (deleting a reported message,
+clearing a reported nickname, resetting a reported profile, and deleting a banned account's
+recent messages), `banUsers` (banning accounts from the whole deployment), and `messageAnyUser`
+(messaging anyone, past blocks). `admin allow <permission>` lets the top role do each of them
+too. From then on, administrators manage everything else from the
 Administration Dashboard, starting with its Settings tab: the display name and icon the
 sign-in screen welcomes people with, and the deployment's policies.
 

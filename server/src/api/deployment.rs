@@ -406,7 +406,7 @@ pub struct FileTransferLogQuery {
 }
 
 /// The record of files offered in calls and who received them, newest offer first, a page at a
-/// time. Anyone who may view the dashboard may read it.
+/// time. It tells who sent what to whom in private calls, so it takes Moderate any community.
 #[utoipa::path(
     get,
     path = "/admin/file-transfers",
@@ -426,7 +426,7 @@ pub async fn read_file_transfer_log(
     AdminUser(_session, access): AdminUser,
     Query(query): Query<FileTransferLogQuery>,
 ) -> ApiResult<Json<Vec<FileOfferEntry>>> {
-    access.require(DeploymentPermission::ViewDashboard)?;
+    access.require(DeploymentPermission::ModerateCommunities)?;
     let entries = app::file_transfer::read_log(
         &state,
         query.before,

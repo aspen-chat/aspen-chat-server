@@ -492,7 +492,7 @@ pub async fn grant_top_role(
 
 /// The terminal's change to the top role: allows `permission` to it, or denies it, and tells
 /// its holders. Returns the role's name. Refused when the deployment has no roles yet (`admin
-/// grant` makes the first).
+/// grant` makes the first), and when denying a permission that one the role allows includes.
 pub async fn set_top_role_permission(
     publisher: &impl Publishing,
     conn: &mut AsyncPgConnection,
@@ -508,6 +508,16 @@ pub async fn set_top_role_permission(
             let permissions = if allow {
                 top.permissions | permission.bits()
             } else {
+                // Denying what an allowed permission includes would change nothing it does.
+                if let Some(including) = DeploymentPermission::ALL.iter().find(|p| {
+                    top.permissions.contains(p.bits()) && p.includes().contains(&permission)
+                }) {
+                    return Err(app::Error::Validation(t!(
+                        "deploymentPermissionIncluded",
+                        permission = permission.describe(),
+                        including = including.describe()
+                    )));
+                }
                 top.permissions.difference(permission.bits())
             };
             diesel::update(deployment_role::table.filter(deployment_role::id.eq(top.id)))

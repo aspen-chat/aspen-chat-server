@@ -1,5 +1,6 @@
 //! The deployment's own account, which sends people notices from the deployment itself, such as
-//! a community owner's when `app::everyone_limit` turns Mention everyone off.
+//! a community owner's when `app::everyone_limit` turns Mention everyone off, and the warnings
+//! its moderators give (`app::report`).
 //!
 //! It is one row of `user` with `system` set, made the first time a notice is sent, called what
 //! the deployment is called (`app::deployment_settings`), and labelled as the system wherever it is named. It has no
@@ -82,6 +83,18 @@ pub async fn notify(
     recipient: UserId,
     content: String,
 ) -> app::Result<()> {
+    post(state, recipient, content, app::message::Posting::Text).await?;
+    Ok(())
+}
+
+/// Posts `content` from the system account in its DM with `recipient`, made on first use, and
+/// returns the message.
+pub async fn post(
+    state: &GlobalServerContext,
+    recipient: UserId,
+    content: String,
+    posting: app::message::Posting,
+) -> app::Result<app::message::Message> {
     let mut conn = state.connection_pool.get().await?;
     let (system, dm) = conn
         .transaction(|conn| {
@@ -109,15 +122,5 @@ pub async fn notify(
         })
         .await?;
     drop(conn);
-    app::message::create_message(
-        state,
-        system,
-        dm,
-        content,
-        Vec::new(),
-        false,
-        app::message::Posting::Text,
-    )
-    .await?;
-    Ok(())
+    app::message::create_message(state, system, dm, content, Vec::new(), false, posting).await
 }

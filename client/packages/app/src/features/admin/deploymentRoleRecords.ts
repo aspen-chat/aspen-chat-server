@@ -1,4 +1,4 @@
-import type { DeploymentPermission, DeploymentRole } from "@aspen/protocol";
+import type { AdminAccess, DeploymentPermission, DeploymentRole } from "@aspen/protocol";
 import { useCallback } from "react";
 import { useSync } from "@/api/hooks";
 import { useAdminRead } from "@/features/admin/useAdminRead";
@@ -10,20 +10,32 @@ export const DEPLOYMENT_PERMISSIONS: readonly DeploymentPermission[] = [
   "manageVoiceServers",
   "manageDeploymentRoles",
   "moderateCommunities",
-  "manageBots",
   "manageFederation",
   "reviewReports",
+  "removeContent",
   "manageReportCategories",
   "banUsers",
   "messageAnyUser",
   "manageDeploymentSettings",
+  "managePlugins",
 ];
 
 /** The deployment's roles and the caller's standing among them, read together. */
 export interface DeploymentRoles {
   roles: DeploymentRole[];
-  /** The caller's permissions and roles. */
-  mine: { permissions: DeploymentPermission[]; roles: string[] };
+  /** The caller's permissions and roles, and which permissions include others. */
+  mine: AdminAccess;
+}
+
+/** The selected permission that includes `permission`, which a role then holds whether it is
+ * selected or not; undefined when none does. */
+export function includedBy(
+  permission: DeploymentPermission,
+  selected: ReadonlySet<DeploymentPermission>,
+  inclusions: AdminAccess["inclusions"],
+): DeploymentPermission | undefined {
+  return inclusions.find((i) => selected.has(i.permission) && i.includes.includes(permission))
+    ?.permission;
 }
 
 /** Reads the deployment's roles with the caller's own, for the sections that need both. */

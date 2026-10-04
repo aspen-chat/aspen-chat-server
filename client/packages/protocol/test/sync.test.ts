@@ -83,7 +83,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
-    "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [] }),
+    "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [], inclusions: [] }),
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
     "/api/v1/plugins": () => json([]),
     "/api/v1/users/statuses": (url) =>
@@ -1081,7 +1081,8 @@ describe("AspenSync", () => {
     const searches: string[] = [];
     const { sync } = makeSync({
       ...bootstrapResponses(),
-      "/api/v1/users/@me/admin": () => json({ permissions: ["viewDashboard"], roles: [] }),
+      "/api/v1/users/@me/admin": () =>
+        json({ permissions: ["viewDashboard"], roles: [], inclusions: [] }),
       "/api/v1/admin/users": (url) => {
         searches.push(url.search);
         return json([]);

@@ -199,7 +199,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
       return json(route, { data: [], included: { users: [] } });
     }
     if (path === "/users/@me/admin") {
-      return json(route, { permissions: [], roles: [] });
+      return json(route, { permissions: [], roles: [], inclusions: [] });
     }
     if (path.endsWith("/messages")) {
       return json(route, { data: [], included: { users } });
