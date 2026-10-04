@@ -1,0 +1,25 @@
+[package]
+name = "aspen_word_filter"
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "An example Aspen plugin: a word filter that masks or refuses words, flags others, and counts what it sees"
+publish = false
+
+# Its own workspace: it is built for `wasm32-wasip2`, which nothing else in the repository
+# targets, so it is excluded from the root workspace. `cargo build --release --target
+# wasm32-wasip2` here writes the component the server's tests install.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.62.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

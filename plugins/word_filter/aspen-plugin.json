@@ -1,0 +1,90 @@
+{
+  "id": "org.aspenchat.wordfilter",
+  "version": "1.0.0",
+  "api": 1,
+  "component": "target/wasm32-wasip2/release/aspen_word_filter.wasm",
+  "name": "name",
+  "description": "description",
+  "author": "The Aspen authors",
+  "homepage": "https://github.com/aspen-chat/aspen-chat-server",
+  "defaultLanguage": "en",
+  "messages": {
+    "en": {
+      "name": "Word filter",
+      "description": "Masks or refuses the words you list, and flags messages holding the words you watch for.",
+      "retention": "Keeps a count of each channel's messages, until the channel is deleted. Keeps nothing of what messages say.",
+      "refused": "Your message holds “%{word}”, which this community does not allow.",
+      "watchedLabel": "Mentions “%{word}”",
+      "watchedDetail": "This community's moderators asked to be told of this word.",
+      "burstLabel": "Posted many messages quickly",
+      "settingWords": "Words to filter everywhere",
+      "settingWordsDescription": "One a line. Whole words only, ignoring case.",
+      "settingAction": "What to do with a filtered word",
+      "actionMask": "Replace it with asterisks",
+      "actionRefuse": "Refuse the message",
+      "communityWords": "Words to filter here",
+      "communityWatchWords": "Words to flag",
+      "communityWatchWordsDescription": "Messages holding one are marked for everyone who reads them.",
+      "communityAlertChannel": "Where to report refused messages",
+      "principalName": "Word filter",
+      "commandWordcount": "How many messages the filter has counted in this channel"
+    }
+  },
+  "permissions": [
+    "messages.read",
+    "messages.rewrite",
+    "messages.refuse",
+    "messages.annotate",
+    "storage",
+    "routes",
+    "events",
+    "act"
+  ],
+  "hooks": {
+    "intercept": {
+      "message.create": { "failure": "open" },
+      "message.edit": { "failure": "open" }
+    },
+    "observe": ["message.create", "command.invoke"]
+  },
+  "settings": [
+    {
+      "name": "words",
+      "type": "textList",
+      "label": "settingWords",
+      "description": "settingWordsDescription",
+      "maxItems": 500
+    },
+    {
+      "name": "action",
+      "type": "choice",
+      "label": "settingAction",
+      "default": "mask",
+      "options": [
+        { "value": "mask", "label": "actionMask" },
+        { "value": "refuse", "label": "actionRefuse" }
+      ]
+    }
+  ],
+  "communitySettings": [
+    { "name": "words", "type": "textList", "label": "communityWords", "maxItems": 500 },
+    {
+      "name": "watchWords",
+      "type": "textList",
+      "label": "communityWatchWords",
+      "description": "communityWatchWordsDescription",
+      "maxItems": 100
+    },
+    { "name": "alertChannel", "type": "channel", "label": "communityAlertChannel" }
+  ],
+  "storageQuota": 1048576,
+  "principal": {
+    "username": "wordfilter",
+    "displayName": "principalName",
+    "permissions": ["viewChannel", "sendMessages"],
+    "commands": [
+      { "name": "wordcount", "description": "How many messages the filter has counted in this channel", "parameters": [] }
+    ]
+  },
+  "retention": "retention"
+}

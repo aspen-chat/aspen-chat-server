@@ -1,0 +1,288 @@
+/// The interface between Aspen and its plugins: what a plugin exports for the host to call, and
+/// what the host offers it in return. `spec/plugins.md` is the design it follows: what each
+/// permission allows, when each hook is called, and how reads are decided. Within version 1 it
+/// changes only by addition.
+package aspen:plugin@1.0.0;
+
+interface types {
+    /// An id: a UUID in its hyphenated form.
+    type id = string;
+
+    /// Text a person reads: a key of the plugin's `messages`, and the values its `%{name}`
+    /// placeholders are filled with. The host shows it in each reader's language.
+    record text {
+        key: string,
+        args: list<tuple<string, string>>,
+    }
+
+    /// Someone who posts.
+    record person {
+        id: id,
+        username: string,
+        display-name: option<string>,
+        bot: bool,
+        /// The domain of their home deployment, for a user of another deployment.
+        home-domain: option<string>,
+        /// The community roles they hold besides everyone's; empty outside a community.
+        roles: list<id>,
+    }
+
+    /// Where a message is.
+    record place {
+        channel: id,
+        /// The community, for a community channel or a thread in one.
+        community: option<id>,
+        /// For a thread, the channel it was started in.
+        thread-of: option<id>,
+        /// Whether it is a DM or group DM, or a thread in one.
+        direct: bool,
+    }
+
+    /// An attachment's record. Its bytes are read with `read-attachment`.
+    record attachment {
+        id: id,
+        file-name: string,
+        content-type: option<string>,
+        size: u64,
+    }
+
+    /// A message about to be saved.
+    record draft {
+        author: person,
+        place: place,
+        content: string,
+        attachments: list<attachment>,
+        /// The message being edited, for `message.edit`.
+        editing: option<id>,
+    }
+
+    /// A message as saved.
+    record message {
+        id: id,
+        author: person,
+        place: place,
+        content: string,
+        attachments: list<attachment>,
+        /// Its kind's wire name: `standard`, `command`, `poll`, and so on.
+        kind: string,
+        /// When it was posted, in RFC 3339.
+        timestamp: string,
+        /// When its text last changed, in RFC 3339.
+        edited-at: option<string>,
+        /// The plugins that rewrote its text.
+        altered-by: list<string>,
+    }
+
+    /// A deleted message.
+    record deleted-message {
+        id: id,
+        place: place,
+    }
+
+    /// A command sent to the plugin's principal.
+    record command {
+        /// The message that shows it.
+        invocation: id,
+        place: place,
+        invoker: person,
+        name: string,
+        /// Its arguments, checked against their parameters' types, as JSON: an array of
+        /// `{"type": …, "value": …}` objects in order.
+        arguments: string,
+    }
+
+    /// What an intercepting hook decides.
+    variant verdict {
+        /// Save it as it is.
+        allow,
+        /// Save it with this text instead (`messages.rewrite`).
+        rewrite(string),
+        /// Do not save it; the author reads why (`messages.refuse`).
+        refuse(text),
+    }
+
+    /// What an observing hook is told of.
+    variant observed {
+        message-created(message),
+        message-edited(message),
+        message-deleted(deleted-message),
+        command-invoked(command),
+        /// A community turned the plugin on.
+        plugin-enabled(id),
+        /// A community turned the plugin off.
+        plugin-disabled(id),
+    }
+
+    /// Whom a call serves, and where.
+    record context {
+        /// The community it runs for.
+        community: option<id>,
+        /// That community's settings for the plugin, as a JSON object.
+        community-settings: option<string>,
+        /// The language of whom it serves, a BCP 47 tag, when it serves someone.
+        locale: option<string>,
+        /// For an observing call, the event's id, the same each time it is delivered.
+        event-id: option<string>,
+    }
+
+    enum severity {
+        info,
+        notice,
+        warning,
+    }
+
+    /// What a plugin says about a message or a person.
+    record annotation {
+        /// Its own name for what it says; one of each kind per message or person.
+        kind: string,
+        severity: severity,
+        label: text,
+        detail: option<text>,
+        /// An `https` link for more.
+        link: option<string>,
+    }
+
+    /// Where stored data lives, and so who may read it through a route and when it goes.
+    variant scope {
+        deployment,
+        community(id),
+        channel(id),
+        user(id),
+    }
+
+    /// Who receives a plugin event.
+    variant audience {
+        /// Whoever may view the channel.
+        channel(id),
+        /// The community's members.
+        community(id),
+        /// That user alone.
+        user(id),
+    }
+
+    /// A request to one of the plugin's routes.
+    record request {
+        method: string,
+        /// The path after `/api/v1/plugins/{id}/routes/`.
+        path: string,
+        /// The query string, without its `?`.
+        query: string,
+        content-type: option<string>,
+        body: list<u8>,
+        /// Who is asking.
+        caller: id,
+    }
+
+    /// A route's answer.
+    record response {
+        status: u16,
+        content-type: option<string>,
+        body: list<u8>,
+    }
+
+    /// A call to one of the manifest's `hosts`, over HTTPS.
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    /// Why a host call did not do what was asked.
+    variant error {
+        /// The plugin lacks the permission, or whoever it acts as may not.
+        denied(string),
+        /// There is no such thing, or whoever it acts as may not see it.
+        not-found,
+        /// A limit was reached: a quota, a size, a rate.
+        limit(string),
+        /// What was asked for is malformed.
+        invalid(string),
+        /// Something the host needs failed; trying later may work.
+        unavailable(string),
+    }
+
+    enum level {
+        debug,
+        info,
+        warn,
+        error,
+    }
+}
+
+/// What the host offers. Each call is checked against the plugin's permissions, and reads are
+/// made as whoever the call serves: the caller of a route, and otherwise the plugin's principal.
+interface host {
+    use types.{id, level, annotation, scope, audience, http-request, http-response, message, error};
+
+    /// The deployment's settings for the plugin, as a JSON object.
+    settings: func() -> string;
+
+    /// Writes to the server's log under the plugin's id.
+    log: func(level: level, message: string);
+
+    /// Adds `amount` to the count of `key` in the current window of `window-seconds`, and
+    /// returns the count. Windows are fixed and aligned to the epoch.
+    counter-add: func(key: string, window-seconds: u32, amount: u32) -> result<u64, error>;
+
+    /// Sets the plugin's annotation of this kind on a message (`messages.annotate`).
+    annotate-message: func(message: id, annotation: annotation) -> result<_, error>;
+    clear-message-annotation: func(message: id, kind: string) -> result<_, error>;
+
+    /// Sets the plugin's annotation of this kind on a person (`users.annotate`).
+    annotate-user: func(user: id, annotation: annotation) -> result<_, error>;
+    clear-user-annotation: func(user: id, kind: string) -> result<_, error>;
+
+    /// The bytes of an attachment of a message the call was shown, or that the caller of a
+    /// route may read (`attachments.read`).
+    read-attachment: func(attachment: id) -> result<list<u8>, error>;
+
+    /// A message, as whoever the call serves may read it (`messages.read`).
+    read-message: func(message: id) -> result<message, error>;
+
+    /// Calls one of the manifest's `hosts` (`network`). Not while intercepting.
+    fetch: func(request: http-request) -> result<http-response, error>;
+
+    /// The plugin's own data (`storage`).
+    storage-get: func(scope: scope, key: string) -> result<option<list<u8>>, error>;
+    storage-set: func(scope: scope, key: string, value: list<u8>) -> result<_, error>;
+    storage-delete: func(scope: scope, key: string) -> result<_, error>;
+    /// The keys after `after` that begin with `prefix`, in order, at most `limit` (100 at most).
+    storage-list: func(scope: scope, prefix: string, after: option<string>, limit: u32) -> result<list<tuple<string, list<u8>>>, error>;
+
+    /// Publishes a `pluginEvent` with this kind and JSON payload (`events`).
+    publish: func(audience: audience, kind: string, payload: string) -> result<_, error>;
+
+    /// Acts as the plugin's principal (`act`), with its permissions where it acts. While
+    /// intercepting, an action is run once the hook has answered, and returns nothing.
+    send-message: func(channel: id, content: string) -> result<option<id>, error>;
+    delete-message: func(message: id) -> result<_, error>;
+    add-reaction: func(message: id, emoji: string) -> result<_, error>;
+    remove-member: func(community: id, user: id) -> result<_, error>;
+    ban-member: func(community: id, user: id, reason: option<string>, seconds: option<u64>) -> result<_, error>;
+}
+
+/// What a plugin exports. The host calls only the hooks its manifest names.
+interface hooks {
+    use types.{draft, verdict, observed, context, request, response};
+
+    /// Decides a message about to be saved (`message.create`, `message.edit`).
+    intercept: func(draft: draft, context: context) -> verdict;
+
+    /// Is told of something that happened. An error is logged, and the event delivered again.
+    observe: func(event: observed, context: context) -> result<_, string>;
+
+    /// Answers a request to one of its routes.
+    route: func(request: request, context: context) -> response;
+}
+
+world plugin {
+    import host;
+    export hooks;
+}
