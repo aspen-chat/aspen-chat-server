@@ -122,6 +122,31 @@ How plugins run; which are installed, and their settings, are in the database (s
 | --- | --- | --- |
 | `enabled` | `true` | Whether the Aspen app on phones may ask to be woken when it is not open, for DMs and messages that tag someone. Phones are woken through the relay of whoever published their app (the Aspen Foundation's, for the published apps) or through a UnifiedPush distributor; this server calls them over HTTPS, as it calls other deployments. What it sends them is encrypted to the phone, and says only which channel and message to fetch. |
 
+## `[email]`
+
+Without this section the deployment sends no mail: accounts have no email address, nobody can
+reset a forgotten password by email, and the email deployment settings below cannot be turned
+on. With it, people may give an address at registration or in their account settings, and the
+deployment sends verification codes, password reset codes, the daily digest people ask for, and
+the newsletter, when its administrators run one. Mail waits in a queue in the database, password
+resets first, and is sent by every API server whose `send` is on: by default all of them, so the
+SMTP server must accept connections from each. A large deployment can turn `send` off on most
+servers and leave sending, the SMTP credentials, and the work of making digests to a few, which
+may be API servers kept out of the load balancer for it; those few must reach the SMTP server,
+and the rest need only `from` and `public_url`.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `send` | `true` | Whether this server sends mail and makes daily digests. With it off, the server still takes addresses and queues mail, and tells the senders at once (over NATS) when someone waits for it; at least one server of the deployment must send, or mail waits until one does. |
+| `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
+| `from` | required | Who mail comes from, such as `Example Chat <noreply@chat.example.org>`. Its domain should publish SPF and DKIM records for the SMTP server you use, or mail lands in spam. |
+| `max_per_second` | none | The most mail the whole deployment hands to the SMTP server in a second, however many servers send, counted in Valkey; set it under your provider's sending quota (Amazon SES starts accounts at 14 a second). A second's worth may go back to back. Left out, each sending server sends up to eight at once. |
+| `public_url` | `https://` and `[federation] domain` | This API server's address as people's mail programs reach it, such as `https://chat.example.org`: the unsubscribe links in digests and newsletters, and the one-click unsubscribe mail programs offer, go to `/email/unsubscribe` there. One of the two is required. |
+
+Mail the SMTP server refuses for good (an address that does not exist) is dropped and logged;
+mail it cannot take now is tried again, waiting longer each time, for about a day. The metrics
+`aspen_emails_sent_total` and `aspen_emails_failed_total` count both.
+
 ## `[metrics]`
 
 | Setting | Default | |
@@ -191,6 +216,9 @@ anyone has an account.
 | `bots-max-per-user` | `25` | The most bots one person may own. |
 | `everyone-mention-limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the deployment's own account (which cannot be signed in to, messaged, or blocked) and may turn it back on. `0` never turns it off. |
 | `custom-emoji-limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
+| `email-required` | `false` | Creating an account takes an email address. Needs `[email]`. It binds registration only: accounts made before it was turned on are not asked for one. |
+| `email-verification-required` | `false` | An account that has an email address must verify it, by the code mailed to it, before it can use the deployment; until then it can only verify, change, or resend its address, or sign out. Turned on, the apps of those with an unverified address are asked at once. Accounts without an address are not affected unless `email-required` is on too, and then only once they give one. Needs `[email]`. |
+| `newsletter-enabled` | `false` | The deployment has a newsletter: people may subscribe at registration (unticked by default) and in their account settings, and holders of Send newsletters write and send posts under **Newsletter** in the dashboard. Only verified addresses receive it, and each piece carries an unsubscribe link. Needs `[email]`. |
 | `file-transfers` | `true` | Whether people may offer files to one another in calls. Transfers go between their devices, or through a voice server's relay (`[transfer]` in `voice_server.toml`); either way this deployment keeps a record of each offer and transfer for its moderators, never the file. `false` turns the whole feature off: no one can offer a file, whatever the channels' permissions, and calls in progress follow at once. |
 | `users-emigration`, `bots-emigration` | `closed` | Whether this deployment's accounts may use other deployments: `closed`, `open`, `allowList`, or `blockList`. See [Federation](federation.md). |
 | `users-immigration`, `bots-immigration` | `closed` | Whether other deployments' accounts may use this one, the same way. Closing or narrowing it signs out at once those it no longer admits. |

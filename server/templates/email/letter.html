@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="{{ letter.lang }}" dir="{{ letter.dir }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ letter.subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f2;color:#1d1d1b;font-family:-apple-system,'Segoe UI',Roboto,'Noto Sans',sans-serif;font-size:16px;line-height:1.5;">
+<div style="max-width:600px;margin:0 auto;padding:24px 16px;">
+<p style="margin:0 0 16px;font-size:14px;color:#5c5c58;">{{ letter.deployment }}</p>
+<div style="background:#ffffff;border-radius:8px;padding:24px;">
+<h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;">{{ letter.title }}</h1>
+{% for paragraph in letter.intro %}<p style="margin:0 0 12px;">{{ paragraph }}</p>
+{% endfor %}
+{% if let Some(code) = letter.code %}<p style="margin:16px 0;font-family:'Intel One Mono',ui-monospace,monospace;font-size:32px;letter-spacing:6px;font-weight:bold;">{{ code }}</p>
+{% endif %}
+{% if let Some(html) = letter.body_html %}<div>{{ html|safe }}</div>
+{% endif %}
+{% for section in letter.sections %}<div style="margin:24px 0 0;">
+<h2 style="margin:0 0 8px;font-size:17px;"><a href="{{ section.link }}" style="color:#2f6b3a;">{{ section.heading }}</a></h2>
+{% for item in section.items %}<p style="margin:0 0 8px;"><strong>{{ item.author }}</strong> <span style="color:#5c5c58;font-size:13px;">{{ item.time }}</span><br>{{ item.text }}</p>
+{% endfor %}
+{% if let Some(more) = section.more %}<p style="margin:0 0 8px;"><a href="{{ section.link }}" style="color:#2f6b3a;">{{ more }}</a></p>
+{% endif %}
+</div>
+{% endfor %}
+{% for paragraph in letter.outro %}<p style="margin:12px 0 0;">{{ paragraph }}</p>
+{% endfor %}
+</div>
+<p style="margin:16px 0 0;font-size:13px;color:#5c5c58;">{% for line in letter.footer %}{{ line }}<br>{% endfor %}{% if let Some(unsubscribe) = letter.unsubscribe %}<a href="{{ unsubscribe.url }}" style="color:#5c5c58;">{{ unsubscribe.label }}</a>{% endif %}</p>
+</div>
+</body>
+</html>

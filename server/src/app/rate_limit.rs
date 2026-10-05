@@ -69,6 +69,24 @@ redis.call('SET', KEYS[1], next_tat, 'PX', next_tat - now)
 return 0
 ";
 
+/// Takes one request from the GCRA bucket `key` at `rate`, for limits kept outside the API's
+/// routes (`app::email::outbox`'s sending rate): `None` when it is allowed, or how long until it
+/// would be.
+pub(crate) async fn take(
+    valkey: &Client,
+    key: &str,
+    rate: aspen_limits::Rate,
+) -> Result<Option<Duration>, fred::error::Error> {
+    let wait: i64 = valkey
+        .eval(
+            GCRA,
+            key.to_string(),
+            vec![rate.emission_ms, rate.tolerance_ms],
+        )
+        .await?;
+    Ok((wait > 0).then(|| Duration::from_millis(wait.unsigned_abs())))
+}
+
 /// Who may call a route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {

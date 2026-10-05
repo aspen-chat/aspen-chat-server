@@ -362,6 +362,9 @@ export class AspenSync {
       onEnrollmentRequired: () => {
         options.client.noticeEnrollmentRequired();
       },
+      onVerificationRequired: () => {
+        options.client.noticeVerificationRequired();
+      },
     };
     if (options.validateEvents !== undefined) {
       streamOptions.validate = options.validateEvents;

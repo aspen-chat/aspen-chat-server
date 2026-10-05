@@ -278,6 +278,7 @@ async fn ensure_principal(
                     bot_owner: None,
                     bot_public: None,
                     name_hue: None,
+                    public_email: None,
                 }),
             )
             .await?;
@@ -310,6 +311,7 @@ async fn ensure_principal(
                     home_icon: None,
                     name_hue: None,
                     plugin: Some(manifest.id.clone()),
+                    public_email: None,
                 })
                 .execute(conn)
                 .await

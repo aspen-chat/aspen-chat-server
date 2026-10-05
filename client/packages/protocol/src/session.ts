@@ -15,6 +15,11 @@ export interface Session {
    * session can do nothing but add one or sign out.
    */
   twoFactorEnrollmentRequired?: boolean;
+  /**
+   * The server requires a verified email address and this account's is not verified. Until it
+   * is, the session can do nothing but verify, change, or resend it, or sign out.
+   */
+  emailVerificationRequired?: boolean;
 }
 
 /**

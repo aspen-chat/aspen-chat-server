@@ -18,7 +18,9 @@ that every API server signs with the same one. Anyone holding a backup can sign 
 deployment. Encrypt backups, and limit who can read them. If one leaks, replace the key with
 `aspen-chat-server federation rotate-key --compromised` and tell the deployments you federate
 with (see [Federation](federation.md#keys)). The sessions and password hashes in it are
-sensitive too: a leak means everyone should change their password.
+sensitive too: a leak means everyone should change their password. So are people's email
+addresses, and the mail waiting to be sent, which can hold a password reset code for the few
+seconds before it goes.
 
 The database also holds the deployment's push key, which phones' relays know it by. A
 deployment restored without it makes a new one, and phones then need to be opened once to be
@@ -40,8 +42,9 @@ posted them would have to post them again.
   next snapshot puts the record of its calls right, and each API server reads the settings
   afresh.
 - **Valkey** holds rate limit counters, who is online, and sign-in steps in progress (tickets
-  for a second factor, passkey ceremonies). After a loss, people halfway through signing in
-  start again; nobody is signed out.
+  for a second factor, passkey ceremonies, email verification codes, password resets). After a
+  loss, people halfway through signing in, verifying an address, or resetting a password start
+  again; nobody is signed out.
 - **The servers themselves** keep nothing: rebuild or redeploy them.
 - **`aspen.toml` and `voice_server.toml`** are configuration, not data, but they hold secrets
   (the database password, the storage keys, `token_secret`). Keep them with your other secrets,

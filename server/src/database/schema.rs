@@ -235,6 +235,9 @@ diesel::table! {
         bots_immigration -> Text,
         bots_shared_list -> Bool,
         bots_immigration_invite_required -> Bool,
+        email_required -> Bool,
+        email_verification_required -> Bool,
+        newsletter_enabled -> Bool,
     }
 }
 
@@ -243,6 +246,19 @@ diesel::table! {
         channel -> Uuid,
         user -> Uuid,
         joined_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    email_outbox (id) {
+        id -> Uuid,
+        priority -> Int2,
+        user -> Uuid,
+        address -> Nullable<Text>,
+        mail -> Jsonb,
+        attempts -> Int4,
+        not_before -> Timestamptz,
+        created_at -> Timestamptz,
     }
 }
 
@@ -420,6 +436,22 @@ diesel::table! {
         channel -> Nullable<Uuid>,
         subject -> Nullable<Text>,
         at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    newsletter_post (id) {
+        id -> Uuid,
+        subject -> Text,
+        body -> Text,
+        author -> Nullable<Uuid>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        sent_at -> Nullable<Timestamptz>,
+        sent_by -> Nullable<Uuid>,
+        queued_through -> Nullable<Uuid>,
+        queued_at -> Nullable<Timestamptz>,
+        recipients -> Int8,
     }
 }
 
@@ -723,6 +755,7 @@ diesel::table! {
         banned_until -> Nullable<Timestamptz>,
         name_hue -> Nullable<Int2>,
         plugin -> Nullable<Text>,
+        public_email -> Nullable<Text>,
     }
 }
 
@@ -752,6 +785,23 @@ diesel::table! {
     user_deployment_role (user, role) {
         user -> Uuid,
         role -> Uuid,
+    }
+}
+
+diesel::table! {
+    user_email (user) {
+        user -> Uuid,
+        address -> Text,
+        verified_at -> Nullable<Timestamptz>,
+        shown -> Bool,
+        newsletter -> Bool,
+        digest -> Bool,
+        digest_time_zone -> Text,
+        digest_hour -> Int2,
+        digest_next_at -> Nullable<Timestamptz>,
+        digest_since -> Nullable<Timestamptz>,
+        locale -> Text,
+        unsubscribe_token -> Text,
     }
 }
 
@@ -860,6 +910,7 @@ diesel::joinable!(custom_emoji -> user (created_by));
 diesel::joinable!(deployment_settings -> icon (icon));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
+diesel::joinable!(email_outbox -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
 diesel::joinable!(federation_list_entry -> federated_deployment (domain));
 diesel::joinable!(federation_list_entry -> user (added_by));
@@ -925,6 +976,7 @@ diesel::joinable!(user_annotation -> plugin (plugin));
 diesel::joinable!(user_annotation -> user (user));
 diesel::joinable!(user_deployment_role -> deployment_role (role));
 diesel::joinable!(user_deployment_role -> user (user));
+diesel::joinable!(user_email -> user (user));
 diesel::joinable!(user_foreign_deployment -> user (user));
 diesel::joinable!(user_preferences -> user (user));
 diesel::joinable!(voice_participant -> user (user));
@@ -959,6 +1011,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     deployment_role,
     deployment_settings,
     dm_recipient,
+    email_outbox,
     federated_deployment,
     federation_key,
     federation_list_entry,
@@ -972,6 +1025,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     message_attachment,
     message_link_preview,
     moderation_log,
+    newsletter_post,
     notification_setting,
     passkey,
     pin,
@@ -1000,6 +1054,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_annotation,
     user_block,
     user_deployment_role,
+    user_email,
     user_foreign_deployment,
     user_preferences,
     voice_participant,

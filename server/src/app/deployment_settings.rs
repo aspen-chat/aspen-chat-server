@@ -81,6 +81,13 @@ pub struct DeploymentSettings {
     /// Whether people may offer files to one another in calls. Off, no join token grants
     /// Transfer files, whatever the channel's permissions say.
     pub file_transfers: bool,
+    /// Whether registering takes an email address (`app::email`).
+    pub email_required: bool,
+    /// Whether an account with an unverified email address must verify it before using the
+    /// deployment.
+    pub email_verification_required: bool,
+    /// Whether the deployment has a newsletter its users may subscribe to.
+    pub newsletter_enabled: bool,
     pub federation: FederationPolicy,
 }
 
@@ -106,6 +113,9 @@ struct SettingsRow {
     everyone_mention_limit: i32,
     custom_emoji_limit: i32,
     file_transfers: bool,
+    email_required: bool,
+    email_verification_required: bool,
+    newsletter_enabled: bool,
     users_emigration: Gate,
     users_immigration: Gate,
     users_shared_list: bool,
@@ -132,6 +142,9 @@ impl From<SettingsRow> for DeploymentSettings {
             everyone_mention_limit: count(row.everyone_mention_limit),
             custom_emoji_limit: count(row.custom_emoji_limit),
             file_transfers: row.file_transfers,
+            email_required: row.email_required,
+            email_verification_required: row.email_verification_required,
+            newsletter_enabled: row.newsletter_enabled,
             federation: FederationPolicy {
                 users: MigrationRules {
                     emigration: row.users_emigration,
@@ -169,6 +182,9 @@ pub struct SettingsChange {
     #[diesel(skip_update)]
     pub custom_emoji_limit: Option<u32>,
     pub file_transfers: Option<bool>,
+    pub email_required: Option<bool>,
+    pub email_verification_required: Option<bool>,
+    pub newsletter_enabled: Option<bool>,
     pub users_emigration: Option<Gate>,
     pub users_immigration: Option<Gate>,
     pub users_shared_list: Option<bool>,
@@ -230,6 +246,9 @@ impl SettingsChange {
             everyone_mention_limit => next.everyone_mention_limit,
             custom_emoji_limit => next.custom_emoji_limit,
             file_transfers => next.file_transfers,
+            email_required => next.email_required,
+            email_verification_required => next.email_verification_required,
+            newsletter_enabled => next.newsletter_enabled,
             users_emigration => users.emigration,
             users_immigration => users.immigration,
             users_shared_list => users.shared_list,
@@ -356,7 +375,7 @@ pub async fn update_as(
         access.require(DeploymentPermission::ManageDeploymentSettings)?;
     }
     let mut conn = state.connection_pool.get().await?;
-    let changed = update(state, conn.as_mut(), change).await?;
+    let changed = update(state, conn.as_mut(), app::email::available(state), change).await?;
     state.settings.offer(changed.clone());
     drop(conn);
     read_with_icon(state).await
@@ -365,10 +384,12 @@ pub async fn update_as(
 /// Changes the settings, for the dashboard (through [`update_as`]) or the terminal, and answers
 /// with them as they now are. A display name is trimmed and from 1 to 64 characters; an icon
 /// must be one whose upload is confirmed; a gate opens only on a deployment with a domain, and a
-/// shared list needs both of its gates to read the same kind of list.
+/// shared list needs both of its gates to read the same kind of list; what needs mail turns on
+/// only where `email_available`, `[email]` being configured.
 pub async fn update(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
+    email_available: bool,
     mut change: SettingsChange,
 ) -> app::Result<DeploymentSettings> {
     if let Some(Some(name)) = &change.display_name {
@@ -396,6 +417,17 @@ pub async fn update(
                     .into();
                 let wanted = change.applied_to(&before);
                 validate(&wanted)?;
+                let turns_on = |now: bool, then: bool| now && !then;
+                if !email_available
+                    && (turns_on(wanted.email_required, before.email_required)
+                        || turns_on(
+                            wanted.email_verification_required,
+                            before.email_verification_required,
+                        )
+                        || turns_on(wanted.newsletter_enabled, before.newsletter_enabled))
+                {
+                    return Err(app::Error::Validation(t!("emailSettingNeedsMail")));
+                }
                 if wanted == before {
                     return Ok((before.clone(), before));
                 }

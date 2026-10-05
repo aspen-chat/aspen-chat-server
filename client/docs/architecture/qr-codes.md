@@ -27,8 +27,10 @@
   frames scaled to 640 pixels across read five times a second by `zxing-wasm`'s reader, whose
   WebAssembly is served with the app (`zxing.ts`) and loaded when the scanner first opens.
   `ScanCodeButton` reads what a code leads to (`parseAspenLink`, `aspenLinks.ts`: a sign-in
-  code, a registration invite, or a community invite, under whatever address it was shared)
-  and answers a code that is not Aspen's, or not the kind wanted there, without closing; the
+  code, a registration invite, a community invite, or a channel or DM, as the links in the
+  server's mail name them (`/communities/{id}/channels/{id}`, `/dms/{id}`), under whatever
+  address it was shared) and answers a code that is not Aspen's, or not the kind wanted there,
+  without closing; the
   join form scans invites, and Sign-in and security, the sign-in screen, and the server form
   scan sign-in codes. In the desktop and mobile apps `useOpenAppLinks` (`src/api/appLinks.ts`) opens
   the `aspen://app/…` links the system hands over, at launch or while running, the same way.

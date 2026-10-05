@@ -105,6 +105,10 @@ pub enum EventStreamErrorCode {
     /// add one. Sent at `identify`, and to an open stream when the deployment starts requiring
     /// one. Close code 4403.
     TwoFactorEnrollmentRequired,
+    /// The server requires a verified email address and the account's is not; the session may
+    /// only verify, change, or resend it. Sent at `identify`, and to an open stream when the
+    /// deployment starts requiring one. Close code 4428.
+    EmailVerificationRequired,
     /// No `identify` frame arrived within the allowed time. Close code 4408.
     IdentifyTimeout,
     /// The account was banned from the deployment, which the `accountBanned` event before
@@ -120,6 +124,7 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::BadRequest => 4400,
             EventStreamErrorCode::Unauthorized => 4401,
             EventStreamErrorCode::TwoFactorEnrollmentRequired => 4403,
+            EventStreamErrorCode::EmailVerificationRequired => 4428,
             EventStreamErrorCode::IdentifyTimeout => 4408,
             EventStreamErrorCode::Banned => 4410,
             EventStreamErrorCode::Internal => 1011,
@@ -132,6 +137,9 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::Unauthorized => t!("invalidAuthToken"),
             EventStreamErrorCode::TwoFactorEnrollmentRequired => {
                 t!("problemTwoFactorEnrollmentRequired")
+            }
+            EventStreamErrorCode::EmailVerificationRequired => {
+                t!("problemEmailVerificationRequired")
             }
             EventStreamErrorCode::IdentifyTimeout => t!("eventStreamIdentifyTimeout"),
             EventStreamErrorCode::Banned => t!("eventStreamBanned"),
@@ -333,6 +341,9 @@ async fn identify(
     if caller.enrollment_required(&state.settings()) {
         return Err(Rejection(EventStreamErrorCode::TwoFactorEnrollmentRequired));
     }
+    if caller.verification_required(&state.settings()) {
+        return Err(Rejection(EventStreamErrorCode::EmailVerificationRequired));
+    }
     app::user_status::mark_user_online(state, &user);
     Ok(Identified {
         user,
@@ -360,6 +371,9 @@ fn event_frame(event: &FeedEvent) -> Result<Message, axum::Error> {
 struct Fed {
     written: usize,
     ends: Option<StreamEnd>,
+    /// When one of the events told the user their email account changed, whether the last of
+    /// them says it now holds an address it has not verified.
+    email_unverified: Option<bool>,
 }
 
 /// Writes one delivery's frames without flushing.
@@ -372,6 +386,10 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
             Ok(Fed {
                 written: events.len(),
                 ends: events.iter().find_map(|event| event.ends()),
+                email_unverified: events
+                    .iter()
+                    .rev()
+                    .find_map(|event| event.email_unverified()),
             })
         }
         Delivery::Live(event) => {
@@ -379,15 +397,38 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
             Ok(Fed {
                 written: 1,
                 ends: event.ends(),
+                email_unverified: event.email_unverified(),
             })
         }
     }
 }
 
+/// Whether `settings` require a verified email address and `user`'s, as it is now, is not. A
+/// failure to read it is logged and keeps the stream open; the next request decides.
+async fn owes_verified_email(
+    state: &GlobalServerContext,
+    user: crate::app::UserId,
+    settings: &DeploymentSettings,
+) -> bool {
+    if !settings.email_verification_required {
+        return false;
+    }
+    match app::email::unverified(state, user).await {
+        Ok(unverified) => unverified,
+        Err(e) => {
+            warn!(error = %e, "could not read whether an email address is verified");
+            false
+        }
+    }
+}
+
 /// Delivers the event feed to the socket until either side ends it, for `caller`'s session of
-/// `user_row`. `settings` is this server's copy of the deployment's settings: when the deployment starts requiring a second
-/// factor the session's account lacked when it identified, the stream closes, and the client's
-/// next `identify` decides afresh, so one that added a factor meanwhile reconnects.
+/// `user_row`. `settings` is this server's copy of the deployment's settings: when the
+/// deployment starts requiring a second factor the session's account lacked when it identified,
+/// or a verified email address, the stream closes, and the client's next `identify` decides
+/// afresh, so one that added a factor meanwhile reconnects. Whether the address is verified is
+/// read again when the settings change, and taken from each `emailAccountChanged` of the user,
+/// since they may change their address while the stream is open.
 async fn pump_events(
     mut socket: WebSocket,
     mut subscription: Subscription,
@@ -411,7 +452,7 @@ async fn pump_events(
                     debug!("the event feed dropped a connection");
                     return;
                 };
-                let Fed { mut written, mut ends } = match feed_delivery(&mut socket, delivery).await {
+                let Fed { mut written, mut ends, mut email_unverified } = match feed_delivery(&mut socket, delivery).await {
                     Ok(fed) => fed,
                     Err(e) => {
                         log_send_error(&e);
@@ -426,6 +467,7 @@ async fn pump_events(
                         Ok(more) => {
                             written += more.written;
                             ends = more.ends;
+                            email_unverified = more.email_unverified.or(email_unverified);
                         }
                         Err(e) => {
                             log_send_error(&e);
@@ -446,15 +488,24 @@ async fn pump_events(
                     reject(&mut socket, code).await;
                     return;
                 }
+                let required = settings.borrow().email_verification_required;
+                if required && email_unverified == Some(true) {
+                    reject(&mut socket, EventStreamErrorCode::EmailVerificationRequired).await;
+                    return;
+                }
             },
             changed = settings.changed() => {
                 // The server is stopping when its copy of the settings is gone.
                 if changed.is_err() {
                     return;
                 }
-                let owes_factor = caller.enrollment_required(&settings.borrow_and_update());
-                if owes_factor {
+                let settings = settings.borrow_and_update().clone();
+                if caller.enrollment_required(&settings) {
                     reject(&mut socket, EventStreamErrorCode::TwoFactorEnrollmentRequired).await;
+                    return;
+                }
+                if owes_verified_email(state, user, &settings).await {
+                    reject(&mut socket, EventStreamErrorCode::EmailVerificationRequired).await;
                     return;
                 }
             },

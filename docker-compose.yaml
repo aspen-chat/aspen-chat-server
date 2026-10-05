@@ -37,6 +37,13 @@ services:
       - AWS_ACCESS_KEY_ID=GK484e56c38fb7e14b182bf47a
       - AWS_SECRET_ACCESS_KEY=6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027
       - S3_BUCKET=aspen-media
+  mailpit:
+    # Catches the mail a development server sends (`[email] smtp_url = "smtp://localhost:1025"`)
+    # and shows it at http://localhost:8025 instead of delivering it.
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
 volumes:
   db:
   seaweeddata:

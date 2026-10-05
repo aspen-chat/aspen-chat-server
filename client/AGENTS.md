@@ -96,7 +96,10 @@ commit, as with comments.
   second factor with `twoFactorEnrollmentRequired`. `AspenClient` notices it on any response
   and flags the session (`twoFactorEnrollmentRequired`), and the root layout then shows the
   enrollment screen instead of the app until a factor is added and its recovery codes have
-  been dismissed (`markEnrolled`). Security changes the server says need a fresh verification
+  been dismissed (`markEnrolled`). A server that requires a verified email address does the same
+  with `emailVerificationRequired` (and an event stream close of 4428): the session is flagged
+  (`emailVerificationRequired`) and the root layout shows the verification screen until the
+  address is verified (`markEmailVerified`). Security changes the server says need a fresh verification
   go through `useReauth()` (`src/features/security/reauthContext.ts`), which asks the user to
   confirm it's them and tries once more, and resolves to `undefined` when they decline, so an
   action that has no result of its own returns one to tell success apart. Sign-in and security

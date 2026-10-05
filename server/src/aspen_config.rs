@@ -41,6 +41,9 @@ pub struct AspenConfig {
     pub web_client: WebClientConfig,
     #[serde(default)]
     pub plugins: PluginsConfig,
+    /// Sending mail (`app::email`); left out, the deployment sends none, and its administrators
+    /// cannot require or offer what needs it.
+    pub email: Option<EmailConfig>,
     /// What `aspen.toml` says about rate limits; `rate_limits` is the result.
     #[serde(default, rename = "rate_limits")]
     pub rate_limit_overrides: RateLimitOverrides,
@@ -382,6 +385,96 @@ impl WebClientConfig {
     }
 }
 
+/// Sending mail (`app::email`): verification and password reset codes, the daily digest, and the
+/// newsletter.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailConfig {
+    /// The SMTP server mail is handed to, with its credentials: `smtps://user:password@host`
+    /// (TLS from the start, port 465), `smtp://user:password@host?tls=required` (STARTTLS, port
+    /// 587), or `smtp://host:1025` (no encryption, for a development mail catcher). Characters
+    /// in the user and password that a URL reserves are percent-encoded. Required where `send`
+    /// is on; a server that sends nothing needs no credentials.
+    pub smtp_url: Option<String>,
+    /// Whether this server sends mail and makes digests. Every server with `[email]` takes
+    /// addresses and queues mail; turned off on some, the others send it, so the SMTP
+    /// credentials and the work of sending stay on servers chosen for it. At least one server
+    /// of the deployment must send.
+    #[serde(default = "EmailConfig::default_send")]
+    pub send: bool,
+    /// The most mail the whole deployment hands to the SMTP server each second, however many
+    /// servers send, as the provider's quota allows; left out, no limit. Counted in Valkey.
+    pub max_per_second: Option<u32>,
+    /// Who mail comes from, such as `Aspen <noreply@chat.example.org>`.
+    pub from: String,
+    /// The address of this API server as mail readers reach it, such as
+    /// `https://chat.example.org`, which the unsubscribe links in mail name. Left out, it is
+    /// `https://` and `[federation] domain`; one of the two is required.
+    pub public_url: Option<String>,
+}
+
+impl EmailConfig {
+    fn default_send() -> bool {
+        true
+    }
+
+    /// Checks `from`, `smtp_url`, `max_per_second`, and `public_url`, resolving `public_url`
+    /// from `federation` when it is left out and trimming a trailing slash.
+    fn validate(&mut self, federation: &FederationConfig) -> Result<(), config::ConfigError> {
+        let message = |text: String| config::ConfigError::Message(text);
+        if self.send && self.smtp_url.is_none() {
+            return Err(message(
+                "[email] needs smtp_url on a server that sends mail; set send = false on a \
+                 server that only queues it"
+                    .to_string(),
+            ));
+        }
+        if self.max_per_second == Some(0) {
+            return Err(message(
+                "email.max_per_second must be at least 1; leave it out for no limit".to_string(),
+            ));
+        }
+        self.from.parse::<lettre::message::Mailbox>().map_err(|e| {
+            message(format!(
+                "email.from {:?} is not an address like `Aspen <noreply@example.org>`: {e}",
+                self.from
+            ))
+        })?;
+        let public_url = match (&self.public_url, &federation.domain) {
+            (Some(url), _) => url.clone(),
+            (None, Some(domain)) => format!("https://{domain}"),
+            (None, None) => {
+                return Err(message(
+                    "[email] needs public_url, the address mail readers reach this server at, \
+                     since [federation] domain is not set either"
+                        .to_string(),
+                ));
+            }
+        };
+        let parsed = url::Url::parse(&public_url)
+            .ok()
+            .filter(|parsed| {
+                matches!(parsed.scheme(), "http" | "https")
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none()
+                    && parsed.username().is_empty()
+            })
+            .ok_or_else(|| {
+                message(format!(
+                    "email.public_url {public_url:?} must be an http or https address with no \
+                     query, fragment, or credentials"
+                ))
+            })?;
+        self.public_url = Some(parsed.as_str().trim_end_matches('/').to_string());
+        Ok(())
+    }
+
+    /// The address unsubscribe links are built on, once [`EmailConfig::validate`] has run.
+    pub fn public_url(&self) -> &str {
+        self.public_url.as_deref().unwrap_or_default()
+    }
+}
+
 /// Cross-Origin Resource Sharing.
 ///
 /// Browsers (including the Electron and Capacitor shells, which are browsers) refuse to read a
@@ -474,6 +567,9 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.federation.validate()?;
     loaded.web_client.validate()?;
+    if let Some(email) = &mut loaded.email {
+        email.validate(&loaded.federation)?;
+    }
     Ok(loaded)
 }
 
@@ -536,6 +632,67 @@ mod tests {
         assert_eq!(
             config.voice.token_secret,
             VoiceConfig::default().token_secret
+        );
+    }
+
+    fn email(public_url: Option<&str>, domain: Option<&str>) -> Result<String, String> {
+        let mut config = EmailConfig {
+            smtp_url: Some("smtp://localhost:1025".to_string()),
+            send: true,
+            max_per_second: None,
+            from: "Aspen <noreply@example.org>".to_string(),
+            public_url: public_url.map(str::to_string),
+        };
+        let federation = FederationConfig {
+            domain: domain.map(str::to_string),
+            ..FederationConfig::default()
+        };
+        config
+            .validate(&federation)
+            .map(|()| config.public_url().to_string())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Unsubscribe links need an address, given or taken from the federation domain.
+    #[test]
+    fn email_needs_a_public_address() {
+        assert_eq!(
+            email(Some("https://chat.example.org/"), None).unwrap(),
+            "https://chat.example.org"
+        );
+        assert_eq!(
+            email(None, Some("chat.example.org:8443")).unwrap(),
+            "https://chat.example.org:8443"
+        );
+        assert!(email(None, None).is_err());
+        assert!(email(Some("chat.example.org"), None).is_err());
+    }
+
+    /// A server that sends needs an SMTP server; one that only queues does not.
+    #[test]
+    fn only_a_sending_server_needs_smtp() {
+        let config = |toml: &str| -> Result<EmailConfig, String> {
+            let mut config: EmailConfig = config::Config::builder()
+                .add_source(config::File::from_str(toml, config::FileFormat::Toml))
+                .build()
+                .and_then(|built| built.try_deserialize())
+                .map_err(|e| e.to_string())?;
+            config
+                .validate(&FederationConfig {
+                    domain: Some("chat.example.org".to_string()),
+                    ..FederationConfig::default()
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(config)
+        };
+        assert!(config("from = \"a@example.org\"").is_err());
+        let queuing = config("from = \"a@example.org\"\nsend = false").unwrap();
+        assert!(!queuing.send && queuing.smtp_url.is_none());
+        let sending = config("from = \"a@example.org\"\nsmtp_url = \"smtp://x\"").unwrap();
+        assert!(sending.send && sending.max_per_second.is_none());
+        assert!(
+            config("from = \"a@example.org\"\nsmtp_url = \"smtp://x\"\nmax_per_second = 0")
+                .is_err()
         );
     }
 

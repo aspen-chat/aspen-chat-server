@@ -52,6 +52,8 @@ pub struct UserPg {
     pub name_hue: Option<i16>,
     /// For a plugin's principal, the plugin's id (`app::plugin::principal`).
     pub plugin: Option<String>,
+    /// The email address the profile shows (`app::email::set_public_email`).
+    pub public_email: Option<String>,
 }
 
 impl UserPg {
@@ -195,6 +197,8 @@ pub async fn create_user(
     command: &UserCreateRequest,
 ) -> Result<UserId, app::Error> {
     validate_registration(command)?;
+    let email = app::email::check_registration(&state, command.email.as_deref())?;
+    let newsletter = command.newsletter.unwrap_or(false);
     let mut conn = match state.connection_pool.get().await {
         Ok(conn) => conn,
         Err(e) => {
@@ -254,9 +258,14 @@ pub async fn create_user(
                         home_id: None,
                         home_icon: None,
                         plugin: None,
+                        public_email: None,
                     })
                     .execute(conn.as_mut())
                     .await?;
+                if let Some(address) = &email {
+                    app::email::register(state, conn.as_mut(), new_user_id, address, newsletter)
+                        .await?;
+                }
                 if registered_with.is_some() {
                     diesel::update(user::table.filter(user::id.eq(new_user_id)))
                         .set(user::registered_with.eq(registered_with))
@@ -282,6 +291,7 @@ pub async fn create_user(
     if let Some(community) = joined {
         app::everyone_limit::after_join(state, community).await;
     }
+    app::email::wake(state).await;
     Ok(new_user_id)
 }
 
@@ -430,6 +440,7 @@ pub(crate) async fn apply_profile_update(
                     bot_owner: None,
                     bot_public: None,
                     name_hue: None,
+                    public_email: None,
                 }),
             )
             .await?;
@@ -509,6 +520,17 @@ pub(crate) async fn retire(
     app::login::revoke_all_sessions(state, conn, id).await?;
     app::two_factor::remove_all(conn, id).await?;
     app::bot::orphan_bots_of(state, conn, id).await?;
+    // Their address and the mail waiting for it go with them.
+    diesel::delete(schema::email_outbox::table.filter(schema::email_outbox::user.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::delete(schema::user_email::table.filter(schema::user_email::user.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::update(user::table.filter(user::id.eq(id)))
+        .set(user::public_email.eq(None::<String>))
+        .execute(conn)
+        .await?;
     // What plugins kept about them goes with them.
     app::plugin::storage::forget(conn, app::plugin::storage::Scope::User(id)).await?;
     diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))
@@ -615,6 +637,7 @@ pub async fn user_for_token(
             refresh_token::verified_at,
             refresh_token::method,
             diesel::dsl::sql::<diesel::sql_types::Bool>(app::two_factor::HAS_SECOND_FACTOR_SQL),
+            diesel::dsl::sql::<diesel::sql_types::Bool>(app::two_factor::EMAIL_UNVERIFIED_SQL),
         ))
         .filter(
             session::dsl::token
@@ -630,11 +653,12 @@ pub async fn user_for_token(
             chrono::DateTime<Utc>,
             app::login::SignInMethod,
             bool,
+            bool,
         )>(conn.as_mut())
         .await
         .optional()?;
     Ok(found.map(
-        |(user, refresh_token, verified_at, method, has_second_factor)| {
+        |(user, refresh_token, verified_at, method, has_second_factor, email_unverified)| {
             let caller = app::two_factor::Caller {
                 user: user.id,
                 session_token: token.to_string(),
@@ -645,6 +669,7 @@ pub async fn user_for_token(
                 bot: user.bot,
                 method,
                 foreign: user.foreign(),
+                email_unverified,
             };
             (user, caller)
         },

@@ -22,6 +22,7 @@ pub(crate) mod deployment;
 pub(crate) mod deployment_settings;
 pub(crate) mod device_link;
 pub(crate) mod dm;
+pub(crate) mod email;
 pub(crate) mod error;
 mod event_stream;
 pub(crate) mod extract;
@@ -319,6 +320,27 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(message::open_thread))
         .routes(routes!(message::pin_message, message::unpin_message))
         .routes(routes!(message::remove_attachment))
+        .routes(routes!(email::get_email, email::update_email))
+        .routes(routes!(
+            email::set_email_address,
+            email::remove_email_address
+        ))
+        .routes(routes!(email::resend_email_verification))
+        .routes(routes!(email::verify_email))
+        .routes(routes!(email::start_password_reset))
+        .routes(routes!(email::send_password_reset_code))
+        .routes(routes!(email::complete_password_reset))
+        .routes(routes!(
+            email::list_newsletter_posts,
+            email::create_newsletter_post
+        ))
+        .routes(routes!(
+            email::get_newsletter_post,
+            email::update_newsletter_post,
+            email::delete_newsletter_post
+        ))
+        .routes(routes!(email::test_newsletter_post))
+        .routes(routes!(email::send_newsletter_post))
         .routes(routes!(dm::open_dm, dm::list_dms))
         .routes(routes!(dm::add_recipient))
         .routes(routes!(dm::leave_dm))
@@ -552,6 +574,18 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             rate_limit::limit_requests,
         ))
         .route_layer(axum::middleware::from_fn(metrics::observe));
+    // Every unsubscribe link in mail opens this page, which answers mail programs' one-click
+    // unsubscribe too (`api::email`).
+    let unsubscribe = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::UNSUBSCRIBE_PAGE.1,
+            axum::routing::get(email::unsubscribe_page).post(email::unsubscribe),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     // Other deployments read this deployment's document here (`app::federation`).
     let well_known = OpenApiRouter::<GlobalServerContext>::new()
         .route(
@@ -566,6 +600,7 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
     let router = OpenApiRouter::<GlobalServerContext>::new()
         .nest(API_PREFIX, v1)
         .merge(page)
+        .merge(unsubscribe)
         .merge(well_known);
     if context.config.metrics.enabled {
         aspen_metrics::install(context.config.metrics.listen_addr)

@@ -51,6 +51,15 @@ pub struct SettingsArgs {
     /// Whether people may offer files to one another in calls.
     #[clap(long)]
     file_transfers: Option<bool>,
+    /// Whether registering takes an email address. Needs `[email]` in aspen.toml.
+    #[clap(long)]
+    email_required: Option<bool>,
+    /// Whether an account must verify its email address before using the deployment.
+    #[clap(long)]
+    email_verification_required: Option<bool>,
+    /// Whether the deployment has a newsletter its users may subscribe to.
+    #[clap(long)]
+    newsletter_enabled: Option<bool>,
     /// Whether this deployment's users may use others: closed, open, allowList, or blockList.
     #[clap(long)]
     users_emigration: Option<Gate>,
@@ -94,6 +103,9 @@ impl From<SettingsArgs> for SettingsChange {
             everyone_mention_limit: args.everyone_mention_limit,
             custom_emoji_limit: args.custom_emoji_limit,
             file_transfers: args.file_transfers,
+            email_required: args.email_required,
+            email_verification_required: args.email_verification_required,
+            newsletter_enabled: args.newsletter_enabled,
             users_emigration: args.users_emigration,
             users_immigration: args.users_immigration,
             users_shared_list: args.users_shared_list,
@@ -119,6 +131,9 @@ impl From<&DeploymentSettings> for SettingsArgs {
             everyone_mention_limit: Some(settings.everyone_mention_limit),
             custom_emoji_limit: Some(settings.custom_emoji_limit),
             file_transfers: Some(settings.file_transfers),
+            email_required: Some(settings.email_required),
+            email_verification_required: Some(settings.email_verification_required),
+            newsletter_enabled: Some(settings.newsletter_enabled),
             users_emigration: Some(users.emigration),
             users_immigration: Some(users.immigration),
             users_shared_list: Some(users.shared_list),
@@ -166,6 +181,7 @@ pub async fn settings(config: &AspenConfig, command: SettingsCommand) -> Result<
             let (changed, noted) = noting(deployment_settings::update(
                 &publisher,
                 &mut conn,
+                config.email.is_some(),
                 args.into(),
             ))
             .await;

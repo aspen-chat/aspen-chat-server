@@ -63,6 +63,16 @@ secret_key = "…"
 token_secret = "a long random string, shared with every voice server"
 ```
 
+To send mail (email verification, password reset by email, the daily digest, and a newsletter),
+add an SMTP server; without it the deployment works without email:
+
+```toml
+[email]
+smtp_url = "smtps://aspen:…@smtp.example.org"
+from = "Example Chat <noreply@chat.example.org>"
+public_url = "https://chat.example.org"
+```
+
 Every other setting has a default; [Configuration](configuration.md) lists them all. Each can
 also be given in the environment, which overrides the file: `ASPEN_` and the key, with `__`
 between nested keys (`ASPEN_DATABASE_URL`, `ASPEN_VOICE__TOKEN_SECRET`).

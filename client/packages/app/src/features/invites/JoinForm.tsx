@@ -64,7 +64,7 @@ export function JoinForm({ onDone }: { onDone?: () => void }) {
           label={m.qr.scanInvite}
           hint={m.qr.scanInviteHint}
           accept={(link) => {
-            if (link.kind === "deviceLink") {
+            if (link.kind !== "invite" && link.kind !== "registration") {
               return m.qr.notAnInvite;
             }
             onDone?.();

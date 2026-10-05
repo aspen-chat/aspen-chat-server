@@ -40,6 +40,7 @@ import {
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
+import { EmailDialog } from "@/features/email/EmailDialog";
 import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { FontsSection } from "@/features/settings/FontsSection";
@@ -63,11 +64,11 @@ import { AccessibilitySection } from "@/features/settings/AccessibilitySection";
 import { ZoomSlider } from "@/features/settings/ZoomSlider";
 
 /**
- * The user's preferences: first the account's sign-in and security settings; then the
- * microphone and speaker voice chat uses and the speaker for notification sounds, kept with this
- * install; the appearance: the theme, palette, contrast, zoom, and whether names take their
- * roles' colours, kept with this install, and the message text size, line spacing, and
- * animation speed, kept with the account; whether new messages are read out, and the fonts text
+ * The user's preferences: first the account's sign-in and security settings and its email
+ * address; then the microphone and speaker voice chat uses and the speaker for notification
+ * sounds, kept with this install; the appearance: the theme, palette, contrast, zoom, and whether
+ * names take their roles' colours, kept with this install, and the message text size, line spacing,
+ * and animation speed, kept with the account; whether new messages are read out, and the fonts text
  * and code are drawn in, kept with this install; the language, kept with the account; the
  * people the user has blocked; developer mode, with the user's bots; and the way out of the
  * account. Sections for account-wide preferences slot in beside them.
@@ -94,6 +95,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                       {m.settings.account}
                     </h3>
                     <SecurityDialog />
+                    <EmailDialog />
                   </section>
                   <AudioSection />
                   <section aria-labelledby="settings-appearance" className={planeClass}>

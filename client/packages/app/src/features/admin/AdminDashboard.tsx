@@ -1,5 +1,6 @@
 import {
   ChartLineUpIcon,
+  EnvelopeSimpleIcon,
   FileArrowUpIcon,
   FlagIcon,
   GearSixIcon,
@@ -28,6 +29,7 @@ import { DeploymentSettingsSection } from "@/features/admin/DeploymentSettings";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
 import { PluginsSection } from "@/features/admin/Plugins";
+import { NewsletterSection } from "@/features/admin/Newsletter";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { FileTransferLog } from "@/features/admin/FileTransferLog";
 import { ModerationLog } from "@/features/admin/ModerationLog";
@@ -53,6 +55,7 @@ const ADMIN_TABS = [
   "users",
   "communities",
   "settings",
+  "newsletter",
   "federation",
   "plugins",
   "moderation",
@@ -80,6 +83,7 @@ function useAllowedTabs(): AdminTab[] {
     users: directories,
     communities: directories,
     settings: permissions.has("manageDeploymentSettings"),
+    newsletter: permissions.has("sendNewsletters"),
     federation: permissions.has("manageFederation"),
     plugins: view || permissions.has("managePlugins"),
     moderation: view,
@@ -101,6 +105,7 @@ function useTabLabel(): (tab: AdminTab) => string {
       users: m.admin.users,
       communities: m.admin.communities,
       settings: m.admin.settings,
+      newsletter: m.email.newsletterTitle,
       federation: m.federation.title,
       plugins: m.plugins.adminTab,
       moderation: m.admin.moderationLog,
@@ -118,6 +123,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   users: UsersIcon,
   communities: UsersThreeIcon,
   settings: GearSixIcon,
+  newsletter: EnvelopeSimpleIcon,
   federation: GlobeIcon,
   plugins: PlugIcon,
   moderation: ScrollIcon,
@@ -129,7 +135,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
  * one-pane screen sets across the top instead. The user bar (`SidebarFooter`) is at the foot of
  * the rail, or of the screen on a one-pane screen. The tabs are the deployment's totals and their
  * growth, the health of its servers, registration invites, its roles, the reports people made
- * and the categories they make them in, searchable lists of its users and communities, the name and icon it welcomes people with, federation with other
+ * and the categories they make them in, searchable lists of its users and communities, the name and icon it welcomes people with and its policies, its email newsletter, federation with other
  * deployments, its plugins, the moderation log, and the record
  * of file transfers. Each shows only to those with the deployment permission it needs; the
  * server refuses everyone else whatever this page shows. `/admin`, or a tab the caller may not
@@ -239,6 +245,8 @@ function TabContent({ tab }: { tab: AdminTab }) {
           <DeploymentSettingsSection />
         </>
       );
+    case "newsletter":
+      return <NewsletterSection />;
     case "federation":
       return <FederationSection />;
     case "plugins":

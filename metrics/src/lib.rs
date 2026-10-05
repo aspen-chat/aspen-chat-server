@@ -69,6 +69,10 @@ pub mod api {
     /// Time from a voice server's report reaching the report stream to an API server having
     /// applied it, by `report`: how far behind the record of calls runs.
     pub const VOICE_REPORT_WAIT_DURATION: &str = "aspen_voice_report_wait_duration_seconds";
+    /// Mail handed to the SMTP server.
+    pub const EMAILS_SENT: &str = "aspen_emails_sent_total";
+    /// Mail given up: refused for good, or failing for about a day.
+    pub const EMAILS_FAILED: &str = "aspen_emails_failed_total";
 }
 
 /// Voice server metrics.

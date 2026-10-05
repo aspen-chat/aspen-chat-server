@@ -27,6 +27,9 @@ export type DeploymentSettings = components["schemas"]["DeploymentSettings"];
 export type DeploymentSettingsUpdateRequest =
   components["schemas"]["DeploymentSettingsUpdateRequest"];
 export type FederationUpdateRequest = components["schemas"]["FederationUpdateRequest"];
+export type NewsletterPost = components["schemas"]["NewsletterPostRecord"];
+export type NewsletterPostCreateRequest = components["schemas"]["NewsletterPostCreateRequest"];
+export type NewsletterPostUpdateRequest = components["schemas"]["NewsletterPostUpdateRequest"];
 
 export type UserSort = NonNullable<
   NonNullable<paths["/api/v1/admin/users"]["get"]["parameters"]["query"]>["sort"]
@@ -305,6 +308,58 @@ export class AdminApi {
     change: DeploymentSettingsUpdateRequest,
   ): Promise<DeploymentSettings> {
     return adminRead(await this.#client.api.PATCH("/api/v1/admin/settings", { body: change }));
+  }
+
+  /** Every newsletter post, the newest first. */
+  async newsletterPosts(): Promise<NewsletterPost[]> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/newsletter/posts"));
+  }
+
+  /** Writes a newsletter draft. */
+  async createNewsletterPost(post: NewsletterPostCreateRequest): Promise<NewsletterPost> {
+    return adminRead(await this.#client.api.POST("/api/v1/admin/newsletter/posts", { body: post }));
+  }
+
+  /** Changes a newsletter draft; a sent post is refused (`conflict`). */
+  async updateNewsletterPost(
+    post: string,
+    change: NewsletterPostUpdateRequest,
+  ): Promise<NewsletterPost> {
+    return adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/newsletter/posts/{post}", {
+        params: { path: { post } },
+        body: change,
+      }),
+    );
+  }
+
+  /** Deletes a newsletter draft. */
+  async deleteNewsletterPost(post: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/newsletter/posts/{post}", {
+      params: { path: { post } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Mails the post to the caller alone, at their verified address. */
+  async testNewsletterPost(post: string): Promise<void> {
+    const result = await this.#client.api.POST("/api/v1/admin/newsletter/posts/{post}/test", {
+      params: { path: { post } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Sends the post to every subscriber, once; it is fixed from then on. */
+  async sendNewsletterPost(post: string): Promise<NewsletterPost> {
+    return adminRead(
+      await this.#client.api.POST("/api/v1/admin/newsletter/posts/{post}/sending", {
+        params: { path: { post } },
+      }),
+    );
   }
 
   /** This deployment's part in federation: its domain, key, gates, and lists in force. */

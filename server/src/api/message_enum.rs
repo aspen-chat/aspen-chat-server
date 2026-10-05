@@ -29,6 +29,12 @@ enum MessageEnumSource {
         // `registration_invite_required` is on; see `app::registration_invite`.
         #[message_gen(secret)]
         invite_code: Option<String>,
+        // An email address for the account, needed when the deployment setting `email_required`
+        // is on, and whether to receive the deployment's newsletter there; see `app::email`.
+        #[message_gen(secret)]
+        email: Option<String>,
+        #[message_gen(secret)]
+        newsletter: Option<bool>,
         icon: Option<IconId>,
         #[message_gen(server_authoritative)]
         online_status: UserOnlineStatus,
@@ -71,6 +77,10 @@ enum MessageEnumSource {
         // which acts only for the plugin (`app::plugin::principal`).
         #[message_gen(server_authoritative)]
         plugin: Option<String>,
+        // The email address the user shows on their profile: one they verified and chose to
+        // show; `None` otherwise. See `app::email`.
+        #[message_gen(server_authoritative = "mutable")]
+        public_email: Option<String>,
     },
     // The user's account preferences were written, by one of their devices; the others fetch
     // them. The values themselves stay out of the stream, which everyone receives.
@@ -79,6 +89,13 @@ enum MessageEnumSource {
         user: UserId,
         updated_at: chrono::DateTime<Utc>,
     },
+    // The user's email address or what they receive there changed, on one of their devices or
+    // by verifying it; the others read it again (`GET /users/@me/email`). The address itself
+    // stays out of the stream; `unverified` says whether the account now holds one it has not
+    // verified, which closes its streams where the deployment requires verified addresses. See
+    // `app::email`.
+    #[message_gen(custom_event)]
+    EmailAccountChanged { user: UserId, unverified: bool },
     // How far the user has read a channel moved forward, on one of their devices or by their
     // posting there; the others follow. `last_read` is a position among the channel's message
     // ids (see `app::read_state`), and it only ever moves forward.

@@ -478,12 +478,66 @@ export class AspenClient {
    * with `login`. Throws `ApiProblemError` (`usernameTaken`, `validation`,
    * `passwordRequirementsNotMet`) on failure.
    */
-  /** Creates an account; `inviteCode` is the registration invite, which some servers require. */
-  async register(name: string, password: string, inviteCode?: string): Promise<Schemas["User"]> {
+  /**
+   * Creates an account. `inviteCode` is the registration invite, which some servers require;
+   * `email` an address for it, which some require too, mailed a code to verify it; and
+   * `newsletter` whether that address receives the deployment's newsletter.
+   */
+  async register(
+    name: string,
+    password: string,
+    options: { inviteCode?: string; email?: string; newsletter?: boolean } = {},
+  ): Promise<Schemas["User"]> {
     const result = await this.api.POST(`${API_PREFIX}/users`, {
-      body: { name, password, ...(inviteCode === undefined ? {} : { inviteCode }) },
+      body: {
+        name,
+        password,
+        ...(options.inviteCode === undefined ? {} : { inviteCode: options.inviteCode }),
+        ...(options.email === undefined ? {} : { email: options.email }),
+        ...(options.newsletter === undefined ? {} : { newsletter: options.newsletter }),
+      },
     });
     return unwrap(result);
+  }
+
+  /**
+   * Begins resetting a forgotten password: answers with the reset's id and the account's
+   * verified email address, masked. Needs no session. Throws `ApiProblemError`
+   * (`passwordResetUnavailable`, whose detail says why) when it cannot be reset by email.
+   */
+  async startPasswordReset(username: string): Promise<Schemas["PasswordReset"]> {
+    return unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/password-resets`, { body: { username } }),
+    );
+  }
+
+  /**
+   * Mails the reset's code to the account's address, given that whole address. Throws
+   * `ApiProblemError` (`emailMismatch`, `passwordResetExpired`, `tooManyAttempts`).
+   */
+  async sendPasswordResetCode(reset: string, address: string): Promise<void> {
+    const result = await this.api.POST(`${API_PREFIX}/auth/password-resets/{reset}/codes`, {
+      params: { path: { reset } },
+      body: { address },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Sets a new password with the code mailed for the reset; every sign-in of the account ends.
+   * Throws `ApiProblemError` (`verificationFailed`, `passwordRequirementsNotMet`,
+   * `passwordResetExpired`, `tooManyAttempts`).
+   */
+  async completePasswordReset(reset: string, code: string, newPassword: string): Promise<void> {
+    const result = await this.api.POST(`${API_PREFIX}/auth/password-resets/{reset}/completion`, {
+      params: { path: { reset } },
+      body: { code, newPassword },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /**
@@ -644,8 +698,9 @@ export class AspenClient {
 
   /**
    * A server that has started requiring a second factor answers every request of an account
-   * without one this way. Flagging the session lets the app show the enrollment screen instead
-   * of failing everywhere.
+   * without one this way, and one requiring a verified email address every request of an
+   * account whose address is not. Flagging the session lets the app show the screen that meets
+   * the requirement instead of failing everywhere.
    */
   async #noticeEnrollmentProblem(response: Response): Promise<void> {
     let body: unknown;
@@ -656,6 +711,31 @@ export class AspenClient {
     }
     if (isProblem(body) && body.code === "twoFactorEnrollmentRequired") {
       this.noticeEnrollmentRequired();
+    }
+    if (isProblem(body) && body.code === "emailVerificationRequired") {
+      this.noticeVerificationRequired();
+    }
+  }
+
+  /**
+   * Flags the session as owing the verified email address the deployment requires, as a refused
+   * request or the event stream's close says, so the app shows the verification screen.
+   */
+  noticeVerificationRequired(): void {
+    const session = this.session;
+    if (session !== null && session.emailVerificationRequired !== true) {
+      this.#setSession({ ...session, emailVerificationRequired: true });
+    }
+  }
+
+  /**
+   * Records that the account's email address is verified, or that it no longer has one to
+   * verify, lifting the verification screen.
+   */
+  markEmailVerified(): void {
+    const session = this.session;
+    if (session?.emailVerificationRequired === true) {
+      this.#setSession({ ...session, emailVerificationRequired: false });
     }
   }
 

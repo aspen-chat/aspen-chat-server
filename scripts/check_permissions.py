@@ -26,13 +26,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-from stack import REPO, Failed, Ports, Stack, WebSocket, start_services, wait_for, wait_for_services
+from stack import REPO, Failed, Ports, Stack, WebSocket, psql, start_services, wait_for, wait_for_services
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
               transfer=13578, relay_min=46100, relay_max=46199)
 PASSWORD = "check-permissions-password"
-# Scenarios make several accounts and many changes in moments, as no person would.
-SETTINGS = "[rate_limits]\nenabled = false\n"
+# Scenarios make several accounts and many changes in moments, as no person would. Mail goes to
+# an SMTP port nothing listens on, so what is queued stays in the outbox to be read.
+SETTINGS = ("[rate_limits]\nenabled = false\n"
+            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n"
+            "public_url = \"http://localhost\"\n")
 
 
 def say(message: str) -> None:
@@ -845,9 +848,82 @@ def calendar_channels(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", CALENDAR_ID)
 
 
+def email(world: World, check: Checks) -> None:
+    say("email: a shown address, the verification gate, and what a digest tells of")
+    stack = world.stack
+    member = world.member
+    owner_stream = stack.events(world.owner["token"])
+    owner_stream.gather(0.5)
+    outsider = world.account("outsider")
+    address = f"member.{world.run}@example.org"
+    check("a fresh sign-in gives an address",
+          stack.status("PUT", "/users/@me/email/address", {"address": address}, member["token"]) == 200)
+    stack.api("PATCH", "/users/@me/email", {"shown": True}, member["token"])
+    check("an unverified address is not shown, though the member chose to",
+          stack.api("GET", f"/users/{member['id']}", token=outsider["token"]).get("publicEmail") is None)
+    # The code goes to a mailbox no one reads here; the database stands in for typing it.
+    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.api("PATCH", "/users/@me/email", {"shown": False}, member["token"])
+    owner_stream.gather(0.5)
+    stack.api("PATCH", "/users/@me/email", {"shown": True}, member["token"])
+    got = owner_stream.gather(1.0)
+    check("showing a verified address announces it to those who share a community",
+          bool(of(got, "user", id=member["id"], publicEmail=address)), got)
+    check("and anyone reading the user sees it",
+          stack.api("GET", f"/users/{member['id']}", token=outsider["token"]).get("publicEmail") == address)
+    stack.api("PATCH", "/users/@me/email", {"shown": False}, member["token"])
+    got = owner_stream.gather(1.0)
+    check("hiding it announces that it is gone",
+          any("publicEmail" in e and e["publicEmail"] is None for e in of(got, "user", id=member["id"])), got)
+    check("and no read shows it",
+          stack.api("GET", f"/users/{member['id']}", token=outsider["token"]).get("publicEmail") is None)
+    check("someone else's address is not theirs to read",
+          stack.status("GET", f"/users/{member['id']}/email", token=outsider["token"]) == 403)
+    owner_stream.close()
+
+    stack.api("PUT", "/users/@me/email/address", {"address": f"other.{world.run}@example.org"}, member["token"])
+    world.stream.gather(0.5)
+    stack.command("settings", "set", "--email-verification-required", "true")
+    world.stream.gather(3.0)
+    check("requiring verified addresses closes the stream of a member whose address is not",
+          world.stream.closed == 4428, world.stream.closed)
+    check("whose requests are refused but for verifying it",
+          stack.status("GET", "/users/@me", token=member["token"]) == 403
+          and stack.status("GET", "/users/@me/email", token=member["token"]) == 200)
+    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    check("and once it is verified their session works again",
+          stack.status("GET", "/users/@me", token=member["token"]) == 200)
+    stream = stack.events(member["token"])
+    stream.gather(0.5)
+    stack.api("PUT", "/users/@me/email/address", {"address": f"third.{world.run}@example.org"}, member["token"])
+    stream.gather(2.0)
+    check("changing to an unverified address while verified ones are required closes their stream",
+          stream.closed == 4428, stream.closed)
+    psql(f"UPDATE user_email SET verified_at = now() WHERE \"user\" = '{member['id']}'", stack.database)
+    stack.command("settings", "set", "--email-verification-required", "false")
+
+    seen = world.channel("seen")
+    hidden = world.channel("hidden")
+    world.post(seen, "for the digest")
+    world.post(hidden, "not for the member")
+    world.as_owner("PUT", f"/channels/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    stack.api("PATCH", "/users/@me/email", {"digest": True}, member["token"])
+    psql(f"UPDATE user_email SET digest_since = now() - interval '1 hour', digest_next_at = now() "
+         f"WHERE \"user\" = '{member['id']}'", stack.database)
+
+    def digest() -> str:
+        return psql(f"SELECT mail FROM email_outbox WHERE \"user\" = '{member['id']}' "
+                    f"AND mail->>'kind' = 'digest'", stack.database)
+
+    check("a digest is made when it is due", soon(lambda: digest() != "", 75))
+    made = digest()
+    check("it tells of what the member may read", "for the digest" in made, made)
+    check("and nothing of a channel they lost view of", "not for the member" not in made and hidden not in made, made)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
              deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, review_powers, plugins, calendar_channels]
+             nicknames, review_powers, plugins, calendar_channels, email]
 
 
 def main() -> None:

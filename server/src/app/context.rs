@@ -39,6 +39,8 @@ pub struct GlobalServerContext {
     pub settings: app::deployment_settings::SettingsCache,
     /// The plugins this server runs (`app::plugin`).
     pub plugins: Arc<app::plugin::Plugins>,
+    /// What this server sends mail with, when `[email]` is configured (`app::email`).
+    pub mailer: Option<Arc<app::email::Mailer>>,
 }
 
 impl GlobalServerContext {
@@ -100,6 +102,12 @@ impl GlobalServerContext {
         // Checked now so that a mistake in `[auth.passkeys]` stops the server as it starts.
         app::passkey::relying_party(&config.auth, app::deployment_settings::DEFAULT_NAME)?;
         let federation_client = app::federation::fetch::client(&config.federation)?;
+        let mailer = config
+            .email
+            .as_ref()
+            .map(app::email::Mailer::new)
+            .transpose()?
+            .map(Arc::new);
         let connection_pool = {
             let conn_manager =
                 AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
@@ -137,6 +145,7 @@ impl GlobalServerContext {
             federation_client,
             settings: app::deployment_settings::SettingsCache::new(settings),
             plugins: Arc::new(app::plugin::Plugins::new()?),
+            mailer,
             config: config.into(),
         })
     }
@@ -144,7 +153,7 @@ impl GlobalServerContext {
 
 /// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
 /// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
-/// dispatcher, and the plugins with their observers, making the federation and push keys where
+/// dispatcher, the mail sender and digest scheduler, and the plugins with their observers, making the federation and push keys where
 /// they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
     app::deployment_settings::spawn_watcher(context.clone());
@@ -158,6 +167,8 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     app::federation::standing::spawn_confirmer(context.clone());
     app::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     app::push::spawn_dispatcher(context.clone());
+    app::email::outbox::spawn_sender(context.clone());
+    app::email::digest::spawn_scheduler(context.clone());
     app::plugin::registry::start(context).await?;
     Ok(())
 }

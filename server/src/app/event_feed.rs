@@ -124,12 +124,22 @@ pub struct FeedEvent {
     /// On a community's subject, that what was announced about it may not have happened
     /// (`app::events::settle`): the model is dropped and its readers resume.
     resync: bool,
+    /// On a user's own subject, that their email account changed (`app::email`): whether it now
+    /// holds an address it has not verified, which a connection checks against the deployment's
+    /// settings.
+    email_unverified: Option<bool>,
 }
 
 impl FeedEvent {
     /// Whether a connection that delivers this event closes after it, and why.
     pub fn ends(&self) -> Option<StreamEnd> {
         self.ends
+    }
+
+    /// When it tells its user that their email account changed, whether the account now holds
+    /// an address it has not verified.
+    pub fn email_unverified(&self) -> Option<bool> {
+        self.email_unverified
     }
 
     /// Whether a connection of `sign_in` receives this event: every connection of its user does,
@@ -845,6 +855,19 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     };
     let resync = matches!(owner, SubjectOwner::Community(_))
         && payload.get().contains(r#""serverEvent":"communityResync""#);
+    let email_unverified = (own
+        && payload
+            .get()
+            .contains(r#""serverEvent":"emailAccountChanged""#))
+    .then(|| {
+        #[derive(Deserialize)]
+        struct Changed {
+            unverified: bool,
+        }
+        serde_json::from_str::<Changed>(payload.get()).ok()
+    })
+    .flatten()
+    .map(|changed| changed.unverified);
     let channel = message
         .headers
         .as_ref()
@@ -895,6 +918,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             ends,
             sign_ins,
             resync,
+            email_unverified,
         },
         info.pending,
     ))
@@ -1212,6 +1236,7 @@ mod tests {
             ends: None,
             sign_ins: None,
             resync: false,
+            email_unverified: None,
         }
     }
 

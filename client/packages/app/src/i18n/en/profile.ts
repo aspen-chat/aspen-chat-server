@@ -7,6 +7,7 @@ export const profile = {
   status: "Status",
   statusPlaceholder: "What are you up to?",
   statusLabel: "Status",
+  emailLabel: "Email",
   clearStatus: "Clear status",
   pickStatusEmoji: "Choose a status emoji",
   changeStatusEmoji: "Change the status emoji",

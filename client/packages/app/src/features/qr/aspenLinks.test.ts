@@ -36,6 +36,21 @@ describe("parseAspenLink", () => {
     });
   });
 
+  it("reads channels and DMs, as mail links to them", () => {
+    const community = "01a1092e-b636-735b-8ae8-356fceb84f99";
+    const channel = "01a1092e-b683-700d-8d11-d5cad1e2e76b";
+    expect(
+      parseAspenLink(`https://chat.example.org/communities/${community}/channels/${channel}`),
+    ).toEqual({ kind: "channel", community, channel });
+    expect(parseAspenLink(`aspen://app/communities/${community}/channels/${channel}`)).toEqual({
+      kind: "channel",
+      community,
+      channel,
+    });
+    expect(parseAspenLink(`aspen://app/dms/${channel}`)).toEqual({ kind: "dm", channel });
+    expect(parseAspenLink("aspen://app/dms/not-an-id")).toBeNull();
+  });
+
   it("refuses anything else", () => {
     expect(parseAspenLink("abc123")).toBeNull();
     expect(parseAspenLink("https://example.org/")).toBeNull();

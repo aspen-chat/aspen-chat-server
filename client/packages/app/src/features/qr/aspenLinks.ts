@@ -5,7 +5,16 @@ import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
 export type AspenLink =
   | { kind: "invite"; invite: InviteRef }
   | { kind: "registration"; code: string }
-  | { kind: "deviceLink"; server: string; id: string };
+  | { kind: "deviceLink"; server: string; id: string }
+  | { kind: "channel"; community: string; channel: string }
+  | { kind: "dm"; channel: string };
+
+/** A record's id, as the server makes them. */
+const ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+/** A community channel's route, as the digest's links name it, under any address. */
+const CHANNEL_PATH = new RegExp(`/communities/(${ID})/channels/(${ID})/?(?:[?#].*)?$`);
+/** A DM's route, likewise. */
+const DM_PATH = new RegExp(`/dms/(${ID})/?(?:[?#].*)?$`);
 
 const REGISTRATION_CODE = /^[A-Za-z0-9]{1,16}$/;
 /** A device link's id: 32 random bytes, unpadded base64url, as the server makes them. */
@@ -40,9 +49,9 @@ export function deviceLinkOf(
 
 /**
  * Reads what a scanned QR code or an opened link leads to, whatever address it was shared
- * under (a web client, this page, or an `aspen:` link): a sign-in code, a registration invite, or
- * a community invite. `null` for anything else, bare invite codes included, since text that
- * merely looks like a code is not one.
+ * under (a web client, this page, or an `aspen:` link): a sign-in code, a registration invite, a
+ * community invite, or a channel or DM, as the links in mail name them. `null` for anything
+ * else, bare invite codes included, since text that merely looks like a code is not one.
  */
 export function parseAspenLink(text: string): AspenLink | null {
   const trimmed = text.trim();
@@ -55,6 +64,14 @@ export function parseAspenLink(text: string): AspenLink | null {
   if (registration !== null) {
     const code = new URLSearchParams(registration[1] ?? "").get("invite") ?? "";
     return REGISTRATION_CODE.test(code) ? { kind: "registration", code } : null;
+  }
+  const channel = CHANNEL_PATH.exec(trimmed);
+  if (channel?.[1] !== undefined && channel[2] !== undefined) {
+    return { kind: "channel", community: channel[1], channel: channel[2] };
+  }
+  const dm = DM_PATH.exec(trimmed);
+  if (dm?.[1] !== undefined) {
+    return { kind: "dm", channel: dm[1] };
   }
   if (trimmed.includes("/invite/")) {
     const invite = parseInvite(trimmed);

@@ -132,6 +132,7 @@ function harness(tokens: (string | null)[] = ["token-1", "token-2", "token-3"]) 
     onEvent: (e) => log.push(`event:${e.serverEvent}`),
     onInvalidEvent: () => log.push("invalid"),
     onEnrollmentRequired: () => log.push("enroll"),
+    onVerificationRequired: () => log.push("verify"),
   });
   return { stream, timers, log, authCalls, sockets: FakeSocket.instances };
 }
@@ -294,6 +295,16 @@ describe("EventStream", () => {
     await flush();
     // The same token is good once the account has a factor.
     expect(authCalls).toEqual([false, false]);
+  });
+
+  it("says when the deployment requires a verified email address the account lacks", async () => {
+    const { stream, log, sockets } = harness();
+    stream.start();
+    await flush();
+    sockets[0]?.onopen?.();
+    sockets[0]?.onclose?.({ code: 4428, reason: "" });
+    expect(log).toEqual(["verify", "lost:connection closed (4428)"]);
+    stream.stop();
   });
 
   it("stops when there is no session to identify with", async () => {

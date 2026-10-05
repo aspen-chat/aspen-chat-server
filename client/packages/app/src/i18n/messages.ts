@@ -11,6 +11,7 @@ import { deploymentPermissionNames } from "./en/deploymentPermissionNames";
 import { deviceLink } from "./en/deviceLink";
 import { deployments } from "./en/deployments";
 import { dms } from "./en/dms";
+import { email } from "./en/email";
 import { emoji } from "./en/emoji";
 import { emojiPanel } from "./en/emojiPanel";
 import { expiry } from "./en/expiry";
@@ -85,6 +86,7 @@ export const en = {
   deployments,
   twoFactor,
   security,
+  email,
   qr,
   deviceLink,
   crop,
