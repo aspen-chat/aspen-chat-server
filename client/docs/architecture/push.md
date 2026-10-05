@@ -17,7 +17,9 @@
   channel takes down the notices before it), and opens its message, or its channel when it is
   about none. A build pushes
   only with a relay in the `aspen_push_relay` string and a `google-services.json` from its
-  publisher's Firebase project. On iOS (`packages/mobile/ios/App`), `AspenPushPlugin.swift` is the
+  publisher's Firebase project; one naming no relay registers for nothing (`describe` refuses
+  there, before the app asks), since Android's registration would ask a Firebase it lacks and
+  take the app down. On iOS (`packages/mobile/ios/App`), `AspenPushPlugin.swift` is the
   same plugin: `describe` names APNs, the bundle id, the sandbox for a debug build, and the relay
   `AspenPushRelay` in `Info.plist` names (the build setting `ASPEN_PUSH_RELAY`, given on the
   `xcodebuild` command line or in a publisher's project; empty, like Android's string, the build
