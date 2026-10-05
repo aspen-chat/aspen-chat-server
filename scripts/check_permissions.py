@@ -723,12 +723,19 @@ def word_filter() -> Path:
     return example("word_filter")
 
 
+def running(world: World, plugin: str) -> None:
+    """Waits for the chat server to run `plugin`, which it does once it has compiled its
+    component: a while on a debug build, and longer for a larger plugin."""
+    wait_for(f"{plugin} running", lambda: any(
+        p["id"] == plugin for p in world.stack.api("GET", "/plugins", token=world.owner["token"])), 60)
+
+
 def plugins(world: World, check: Checks) -> None:
     say("a plugin's notes, events, routes, settings, and account")
     stack = world.stack
     stack.command("plugins", "install", str(word_filter()), "--yes")
     stack.command("plugins", "enable", WORD_FILTER_ID)
-    time.sleep(1.5)
+    running(world, WORD_FILTER_ID)
     watched = world.channel("plugin-watched")
     world.stream.gather(0.5)
     turned_on = world.as_owner("PUT", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}",
@@ -788,7 +795,7 @@ def calendar_channels(world: World, check: Checks) -> None:
     stack = world.stack
     stack.command("plugins", "install", str(example("calendar")), "--yes")
     stack.command("plugins", "enable", CALENDAR_ID)
-    time.sleep(1.5)
+    running(world, CALENDAR_ID)
     announce = world.channel("announcements")
     world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
                    {"settings": {"announceChannel": announce}, "grant": ["viewChannel", "sendMessages"]})
