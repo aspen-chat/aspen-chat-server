@@ -61,6 +61,16 @@ interface AspenDesktopBridge {
     ready(): Promise<string[]>;
     onOpen(listener: (url: string) => void): () => void;
   };
+  /**
+   * The window's zoom (`packages/desktop/src/main/zoom.ts`): the factor it keeps, setting it,
+   * and Ctrl + and Ctrl − (with Ctrl 0 and Ctrl with the wheel), which the main process takes
+   * from the page and hands back as steps for `theme/zoom.ts` to make.
+   */
+  readonly zoom: {
+    get(): Promise<number>;
+    set(factor: number): Promise<void>;
+    onStep(listener: (step: 1 | -1 | 0) => void): () => void;
+  };
   /** Game capture through libobs; the shape is `GameCaptureBridge` in `features/voice/gameCapture.ts`. */
   readonly gameCapture: {
     kinds(): Promise<{

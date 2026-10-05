@@ -41,7 +41,7 @@ import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
 import type { Included, Invocation, NotificationLevel } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
-import { type UploadTarget, uploadAttachment, uploadIcon } from "./upload";
+import { type UploadTarget, describeAttachment, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall } from "./voice";
 import type { VoiceMedia } from "./voiceMedia";
@@ -594,6 +594,14 @@ export class AspenSync {
     onProgress?: (sent: number, total: number) => void,
   ): Promise<Attachment> {
     return uploadAttachment(this.#uploadTarget(), file, size, onProgress);
+  }
+
+  /**
+   * Sets or clears (with `null`) what an attachment not yet sent shows, which readers' apps give
+   * as its text alternative, and caches the record as it now is.
+   */
+  describeAttachment(attachmentId: string, description: string | null): Promise<Attachment> {
+    return describeAttachment(this.#uploadTarget(), attachmentId, description);
   }
 
   /**

@@ -452,9 +452,15 @@ export class ListScroller {
     this.#steer(at + by, at);
   };
 
+  /** Focus went to a row that way, by key (`messageRows.ts`); history pages ahead of it. */
+  readonly focusMoved = (heading: Heading) => {
+    this.heading = heading;
+  };
+
   readonly onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const box = this.viewport.current;
-    if (box === null || event.target instanceof HTMLTextAreaElement) {
+    // A key a row took, to move between rows (`messageRows.ts`), is not for scrolling.
+    if (box === null || event.defaultPrevented || event.target instanceof HTMLTextAreaElement) {
       return;
     }
     const page = box.clientHeight - PAGE_OVERLAP_PX;

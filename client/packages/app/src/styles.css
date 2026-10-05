@@ -389,6 +389,16 @@
   --palette-code-attr: light-dark(#0d6e66, #5eead4);
 }
 
+/* More contrast (`applyContrastMode`), in any palette: secondary and faint text drawn nearer
+   the ink, and lines strong enough to see as edges (3:1 and more), so the palette's hues stay
+   while what was quiet becomes plain. Mixed from each palette's own ink and ground. */
+:root[data-contrast="more"] {
+  --palette-ink-muted: color-mix(in oklab, var(--palette-ink) 88%, var(--palette-surface));
+  --palette-ink-faint: color-mix(in oklab, var(--palette-ink) 78%, var(--palette-surface));
+  --palette-code-comment: color-mix(in oklab, var(--palette-ink) 78%, var(--palette-surface));
+  --palette-line: color-mix(in oklab, var(--palette-ink) 60%, var(--palette-surface));
+}
+
 :root {
   color-scheme: light dark;
 }
@@ -432,9 +442,96 @@ body,
   }
 }
 
+/* Forced colours (Windows' contrast themes) draw every background in the theme's one ground and
+   drop box shadows, which take Tailwind's rings with them. What those alone show is given
+   another way here: focus and the choice made by an outline in the theme's highlight, and
+   marks drawn as a fill, or as a ring, by the utilities below. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  [data-selected],
+  [aria-selected="true"],
+  [aria-current="page"],
+  [aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+/* A mark drawn only as a fill (a slider's track, a progress bar, a radio button's dot), kept in
+   the theme's text colour under forced colours rather than lost in its ground. */
+@utility forced-fill {
+  @media (forced-colors: active) {
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
+}
+
+/* A mark drawn only as a ring (someone speaking, a picture chosen, what a report is about),
+   drawn as an outline under forced colours, which drop rings. */
+@utility forced-outline {
+  @media (forced-colors: active) {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 body {
-  @apply bg-surface text-ink antialiased;
+  @apply bg-surface text-base text-ink antialiased;
   font-family: var(--font-sans);
+}
+
+/* Type is drawn at the system's text size where the app follows one (`--system-text-scale`,
+   which `followSystemTextSize` writes on <html> on iPhone and iPad, after Larger Text), and
+   messages and the message box at the reader's message text size (`MESSAGE_TEXT_SIZE`) and line
+   spacing (`MESSAGE_SPACING`) on top of it, which `useFollowMessageTextSize` writes on <html> as
+   `--message-text-scale` and `--message-line-scale`; each is 1 at the normal. `type-scale`
+   redefines each of Tailwind's type sizes, and the line height that goes with it, at the
+   element's `--text-scale` and `--line-scale`: once at the root for the whole app, and again in
+   `.message-text`, so names, times, reactions, and bodies change together while the rest keeps
+   its size. Text grows; spacing and icons do not, as the platforms' own text sizes do it. The
+   values are Tailwind's own; a custom property cannot scale the value it inherits, so they are
+   written out. */
+@utility type-scale {
+  --text-xs: calc(0.75rem * var(--text-scale));
+  --text-sm: calc(0.875rem * var(--text-scale));
+  --text-base: calc(1rem * var(--text-scale));
+  --text-lg: calc(1.125rem * var(--text-scale));
+  --text-xl: calc(1.25rem * var(--text-scale));
+  --text-2xl: calc(1.5rem * var(--text-scale));
+  --text-3xl: calc(1.875rem * var(--text-scale));
+  --text-4xl: calc(2.25rem * var(--text-scale));
+  --text-xs--line-height: calc(1 / 0.75 * var(--line-scale));
+  --text-sm--line-height: calc(1.25 / 0.875 * var(--line-scale));
+  --text-base--line-height: calc(1.5 * var(--line-scale));
+  --text-lg--line-height: calc(1.75 / 1.125 * var(--line-scale));
+  --text-xl--line-height: calc(1.75 / 1.25 * var(--line-scale));
+  --text-2xl--line-height: calc(2 / 1.5 * var(--line-scale));
+  --text-3xl--line-height: calc(2.25 / 1.875 * var(--line-scale));
+  --text-4xl--line-height: calc(2.5 / 2.25 * var(--line-scale));
+}
+
+:root {
+  --text-scale: var(--system-text-scale, 1);
+  --line-scale: 1;
+  @apply type-scale;
+}
+
+.message-text {
+  --text-scale: calc(var(--system-text-scale, 1) * var(--message-text-scale, 1));
+  --line-scale: var(--message-line-scale, 1);
+  @apply type-scale;
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+}
+
+/* The text of the message box, and of a message being edited, at the message text size but
+   never below 16px: iOS zooms the page into a text field drawn smaller than that when it is
+   focused. */
+@utility message-box-text {
+  font-size: max(1rem, var(--text-base));
 }
 
 /* Message bodies are GitHub-flavoured Markdown rendered by `features/messages/Markdown.tsx`. */
@@ -443,8 +540,10 @@ body {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+/* Paragraphs stand apart by what a line's height adds to its text, half the text's size at the
+   normal spacing, so they part further as the line spacing grows. */
 .message-body > * + * {
-  margin-top: 0.5rem;
+  margin-top: calc((1.5 * var(--message-line-scale, 1) - 1) * 1em);
 }
 .message-body p {
   white-space: pre-wrap;
@@ -495,10 +594,10 @@ body {
   font-weight: 600;
 }
 .message-body h1 {
-  font-size: 1.25rem;
+  font-size: var(--text-xl);
 }
 .message-body h2 {
-  font-size: 1.125rem;
+  font-size: var(--text-lg);
 }
 .message-body table {
   border-collapse: collapse;

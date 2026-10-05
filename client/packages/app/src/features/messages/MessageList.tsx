@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   useBlockedUsers,
   useChannel,
@@ -8,12 +8,14 @@ import {
   useStore,
   useSync,
 } from "@/api/hooks";
+import { useAnnounceArrivals } from "@/features/messages/announceArrivals";
 import { windowParts } from "@/features/messages/blocked";
 import { BlockedRun, NewMessagesLine } from "@/features/messages/BlockedRun";
 import { DepartingSpace } from "@/features/messages/DepartingSpace";
 import { useDeparting, type Departing } from "@/features/messages/departing";
 import { useHistoryPaging } from "@/features/messages/historyPaging";
 import { JumpToLatest } from "@/features/messages/JumpToLatest";
+import { MessageRows, MessageRowsContext, moveBetweenRows } from "@/features/messages/messageRows";
 import { KeepStillContext } from "@/features/messages/keepStill";
 import { channelLink, type ChannelHome } from "@/features/messages/links";
 import { OWNS_SCROLLING, useListPosition, useListScroller } from "@/features/messages/listScroller";
@@ -183,6 +185,14 @@ export function MessageList({
     measured: measure,
   });
   useReadReports({ seenFrame, noteSeenSoon, sync, channelId });
+  useAnnounceArrivals(sync, window?.ids);
+  const [messageRows] = useState(() => new MessageRows());
+  // Every render may draw or drop rows, the one the tab order stops at among them.
+  useLayoutEffect(() => {
+    if (content.current !== null) {
+      messageRows.settle(content.current);
+    }
+  });
 
   const blockedUsers = useBlockedUsers();
   const parts = useMemo(() => {
@@ -240,57 +250,68 @@ export function MessageList({
       }
     >
       <KeepStillContext.Provider value={scroller.settle}>
-        <div ref={content} className="flex min-h-full flex-col justify-end gap-1 px-4 py-3">
-          {window.hasOlder ? (
-            <LoadingEdge loading={loadingOlder} />
-          ) : start !== undefined ? (
-            <div ref={startBox}>{start}</div>
-          ) : (
-            <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-          )}
-          <div ref={rows} className="flex flex-col gap-1">
-            {lineIndex === -1 && <NewMessagesLine />}
-            {leaving(null)}
-            {parts.map((part) => {
-              const item = (id: string) => (
-                <MessageItem
-                  id={id}
-                  home={home}
-                  channelId={channelId}
-                  parentId={parentId}
-                  highlighted={id === highlightId}
-                  latest={atLatest && id === lastId}
-                />
-              );
-              if (part.kind === "message") {
+        <div
+          ref={content}
+          onKeyDown={(event) => {
+            const heading = moveBetweenRows(event.currentTarget, event);
+            if (heading !== null) {
+              scroller.focusMoved(heading);
+            }
+          }}
+          className="message-text flex min-h-full flex-col justify-end gap-1 px-4 py-3"
+        >
+          <MessageRowsContext.Provider value={messageRows}>
+            {window.hasOlder ? (
+              <LoadingEdge loading={loadingOlder} />
+            ) : start !== undefined ? (
+              <div ref={startBox}>{start}</div>
+            ) : (
+              <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+            )}
+            <div ref={rows} className="flex flex-col gap-1">
+              {lineIndex === -1 && <NewMessagesLine />}
+              {leaving(null)}
+              {parts.map((part) => {
+                const item = (id: string) => (
+                  <MessageItem
+                    id={id}
+                    home={home}
+                    channelId={channelId}
+                    parentId={parentId}
+                    highlighted={id === highlightId}
+                    latest={atLatest && id === lastId}
+                  />
+                );
+                if (part.kind === "message") {
+                  return (
+                    <Fragment key={part.id}>
+                      {item(part.id)}
+                      {leaving(part.id)}
+                      {part.index === lineIndex && <NewMessagesLine />}
+                    </Fragment>
+                  );
+                }
+                const lineOffset =
+                  lineIndex !== null &&
+                  lineIndex >= part.index &&
+                  lineIndex < part.index + part.ids.length
+                    ? lineIndex - part.index
+                    : null;
                 return (
-                  <Fragment key={part.id}>
-                    {item(part.id)}
-                    {leaving(part.id)}
-                    {part.index === lineIndex && <NewMessagesLine />}
+                  <Fragment key={part.ids[0]}>
+                    <BlockedRun
+                      ids={part.ids}
+                      lineOffset={lineOffset}
+                      highlightId={highlightId}
+                      item={item}
+                    />
+                    {part.ids.flatMap((id) => leaving(id))}
                   </Fragment>
                 );
-              }
-              const lineOffset =
-                lineIndex !== null &&
-                lineIndex >= part.index &&
-                lineIndex < part.index + part.ids.length
-                  ? lineIndex - part.index
-                  : null;
-              return (
-                <Fragment key={part.ids[0]}>
-                  <BlockedRun
-                    ids={part.ids}
-                    lineOffset={lineOffset}
-                    highlightId={highlightId}
-                    item={item}
-                  />
-                  {part.ids.flatMap((id) => leaving(id))}
-                </Fragment>
-              );
-            })}
-          </div>
-          {!window.atLatest && <LoadingEdge loading={loadingNewer} />}
+              })}
+            </div>
+            {!window.atLatest && <LoadingEdge loading={loadingNewer} />}
+          </MessageRowsContext.Provider>
         </div>
       </KeepStillContext.Provider>
       {OWNS_SCROLLING && (

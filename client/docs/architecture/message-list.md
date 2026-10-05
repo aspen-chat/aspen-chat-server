@@ -72,3 +72,25 @@ flings always act on the latest render's window and callbacks. `useHistoryPaging
 placed afresh; `useShownWindow` holds a change to the window while a deleted message's space
 closes and shows it as a transition; `useNewMessagesLine` places the "New Messages" line;
 `useReadMarking` marks what is seen as read.
+
+## Moving between messages by keyboard
+
+- The list is one stop in the tab order (`messageRows.ts`). Each row, a message
+  (`MessageItem`), a notice, or a closed run of blocked messages (`BlockedRun`), carries
+  `data-message-row` and takes `useRowProps`; one of them has `tabIndex` 0: the row last focused
+  while it is still drawn, otherwise the newest. `MessageRows.settle` decides that after each
+  render of the list, and a row asks with `useRowStop`, so moving re-renders only the rows the
+  stop leaves and reaches. On a row itself (not a control inside it), Up and Down go to the row
+  before and after and Home and End to the first and last the list holds; Tab goes on into the
+  row's controls, which focus reveals as hover does. A move tells `ListScroller.focusMoved`
+  which way it went, so history pages ahead of it as for a scroll, and the scroller's own keys
+  leave alone a key a row took.
+
+## Reading out arrivals
+
+- Where the reader asks (`ANNOUNCE_MESSAGES`, kept with the device, under Settings,
+  Accessibility), `useAnnounceArrivals` reads out each message that arrives in a list on screen
+  (`RecordStore.arrivedAt` within the last ten seconds), as its author's name and its text
+  (`describe`, as notifications word it), through `announce` (`src/features/layout/announce.ts`),
+  which adds a node to the one polite live region `Announcer` keeps at the root. The reader's own
+  messages, those of people they blocked, and history read in are left unsaid.

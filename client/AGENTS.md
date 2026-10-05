@@ -65,12 +65,12 @@ commit, as with comments.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
-- [`message-list.md`](docs/architecture/message-list.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, and the tests that hold it to that.
+- [`message-list.md`](docs/architecture/message-list.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
 - [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, and system notifications.
 - [`plugins.md`](docs/architecture/plugins.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
 - [`polls.md`](docs/architecture/polls.md): poll records, votes, closing, and write-ins.
-- [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, and Settings.
+- [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, the desktop app's zoom and the phones' text sizes, the message text size and line spacing, contrast, and Settings.
 - [`presence.md`](docs/architecture/presence.md): polling statuses and reporting activity.
 - [`profiles-and-icons.md`](docs/architecture/profiles-and-icons.md): icon upload and cropping, profile fields, the profile card, and nicknames.
 - [`push.md`](docs/architecture/push.md): waking phones: the app's subscriptions, Android's handler, and iOS's notification service extension.
@@ -197,7 +197,8 @@ commit, as with comments.
 - Components come from `react-aria-components`. Do not reach for `react-aria` hooks or another
   component library unless React Aria genuinely lacks the primitive; if so, say why in a comment.
 - Every screen and dialog passes axe (`@axe-core/playwright`): `e2e/accessibility.spec.ts`
-  audits them in every palette and both colour schemes on Chromium, and in the default palette
+  audits them in every palette and both colour schemes on Chromium (the default palette at more
+  contrast too), and in the default palette
   on the other browsers and phones. So every ink token, `ink-faint` included, reaches 4.5:1 on
   each surface text sits on; a new palette or token must too. Content sits in landmarks: each
   sidebar is a `section` named by its `h1`, the conversation is `main`, and where one pane
@@ -212,10 +213,25 @@ commit, as with comments.
   each pair shows is the root's `color-scheme`: `light dark`, following the system, unless the
   user chose Light or Dark under Appearance (`applyThemeMode`, kept per install like the
   palette). Nothing may read `prefers-color-scheme` itself, since that ignores the user's choice.
+  More contrast (`applyContrastMode`, kept per install, following the system's
+  `prefers-contrast` unless the user chose Standard or More) is `data-contrast="more"` on the
+  root, which draws every palette's muted and faint inks and lines nearer its ink; a token
+  added to a palette that text or edges use needs its more-contrast value there too.
+- Colour is never the only way something is told. Statuses are shapes (`PresenceMark`: a dot,
+  a crescent, a ring), a link inside text is underlined, and a choice among tinted options is
+  ticked. Under forced colours (Windows' contrast themes), which flatten backgrounds and drop
+  box shadows and so Tailwind's rings, `styles.css` outlines focus and whatever is selected,
+  current, or pressed; a mark drawn only as a fill (a track, a progress bar, a dot) takes
+  `forced-fill`, and one drawn only as a ring (someone speaking, a chosen picture) takes
+  `forced-outline`.
 - Type comes only from `font-sans` and `font-mono` (`--font-sans` and `--font-mono` in
   `src/styles.css`), never a family named in a component: the user may choose their own font
   for either (`docs/architecture/fonts.md`), and the stacks hold the bundled fallbacks for every
   script and for emoji.
+  Text is sized with Tailwind's type scale (`text-sm`) or `em`, never a fixed `rem` or pixel
+  size (but for marks drawn to fit a box of their own: a badge's count, a picture's initials),
+  so the system's text size (Larger Text on iOS) and, inside messages and the message box
+  (`.message-text`), the reader's message text size reach it (`preferences.md`).
 - Icon-only controls get a `Tooltip` (`src/features/layout/Tooltip.tsx`) whose text is also their
   `aria-label`, so the tooltip and the accessible name never disagree.
 - Something done and done with, where nothing on the page will say so (text copied), is said in

@@ -26,7 +26,9 @@ export function ProfileSnapshotCard({
       <div className="flex items-center gap-2">
         <span
           className={
-            aspects.includes("picture") ? "rounded-full ring-2 ring-danger ring-offset-1" : ""
+            aspects.includes("picture")
+              ? "forced-outline rounded-full ring-2 ring-danger ring-offset-1"
+              : ""
           }
         >
           <Avatar name={name} iconId={snapshot.icon ?? null} />

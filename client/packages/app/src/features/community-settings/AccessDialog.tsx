@@ -321,8 +321,10 @@ function Advanced({
                   <ToggleButton
                     key={setting}
                     id={setting}
+                    // The choice made is ticked, not only tinted, so it shows without
+                    // telling the tints apart.
                     className={
-                      "px-2 py-1 text-xs outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+                      "group flex items-center gap-1 px-2 py-1 text-xs outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
                       (setting === "allow"
                         ? "selected:bg-online/20 selected:text-ink"
                         : setting === "deny"
@@ -330,6 +332,12 @@ function Advanced({
                           : "selected:bg-surface-hover selected:text-ink")
                     }
                   >
+                    <CheckIcon
+                      size={12}
+                      weight="bold"
+                      aria-hidden="true"
+                      className="opacity-0 group-selected:opacity-100"
+                    />
                     {m.access[setting]}
                   </ToggleButton>
                 ))}

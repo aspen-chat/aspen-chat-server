@@ -68,6 +68,32 @@ export async function uploadAttachment(
   return confirm.data;
 }
 
+/** The longest description an attachment may have, in characters, as the server bounds it. */
+export const ATTACHMENT_DESCRIPTION_MAX_CHARS = 1500;
+
+/**
+ * Sets or clears (with `null`, or nothing but space) what an attachment not yet sent shows, in
+ * its uploader's words, and caches the record as it now is.
+ */
+export async function describeAttachment(
+  target: UploadTarget,
+  attachmentId: string,
+  description: string | null,
+): Promise<Attachment> {
+  const { data, error, response } = await target.client.api.PATCH(
+    "/api/v1/attachments/{attachment}",
+    {
+      params: { path: { attachment: attachmentId } },
+      body: { description },
+    },
+  );
+  if (data === undefined) {
+    throw new ApiProblemError(problemOf(error, response));
+  }
+  target.store.ingest({ attachments: [data] });
+  return data;
+}
+
 /**
  * Uploads an icon in the server's two phases, reserving it, sending the bytes straight to
  * storage, and confirming, and caches the record. The caller then names the icon on a user

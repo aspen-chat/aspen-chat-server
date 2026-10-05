@@ -21,6 +21,7 @@ diesel::table! {
         width -> Nullable<Int4>,
         height -> Nullable<Int4>,
         uploader -> Nullable<Uuid>,
+        description -> Nullable<Text>,
     }
 }
 

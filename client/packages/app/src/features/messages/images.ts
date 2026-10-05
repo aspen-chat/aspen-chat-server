@@ -9,6 +9,21 @@ export interface Picture {
   /** Its size in pixels, when known before it loads, so its room is kept for it. */
   width?: number | null | undefined;
   height?: number | null | undefined;
+  /** What it shows, in its uploader's words, when it is an attachment they described. */
+  description?: string | null | undefined;
+}
+
+/** Whether a file is one a description is offered for: a picture or a video. */
+export function describable(mimeType: string): boolean {
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/");
+}
+
+/**
+ * The text that stands for a picture where it cannot be seen: its uploader's description, or
+ * else `unnamed` (the name it goes by, worded as a picture's).
+ */
+export function pictureAlt(picture: Picture, unnamed: string): string {
+  return picture.description ?? unnamed;
 }
 
 /** How many of a message's pictures show inline; the rest are behind the gallery button. */

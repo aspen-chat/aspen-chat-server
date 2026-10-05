@@ -2,7 +2,8 @@
  * Colour palettes and whether they are drawn light or dark. Each palette is a block of CSS
  * variables in `styles.css` selected by the `data-theme` attribute on <html>, every colour in it
  * a `light-dark()` pair; the mode sets the document's `color-scheme`, which picks one of each
- * pair. This module only chooses and remembers both, per browser.
+ * pair. This module only chooses and remembers both, per browser, and the contrast they are
+ * drawn at.
  */
 
 export const PALETTES = [
@@ -78,6 +79,66 @@ export function applyThemeMode(mode: ThemeMode): void {
   document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", scheme);
   try {
     window.localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    // Not fatal; the system's preference applies next launch.
+  }
+}
+
+/** Whether colours are drawn at their palette's contrast, at more, or as the system prefers. */
+export const CONTRAST_MODES = ["system", "standard", "more"] as const;
+export type ContrastMode = (typeof CONTRAST_MODES)[number];
+
+const CONTRAST_KEY = "aspen.contrast";
+const MORE_CONTRAST = "(prefers-contrast: more)";
+
+export function isContrastMode(value: unknown): value is ContrastMode {
+  return typeof value === "string" && (CONTRAST_MODES as readonly string[]).includes(value);
+}
+
+export function storedContrastMode(): ContrastMode {
+  try {
+    const stored = window.localStorage.getItem(CONTRAST_KEY);
+    return isContrastMode(stored) ? stored : "system";
+  } catch {
+    return "system";
+  }
+}
+
+/** Stops following the system's contrast preference, while `system` is chosen. */
+let stopFollowing: (() => void) | null = null;
+
+/**
+ * Applies a contrast mode to the document and remembers it for the next launch. More contrast
+ * is `data-contrast="more"` on the root, which `styles.css` answers by drawing secondary text
+ * and lines nearer the ink in whatever palette is chosen; `system` sets it while the system
+ * asks for more contrast, and follows it as that changes.
+ */
+export function applyContrastMode(mode: ContrastMode): void {
+  stopFollowing?.();
+  stopFollowing = null;
+  const root = document.documentElement;
+  const show = (more: boolean) => {
+    if (more) {
+      root.dataset.contrast = "more";
+    } else {
+      delete root.dataset.contrast;
+    }
+  };
+  if (mode === "system") {
+    const query = window.matchMedia(MORE_CONTRAST);
+    const follow = () => {
+      show(query.matches);
+    };
+    follow();
+    query.addEventListener("change", follow);
+    stopFollowing = () => {
+      query.removeEventListener("change", follow);
+    };
+  } else {
+    show(mode === "more");
+  }
+  try {
+    window.localStorage.setItem(CONTRAST_KEY, mode);
   } catch {
     // Not fatal; the system's preference applies next launch.
   }

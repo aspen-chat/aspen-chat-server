@@ -1,6 +1,7 @@
 import { ProhibitIcon } from "@phosphor-icons/react";
 import { Fragment, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
+import { useRowProps } from "@/features/messages/messageRows";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -24,6 +25,8 @@ export function BlockedRun({
   const [open, setOpen] = useState(highlightId !== undefined && ids.includes(highlightId));
   // A link to one of these messages, followed while the row is shown, opens it.
   const [linked, setLinked] = useState(highlightId);
+  // Closed, the row stands for its messages among the list's rows, under the newest one's id.
+  const rowProps = useRowProps(ids[ids.length - 1] ?? "");
   if (highlightId !== linked) {
     setLinked(highlightId);
     if (highlightId !== undefined && ids.includes(highlightId)) {
@@ -50,7 +53,8 @@ export function BlockedRun({
       <>
         <div
           data-message-id={ids[ids.length - 1]}
-          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink-faint"
+          {...rowProps}
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink-faint outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <ProhibitIcon size={16} aria-hidden="true" />
           <span>{count}</span>

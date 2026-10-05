@@ -26,8 +26,12 @@ import { Spoiler } from "@/features/messages/Spoiler";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
+/**
+ * A link in text is underlined as well as coloured: in most palettes the accent is too near the
+ * ink around it to be told apart by colour alone.
+ */
 const linkClass =
-  "text-accent underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
+  "text-accent underline underline-offset-2 hover:decoration-2 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
 
 /**
  * A link in a message. An Aspen invite link that names its deployment opens its invite screen

@@ -284,6 +284,13 @@ export {
   LANGUAGE,
   MAX_MOTION_SPEED,
   MOTION_SPEED,
+  MESSAGE_TEXT_SIZE,
+  ANNOUNCE_MESSAGES,
+  MESSAGE_SPACING,
+  MESSAGE_SPACINGS,
+  type MessageSpacing,
+  MESSAGE_TEXT_SIZES,
+  type MessageTextSize,
   RAIL_ORDER,
   RAIL_FOLDERS,
   FOLDER_COLORS,
@@ -337,3 +344,4 @@ export {
   type ForeignDeployment,
 } from "./deployments";
 export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";
+export { ATTACHMENT_DESCRIPTION_MAX_CHARS } from "./upload";

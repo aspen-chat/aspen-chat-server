@@ -4,14 +4,14 @@ import { displayNameOf } from "@/features/users/profile";
 import { format, type Messages } from "@/i18n/messages";
 
 /**
- * What a notification says of a message: who wrote it (by their nickname, in a community) where,
- * and its text with tags as names.
+ * What a notification says of a message: who wrote it (by their nickname, in a community), that
+ * and where as its title, and its text with tags as names.
  */
 export function describe(
   m: Messages,
   sync: AspenSync,
   message: Message,
-): { title: string; body: string } {
+): { name: string; title: string; body: string } {
   const store = sync.store;
   const author = store.user(message.author);
   const channel = store.channel(message.channelId);
@@ -42,5 +42,5 @@ export function describe(
         : message.attachments.length > 0
           ? m.notifications.attachment
           : m.notifications.newMessage;
-  return { title, body };
+  return { name, title, body };
 }

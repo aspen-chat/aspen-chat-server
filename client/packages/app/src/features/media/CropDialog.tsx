@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import {
-  Button,
-  Dialog,
-  Label,
-  Modal,
-  ModalOverlay,
-  Slider,
-  SliderThumb,
-  SliderTrack,
-} from "react-aria-components";
+import { Button, Dialog, Label, Modal, ModalOverlay, Slider } from "react-aria-components";
+import { SliderRail } from "@/features/layout/SliderRail";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import {
@@ -255,10 +247,7 @@ function CropSurface({
         className="flex w-full flex-col gap-1"
       >
         <Label className="text-sm font-medium text-ink-muted">{m.crop.size}</Label>
-        <SliderTrack className="relative h-6 w-full">
-          <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-line" />
-          <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
-        </SliderTrack>
+        <SliderRail />
       </Slider>
     </div>
   );

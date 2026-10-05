@@ -47,6 +47,7 @@ import { format } from "@/i18n/messages";
 import { UserMention } from "@/features/messages/Mention";
 import { formatNodes } from "@/i18n/formatNodes";
 import { useNameIn } from "@/features/users/nameIn";
+import { useRowProps } from "@/features/messages/messageRows";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -122,6 +123,7 @@ export const MessageItem = memo(function MessageItem({
   const me = useMe();
   const permissions = useChannelAccess(channelId);
   const [editing, setEditing] = useState(false);
+  const rowProps = useRowProps(id);
   // How far the pointer's actions rise above the row: all the way, or as far as there is room.
   const [toolbarRise, setToolbarRise] = useState(TOOLBAR_RISE_PX);
   // A touch screen offers the actions under a long press; a pointer, at the corner.
@@ -257,10 +259,18 @@ export const MessageItem = memo(function MessageItem({
       ref={row}
       data-message-id={id}
       data-mentions-me={tagsMe ? "true" : undefined}
-      tabIndex={-1}
-      {...(touchOnly ? longPressProps : { onPointerEnter: placeToolbar, onFocus: placeToolbar })}
+      {...rowProps}
+      {...(touchOnly
+        ? longPressProps
+        : {
+            onPointerEnter: placeToolbar,
+            onFocus: () => {
+              rowProps.onFocus();
+              placeToolbar();
+            },
+          })}
       className={
-        "group relative flex gap-3 rounded-md py-1.5 outline-none " +
+        "group relative flex gap-3 rounded-md py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
         (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
         arriving +
         (highlighted ? "motion-flash " : "") +
@@ -408,11 +418,13 @@ function NoticeRow({
   highlighted: boolean;
   children: ReactNode;
 }) {
+  const rowProps = useRowProps(id);
   return (
     <article
       data-message-id={id}
+      {...rowProps}
       className={
-        "flex gap-3 rounded-md px-2 py-1.5 " +
+        "flex gap-3 rounded-md px-2 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
         arriving +
         (highlighted ? "motion-flash " : "") +
         "hover:bg-surface-hover/60"

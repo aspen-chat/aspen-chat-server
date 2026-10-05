@@ -221,6 +221,34 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(shown.waitForExistence(timeout: 30), "the message is not shown: \(app.debugDescription)")
     }
 
+    /// Text follows the system's Larger Text (`theme/systemTextSize.ts`): the app launched at
+    /// Accessibility Extra Large, whose body text is 40 points to the default's 17, draws the
+    /// user's name at the foot of the channel list over twice as tall, and Settings beside it
+    /// stays on the screen. The size is given at launch, for this app alone, as the system's
+    /// own setting would give it.
+    func testTextFollowsLargerText() throws {
+        let user = try environment("ASPEN_TEST_USER")
+        try signIn()
+        let normal = try nameHeight(user, at: "UICTContentSizeCategoryL")
+        let larger = try nameHeight(user, at: "UICTContentSizeCategoryAccessibilityXL")
+        XCTAssertGreaterThan(larger / normal, 1.8, "drawn \(normal) then \(larger) tall")
+        let settings = web.buttons["Settings"].firstMatch
+        XCTAssertTrue(settings.isHittable, "Settings is off the screen: \(settings.frame)")
+        XCTAssertLessThanOrEqual(settings.frame.maxX, app.windows.firstMatch.frame.maxX)
+    }
+
+    /// Launches the app at the text size `category` and reads how tall the name `user` is drawn.
+    private func nameHeight(_ user: String, at category: String) throws -> CGFloat {
+        app.terminate()
+        app.launchArguments = ["-UIPreferredContentSizeCategoryName", category]
+        app.launch()
+        let name = web.staticTexts[user].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 30), "no \(user): \(app.debugDescription)")
+        // The page measures the system's text size a moment after it starts.
+        Thread.sleep(forTimeInterval: 2)
+        return name.frame.height
+    }
+
     /// What the last anchor search saw, for a stray that says nothing was found.
     private var lastSearch = ""
 

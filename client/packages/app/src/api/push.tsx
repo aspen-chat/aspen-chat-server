@@ -86,6 +86,10 @@ export function WakeThisPhone() {
       if (life.stopped) {
         return;
       }
+      // A build that names no relay cannot be woken, and asks nothing of the system: Android's
+      // registration asks Firebase, which such a build is not set up for, and throws on a thread
+      // of its own, taking the app down. `describe` refuses on such a build, ending this here.
+      await AspenPush.describe();
       const permission = await PushNotifications.requestPermissions();
       if (permission.receive === "granted") {
         await PushNotifications.register();

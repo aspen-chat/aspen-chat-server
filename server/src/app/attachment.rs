@@ -16,6 +16,11 @@
 //! may read it, and it goes only with the message (or with its removal by
 //! someone allowed to remove it).
 //!
+//! An attachment may carry a description of what it shows, in its uploader's words, which
+//! readers' apps give as the picture's or video's text alternative. It is given when the upload
+//! starts or set with [`describe_attachment`] until the attachment is sent; a sent attachment's
+//! description is part of the message it went with and stays as it was sent.
+//!
 //! [`delete_attachment`] removes an unsent row of the caller's, confirmed or
 //! not, and best-effort deletes the S3 object. Stale `ready_at IS NULL` rows
 //! whose presigned URL has expired are orphans the operator can sweep on a
@@ -53,6 +58,8 @@ pub struct Attachment {
     /// Who uploaded it; `None` for one uploaded before uploaders were recorded, or whose
     /// uploader's account is gone.
     pub uploader: Option<UserId>,
+    /// What it shows, in its uploader's words; see [`description`].
+    pub description: Option<String>,
 }
 
 /// The largest side, in pixels, a picture's stated size may have.
@@ -81,6 +88,29 @@ pub fn picture_size(width: Option<u32>, height: Option<u32>) -> app::Result<Opti
             max = MAX_PICTURE_SIDE
         ))),
     }
+}
+
+/// The longest description an attachment may have, in characters: a long paragraph, room for
+/// a chart or a screenshot of text to be told in full.
+pub const DESCRIPTION_MAX_CHARS: usize = 1500;
+
+/// A description as an uploader gives it, with the space around it taken off; one with nothing
+/// else in it is no description.
+pub fn description(raw: Option<String>) -> app::Result<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let text = raw.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.chars().count() > DESCRIPTION_MAX_CHARS {
+        return Err(app::Error::Validation(t!(
+            "attachmentDescriptionLength",
+            max = DESCRIPTION_MAX_CHARS
+        )));
+    }
+    Ok(Some(text.to_owned()))
 }
 
 impl Loadable for Attachment {
@@ -144,6 +174,7 @@ pub async fn init_upload(
     file_name: String,
     mime_type: String,
     size: Option<(i32, i32)>,
+    description: Option<String>,
 ) -> app::Result<AttachmentUpload> {
     let id = AttachmentId::new();
     let key = storage_key(id);
@@ -157,6 +188,7 @@ pub async fn init_upload(
         width: size.map(|(w, _)| w),
         height: size.map(|(_, h)| h),
         uploader: Some(caller),
+        description,
     };
     let mut conn = state.connection_pool.get().await?;
     diesel::insert_into(attachment::table)
@@ -275,6 +307,42 @@ pub async fn read_attachment(
     Err(app::Error::Diesel(diesel::result::Error::NotFound))
 }
 
+/// Sets or clears the description of an attachment of the caller's that is in no message yet,
+/// confirmed or not, and returns it; `None` leaves the description as it is. One in a message, or
+/// anyone else's, is answered as not found.
+pub async fn describe_attachment(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: AttachmentId,
+    description: Option<Option<String>>,
+) -> app::Result<Attachment> {
+    let mut conn = state.connection_pool.get().await?;
+    let unsent = attachment::id
+        .eq(id)
+        .and(attachment::uploader.eq(caller))
+        .and(diesel::dsl::not(diesel::dsl::exists(
+            message_attachment::table.filter(message_attachment::attachment_id.eq(attachment::id)),
+        )));
+    let row = match description {
+        Some(text) => {
+            diesel::update(attachment::table)
+                .filter(unsent)
+                .set(attachment::description.eq(self::description(text)?))
+                .returning(Attachment::as_returning())
+                .get_result(conn.as_mut())
+                .await?
+        }
+        None => {
+            attachment::table
+                .select(Attachment::as_select())
+                .filter(unsent)
+                .first(conn.as_mut())
+                .await?
+        }
+    };
+    Ok(row)
+}
+
 /// Hard-delete an attachment of the caller's that is in no message, and best-effort delete the
 /// S3 object. Works on both `ready` and pending rows. One in a message goes with the message;
 /// asking to delete it, or anyone else's, is answered as not found.
@@ -310,6 +378,24 @@ pub async fn delete_attachment(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    #[test]
+    fn a_description_is_trimmed_and_bounded() {
+        assert_eq!(description(None).unwrap(), None);
+        assert_eq!(description(Some("   \n".into())).unwrap(), None);
+        assert_eq!(
+            description(Some("  A cat asleep on a keyboard. ".into())).unwrap(),
+            Some("A cat asleep on a keyboard.".into())
+        );
+        let longest = "é".repeat(DESCRIPTION_MAX_CHARS);
+        assert_eq!(description(Some(longest.clone())).unwrap(), Some(longest));
+        assert!(description(Some("é".repeat(DESCRIPTION_MAX_CHARS + 1))).is_err());
+    }
 }
 
 #[cfg(test)]

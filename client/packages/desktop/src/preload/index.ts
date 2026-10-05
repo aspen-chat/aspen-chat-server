@@ -50,6 +50,22 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       };
     },
   },
+  // The window's zoom: the factor the main process keeps, and the steps the zoom keys ask for.
+  zoom: {
+    get: () => ipcRenderer.invoke("zoom:get"),
+    set: (factor: unknown) => ipcRenderer.invoke("zoom:set", factor),
+    onStep: (listener: (step: number) => void) => {
+      const handler = (_event: unknown, step: unknown) => {
+        if (step === 1 || step === -1 || step === 0) {
+          listener(step);
+        }
+      };
+      ipcRenderer.on("zoom:step", handler);
+      return () => {
+        ipcRenderer.off("zoom:step", handler);
+      };
+    },
+  },
   // Game capture through libobs; the main process owns the helper that captures and sends it.
   gameCapture: {
     kinds: () => ipcRenderer.invoke("voice:capture-kinds"),

@@ -280,6 +280,9 @@ user_per_channel = { requests = 3, per_seconds = 60, burst = 3 }
 [rate_limits.endpoints."PATCH /messages/{message}"]
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+[rate_limits.endpoints."PATCH /attachments/{attachment}"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
 [rate_limits.endpoints."DELETE /messages/{message}"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 

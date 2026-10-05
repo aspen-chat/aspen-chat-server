@@ -5,6 +5,33 @@ export const settings = {
   motionTimes: "{speed}×",
   motionHint:
     "All your devices share this. At the far left, nothing animates. Where a device is set to reduce motion, things fade in place rather than move.",
+  zoom: "Zoom",
+  zoomKeysHint:
+    "Only this device follows this setting. {key} + and {key} − change it too, and {key} 0 puts it back to 100%.",
+  zoomOnIos:
+    "Aspen's text follows the size set in Settings, Accessibility, Display & Text Size, Larger Text. Display Zoom, under Display & Brightness, makes everything larger.",
+  zoomOnAndroid:
+    "Aspen follows your phone's Font size and Display size, under Settings, Display (or Accessibility, on some phones).",
+  zoomInBrowser:
+    "Your browser sets how large Aspen is drawn. Press Ctrl + or Ctrl − (⌘ + or ⌘ − on a Mac), or use its menu.",
+  messageTextSize: "Message text size",
+  messageTextSizeValue: "{size}px",
+  messageTextSizeSample: "Messages will be this size.",
+  messageTextSizeHint:
+    "All your devices share this. It sizes messages and the message box, on top of the text size set for the whole app.",
+  messageSpacing: "Line spacing",
+  messageSpacingNormal: "Normal",
+  messageSpacingWide: "Wide",
+  messageSpacingWider: "Wider",
+  messageSpacingSample:
+    "Lines of a message sit this far apart, and wrap like this when they run long.",
+  messageSpacingSampleParagraph: "A new paragraph starts this far below.",
+  messageSpacingHint:
+    "All your devices share this. It spaces the lines and paragraphs of messages.",
+  accessibility: "Accessibility",
+  announceMessages: "Read out new messages",
+  announceMessagesHint:
+    "Your screen reader says who wrote each message that arrives in the conversation you have open, and what it says. Only this device follows this setting.",
   nameColors: "Colour names by role",
   nameColorsHint:
     "Draws people's names in their roles' colours. Only this device follows this setting.",

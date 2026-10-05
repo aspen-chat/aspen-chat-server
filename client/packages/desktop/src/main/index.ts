@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { claimAppLinks, serveAppLinks } from "./appLinks";
 import { serveGameCapture } from "./gameCapture";
 import { servePasskeyHandoff } from "./passkeyHandoff";
+import { serveZoom, storedZoom, zoomWindow } from "./zoom";
 
 /** Where `pnpm dev` serves the app; override with `ASPEN_DEV_SERVER_URL`. */
 const devServerUrl = process.env.ASPEN_DEV_SERVER_URL ?? "http://localhost:5173";
@@ -65,8 +66,10 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      zoomFactor: storedZoom(),
     },
   });
+  zoomWindow(window);
 
   window.once("ready-to-show", () => {
     if (!hidden) {
@@ -198,6 +201,7 @@ app
     serveDisplayMedia();
     serveGameCapture();
     servePasskeyHandoff();
+    serveZoom();
     createWindow();
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

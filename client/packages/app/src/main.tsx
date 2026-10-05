@@ -3,7 +3,16 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { I18nProvider } from "./i18n/I18nProvider";
 import { applyStoredFonts } from "./theme/fonts";
-import { applyPalette, applyThemeMode, storedPalette, storedThemeMode } from "./theme/palettes";
+import {
+  applyContrastMode,
+  applyPalette,
+  applyThemeMode,
+  storedContrastMode,
+  storedPalette,
+  storedThemeMode,
+} from "./theme/palettes";
+import { followSystemTextSize } from "./theme/systemTextSize";
+import { followZoom } from "./theme/zoom";
 // Aspen's own typefaces, upright and italic, each a variable font split by script so a page
 // fetches only the scripts it shows (`--font-sans` and `--font-mono` in `styles.css`).
 import "@fontsource-variable/inclusive-sans";
@@ -18,7 +27,10 @@ import "./styles.css";
 
 applyPalette(storedPalette());
 applyThemeMode(storedThemeMode());
+applyContrastMode(storedContrastMode());
 void applyStoredFonts();
+followZoom();
+followSystemTextSize();
 // The Noto faces themselves, whose rules are too long to hold up the first paint for; text in
 // their scripts shows in the system's fonts until they load.
 void import("./generated/fontFaces.css");

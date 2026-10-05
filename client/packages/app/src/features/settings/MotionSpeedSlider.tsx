@@ -1,7 +1,8 @@
 import { MAX_MOTION_SPEED, MOTION_SPEED } from "@aspen/protocol";
 import { useState } from "react";
-import { Label, Slider, SliderOutput, SliderThumb, SliderTrack, Text } from "react-aria-components";
+import { Label, Slider, SliderOutput, Text } from "react-aria-components";
 import { usePreference, useSync } from "@/api/hooks";
+import { SliderRail } from "@/features/layout/SliderRail";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -56,10 +57,7 @@ export function MotionSpeedSlider() {
           {({ state }) => describe(state.getThumbValue(0))}
         </SliderOutput>
       </div>
-      <SliderTrack className="relative h-6 w-full">
-        <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 rounded-full bg-line" />
-        <SliderThumb className="top-1/2 h-4 w-4 rounded-full border border-line bg-accent outline-none dragging:bg-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50" />
-      </SliderTrack>
+      <SliderRail />
       <Text slot="description" className="text-xs text-ink-muted">
         {m.settings.motionHint}
       </Text>

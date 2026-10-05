@@ -30,7 +30,7 @@ export function MentionBadge({
       title={title ?? mentionsText(m, count)}
       className={
         (grown > 0 ? "motion-pop " : "") +
-        "flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-danger px-1 text-[11px] leading-none font-semibold text-accent-contrast tabular-nums " +
+        "flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-danger px-1 forced-colors:border text-[11px] leading-none font-semibold text-accent-contrast tabular-nums " +
         className
       }
     >

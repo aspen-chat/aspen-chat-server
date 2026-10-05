@@ -162,10 +162,13 @@ export function ResizablePane({
     </div>
   ) : null;
 
+  // On a one-pane screen the pane shares the width with the rail, so it may shrink below what
+  // its contents would take: at a large text size their widest line would otherwise push it,
+  // and the controls at its end, past the screen's edge.
   return (
     <div
       role={role}
-      className={"relative md:shrink-0 " + className}
+      className={"relative min-w-0 md:shrink-0 " + className}
       style={wide ? { width } : undefined}
     >
       <EdgeContext.Provider value={handle}>{children}</EdgeContext.Provider>
