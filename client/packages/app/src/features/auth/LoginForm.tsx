@@ -14,6 +14,8 @@ import { useMessages } from "@/i18n/context";
 import { OtherDeviceSignIn } from "./OtherDeviceSignIn";
 import { usePasskeyTransport } from "./passkeyTransport";
 import { SecondFactorFields } from "./SecondFactorFields";
+import { PasswordReset } from "@/features/email/PasswordReset";
+import { useEmailPolicy } from "@/features/email/policy";
 import {
   alertClass,
   fieldClass,
@@ -25,7 +27,9 @@ import {
 } from "./styles";
 
 type Step =
-  { kind: "password" } | { kind: "secondFactor"; ticket: string; methods: SecondFactorMethod[] };
+  | { kind: "password" }
+  | { kind: "secondFactor"; ticket: string; methods: SecondFactorMethod[] }
+  | { kind: "reset" };
 
 /** Why an attempt failed, as the form shows it; `null` when the user backed out. */
 function failure(e: unknown): string | null {
@@ -38,14 +42,30 @@ function failure(e: unknown): string | null {
 /**
  * Signing in to the currently selected server: a username and password, then a second factor
  * when the account has two-factor sign-in on; or a passkey on its own; or another device, by a
- * QR code (`OtherDeviceSignIn`). Failures show the
+ * QR code (`OtherDeviceSignIn`). Where the deployment sends email, a forgotten password is reset
+ * by a code mailed to the account's address (`PasswordReset`). Failures show the
  * server's localized Problem text. Which server it is shows above it (`DeploymentWelcome`).
  */
 export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
   const transport = usePasskeyTransport();
   const [step, setStep] = useState<Step>({ kind: "password" });
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const m = useMessages();
 
+  if (step.kind === "reset") {
+    return (
+      <PasswordReset
+        onDone={() => {
+          setNotice(m.email.resetDone);
+          setStep({ kind: "password" });
+        }}
+        onCancel={() => {
+          setStep({ kind: "password" });
+        }}
+      />
+    );
+  }
   if (step.kind === "secondFactor") {
     return (
       <SecondFactorStep
@@ -64,6 +84,12 @@ export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => vo
       transport={transport}
       error={error}
       setError={setError}
+      notice={notice}
+      onForgotPassword={() => {
+        setError(null);
+        setNotice(null);
+        setStep({ kind: "reset" });
+      }}
       onSecondFactor={(ticket, methods) => {
         setError(null);
         setStep({ kind: "secondFactor", ticket, methods });
@@ -77,18 +103,24 @@ function PasswordStep({
   transport,
   error,
   setError,
+  notice,
+  onForgotPassword,
   onSecondFactor,
   onSwitchToRegister,
 }: {
   transport: PasskeyTransport | null;
   error: string | null;
   setError: (error: string | null) => void;
+  /** Something done that the reader returned from, such as a password reset. */
+  notice: string | null;
+  onForgotPassword: () => void;
   onSecondFactor: (ticket: string, methods: SecondFactorMethod[]) => void;
   onSwitchToRegister: () => void;
 }) {
   const m = useMessages();
   const client = useAspenClient();
   const [pending, setPending] = useState<"password" | "passkey" | null>(null);
+  const emailAvailable = useEmailPolicy()?.available === true;
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -152,6 +184,11 @@ function PasswordStep({
           <Input className={inputClass} />
           <FieldError className="text-sm text-danger" />
         </TextField>
+        {notice !== null && error === null && (
+          <p role="status" className="rounded-md bg-accent-soft px-3 py-2 text-sm">
+            {notice}
+          </p>
+        )}
         {error !== null && (
           <p role="alert" className={alertClass}>
             {error}
@@ -160,6 +197,11 @@ function PasswordStep({
         <Button type="submit" isDisabled={pending !== null} className={primaryButtonClass}>
           {pending === "password" ? m.signingIn : m.signIn}
         </Button>
+        {emailAvailable && (
+          <Button onPress={onForgotPassword} className={linkButtonClass + " self-start text-sm"}>
+            {m.email.forgotPassword}
+          </Button>
+        )}
       </Form>
       <div className="flex items-center gap-3 text-xs text-ink-muted" aria-hidden="true">
         <span className="h-px flex-1 bg-line" />

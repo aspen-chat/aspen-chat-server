@@ -9,10 +9,15 @@ import { format } from "@/i18n/messages";
 import { fieldClass, inputClass, labelClass, linkButtonClass, primaryButtonClass } from "./styles";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { ChoiceCheckbox } from "@/features/layout/choices";
+import { useEmailPolicy } from "@/features/email/policy";
 
 /**
  * Creates an account, then signs in with the same credentials so the user lands in the app
- * without typing them twice. Server Problems are attached to the field they concern.
+ * without typing them twice. Where the deployment sends email it asks for an address (required
+ * where the deployment says so), and, where it has a newsletter and an address is typed, whether
+ * to subscribe, unchecked until the user checks it. Server Problems are attached to the field
+ * they concern.
  */
 export function RegisterForm({
   onSwitchToLogin,
@@ -33,6 +38,12 @@ export function RegisterForm({
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [newsletter, setNewsletter] = useState(false);
+  const policy = useEmailPolicy();
+  const askEmail = policy?.available === true;
+  const emailRequired = policy?.required === true;
+  const offerNewsletter = policy?.newsletter === true && email.trim() !== "";
   const [error, setError] = useState<string | null>(null);
   const joins = useDualInviteCommunity(initialInvite);
 
@@ -48,6 +59,7 @@ export function RegisterForm({
     setPasswordError(null);
     setConfirmError(null);
     setError(null);
+    const address = askEmail ? email.trim() : "";
     if (password.length < PASSWORD_MIN_LENGTH) {
       setPasswordError(m.passwordHint);
       return;
@@ -58,14 +70,25 @@ export function RegisterForm({
     }
     setPending(true);
     try {
-      await client.register(username, password, invite === "" ? undefined : invite);
+      await client.register(username, password, {
+        ...(invite === "" ? {} : { inviteCode: invite }),
+        ...(address === "" ? {} : { email: address, newsletter: offerNewsletter && newsletter }),
+      });
       await client.login(username, password);
     } catch (e) {
       if (e instanceof ApiProblemError) {
         switch (e.code) {
           case "usernameTaken":
-          case "validation":
             setUsernameError(e.message);
+            break;
+          case "validation":
+            // The username's rules and the address's both answer `validation`, and only the
+            // server's text says which; with an address asked for, it shows for the whole form.
+            if (askEmail) {
+              setError(e.message);
+            } else {
+              setUsernameError(e.message);
+            }
             break;
           case "passwordRequirementsNotMet":
             setPasswordError(e.message);
@@ -147,6 +170,32 @@ export function RegisterForm({
         <Input className={inputClass} />
         <FieldError className="text-sm text-danger">{usernameError}</FieldError>
       </TextField>
+      {askEmail && (
+        <TextField
+          name="email"
+          type="email"
+          value={email}
+          onChange={setEmail}
+          isRequired={emailRequired}
+          autoComplete="email"
+          className={fieldClass}
+        >
+          <Label className={labelClass}>{m.email.addressLabel}</Label>
+          <Input className={inputClass} spellCheck={false} autoCapitalize="off" />
+          <Text slot="description" className="text-sm text-ink-muted">
+            {emailRequired ? m.email.registerRequiredHint : m.email.registerOptionalHint}
+          </Text>
+          <FieldError className="text-sm text-danger" />
+        </TextField>
+      )}
+      {offerNewsletter && (
+        <ChoiceCheckbox
+          isSelected={newsletter}
+          onChange={setNewsletter}
+          label={m.email.newsletterSubscribe}
+          hint={m.email.newsletterSubscribeHint}
+        />
+      )}
       <TextField
         name="password"
         // A field marked invalid blocks the form's next submission, so its error goes as soon

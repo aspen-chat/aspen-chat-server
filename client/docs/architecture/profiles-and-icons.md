@@ -7,7 +7,9 @@
   that circle at most `ICON_MAX_SIZE` wide, upload, and the id. `Avatar` takes an `iconId` and
   shows the picture once `useIcon` has the record, initials until then.
 - Profiles are fields on the user record (`displayName`, `pronouns`, `bio`, `status` as
-  `{ text, emoji? }`), edited by `AspenSync.updateProfile` as a merge patch built by
+  `{ text, emoji? }`, and `publicEmail`, the verified address a user chose to show, which the
+  card offers as a `mailto:` link and which only the email settings change; see Sign-in),
+  edited by `AspenSync.updateProfile` as a merge patch built by
   `src/features/users/profile.ts`, which also decides what to call a user (`displayNameOf`).
   Show that name wherever a user is named, never `name` directly; `ProfileCard.tsx` is the card
   any user control opens, and `EditProfileDialog.tsx` the signed-in user's editor. Opened within

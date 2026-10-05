@@ -75,6 +75,7 @@ pub async fn user_for_token(
             bot: true,
             method: app::login::SignInMethod::Token,
             foreign: false,
+            email_unverified: false,
         };
         (bot, caller)
     }))
@@ -221,6 +222,7 @@ pub async fn create(
                         home_id: None,
                         home_icon: None,
                         plugin: None,
+                        public_email: None,
                     })
                     .returning(UserPg::as_returning())
                     .get_result(conn.as_mut())
@@ -408,6 +410,7 @@ pub async fn set_public(
                         bot_owner: None,
                         bot_public: Some(public),
                         name_hue: None,
+                        public_email: None,
                     }),
                 )
                 .await?;
@@ -555,6 +558,7 @@ async fn publish_owner(
             bot_owner: Some(owner),
             bot_public: None,
             name_hue: None,
+            public_email: None,
         }),
     )
     .await

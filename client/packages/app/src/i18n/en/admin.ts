@@ -189,6 +189,17 @@ export const admin = {
   removeDeploymentIcon: "Remove icon",
   policiesTitle: "Policies",
   policiesHint: "What this server allows. A change reaches every server at once.",
+  emailHeading: "Email",
+  emailUnavailable:
+    "This server sends no mail, so these cannot be turned on. Its operator sets up mail under [email] in aspen.toml.",
+  emailRequired: "Require an email address to register",
+  emailRequiredHint: "New accounts must give one. Accounts made before keep working without one.",
+  emailVerificationRequired: "Require a verified email address",
+  emailVerificationRequiredHint:
+    "An account with an address it has not verified can do nothing but verify it, change it, or sign out.",
+  newsletterEnabled: "Newsletter",
+  newsletterEnabledHint:
+    "People may subscribe to the server's newsletter, which holders of Send newsletters write in the Newsletter tab.",
   registrationInviteRequired: "Registration takes an invite",
   registrationInviteRequiredHint:
     "New accounts need a registration invite. Accounts already made are unaffected.",

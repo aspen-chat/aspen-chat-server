@@ -162,6 +162,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::CommunityResync { .. } => ScopeKind::Community,
         ServerEvent::UserCommunity(_) => ScopeKind::Membership,
         ServerEvent::UserPreferencesChanged { .. }
+        | ServerEvent::EmailAccountChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }
@@ -640,6 +641,7 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::CommunityBan(_)
         | ServerEvent::CommunityResync { .. }
         | ServerEvent::UserPreferencesChanged { .. }
+        | ServerEvent::EmailAccountChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }

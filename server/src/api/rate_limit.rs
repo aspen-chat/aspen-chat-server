@@ -34,6 +34,9 @@ pub const PASSKEY_PAGE: (&str, &str) = ("GET", "/auth/passkey");
 /// This deployment's federation document, served outside `API_PREFIX` at the path every
 /// deployment uses, and not in the OpenAPI document.
 pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
+/// The page unsubscribe links in mail open, served outside `API_PREFIX` and not in the OpenAPI
+/// document; posting to it unsubscribes, under the same limits.
+pub const UNSUBSCRIBE_PAGE: (&str, &str) = ("GET", "/email/unsubscribe");
 
 /// Plugins' own routes (`api::plugin::route`), which are not in the OpenAPI document.
 pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
@@ -55,7 +58,13 @@ pub fn routes() -> Vec<Route> {
             routes.push(Route::new(method, template, access(operation)));
         }
     }
-    for (method, template) in [EVENT_STREAM_ROUTE, PASSKEY_PAGE, WELL_KNOWN] {
+    for (method, template) in [
+        EVENT_STREAM_ROUTE,
+        PASSKEY_PAGE,
+        WELL_KNOWN,
+        UNSUBSCRIBE_PAGE,
+        ("POST", UNSUBSCRIBE_PAGE.1),
+    ] {
         routes.push(Route::new(method, template, Access::Anonymous));
     }
     for method in PLUGIN_ROUTE_METHODS {

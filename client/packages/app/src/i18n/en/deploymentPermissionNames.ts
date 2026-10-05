@@ -45,10 +45,14 @@ export const deploymentPermissionNames = {
   },
   manageDeploymentSettings: {
     name: "Manage deployment settings",
-    hint: "Change the server's name and icon, and its policies: registration invites, second factors, bots, community limits, and files in calls; delete bots whose owners have deleted their accounts.",
+    hint: "Change the server's name and icon, and its policies: registration invites, second factors, email, bots, community limits, and files in calls; delete bots whose owners have deleted their accounts.",
   },
   managePlugins: {
     name: "Manage plugins",
     hint: "Turn installed plugins on and off for the whole server, change their settings, and choose where they run and in what order. Installing them is done on the server itself.",
+  },
+  sendNewsletters: {
+    name: "Send newsletters",
+    hint: "Write posts for the server's email newsletter, send tests to yourself, and send them to every subscriber.",
   },
 } as const;

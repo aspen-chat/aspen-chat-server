@@ -68,6 +68,8 @@ pub struct Caller {
     /// Whether the caller is a user of another deployment, whose sign-in and its security are
     /// their home's (`app::federation::abroad`).
     pub foreign: bool,
+    /// Whether the account has an email address it has not verified (`app::email`).
+    pub email_unverified: bool,
 }
 
 impl Caller {
@@ -101,6 +103,12 @@ impl Caller {
     /// session may only add one, or sign out.
     pub fn enrollment_required(&self, settings: &DeploymentSettings) -> bool {
         settings.require_two_factor && !self.bot && !self.foreign && !self.has_second_factor
+    }
+
+    /// Whether `settings` require a verified email address and this account's is not. Such a
+    /// session may only verify, change, or resend it, or sign out.
+    pub fn verification_required(&self, settings: &DeploymentSettings) -> bool {
+        settings.email_verification_required && self.email_unverified
     }
 }
 
@@ -158,6 +166,11 @@ pub async fn methods(
         recovery_code,
     })
 }
+
+/// The SQL condition that the `user` row in a query has an email address it has not verified,
+/// answered in the per-request session lookup as [`HAS_SECOND_FACTOR_SQL`] is.
+pub const EMAIL_UNVERIFIED_SQL: &str = "EXISTS (SELECT 1 FROM user_email e \
+     WHERE e.\"user\" = \"user\".id AND e.verified_at IS NULL)";
 
 /// SQL that is true when the row of `"user"` in scope holds a second factor. Kept as one
 /// fragment so the per-request session lookup answers it in the same query.

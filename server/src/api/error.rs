@@ -53,6 +53,16 @@ pub enum ProblemCode {
     /// The server requires a second factor this account has not added; the session may only
     /// add one, or sign out.
     TwoFactorEnrollmentRequired,
+    /// The deployment requires a verified email address, and this account's is not verified;
+    /// the session may only verify, change, or resend it (`/users/@me/email`), or sign out.
+    EmailVerificationRequired,
+    /// Password reset: the email address given is not the one the account has.
+    EmailMismatch,
+    /// Password reset cannot start for this account: no account has that username, or it has no
+    /// verified email address. `detail` says which, and what to do.
+    PasswordResetUnavailable,
+    /// Password reset: the reset is unknown, has expired, or is finished. Start again.
+    PasswordResetExpired,
     /// Too many wrong codes or passwords recently; try again later.
     TooManyAttempts,
     /// Too many requests to this endpoint recently. `Retry-After` says how many seconds to
@@ -134,6 +144,8 @@ impl ProblemCode {
             | ProblemCode::VerificationFailed
             | ProblemCode::ReauthenticationRequired
             | ProblemCode::TwoFactorEnrollmentRequired
+            | ProblemCode::EmailVerificationRequired
+            | ProblemCode::EmailMismatch
             | ProblemCode::RegistrationInviteRequired
             | ProblemCode::RegistrationInviteInvalid
             | ProblemCode::AdminRequired
@@ -145,6 +157,9 @@ impl ProblemCode {
             }
             ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
+            ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
+                StatusCode::NOT_FOUND
+            }
             ProblemCode::DeviceLinkExpired => StatusCode::NOT_FOUND,
             ProblemCode::DeviceLinkUsed => StatusCode::CONFLICT,
             ProblemCode::NotFound => StatusCode::NOT_FOUND,
@@ -182,6 +197,10 @@ impl ProblemCode {
             ProblemCode::VerificationFailed => t!("problemVerificationFailed"),
             ProblemCode::ReauthenticationRequired => t!("problemReauthenticationRequired"),
             ProblemCode::TwoFactorEnrollmentRequired => t!("problemTwoFactorEnrollmentRequired"),
+            ProblemCode::EmailVerificationRequired => t!("problemEmailVerificationRequired"),
+            ProblemCode::EmailMismatch => t!("problemEmailMismatch"),
+            ProblemCode::PasswordResetUnavailable => t!("problemPasswordResetUnavailable"),
+            ProblemCode::PasswordResetExpired => t!("problemPasswordResetExpired"),
             ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
             ProblemCode::RateLimited => t!("problemRateLimited"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
@@ -308,6 +327,14 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::ReauthenticationRequired)
             }
             app::Error::TooManyAttempts => Self::new(ProblemCode::TooManyAttempts),
+            app::Error::EmailMismatch => {
+                Self::new(ProblemCode::EmailMismatch).with_detail(t!("emailMismatchDetail"))
+            }
+            app::Error::PasswordResetUnavailable(reason) => {
+                Self::new(ProblemCode::PasswordResetUnavailable).with_detail(reason)
+            }
+            app::Error::PasswordResetExpired => Self::new(ProblemCode::PasswordResetExpired)
+                .with_detail(t!("passwordResetExpiredDetail")),
             app::Error::LastSecondFactor => Self::new(ProblemCode::LastSecondFactor),
             app::Error::InvalidTicket => Self::new(ProblemCode::InvalidToken),
             app::Error::DeviceLinkExpired => {

@@ -24,8 +24,8 @@
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
 # document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,
-# and `GET /.well-known/aspen` for the federation document (both served at those paths, outside
-# `/api/v1`).
+# `GET /.well-known/aspen` for the federation document, and `GET` and `POST /email/unsubscribe`
+# for the page unsubscribe links open (the last three served at those paths, outside `/api/v1`).
 
 [rate_limits]
 enabled = true
@@ -57,6 +57,9 @@ endpoints = [
   "POST /auth/passkey-ceremonies/{ceremony}/claim",
   "POST /auth/device-links",
   "POST /auth/device-links/{link}/scan",
+  "POST /auth/password-resets",
+  "POST /auth/password-resets/{reset}/codes",
+  "POST /auth/password-resets/{reset}/completion",
 ]
 limits = { ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" } }
 
@@ -82,6 +85,9 @@ endpoints = [
   "PATCH /users/{user}/passkeys/{passkey}",
   "DELETE /users/{user}/passkeys/{passkey}",
   "POST /users/{user}/recovery-codes",
+  "PUT /users/{user}/email/address",
+  "DELETE /users/{user}/email/address",
+  "POST /users/{user}/email/verification",
 ]
 limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "security" } }
 
@@ -138,6 +144,11 @@ endpoints = [
   "GET /admin/plugins",
   "PATCH /admin/plugins/{plugin}",
   "PUT /admin/plugin-order",
+  "GET /admin/newsletter/posts",
+  "POST /admin/newsletter/posts",
+  "GET /admin/newsletter/posts/{post}",
+  "PATCH /admin/newsletter/posts/{post}",
+  "DELETE /admin/newsletter/posts/{post}",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -220,6 +231,32 @@ username = { requests = 10, per_seconds = 600, burst = 5 }
 
 [rate_limits.endpoints."POST /users"]
 ip = { requests = 5, per_seconds = 3600, burst = 3 }
+
+# Each sends mail: a code to an address the caller says is theirs.
+[rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
+user = { requests = 5, per_seconds = 3600, burst = 3 }
+
+# Each mails the reset code again, to an address its asker proved they know; the account's mail
+# is also limited where it is queued (`app::email::reset`).
+[rate_limits.endpoints."POST /auth/password-resets/{reset}/codes"]
+per_reset = { requests = 5, per_seconds = 1800, burst = 3 }
+
+[rate_limits.endpoints."POST /auth/password-resets/{reset}/completion"]
+per_reset = { requests = 10, per_seconds = 1800, burst = 5 }
+
+# Each mails the post to its sender; sending it to everyone happens once per post.
+[rate_limits.endpoints."POST /admin/newsletter/posts/{post}/test"]
+user = { requests = 10, per_seconds = 600, burst = 3 }
+
+[rate_limits.endpoints."POST /admin/newsletter/posts/{post}/sending"]
+user = { requests = 5, per_seconds = 3600, burst = 3 }
+
+# The page unsubscribe links in mail open, and the one-click unsubscribe mail programs post.
+[rate_limits.endpoints."GET /email/unsubscribe"]
+ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
+
+[rate_limits.endpoints."POST /email/unsubscribe"]
+ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
 
 [rate_limits.endpoints."POST /auth/token-refresh"]
 ip = { requests = 60, per_seconds = 60, burst = 20 }

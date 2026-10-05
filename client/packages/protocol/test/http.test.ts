@@ -186,6 +186,21 @@ describe("AspenClient", () => {
     expect(client.session?.twoFactorEnrollmentRequired).toBe(false);
   });
 
+  it("flags the session when the server requires a verified email address", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const { fetch } = scriptedFetch([() => problem(403, "emailVerificationRequired")]);
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const { error } = await client.api.GET("/api/v1/users/{user}", {
+      params: { path: { user: "@me" } },
+    });
+    expect(error?.code).toBe("emailVerificationRequired");
+    expect(client.session?.emailVerificationRequired).toBe(true);
+    expect(client.session?.twoFactorEnrollmentRequired).toBeUndefined();
+    client.markEmailVerified();
+    expect(client.session?.emailVerificationRequired).toBe(false);
+  });
+
   it("leaves the session alone on other 403s", async () => {
     const store = new MemorySessionStore();
     store.save(liveSession());

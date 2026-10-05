@@ -7,11 +7,19 @@
   `admin`, read at bootstrap from `GET /users/@me/admin` and kept by `deploymentAccessChanged`
   events; `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin`). Each tab shows
   only with the permission it needs: the totals and growth, and the fleet, with `viewDashboard`,
-  registration invites with `manageRegistrationInvites`, the directories with `viewDashboard`,
+  registration invites with `manageRegistrationInvites`, the email newsletter with
+  `sendNewsletters` (`Newsletter.tsx`: the posts, newest first, drafts and the archive of those
+  sent with how many subscribers each went to; a draft's subject and Markdown body, saved, then
+  previewed as the server renders the mail, in a sandboxed frame that runs nothing, sent as a
+  test to the sender's own verified address, and sent to every subscriber behind a
+  confirmation, fixed from then on; drafts deleted), the directories with `viewDashboard`,
   `moderateCommunities`, `banUsers`, `reviewReports`, or `removeContent`, the reports with `reviewReports`, the
-  report categories with `manageReportCategories`, the moderation log with `viewDashboard`, the deployment's profile with `manageFederation`
+  report categories with `manageReportCategories`, the moderation log with `viewDashboard`, the deployment's profile and policies with `manageDeploymentSettings`
   (`DeploymentProfile.tsx`: the display name and icon the sign-in screens welcome people with,
-  an emptied name saved as none), federation with
+  an emptied name saved as none; `DeploymentSettings.tsx`: registration invites, second
+  factors, email (an address to register, a verified one to use the server, and a newsletter,
+  none of which can be turned on while the server sends no mail, `emailAvailable`), bots,
+  community limits, and files in calls), federation with
   `manageFederation` (`Federation.tsx`: this deployment's domain, key fingerprint, and gates;
   adding a deployment, which is contacted at once; and the directory of those known, each
   checked again, put on the lists the gates read, its offered key reviewed and accepted, or

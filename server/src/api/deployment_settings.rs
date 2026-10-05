@@ -28,11 +28,46 @@ pub struct DeploymentProfile {
     /// Where its web client is served (`[web_client] url`), which links and QR codes for
     /// invites and signing in name; `null` when it has not said.
     pub web_client_url: Option<String>,
+    /// What it does with email, which registration and the account settings offer. Absent
+    /// from a deployment that predates it, which sends no mail.
+    #[schema(required = false)]
+    pub email: EmailPolicy,
+}
+
+/// What a deployment does with email (`app::email`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailPolicy {
+    /// Whether it sends mail at all. Without it, accounts have no address and nothing below
+    /// applies.
+    pub available: bool,
+    /// Whether registering takes an address.
+    pub required: bool,
+    /// Whether an address must be verified before the account may use the deployment.
+    pub verification_required: bool,
+    /// Whether it has a newsletter to subscribe to.
+    pub newsletter: bool,
+}
+
+impl EmailPolicy {
+    pub fn new(
+        state: &GlobalServerContext,
+        settings: &deployment_settings::DeploymentSettings,
+    ) -> Self {
+        let available = crate::app::email::available(state);
+        Self {
+            available,
+            required: available && settings.email_required,
+            verification_required: available && settings.email_verification_required,
+            newsletter: available && settings.newsletter_enabled,
+        }
+    }
 }
 
 impl DeploymentProfile {
     fn new(state: &GlobalServerContext, read: WithIcon) -> Self {
         Self {
+            email: EmailPolicy::new(state, &read.settings),
             display_name: read.settings.display_name,
             icon: read.icon.map(|icon| icon_to_api(state, icon)),
             web_client_url: state.config.web_client.url.clone(),
@@ -129,10 +164,24 @@ pub struct DeploymentSettings {
     /// Whether people may offer files to one another in calls. Off, no one may, whatever a
     /// channel's permissions say.
     pub file_transfers: bool,
+    /// Whether registering takes an email address.
+    pub email_required: bool,
+    /// Whether an account must verify its email address before using the deployment. A
+    /// session of an account whose address is not verified may only verify, change, or resend
+    /// it, or sign out, until it does.
+    pub email_verification_required: bool,
+    /// Whether the deployment has a newsletter its users may subscribe to.
+    pub newsletter_enabled: bool,
+    /// Whether this server can send mail (`[email]` in `aspen.toml`), without which the three
+    /// above cannot be turned on.
+    pub email_available: bool,
 }
 
-impl From<&deployment_settings::DeploymentSettings> for DeploymentSettings {
-    fn from(settings: &deployment_settings::DeploymentSettings) -> Self {
+impl DeploymentSettings {
+    fn new(
+        state: &GlobalServerContext,
+        settings: &deployment_settings::DeploymentSettings,
+    ) -> Self {
         Self {
             registration_invite_required: settings.registration_invite_required,
             require_two_factor: settings.require_two_factor,
@@ -141,6 +190,10 @@ impl From<&deployment_settings::DeploymentSettings> for DeploymentSettings {
             everyone_mention_limit: settings.everyone_mention_limit,
             custom_emoji_limit: settings.custom_emoji_limit,
             file_transfers: settings.file_transfers,
+            email_required: settings.email_required,
+            email_verification_required: settings.email_verification_required,
+            newsletter_enabled: settings.newsletter_enabled,
+            email_available: crate::app::email::available(state),
         }
     }
 }
@@ -157,6 +210,9 @@ pub struct DeploymentSettingsUpdateRequest {
     pub everyone_mention_limit: Option<u32>,
     pub custom_emoji_limit: Option<u32>,
     pub file_transfers: Option<bool>,
+    pub email_required: Option<bool>,
+    pub email_verification_required: Option<bool>,
+    pub newsletter_enabled: Option<bool>,
 }
 
 impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
@@ -169,6 +225,9 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             everyone_mention_limit: request.everyone_mention_limit,
             custom_emoji_limit: request.custom_emoji_limit,
             file_transfers: request.file_transfers,
+            email_required: request.email_required,
+            email_verification_required: request.email_verification_required,
+            newsletter_enabled: request.newsletter_enabled,
             ..Self::default()
         }
     }
@@ -193,12 +252,13 @@ pub async fn get_settings(
 ) -> ApiResult<Json<DeploymentSettings>> {
     access.require(DeploymentPermission::ManageDeploymentSettings)?;
     let read = deployment_settings::read_with_icon(&state).await?;
-    Ok(Json((&read.settings).into()))
+    Ok(Json(DeploymentSettings::new(&state, &read.settings)))
 }
 
 /// Changes the deployment's policies, for every server at once. Turning on two factors closes
-/// the event streams of accounts without one; turning file transfers on or off brings every
-/// call in line. Takes Manage deployment settings.
+/// the event streams of accounts without one, and requiring verified email addresses those of
+/// accounts whose address is not; turning file transfers on or off brings every call in line.
+/// Takes Manage deployment settings.
 #[utoipa::path(
     patch,
     path = "/admin/settings",
@@ -207,7 +267,7 @@ pub async fn get_settings(
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = DeploymentSettings),
-        (status = BAD_REQUEST, description = "A count too large", body = Problem),
+        (status = BAD_REQUEST, description = "A count too large, or an email setting turned on where this server sends no mail", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage deployment settings", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -219,5 +279,5 @@ pub async fn update_settings(
     Json(request): Json<DeploymentSettingsUpdateRequest>,
 ) -> ApiResult<Json<DeploymentSettings>> {
     let read = deployment_settings::update_as(&state, &access, request.into()).await?;
-    Ok(Json((&read.settings).into()))
+    Ok(Json(DeploymentSettings::new(&state, &read.settings)))
 }

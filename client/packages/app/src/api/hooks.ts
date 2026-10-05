@@ -357,6 +357,14 @@ export function useReportsChanges(): number {
   return useTopic("reports", (s) => s.reportsChanges);
 }
 
+/**
+ * Counts every change to the caller's email address or what they receive there, for the screen
+ * showing it to read it again.
+ */
+export function useEmailChanges(): number {
+  return useTopic("email", (s) => s.emailChanges);
+}
+
 /** Whether the caller holds any deployment permission, and so has the dashboard to open. */
 export function useIsAdmin(): boolean {
   return useDeploymentPermissions().size > 0;

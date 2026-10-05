@@ -1,6 +1,7 @@
 import type { User } from "@aspen/protocol";
 import {
   ChatCircleIcon,
+  EnvelopeSimpleIcon,
   FlagIcon,
   PhoneIcon,
   PlusIcon,
@@ -54,7 +55,8 @@ import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/featu
 import { useNameIn } from "@/features/users/nameIn";
 
 /**
- * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, and their
+ * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, the
+ * email address they chose to show, and their
  * bio, with ways to message, block, and report them when they are someone else. Opens from any
  * control that names the user, such as a message author or a member row. Opened within a
  * community it calls them by their nickname there, if they chose one, with their display name
@@ -117,6 +119,16 @@ export function ProfileCard({ user }: { user: User }) {
           <p className="text-sm break-words" aria-label={m.profile.statusLabel}>
             {statusLine(user.status)}
           </p>
+        )}
+        {user.publicEmail != null && (
+          <a
+            href={`mailto:${user.publicEmail}`}
+            aria-label={`${m.profile.emailLabel}: ${user.publicEmail}`}
+            className="flex min-w-0 items-center gap-1.5 self-start text-sm break-all text-accent underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <EnvelopeSimpleIcon size={14} aria-hidden="true" className="shrink-0" />
+            {user.publicEmail}
+          </a>
         )}
         <UserAnnotations userId={user.id} />
       </div>

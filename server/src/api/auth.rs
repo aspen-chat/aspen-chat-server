@@ -669,16 +669,18 @@ pub async fn token_refresh(
 
 /// The authenticated caller. Extracting it requires a valid `Authorization: Bearer <session
 /// token>` header; anything else is rejected with a `401` Problem. A session whose account
-/// still owes the server a second factor is rejected with `twoFactorEnrollmentRequired`;
-/// the few endpoints such a session may use take `EnrollingSessionUser` instead.
+/// still owes the server a second factor is rejected with `twoFactorEnrollmentRequired`, and
+/// one whose email address the server requires verified with `emailVerificationRequired`; the
+/// few endpoints such a session may use take `EnrollingSessionUser` instead.
 #[derive(Clone)]
 pub struct SessionUser {
     pub user: UserPg,
     pub caller: Caller,
 }
 
-/// A caller whose account may still owe the server a second factor: what signing out, re-
-/// verifying, and adding a first factor accept.
+/// A caller whose account may still owe the server a second factor or a verified email address:
+/// what signing out, re-verifying, adding a first factor, and verifying or changing the address
+/// accept.
 #[derive(Clone)]
 pub struct EnrollingSessionUser(pub SessionUser);
 
@@ -738,8 +740,12 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
             GlobalServerContext,
         >>::from_request_parts(parts, state)
         .await?;
-        if session.caller.enrollment_required(&state.settings()) {
+        let settings = state.settings();
+        if session.caller.enrollment_required(&settings) {
             return Err(ApiError::new(ProblemCode::TwoFactorEnrollmentRequired));
+        }
+        if session.caller.verification_required(&settings) {
+            return Err(ApiError::new(ProblemCode::EmailVerificationRequired));
         }
         Ok(session)
     }

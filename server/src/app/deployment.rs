@@ -2,7 +2,7 @@
 //! Administration Dashboard, manage registration invites, voice servers, and the deployment's
 //! own roles, federation with other deployments, report categories, settings, and installed
 //! plugins' settings, moderate any community, review reports, remove reported content, ban users
-//! from the deployment, and message anyone.
+//! from the deployment, message anyone, and send the newsletter.
 //!
 //! Deployment roles are ranked by `position`, like a community's. A holder of Manage deployment
 //! roles may create, edit, reorder, delete, give, and take away only roles below their own
@@ -54,6 +54,7 @@ bitflags::bitflags! {
         const MANAGE_DEPLOYMENT_SETTINGS = 1 << 11;
         const MANAGE_PLUGINS = 1 << 12;
         const REMOVE_CONTENT = 1 << 13;
+        const SEND_NEWSLETTERS = 1 << 14;
     }
 }
 
@@ -125,6 +126,7 @@ pub enum DeploymentPermission {
     MessageAnyUser,
     ManageDeploymentSettings,
     ManagePlugins,
+    SendNewsletters,
 }
 
 impl DeploymentPermission {
@@ -145,6 +147,7 @@ impl DeploymentPermission {
             Self::ManageDeploymentSettings => DeploymentPermissions::MANAGE_DEPLOYMENT_SETTINGS,
             Self::ManagePlugins => DeploymentPermissions::MANAGE_PLUGINS,
             Self::RemoveContent => DeploymentPermissions::REMOVE_CONTENT,
+            Self::SendNewsletters => DeploymentPermissions::SEND_NEWSLETTERS,
         }
     }
 
@@ -172,6 +175,7 @@ impl DeploymentPermission {
             Self::ManageDeploymentSettings => t!("deploymentManageDeploymentSettings"),
             Self::ManagePlugins => t!("deploymentManagePlugins"),
             Self::RemoveContent => t!("deploymentRemoveContent"),
+            Self::SendNewsletters => t!("deploymentSendNewsletters"),
         }
     }
 }
@@ -326,10 +330,11 @@ mod tests {
         );
         // What `admin grant` gives: View dashboard, Manage registration invites, voice servers,
         // deployment roles, and federation, Manage report categories, Manage deployment
-        // settings, and Manage plugins, as the migrations give existing administrators.
+        // settings, Manage plugins, and Send newsletters, as the migrations give existing
+        // administrators.
         assert_eq!(
             DeploymentPermissions::ADMINISTRATOR.bits(),
-            1 | 2 | 4 | 8 | 64 | 256 | 2048 | 4096
+            1 | 2 | 4 | 8 | 64 | 256 | 2048 | 4096 | 16384
         );
     }
 

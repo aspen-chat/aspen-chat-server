@@ -52,3 +52,26 @@
   (`ServerChoice.switchServer`), and the server form offers to scan a code instead of typing an
   address, since the code names its server. The root layout shows the screen in place of the
   sign-in forms while signed out (`/device-link`), and the router has it as a route signed in.
+- Email (`src/features/email`): what the deployment does with it is `email` in
+  `GET /deployment` (`useEmailPolicy`, read each time a screen offering it opens; absent from a
+  deployment that predates it, which is taken to send none). Where it sends mail, the
+  create-account form asks for an address (required where `required`) and, once one is typed and
+  where the deployment has a newsletter, offers it with an unchecked "Send me the newsletter";
+  the sign-in form offers "Forgot your password?" (`PasswordReset`): the username, then the
+  account's address typed whole beside the server's masked one, then the code mailed there with
+  a new password, back to signing in with a notice; a reset the server ended (expired, used up,
+  too many wrong tries) starts again from the username with its reason. A deployment requiring
+  a verified address answers every other request of an account whose address is not verified
+  with `emailVerificationRequired`, and closes its event stream with 4428; `AspenClient` flags
+  the session (`emailVerificationRequired`, `noticeVerificationRequired`) as it does a second
+  factor owed, and the root layout shows `VerificationScreen` (after the enrollment screen, if
+  both are owed) until the code mailed to the address is typed, or the address changed and its
+  code typed (`markEmailVerified`), which mounts the app afresh. Signed in, Settings' Email
+  (`EmailDialog`, for a person of this deployment where it sends mail) shows the same
+  `EmailPanel`: the address, added, changed, or removed (each through `useReauth`, since a
+  verified address can reset the password; removal is not offered where the deployment
+  requires one), its verification, and what the address receives: whether the profile shows it,
+  the newsletter (offered where the deployment has one, or while subscribed), and the daily
+  digest, with its time zone (this device's when first turned on, then any the browser knows)
+  and hour. The panel reads `GET /users/@me/email` on opening and again on each
+  `emailAccountChanged` event (`RecordStore.emailChanges`, topic `email`).

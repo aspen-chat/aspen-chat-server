@@ -4,7 +4,8 @@ import type { AspenLink } from "./aspenLinks";
 
 /**
  * The route a code leads to: a sign-in code's screen (its id as `link`, since a route in a
- * fragment cannot carry a fragment of its own), or an invite's, a bare invite on `domain`.
+ * fragment cannot carry a fragment of its own), an invite's, a bare invite on `domain`, or a
+ * channel or DM of the deployment shown.
  */
 export function aspenLinkRoute(link: AspenLink, domain: Domain) {
   switch (link.kind) {
@@ -14,6 +15,13 @@ export function aspenLinkRoute(link: AspenLink, domain: Domain) {
       return linkOptions({ to: "/register", search: { invite: link.code } });
     case "invite":
       return openInviteLink(link.invite, domain);
+    case "channel":
+      return linkOptions({
+        to: "/communities/$communityId/channels/$channelId",
+        params: { communityId: link.community, channelId: link.channel },
+      });
+    case "dm":
+      return linkOptions({ to: "/dms/$channelId", params: { channelId: link.channel } });
   }
 }
 

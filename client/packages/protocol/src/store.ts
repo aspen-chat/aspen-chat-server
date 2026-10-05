@@ -231,6 +231,7 @@ export class RecordStore {
   /** How many report cases await review, for a reviewer, once read; and each change to them. */
   #openReports: number | undefined = undefined;
   #reportsChanges = 0;
+  #emailChanges = 0;
   readonly #windows = new Map<string, MessageWindow>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
@@ -920,6 +921,14 @@ export class RecordStore {
   /** Topic `reports`: counts every change to what awaits review, for lists to read again. */
   get reportsChanges(): number {
     return this.#reportsChanges;
+  }
+
+  /**
+   * Topic `email`: counts every change to the caller's email address or what they receive
+   * there (`emailAccountChanged`), for the screen showing it to read it again.
+   */
+  get emailChanges(): number {
+    return this.#emailChanges;
   }
 
   /** Records how many report cases are open, from a read or a `reportsChanged` event. */
@@ -2092,6 +2101,11 @@ export class RecordStore {
           break;
         case "reportsChanged":
           this.setOpenReports(event.open);
+          break;
+        case "emailAccountChanged":
+          // The address stays out of the stream; whoever shows it reads it again.
+          this.#emailChanges += 1;
+          this.#touch("email");
           break;
         case "accountBanned":
           // The stream closes after this, and the sign-in with it; nothing here to keep.

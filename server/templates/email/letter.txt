@@ -1,0 +1,24 @@
+{{ letter.deployment }}
+
+{{ letter.title }}
+{% for paragraph in letter.intro %}
+{{ paragraph }}
+{% endfor %}{% if let Some(code) = letter.code %}
+    {{ code }}
+{% endif %}{% if let Some(text) = letter.body_text %}
+{{ text }}
+{% endif %}{% for section in letter.sections %}
+== {{ section.heading }} ==
+{{ section.link }}
+{% for item in section.items %}
+{{ item.author }} ({{ item.time }}):
+{{ item.text }}
+{% endfor %}{% if let Some(more) = section.more %}
+{{ more }}
+{% endif %}{% endfor %}{% for paragraph in letter.outro %}
+{{ paragraph }}
+{% endfor %}
+--
+{% for line in letter.footer %}{{ line }}
+{% endfor %}{% if let Some(unsubscribe) = letter.unsubscribe %}{{ unsubscribe.label }}: {{ unsubscribe.url }}
+{% endif %}

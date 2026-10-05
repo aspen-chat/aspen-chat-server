@@ -657,7 +657,8 @@ pub(crate) async fn read_community_members(
         r#"
         SELECT community, sort_index, nickname, id, name, password_hash, icon, created_at, last_seen_at,
                deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
-               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue, plugin
+               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue, plugin,
+               public_email
         FROM (
             SELECT cu.community, cu.sort_index, cu.nickname, u.*,
                    ROW_NUMBER() OVER (
@@ -783,7 +784,8 @@ pub(crate) async fn search_community_members(
         SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon, u.name_hue, u.plugin
+               u.home_id, u.home_icon, u.name_hue, u.plugin,
+               u.public_email
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
@@ -840,7 +842,8 @@ pub(crate) async fn read_authors_memberships(
         SELECT DISTINCT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon,
                u.created_at, u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio,
                u.status_text, u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public,
-               u.home_domain, u.home_id, u.home_icon, u.name_hue, u.plugin
+               u.home_domain, u.home_id, u.home_icon, u.name_hue, u.plugin,
+               u.public_email
         FROM unnest($1::uuid[], $2::uuid[]) AS written(channel, author)
         JOIN channel c ON c.id = written.channel
         JOIN community_user cu ON cu.community = c.community AND cu."user" = written.author
@@ -872,7 +875,8 @@ pub(crate) async fn read_community_member(
         SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
                u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
                u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon, u.name_hue, u.plugin
+               u.home_id, u.home_icon, u.name_hue, u.plugin,
+               u.public_email
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND cu."user" = $2 AND u.deleted_at IS NULL

@@ -52,6 +52,7 @@ pub async fn id(state: &GlobalServerContext, conn: &mut AsyncPgConnection) -> ap
             home_id: None,
             home_icon: None,
             plugin: None,
+            public_email: None,
         })
         .on_conflict(user::system)
         .filter_target(user::system.eq(true))

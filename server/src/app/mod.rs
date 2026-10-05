@@ -31,6 +31,7 @@ pub mod deployment_role;
 pub mod deployment_settings;
 pub mod device_link;
 pub mod dm;
+pub mod email;
 pub mod ephemeral_token;
 mod error;
 pub mod event_feed;
@@ -277,6 +278,7 @@ id_type!(ReportId);
 id_type!(ReportCategoryId);
 id_type!(AnnotationId);
 id_type!(PluginNoticeId);
+id_type!(NewsletterPostId);
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

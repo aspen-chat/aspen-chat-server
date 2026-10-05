@@ -160,6 +160,18 @@ pub enum Error {
     /// A plugin that must decide what is about to be saved could not; the detail names it.
     #[error("a plugin could not decide: {0}")]
     PluginUnavailable(Cow<'static, str>),
+    /// Password reset: the address given is not the account's (`app::email::reset`).
+    #[error("the email address does not match the account's")]
+    EmailMismatch,
+    /// Password reset cannot start for this account; the reason says why, and what to do.
+    #[error("password reset is unavailable: {0}")]
+    PasswordResetUnavailable(Cow<'static, str>),
+    /// Password reset: the reset is unknown, expired, or finished.
+    #[error("the password reset is unknown or expired")]
+    PasswordResetExpired,
+    /// Mail could not be written or handed to the SMTP server (`app::email`).
+    #[error("mail could not be written or sent: {0}")]
+    Email(String),
     #[error("tokio join error {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
 }

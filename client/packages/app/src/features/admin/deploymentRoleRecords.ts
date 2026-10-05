@@ -18,6 +18,7 @@ export const DEPLOYMENT_PERMISSIONS: readonly DeploymentPermission[] = [
   "messageAnyUser",
   "manageDeploymentSettings",
   "managePlugins",
+  "sendNewsletters",
 ];
 
 /** The deployment's roles and the caller's standing among them, read together. */

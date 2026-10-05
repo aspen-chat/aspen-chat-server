@@ -88,6 +88,9 @@ pub struct Profile {
     /// The home's id of their avatar, served at [`HOME_ICON_PATH`].
     icon: Option<Uuid>,
     bot: bool,
+    /// The email address they show on their profile, if they show one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_email: Option<String>,
 }
 
 /// An assertion this deployment signed, for its user to hand to `audience`.
@@ -161,6 +164,7 @@ pub async fn issue(
                 bio: user.bio.clone(),
                 icon: user.icon.as_ref().map(|icon| icon.id().0),
                 bot: user.bot,
+                public_email: user.public_email.clone(),
             },
         },
     );
@@ -311,7 +315,11 @@ fn check_profile(profile: &Profile) -> app::Result<()> {
         pronouns: Some(profile.pronouns.clone()),
         bio: Some(profile.bio.clone()),
         ..UserUpdateRequest::default()
-    })
+    })?;
+    if let Some(address) = &profile.public_email {
+        app::email::parse_address(address)?;
+    }
+    Ok(())
 }
 
 /// The foreign user `claims` names, made on their first arrival and otherwise brought up to
@@ -389,6 +397,7 @@ async fn arrive(
                         home_id: Some(claims.sub),
                         home_icon: None,
                         plugin: None,
+                        public_email: profile.public_email.clone(),
                     })
                     .execute(conn)
                     .await?;
@@ -437,12 +446,15 @@ async fn arrive(
                 bot_owner: None,
                 bot_public: None,
                 name_hue: None,
+                public_email: (profile.public_email != existing.public_email)
+                    .then(|| profile.public_email.clone()),
             };
             if let UserEvent::Update {
                 name: None,
                 display_name: None,
                 pronouns: None,
                 bio: None,
+                public_email: None,
                 ..
             } = event
             {
@@ -454,6 +466,7 @@ async fn arrive(
                     user::display_name.eq(&profile.display_name),
                     user::pronouns.eq(&profile.pronouns),
                     user::bio.eq(&profile.bio),
+                    user::public_email.eq(&profile.public_email),
                 ))
                 .execute(conn)
                 .await?;
@@ -526,6 +539,7 @@ async fn copy_avatar(
                     bot_owner: None,
                     bot_public: None,
                     name_hue: None,
+                    public_email: None,
                 }),
             )
             .await

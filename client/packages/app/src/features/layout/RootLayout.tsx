@@ -15,6 +15,7 @@ import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
+import { VerificationScreen } from "@/features/email/VerificationScreen";
 import { FollowLanguagePreference } from "@/features/settings/LanguageSection";
 import { SourcePickerDialog } from "@/features/voice/SourcePickerDialog";
 import { useMessages } from "@/i18n/context";
@@ -24,7 +25,7 @@ import { IncomingCalls } from "@/features/voice/IncomingCall";
 /**
  * Signed out: the sign-in or create-account screen, leaving the URL alone so a shared link
  * opens once the user is in. Signed in to an account that still owes the server a second
- * factor: the screen for adding one. Signed in: the community rail beside whatever the route
+ * factor: the screen for adding one; or a verified email address: the screen for verifying it. Signed in: the community rail beside whatever the route
  * shows, all fed by one `SyncProvider`.
  */
 export function RootLayout() {
@@ -34,6 +35,9 @@ export function RootLayout() {
   }
   if (session.twoFactorEnrollmentRequired === true) {
     return <EnrollmentScreen />;
+  }
+  if (session.emailVerificationRequired === true) {
+    return <VerificationScreen />;
   }
   return <SignedIn />;
 }

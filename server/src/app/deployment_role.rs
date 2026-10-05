@@ -160,6 +160,7 @@ async fn refresh_name_hues(
                 bot_owner: None,
                 bot_public: None,
                 name_hue: Some(user.name_hue),
+                public_email: None,
             }),
         )
         .await?;

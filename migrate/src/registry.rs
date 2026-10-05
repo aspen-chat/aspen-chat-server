@@ -87,4 +87,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261004_203118_permission_ranges::M,
     &migrations::m20261004_203124_manage_plugins_permission::M,
     &migrations::m20261004_214803_remove_content_permission::M,
+    &migrations::m20261004_224404_email::M,
 ];

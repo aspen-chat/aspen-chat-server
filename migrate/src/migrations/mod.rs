@@ -87,3 +87,4 @@ pub mod m20261004_100025_nicknames;
 pub mod m20261004_203118_permission_ranges;
 pub mod m20261004_203124_manage_plugins_permission;
 pub mod m20261004_214803_remove_content_permission;
+pub mod m20261004_224404_email;

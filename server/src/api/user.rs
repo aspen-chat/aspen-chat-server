@@ -106,20 +106,24 @@ impl From<app::user::User> for User {
             home_id: user.user_pg.home_id,
             name_hue: user.user_pg.name_hue,
             plugin: user.user_pg.plugin,
+            public_email: user.user_pg.public_email,
         }
     }
 }
 
 /// Registers a new account. This is one of the few unauthenticated endpoints. Usernames must be
 /// 1 to 32 characters with no leading or trailing whitespace; passwords must be at least 8
-/// characters. Registration does not log the user in; call `POST /auth/login` next.
+/// characters. An email address, required where `GET /deployment` says so, is mailed a code to
+/// verify it (`POST /users/@me/email/verification`), and `newsletter` subscribes it to the
+/// deployment's newsletter, where it has one. Registration does not log the user in; call `POST
+/// /auth/login` next.
 #[utoipa::path(
     post,
     path = "/users",
     tag = TAG_USERS,
     responses(
         (status = CREATED, body = User, headers(("Location" = String, description = "URL of the new user"))),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (username rules)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation`: the username rules, or an email address that is missing where one is required, malformed, or given where this deployment sends no mail", body = Problem),
         (status = FORBIDDEN, description = "`registrationInviteRequired`, or `registrationInviteInvalid` when the server requires an invite and this one is not usable", body = Problem),
         (status = CONFLICT, description = "`usernameTaken`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
@@ -159,6 +163,7 @@ pub async fn create_user(
             home_id: None,
             name_hue: None,
             plugin: None,
+            public_email: None,
         },
     ))
 }

@@ -40,6 +40,7 @@ import {
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
+import { EmailDialog } from "@/features/email/EmailDialog";
 import { BlockedUsersSection } from "@/features/settings/BlockedUsers";
 import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { FontsSection } from "@/features/settings/FontsSection";
@@ -59,7 +60,8 @@ import { NameColorsCheckbox } from "@/features/settings/NameColorsCheckbox";
 import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
 
 /**
- * The user's preferences: first the account's sign-in and security settings; then the
+ * The user's preferences: first the account's sign-in and security settings and its email
+ * address; then the
  * microphone and speaker voice chat uses and the speaker for notification sounds, the
  * appearance, and the fonts text and code are drawn in, all kept with this install; the language, kept with the account; the people the
  * user has blocked; developer mode, with the user's bots; and the way out of the account. Sections for
@@ -87,6 +89,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                       {m.settings.account}
                     </h3>
                     <SecurityDialog />
+                    <EmailDialog />
                   </section>
                   <AudioSection />
                   <section aria-labelledby="settings-appearance" className={planeClass}>
