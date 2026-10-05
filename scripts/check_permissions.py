@@ -279,6 +279,10 @@ def attachments(world: World, check: Checks) -> None:
     check("its uploader reads it", stack.status("GET", path, token=world.owner["token"]) == 200)
     check("nobody else reads it before it is sent", stack.status("GET", path, token=world.member["token"]) == 404)
     check("nor deletes it", stack.status("DELETE", path, token=world.member["token"]) == 404)
+    check("nor describes it",
+          stack.status("PATCH", path, {"description": "theirs"}, world.member["token"]) == 404)
+    check("its uploader describes it",
+          stack.status("PATCH", path, {"description": "my notes"}, world.owner["token"]) == 200)
     general = world.channel("pictures")
     posting = {"content": "mine now", "attachments": [handle["id"]]}
     check("nor sends it as their own",
@@ -286,6 +290,8 @@ def attachments(world: World, check: Checks) -> None:
     world.as_owner("POST", f"/channels/{general}/messages", {"content": "notes", "attachments": [handle["id"]]})
     check("once sent, whoever may view the channel reads it",
           stack.status("GET", path, token=world.member["token"]) == 200)
+    check("and its description stays as it was sent",
+          stack.status("PATCH", path, {"description": "changed"}, world.owner["token"]) == 404)
     world.as_owner("PUT", f"/channels/{general}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     check("and nobody once they may not", stack.status("GET", path, token=world.member["token"]) == 404)
 

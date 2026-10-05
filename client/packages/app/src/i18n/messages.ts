@@ -244,6 +244,13 @@ export const en = {
   uploadingFile: "Uploading {name}",
   uploadFailed: "Upload failed",
   removeAttachment: "Remove {name}",
+  describeAttachment: "Describe {name}",
+  editAttachmentDescription: "Edit the description of {name}",
+  attachmentDescription: "Description",
+  attachmentDescriptionHint:
+    "Say what it shows, for people who can't see it. Screen readers read this in its place, and the gallery shows it beneath.",
+  attachmentDescribed: "Described",
+  describeFailed: "The description could not be saved: {reason}",
   imageAlt: "Image: {name}",
   openImage: "Open image",
   viewAllImages: "View all {count} images",

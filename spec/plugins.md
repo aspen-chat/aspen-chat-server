@@ -98,8 +98,8 @@ it. A thread runs where its parent channel does.
 
 ## Permissions
 
-- `messages.read`: be shown messages (their text, author, place, and attachments' records) in
-  the hooks it answers. Every message hook needs it.
+- `messages.read`: be shown messages (their text, author, place, and attachments' records,
+  descriptions included) in the hooks it answers. Every message hook needs it.
 - `messages.rewrite`: change a message's text before it is saved.
 - `messages.refuse`: refuse a message before it is saved, saying why.
 - `messages.annotate`: attach annotations to messages.

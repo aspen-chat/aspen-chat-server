@@ -86,3 +86,4 @@ pub mod m20261004_091749_plugin_views;
 pub mod m20261004_100025_nicknames;
 pub mod m20261004_203118_permission_ranges;
 pub mod m20261004_203124_manage_plugins_permission;
+pub mod m20261004_214820_attachment_descriptions;

@@ -6,7 +6,7 @@ import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
-import { isImageType, splitInline, type Picture } from "@/features/messages/images";
+import { isImageType, pictureAlt, splitInline, type Picture } from "@/features/messages/images";
 import { useKeepStill } from "@/features/messages/keepStill";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -58,6 +58,7 @@ export function MessageMedia({
         attachmentId: attachment.id,
         width: attachment.width,
         height: attachment.height,
+        description: attachment.description,
       });
     } else {
       files.push(attachment);
@@ -220,7 +221,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
     >
       <img
         src={picture.src}
-        alt={format(m.imageAlt, { name: picture.name })}
+        alt={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
         loading="lazy"
         // A finger dragging from the picture pans the list; it does not pick the picture up.
         draggable={false}
@@ -246,10 +247,12 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   );
 }
 
+/** A file to download, carrying its uploader's description, for a video they described. */
 function FileChip({ attachment }: { attachment: Attachment }) {
   return (
     <a
       href={attachment.downloadUrl}
+      {...(attachment.description == null ? {} : { "aria-description": attachment.description })}
       target="_blank"
       rel="noreferrer noopener"
       download={attachment.fileName}

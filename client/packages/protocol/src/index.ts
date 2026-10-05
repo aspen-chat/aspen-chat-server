@@ -336,3 +336,4 @@ export {
   type ForeignDeployment,
 } from "./deployments";
 export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";
+export { ATTACHMENT_DESCRIPTION_MAX_CHARS } from "./upload";

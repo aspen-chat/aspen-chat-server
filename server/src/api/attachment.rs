@@ -7,6 +7,7 @@
 //!   with a public `downloadUrl`.
 //! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment, for its
 //!   uploader or anyone who may view a message it is in.
+//! - `PATCH /attachments/{id}` — the uploader sets or clears its description until it is sent.
 //! - `DELETE /attachments/{id}` — the uploader drops an attachment in no message, row and
 //!   object.
 //!
@@ -16,7 +17,7 @@
 
 use crate::api::auth::SessionUser;
 use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
-use crate::api::extract::{Created, Json, NoContent, Path};
+use crate::api::extract::{Created, Json, NoContent, Path, double_option};
 use crate::api::{API_PREFIX, TAG_ATTACHMENTS};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId};
@@ -39,6 +40,10 @@ pub struct Attachment {
     /// can make room for it before it loads.
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// What a picture or video shows, in its uploader's words, for readers who cannot see it;
+    /// absent when it has none. Apps give it as the attachment's text alternative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 pub(crate) fn attachment_to_api(
@@ -53,6 +58,7 @@ pub(crate) fn attachment_to_api(
         download_url,
         width: row.width.and_then(|w| u32::try_from(w).ok()),
         height: row.height.and_then(|h| u32::try_from(h).ok()),
+        description: row.description,
     }
 }
 
@@ -68,6 +74,21 @@ pub struct AttachmentUploadInitRequest {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// What the picture or video shows, at most `app::attachment::DESCRIPTION_MAX_CHARS`
+    /// characters; blank is none.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// A change to an attachment not yet sent, as a merge patch.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentUpdateRequest {
+    /// What the picture or video shows, at most `app::attachment::DESCRIPTION_MAX_CHARS`
+    /// characters; `null` or blank clears it.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(nullable)]
+    pub description: Option<Option<String>>,
 }
 
 /// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, then
@@ -98,9 +119,16 @@ pub async fn init_attachment_upload(
     Json(request): Json<AttachmentUploadInitRequest>,
 ) -> ApiResult<Created<AttachmentUploadHandle>> {
     let size = app::attachment::picture_size(request.width, request.height)?;
-    let upload =
-        app::attachment::init_upload(&state, user.id, request.file_name, request.mime_type, size)
-            .await?;
+    let description = app::attachment::description(request.description)?;
+    let upload = app::attachment::init_upload(
+        &state,
+        user.id,
+        request.file_name,
+        request.mime_type,
+        size,
+        description,
+    )
+    .await?;
     Ok(Created::new(
         format!("{API_PREFIX}/attachments/{}", upload.id.0),
         AttachmentUploadHandle {
@@ -161,6 +189,33 @@ pub async fn get_attachment(
     Path(attachment): Path<AttachmentId>,
 ) -> ApiResult<Json<Attachment>> {
     let row = app::attachment::read_attachment(&state, user.id, attachment).await?;
+    Ok(Json(attachment_to_api(&state, row)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/attachments/{attachment}",
+    tag = TAG_ATTACHMENTS,
+    params(("attachment" = AttachmentId, Path)),
+    request_body = AttachmentUpdateRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Attachment),
+        (status = BAD_REQUEST, description = "`validation`: the description is too long", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No attachment of the caller's that is not yet sent", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn update_attachment(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(attachment): Path<AttachmentId>,
+    Json(request): Json<AttachmentUpdateRequest>,
+) -> ApiResult<Json<Attachment>> {
+    let row =
+        app::attachment::describe_attachment(&state, user.id, attachment, request.description)
+            .await?;
     Ok(Json(attachment_to_api(&state, row)))
 }
 

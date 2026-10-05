@@ -1,7 +1,7 @@
 import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { Button, Dialog, Link, Modal, ModalOverlay, useLocale } from "react-aria-components";
-import type { Picture } from "@/features/messages/images";
+import { pictureAlt, type Picture } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -10,8 +10,8 @@ const navButtonClass =
   "disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-white/70";
 
 /**
- * Every picture of a message, one at a time, over a darkened page: arrows and the arrow keys
- * move between them, a strip of thumbnails jumps to one, and Escape, the close control, or a
+ * Every picture of a message, one at a time, over a darkened page, with its uploader's
+ * description beneath it when it has one: arrows and the arrow keys move between them, a strip of thumbnails jumps to one, and Escape, the close control, or a
  * click on the empty space around the picture leaves. Opens on the picture at `initial`.
  */
 export function ImageGallery({
@@ -150,7 +150,7 @@ function GalleryBody({
           <img
             key={current.src}
             src={current.src}
-            alt={format(m.imageAlt, { name: current.name })}
+            alt={pictureAlt(current, format(m.imageAlt, { name: current.name }))}
             referrerPolicy="no-referrer"
             className="max-h-full max-w-full object-contain"
           />
@@ -164,6 +164,16 @@ function GalleryBody({
           <CaretRightIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
         </Button>
       </div>
+      {current.description != null && (
+        // Its uploader's description, for every reader; the picture's text alternative already
+        // carries it to assistive technology, so it is not read twice.
+        <p
+          aria-hidden="true"
+          className="mx-auto max-h-24 max-w-2xl overflow-y-auto text-center text-sm whitespace-pre-wrap"
+        >
+          {current.description}
+        </p>
+      )}
       <ul className="flex justify-center gap-2 overflow-x-auto py-1">
         {pictures.map((picture, i) => (
           <li key={picture.src + String(i)}>
@@ -171,7 +181,7 @@ function GalleryBody({
               onPress={() => {
                 setIndex(i);
               }}
-              aria-label={format(m.imageAlt, { name: picture.name })}
+              aria-label={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
               aria-pressed={i === index}
               className={
                 "block h-14 w-14 overflow-hidden rounded-md outline-none focus-visible:ring-2 focus-visible:ring-white/70 " +

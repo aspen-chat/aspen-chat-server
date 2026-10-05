@@ -46,6 +46,8 @@ interface types {
         /// A picture's size in pixels, as its uploader measured it.
         width: option<u32>,
         height: option<u32>,
+        /// What a picture or video shows, in its uploader's words, for those who cannot see it.
+        description: option<string>,
     }
 
     /// A message about to be saved.

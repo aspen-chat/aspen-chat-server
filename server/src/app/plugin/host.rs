@@ -322,7 +322,14 @@ pub(super) async fn attachments(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    type Row = (AttachmentId, String, String, Option<i32>, Option<i32>);
+    type Row = (
+        AttachmentId,
+        String,
+        String,
+        Option<i32>,
+        Option<i32>,
+        Option<String>,
+    );
     let rows: Vec<Row> = attachment::table
         .select((
             attachment::id,
@@ -330,6 +337,7 @@ pub(super) async fn attachments(
             attachment::mime_type,
             attachment::width,
             attachment::height,
+            attachment::description,
         ))
         .filter(attachment::id.eq_any(ids))
         .load(conn)
@@ -338,12 +346,13 @@ pub(super) async fn attachments(
         .iter()
         .filter_map(|id| rows.iter().find(|r| r.0 == *id))
         .map(
-            |(id, file_name, mime_type, width, height)| wit::Attachment {
+            |(id, file_name, mime_type, width, height, description)| wit::Attachment {
                 id: id.0.to_string(),
                 file_name: file_name.clone(),
                 content_type: mime_type.clone(),
                 width: width.and_then(|w| u32::try_from(w).ok()),
                 height: height.and_then(|h| u32::try_from(h).ok()),
+                description: description.clone(),
             },
         )
         .collect())

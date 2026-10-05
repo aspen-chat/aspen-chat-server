@@ -25,6 +25,22 @@
   arrive as previews with a picture and no text. `MessageMedia` there gathers all three into
   one strip and shows at most `INLINE_IMAGE_LIMIT` (three) inline; beyond that a `+N` tile,
   like any inline picture, opens `ImageGallery.tsx`, a modal that pages through the whole set.
+- A picture or video may carry a description, in its uploader's words, for readers who cannot
+  see it: the attachment record's `description` (at most `ATTACHMENT_DESCRIPTION_MAX_CHARS`,
+  1500 characters, the server's `app::attachment::DESCRIPTION_MAX_CHARS`; blank is none). It is
+  the picture's text alternative inline and in the gallery (`pictureAlt`, which falls back to
+  "Image: {name}"), shows beneath the picture in the gallery (hidden from assistive technology
+  there, which has it already), and is a video's download chip's `aria-description`. In the
+  message box each picture or video waiting to be sent has a describe control
+  (`AttachmentDescriptionButton`, filled once described) whose modal keeps the text in the
+  composer's `Pending`; the server takes it with `PATCH /attachments/{attachment}`
+  (`AspenSync.describeAttachment`) at once when the file is uploaded, when the upload ends when
+  it is not, and again before sending for any that did not arrive, so the message always goes
+  with what was written. The server accepts a description from the uploader alone, at the
+  reservation or by that `PATCH`, and only until the attachment is in a message: a sent
+  description is part of the message as it was sent. Whoever may read the attachment reads its
+  description, so it is seen, and stops being seen, exactly as the attachment is (`app::attachment`);
+  a plugin shown the message is shown it in the attachment's record (`spec/plugin.wit`).
 - Video links get a card with a play control (`src/features/messages/VideoCard.tsx`). The
   server only sends a player for providers in its `VIDEO_PROVIDERS` table
   (`server/src/app/link_preview/video.rs`), and `src/features/messages/video.ts` keeps the matching

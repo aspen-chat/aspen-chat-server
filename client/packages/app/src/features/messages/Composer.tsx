@@ -30,7 +30,8 @@ import {
   useSystemDmPeer,
   useUser,
 } from "@/api/hooks";
-import { isImageType } from "@/features/messages/images";
+import { describable, isImageType } from "@/features/messages/images";
+import { AttachmentDescriptionButton } from "@/features/messages/AttachmentDescription";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -45,6 +46,12 @@ import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
 interface Pending {
   key: number;
   name: string;
+  mimeType: string;
+  /**
+   * What it shows, as the user described it here; the attachment's own record has it once it
+   * has reached the server (`describe`).
+   */
+  description: string;
   /** An object URL for the file's own bytes when it is an image, shown as a thumbnail. */
   thumbnail: string | null;
   state:
@@ -98,6 +105,8 @@ export function Composer({
     (saved?.attachments ?? []).map((attachment) => ({
       key: nextKey++,
       name: attachment.fileName,
+      mimeType: attachment.mimeType,
+      description: attachment.description ?? "",
       thumbnail: isImageType(attachment.mimeType) ? attachment.downloadUrl : null,
       state: { kind: "ready", attachment },
     })),
@@ -105,6 +114,9 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Descriptions given while a file was still uploading, by its key, for the upload to give
+  // the server once it is done.
+  const describedEarly = useRef(new Map<number, string>());
   const channel = useChannel(channelId);
   const permissions = useChannelAccess(channelId);
   const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
@@ -200,7 +212,14 @@ export function Composer({
       };
       setPending((list) => [
         ...list,
-        { key, name: file.name, thumbnail, state: { kind: "uploading", sent: 0 } },
+        {
+          key,
+          name: file.name,
+          mimeType: file.type,
+          description: "",
+          thumbnail,
+          state: { kind: "uploading", sent: 0 },
+        },
       ]);
       measurePicture(file)
         .then((size) =>
@@ -214,6 +233,14 @@ export function Composer({
             );
           }),
         )
+        .then(async (uploaded) => {
+          const early = describedEarly.current.get(key);
+          describedEarly.current.delete(key);
+          // A description that fails to reach the server now is given again on sending.
+          return early === undefined
+            ? uploaded
+            : await sync.describeAttachment(uploaded.id, early || null).catch(() => uploaded);
+        })
         .then(
           (attachment) => {
             update({ kind: "ready", attachment });
@@ -226,6 +253,37 @@ export function Composer({
           },
         );
     }
+  }
+
+  /**
+   * Keeps what a file shows as the user described it, and gives it to the server once the file
+   * is there; a file still uploading gives it when the upload is done.
+   */
+  function describe(key: number, description: string) {
+    const item = pending.find((p) => p.key === key);
+    setPending((list) => list.map((p) => (p.key === key ? { ...p, description } : p)));
+    if (item?.state.kind !== "ready") {
+      describedEarly.current.set(key, description);
+      return;
+    }
+    sync.describeAttachment(item.state.attachment.id, description || null).then(
+      (attachment) => {
+        setPending((list) =>
+          list.map((p) =>
+            p.key === key && p.state.kind === "ready"
+              ? { ...p, state: { kind: "ready", attachment } }
+              : p,
+          ),
+        );
+      },
+      (e: unknown) => {
+        setError(
+          format(m.describeFailed, {
+            reason: e instanceof ApiProblemError ? e.message : String(e),
+          }),
+        );
+      },
+    );
   }
 
   async function send() {
@@ -241,6 +299,15 @@ export function Composer({
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
+      // Descriptions that have not reached the server yet (one given just as its upload ended,
+      // or one whose saving failed) go before the message that carries their files.
+      await Promise.all(
+        pending.flatMap((p) =>
+          p.state.kind === "ready" && p.description !== (p.state.attachment.description ?? "")
+            ? [sync.describeAttachment(p.state.attachment.id, p.description || null)]
+            : [],
+        ),
+      );
       const prepared = commands.prepare(text, readyIds);
       if (prepared.kind === "refused") {
         setError(prepared.reason);
@@ -345,6 +412,16 @@ export function Composer({
                   </span>
                 )}
               </span>
+              {describable(p.mimeType) && p.state.kind !== "failed" && (
+                <AttachmentDescriptionButton
+                  name={p.name}
+                  description={p.description}
+                  onSave={(description) => {
+                    describe(p.key, description);
+                  }}
+                  className="absolute end-1 bottom-1 rounded p-0.5 text-ink-faint outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+                />
+              )}
               <Button
                 aria-label={format(m.removeAttachment, { name: p.name })}
                 onPress={() => {
