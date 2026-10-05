@@ -86,7 +86,7 @@ function Value({ plugin, value }: { plugin: PluginInfo; value: CardField["value"
           href={value.url}
           target="_blank"
           rel="noreferrer"
-          className="text-accent hover:underline"
+          className="text-accent underline underline-offset-2 hover:decoration-2"
         >
           {pluginText(plugin, value.text)}
         </a>

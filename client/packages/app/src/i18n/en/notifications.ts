@@ -3,6 +3,7 @@ export const notifications = {
   poll: "Posted a poll",
   attachment: "Sent an attachment",
   newMessage: "New message",
+  announced: "{name}: {body}",
   menu: "Notifications",
   notifyMe: "Notify me about",
   default: "Default ({level})",

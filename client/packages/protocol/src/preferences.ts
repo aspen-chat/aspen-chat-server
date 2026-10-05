@@ -285,6 +285,49 @@ export const MOTION_SPEED: PreferenceDefinition<number> = {
       : undefined,
 };
 
+/** The line spacings messages may be drawn at, as multiples of the normal, tightest first. */
+export const MESSAGE_SPACINGS = [1, 1.2, 1.4] as const;
+export type MessageSpacing = (typeof MESSAGE_SPACINGS)[number];
+
+/**
+ * How far apart the lines and paragraphs of messages are drawn, as a multiple of the normal.
+ * It follows the account, like the message text size.
+ */
+export const MESSAGE_SPACING: PreferenceDefinition<MessageSpacing> = {
+  key: "look.messageSpacing",
+  scope: "account",
+  fallback: 1,
+  parse: (raw) => MESSAGE_SPACINGS.find((spacing) => spacing === raw),
+};
+
+/**
+ * Whether messages that arrive in the conversation on screen are read out by assistive
+ * technology, as they come. Kept with the device, whose screen reader it serves.
+ */
+export const ANNOUNCE_MESSAGES: PreferenceDefinition<boolean> = {
+  key: "a11y.announceMessages",
+  scope: "device",
+  fallback: false,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
+/** The sizes message text may be drawn at, in CSS pixels, smallest first. */
+export const MESSAGE_TEXT_SIZES = [14, 16, 18, 20, 24] as const;
+export type MessageTextSize = (typeof MESSAGE_TEXT_SIZES)[number];
+
+/**
+ * How large messages are drawn, their text and everything that goes with it (names, times,
+ * reactions, the message box), in CSS pixels for their body text. It follows the account, so a
+ * reader who needs larger text has it on every device; zooming the whole app stays with each
+ * device, whose screens differ.
+ */
+export const MESSAGE_TEXT_SIZE: PreferenceDefinition<MessageTextSize> = {
+  key: "look.messageTextSize",
+  scope: "account",
+  fallback: 16,
+  parse: (raw) => MESSAGE_TEXT_SIZES.find((size) => size === raw),
+};
+
 /** Whether this user has silenced one other person for themself, keeping their volume for later. */
 export function userMuted(userId: string): PreferenceDefinition<boolean> {
   return {

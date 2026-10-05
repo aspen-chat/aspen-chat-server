@@ -58,7 +58,7 @@ export function ChoiceCheckbox({
 export function RadioMark() {
   return (
     <span className={markClass + " rounded-full"}>
-      <span className="h-1.5 w-1.5 rounded-full bg-accent-contrast opacity-0 group-selected:opacity-100" />
+      <span className="forced-fill h-1.5 w-1.5 rounded-full bg-accent-contrast opacity-0 group-selected:opacity-100" />
     </span>
   );
 }

@@ -613,7 +613,9 @@ function ContextView({ caseId, reported, dm }: { caseId: string; reported: strin
         <div
           key={kept.message.id}
           className={
-            kept.message.id === reported ? "rounded-md ring-2 ring-danger ring-offset-1" : ""
+            kept.message.id === reported
+              ? "forced-outline rounded-md ring-2 ring-danger ring-offset-1"
+              : ""
           }
         >
           <EmbeddedMessage

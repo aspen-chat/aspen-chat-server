@@ -32,7 +32,7 @@ export function PollClosedNotice({
           {format(m.poll.closedNotice, { question: poll.question })} {outcomeText(m, poll)}{" "}
           <Link
             {...messageLink(home, channelId, poll.messageId)}
-            className="text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="text-accent underline underline-offset-2 outline-none hover:decoration-2 focus-visible:ring-2 focus-visible:ring-accent/50"
           >
             {m.poll.showPoll}
           </Link>

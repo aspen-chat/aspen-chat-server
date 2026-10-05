@@ -6,7 +6,8 @@ import { helper, signInToWorld, settleAnimations } from "./world";
 /**
  * Every screen and dialog of the app, checked with axe against the WCAG rules it knows (ARIA,
  * names, landmarks, contrast), against the stubbed world in `world.ts`. Every palette is
- * checked in both colour schemes on one browser; the rest check the default palette.
+ * checked in both colour schemes on one browser, and the default palette at more contrast too;
+ * the rest check the default palette.
  */
 
 /**
@@ -51,21 +52,30 @@ async function openChannel(page: Page, name: string) {
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
 }
 
-const combinations = PALETTES.flatMap((palette) =>
-  (["light", "dark"] as const).map((scheme) => ({ palette, scheme })),
-);
+/** Every palette in both schemes, and the default one at more contrast in both. */
+const combinations = [
+  ...PALETTES.flatMap((palette) =>
+    (["light", "dark"] as const).map((scheme) => ({ palette, scheme, contrast: "standard" })),
+  ),
+  ...(["light", "dark"] as const).map((scheme) => ({ palette: "aspen", scheme, contrast: "more" })),
+];
 
-for (const { palette, scheme } of combinations) {
-  test.describe(`${palette}, ${scheme}`, () => {
+for (const { palette, scheme, contrast } of combinations) {
+  test.describe(`${palette}, ${scheme}${contrast === "more" ? ", more contrast" : ""}`, () => {
     test.beforeEach(async ({ page }, testInfo) => {
       test.skip(
-        (palette !== "aspen" || scheme !== "light") && testInfo.project.name !== "chromium",
+        (palette !== "aspen" || scheme !== "light" || contrast !== "standard") &&
+          testInfo.project.name !== "chromium",
         "every palette is checked on one browser",
       );
       await page.emulateMedia({ colorScheme: scheme });
-      await page.addInitScript((chosen) => {
-        window.localStorage.setItem("aspen.palette", chosen);
-      }, palette);
+      await page.addInitScript(
+        ([chosen, level]) => {
+          window.localStorage.setItem("aspen.palette", chosen);
+          window.localStorage.setItem("aspen.contrast", level);
+        },
+        [palette, contrast] as const,
+      );
       await signInToWorld(page);
     });
 

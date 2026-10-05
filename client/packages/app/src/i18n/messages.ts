@@ -40,7 +40,7 @@ import { status } from "./en/status";
 import { syncStatus } from "./en/syncStatus";
 import { system } from "./en/system";
 import { tagging } from "./en/tagging";
-import { themeModes } from "./en/themeModes";
+import { contrastModes, themeModes } from "./en/themeModes";
 import { threads } from "./en/threads";
 import { twoFactor } from "./en/twoFactor";
 import { voice } from "./en/voice";
@@ -262,6 +262,10 @@ export const en = {
   paletteLabel: "Colour palette",
   themeModeLabel: "Theme",
   themeModes,
+  contrastLabel: "Contrast",
+  contrastModes,
+  contrastHint:
+    "More draws quiet text and lines stronger, in any palette. Only this device follows this setting.",
   cannotSendHere: "You can't send messages here.",
   channelActions,
   removeReactor: "Remove {name}'s reaction",

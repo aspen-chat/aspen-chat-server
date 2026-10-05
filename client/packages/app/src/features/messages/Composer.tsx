@@ -399,7 +399,7 @@ export function Composer({
                     {({ percentage }) => (
                       <span className="block h-1 w-full overflow-hidden rounded-full bg-line">
                         <span
-                          className="block h-full rounded-full bg-accent transition-[width]"
+                          className="forced-fill block h-full rounded-full bg-accent transition-[width]"
                           style={{ width: `${String(percentage ?? 0)}%` }}
                         />
                       </span>
@@ -502,7 +502,7 @@ export function Composer({
           aria-label={m.messageLabel}
           value={draft}
           onChange={setDraft}
-          className="relative min-w-0 flex-1"
+          className="message-text relative min-w-0 flex-1"
         >
           <p role="status" className="sr-only">
             {commands.active
@@ -541,14 +541,14 @@ export function Composer({
             aria-placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}
-            className="block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
+            className="message-box-text block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
           {draft === "" && (
             // The box's own placeholder would wrap, and grow the box, where it is too long for
             // one line; this one is cut short with an ellipsis instead.
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute inset-x-[13px] bottom-[9px] truncate text-ink-faint"
+              className="message-box-text pointer-events-none absolute inset-x-[13px] bottom-[9px] truncate text-ink-faint"
             >
               {placeholder}
             </span>

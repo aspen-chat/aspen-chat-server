@@ -1,4 +1,6 @@
 import { Outlet, useLocation, useParams, useSearch } from "@tanstack/react-router";
+import { Announcer } from "@/features/layout/Announcer";
+import { useFollowMessageTextSize } from "@/features/layout/messageTextSize";
 import { useFollowMotionSpeed } from "@/features/layout/motion";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
@@ -110,6 +112,12 @@ function FollowMotionSpeed() {
   return null;
 }
 
+/** Keeps messages drawn at the reader's message text size. */
+function FollowMessageTextSize() {
+  useFollowMessageTextSize();
+  return null;
+}
+
 /**
  * The signed-in app: the community rail beside the route. On a narrow screen a conversation
  * (a channel, a DM, a thread) takes the whole width, and the rail shows with the lists the
@@ -127,6 +135,8 @@ function SignedIn() {
       <IncomingCalls />
       <FollowLanguagePreference />
       <FollowMotionSpeed />
+      <FollowMessageTextSize />
+      <Announcer />
       <div className="flex h-full flex-col">
         <SyncBanner />
         <SourcePickerDialog />

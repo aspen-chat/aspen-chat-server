@@ -11,7 +11,12 @@
   every `ACTIVITY_INTERVAL_MS`, and on reconnecting only if the user was active within that
   interval. Nothing else may call it: background work is not the user using the app.
 - A channel's header shows how many people who may view it are online (not away), behind the
-  online status's green dot (`OnlineCount` in `ChannelHeader`). No client knows every member of
+  online status's mark (`OnlineCount` in `ChannelHeader`). No client knows every member of
   a large community, so the server counts (`GET /channels/{channel}/presence`). `useChannelOnline`
   asks `AspenSync.watchChannelPresence` to keep the count current while the header is shown: it
   is read at once, then with every presence poll, into `RecordStore.channelOnline`.
+- A status is drawn by `PresenceMark` (`src/features/users/PresenceMark.tsx`) as a shape as well
+  as a colour, so it reads without telling green from yellow, in greyscale, and under forced
+  colours: a full dot for online, a crescent for away, a ring for offline. Over a member's
+  picture it is named for assistive technology (`StatusDot` in `MemberList`); beside text that
+  says the same it is hidden from it.

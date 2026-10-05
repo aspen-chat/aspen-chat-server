@@ -174,7 +174,7 @@ function BareId({ id }: { id: string }) {
 }
 
 const linkClass =
-  "text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50";
+  "text-accent underline underline-offset-2 outline-none hover:decoration-2 focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
  * Where it was done: the community and the channel, each a link while it stands and its name,

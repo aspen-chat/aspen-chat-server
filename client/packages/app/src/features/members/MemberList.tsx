@@ -8,6 +8,7 @@ import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameColor } from "@/features/users/nameColor";
 import { useNameIn } from "@/features/users/nameIn";
+import { PresenceMark } from "@/features/users/PresenceMark";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -169,13 +170,11 @@ function MemberRow({ user, communityId }: { user: User; communityId: string }) {
   );
 }
 
+/** The status over a member's picture, on a disc of the list's ground so it stands clear of it. */
 function StatusDot({ status, label }: { status: UserOnlineStatus; label: string }) {
-  const colour = status === "online" ? "bg-online" : status === "away" ? "bg-away" : "bg-ink-faint";
   return (
-    <span
-      role="img"
-      aria-label={label}
-      className={`absolute -end-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface-raised ${colour}`}
-    />
+    <span className="absolute -end-0.5 -bottom-0.5 flex rounded-full bg-surface-raised p-0.5">
+      <PresenceMark status={status} label={label} className="h-2.5 w-2.5" />
+    </span>
   );
 }

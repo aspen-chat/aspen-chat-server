@@ -296,7 +296,7 @@ function ScreenThumbnail({
     <ScreenTile
       track={screen.track}
       label={screenLabel(m, screen.user, name)}
-      className={"h-20 w-36 " + (selected ? "ring-2 ring-accent" : "")}
+      className={"h-20 w-36 " + (selected ? "forced-outline ring-2 ring-accent" : "")}
     />
   );
 }
@@ -433,7 +433,9 @@ function TileAvatar({
     <span
       className={
         "rounded-full transition-shadow " +
-        (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
+        (speaking
+          ? "forced-outline ring-4 ring-online ring-offset-2 ring-offset-surface-raised"
+          : "")
       }
       role={speaking ? "img" : undefined}
       aria-label={speaking ? format(m.voice.speaking, { name }) : undefined}
@@ -466,7 +468,9 @@ function CameraVideo({
       data-speaking={speaking ? "true" : undefined}
       className={
         "w-full rounded-lg transition-shadow " +
-        (speaking ? "ring-4 ring-online ring-offset-2 ring-offset-surface-raised" : "")
+        (speaking
+          ? "forced-outline ring-4 ring-online ring-offset-2 ring-offset-surface-raised"
+          : "")
       }
     >
       <ScreenTile

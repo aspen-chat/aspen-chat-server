@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { PresenceMark } from "@/features/users/PresenceMark";
 import { ArrowLeftIcon, ArrowSquareLeftIcon, ArrowSquareRightIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
@@ -80,7 +81,7 @@ function OnlineCount({ channelId }: { channelId: string }) {
   }
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-sm text-ink-muted">
-      <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-online" />
+      <PresenceMark status="online" className="h-2.5 w-2.5" />
       {format(m.channelOnline, { count: numbers.format(online) })}
     </span>
   );

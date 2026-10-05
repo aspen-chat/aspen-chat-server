@@ -287,7 +287,7 @@ function ChannelGroup({
     renderDropIndicator: (target) => (
       <DropIndicator
         target={target}
-        className="mx-2 h-0.5 rounded-full bg-transparent drop-target:bg-accent"
+        className="mx-2 h-0.5 rounded-full bg-transparent drop-target:bg-accent drop-target:forced-fill"
       />
     ),
   });

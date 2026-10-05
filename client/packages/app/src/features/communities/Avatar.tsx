@@ -21,10 +21,12 @@ export function Avatar({
   const iconLoading = useIconLoading(iconId ?? undefined);
   const [shown, setShown] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  // Initials fill a circle of a set size, so they keep their size however large the text
+  // around them is drawn (`type-scale` in `styles.css`).
   const dimensions = {
-    lg: "h-12 w-12 text-base",
-    md: "h-9 w-9 text-sm",
-    sm: "h-7 w-7 text-xs",
+    lg: "h-12 w-12 text-[1rem]",
+    md: "h-9 w-9 text-[0.875rem]",
+    sm: "h-7 w-7 text-[0.75rem]",
     xs: "h-5 w-5 text-[0.5rem]",
   }[size];
   const skeleton = "animate-pulse bg-surface-hover motion-reduce:animate-none";

@@ -57,13 +57,20 @@ import { useMessages } from "@/i18n/context";
 import { ThemePicker } from "@/theme/ThemePicker";
 import { NameColorsCheckbox } from "@/features/settings/NameColorsCheckbox";
 import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
+import { MessageTextSizeSlider } from "@/features/settings/MessageTextSizeSlider";
+import { MessageSpacingSlider } from "@/features/settings/MessageSpacingSlider";
+import { AccessibilitySection } from "@/features/settings/AccessibilitySection";
+import { ZoomSlider } from "@/features/settings/ZoomSlider";
 
 /**
  * The user's preferences: first the account's sign-in and security settings; then the
- * microphone and speaker voice chat uses and the speaker for notification sounds, the
- * appearance, and the fonts text and code are drawn in, all kept with this install; the language, kept with the account; the people the
- * user has blocked; developer mode, with the user's bots; and the way out of the account. Sections for
- * account-wide preferences slot in beside them.
+ * microphone and speaker voice chat uses and the speaker for notification sounds, kept with this
+ * install; the appearance: the theme, palette, contrast, zoom, and whether names take their
+ * roles' colours, kept with this install, and the message text size, line spacing, and
+ * animation speed, kept with the account; whether new messages are read out, and the fonts text
+ * and code are drawn in, kept with this install; the language, kept with the account; the
+ * people the user has blocked; developer mode, with the user's bots; and the way out of the
+ * account. Sections for account-wide preferences slot in beside them.
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
   const m = useMessages();
@@ -94,9 +101,13 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                       {m.settings.appearance}
                     </h3>
                     <ThemePicker />
+                    <ZoomSlider />
+                    <MessageTextSizeSlider />
+                    <MessageSpacingSlider />
                     <MotionSpeedSlider />
                     <NameColorsCheckbox />
                   </section>
+                  <AccessibilitySection />
                   <FontsSection />
                   <NotificationsSection />
                   <LanguageSection />
