@@ -71,7 +71,9 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   pairs arrive settled), `request` made as the person through `AspenSync.pluginRoute`
   (`AspenClient.pluginRoute` builds the URL beneath the plugin's `routes/`, refusing `.` and
   `..` segments and methods a route never takes with 400, unsent, so a page cannot reach the
-  rest of the API; `status` 0 when the deployment cannot be reached), `users` from the store or
+  rest of the API; `status` 0 when the deployment cannot be reached; the plugin's answer comes
+  back as it came, since its status codes are its own: its `401` refreshes no session, its
+  `403` flags no enrollment, and its `429` is not waited out), `users` from the store or
   read (`AspenSync.loadUsers`, at most 100), the plugin's `pluginEvent`s for the channel, its
   community, or the person (`AspenSync.onPluginEvent`), and `open` for a channel the store
   holds. The bridge speaks only to the page the app loaded: a frame's window outlives its

@@ -91,6 +91,33 @@ describe("AspenClient", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("hands a plugin's answers back as they came, refreshing and flagging nothing", async () => {
+    const { fetch, calls } = scriptedFetch([
+      () => problem(401, "unauthorized"),
+      () => problem(403, "twoFactorEnrollmentRequired"),
+      () => problem(403, "emailVerificationRequired"),
+      () => new Response("slow down", { status: 429, headers: { "retry-after": "1" } }),
+    ]);
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const statuses = [];
+    for (let i = 0; i < 4; i++) {
+      statuses.push(
+        (await client.pluginRoute("org.example.forum", { method: "GET", path: "x" })).status,
+      );
+    }
+    expect(statuses).toEqual([401, 403, 403, 429]);
+    // No refresh, no replay, no wait: one request each.
+    expect(calls).toHaveLength(4);
+    expect(calls.every((call) => call.url.includes("/plugins/org.example.forum/routes/x"))).toBe(
+      true,
+    );
+    expect(client.session?.sessionToken).toBe("session-1");
+    expect(client.session?.twoFactorEnrollmentRequired).toBeUndefined();
+    expect(client.session?.emailVerificationRequired).toBeUndefined();
+  });
+
   it("names the languages the user reads in every request", async () => {
     const { fetch, calls } = scriptedFetch([
       () => problem(401, "invalidCredentials"),
