@@ -70,6 +70,9 @@ impl Domain {
             || !labels.iter().all(label_ok)
             // A last label of digits alone would make an IPv4 address a domain.
             || labels.last().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+            // Nor may a URL read it as one (`127.0x1` is 127.0.0.1 there), since a client
+            // connects to an address without resolving it, past `app::outbound::PublicResolver`.
+            || !matches!(url::Host::parse(host), Ok(url::Host::Domain(_)))
         {
             return Err(InvalidDomain);
         }
@@ -163,6 +166,10 @@ mod tests {
             "chat.example.org:99999",
             "chat_example.org",
             "[::1]:443",
+            "127.0x1",
+            "1.0x1:8443",
+            "0x7f.0x0.0x0.0x1",
+            "10.0x0a000001",
             "",
         ] {
             assert_eq!(d(bad), None, "{bad}");
