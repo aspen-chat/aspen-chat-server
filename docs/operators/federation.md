@@ -95,7 +95,8 @@ From then on:
 To replace your own key:
 
 - `aspen-chat-server federation rotate-key --planned` has the old key sign a handover to the
-  new one. Every deployment follows it on its own.
+  new one. Every deployment follows it on its own, as long as it last saw a key among your
+  sixteen newest from the last ninety days.
 - `aspen-chat-server federation rotate-key --compromised` when the old key may be in someone
   else's hands. It vouches for nothing, so every deployment that knew you refuses the new key
   until its administrators accept it: tell them, and give them the new fingerprint

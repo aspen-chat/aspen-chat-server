@@ -15,7 +15,8 @@ deployments use too, are described by those two.
 - **The document**, served unauthenticated at `https://{domain}/.well-known/aspen`: the
   deployment's domain, its keys (the current one first, then those it replaced within the
   handover window, each with the handover that vouches for it), its gates, its `protocol`, and
-  its `software`.
+  its `software`. A reader follows handovers through no more than the first sixteen keys a
+  document lists, so a deployment lists at most that many.
 - **Signed statements**: compact JWS (RFC 7515) with EdDSA over Ed25519 (RFC 8037), at most
   16 KiB (16384 bytes) each, since a reader refuses a longer one. The header's `typ` names the
   kind, and a verifier checks it, so no statement passes for another:
