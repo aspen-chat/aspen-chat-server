@@ -1,11 +1,14 @@
 //! Calls this server makes to other hosts on someone else's say-so: fetching a page a message
-//! links to, or the document of a deployment someone named. A host name can resolve to
-//! anything, so these refuse addresses inside a network (loopback, private, link-local, and
-//! the like), which would otherwise let anyone who can name a host make this server reach
-//! services only it can see.
+//! links to and its picture, or the document of a deployment someone named. A host name can
+//! resolve to anything, and a URL or a redirect can name an address outright, so these refuse
+//! addresses inside a network (loopback, private, link-local, and the like), which would
+//! otherwise let anyone who can name a host make this server reach services only it can see:
+//! names as they are resolved ([`PublicResolver`]), and addresses in URLs and redirects
+//! ([`may_fetch`], [`checked_redirects`]).
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use url::{Host, Url};
 
 /// The IPv4 networks that are not on the public internet (IANA's special-purpose registry).
 const INSIDE_V4: [(Ipv4Addr, u32); 15] = [
@@ -89,12 +92,35 @@ pub fn is_public_address(ip: IpAddr) -> bool {
 /// Whether `url` names its host by an address that is not public. A client connects to an
 /// address it is given without asking its resolver, so `PublicResolver` never sees one; what
 /// takes a URL from someone else checks it here.
-pub fn names_inside_address(url: &reqwest::Url) -> bool {
+pub fn names_inside_address(url: &Url) -> bool {
     match url.host() {
-        Some(url::Host::Ipv4(v4)) => !is_public_address(IpAddr::V4(v4)),
-        Some(url::Host::Ipv6(v6)) => !is_public_address(IpAddr::V6(v6)),
-        Some(url::Host::Domain(_)) | None => false,
+        Some(Host::Ipv4(v4)) => !is_public_address(IpAddr::V4(v4)),
+        Some(Host::Ipv6(v6)) => !is_public_address(IpAddr::V6(v6)),
+        Some(Host::Domain(_)) | None => false,
     }
+}
+
+/// Whether this server may fetch `url` on someone else's say-so: `http` or `https`, at a host
+/// that is a name, which [`PublicResolver`] checks as it connects, or a public address. A URL
+/// naming an address is connected to without resolving anything, so the address is checked
+/// here.
+pub fn may_fetch(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https") && url.has_host() && !names_inside_address(url)
+}
+
+/// Follows at most `hops` redirects, each only to a URL [`may_fetch`] allows, so a public page
+/// cannot send the request on to an address inside a network.
+pub fn checked_redirects(hops: usize) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= hops {
+            attempt.error(format!("more than {hops} redirects"))
+        } else if may_fetch(attempt.url()) {
+            attempt.follow()
+        } else {
+            let refused = format!("a redirect to {}, which may not be fetched", attempt.url());
+            attempt.error(refused)
+        }
+    })
 }
 
 /// Why `PublicResolver` found no address to connect to, which callers tell apart for the
@@ -241,6 +267,33 @@ mod tests {
                 public,
                 "{address}"
             );
+        }
+    }
+
+    #[test]
+    fn only_web_urls_at_names_or_public_addresses_may_be_fetched() {
+        for refused in [
+            "http://127.0.0.1/",
+            "https://10.0.0.1/a.png",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]:8080/",
+            "http://[::ffff:192.168.0.1]/",
+            // Hosts written as one number are addresses too.
+            "http://2130706433/",
+            "http://0x7f000001/",
+            "ftp://example.com/",
+            "file:///etc/passwd",
+            "data:text/html,hi",
+        ] {
+            assert!(!may_fetch(&Url::parse(refused).unwrap()), "{refused}");
+        }
+        for allowed in [
+            "https://example.com/",
+            "http://localhost.example/",
+            "https://1.1.1.1/",
+            "https://[2606:4700::1111]/",
+        ] {
+            assert!(may_fetch(&Url::parse(allowed).unwrap()), "{allowed}");
         }
     }
 }

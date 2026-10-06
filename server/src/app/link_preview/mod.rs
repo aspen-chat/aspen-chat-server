@@ -30,6 +30,10 @@
 //!    before `delete_message` / the content-edit refetch path lets the row
 //!    itself go away, so we don't leak image blobs.
 //!
+//! Every fetch, of a page, its picture, or a redirect either leads to, reaches only public
+//! addresses (`app::outbound`), so a message cannot make the server reach a service inside its
+//! own network.
+//!
 //! Preview thumbnails are downloaded by clients directly from the
 //! anonymous-read endpoint behind [`crate::app::media_store::MediaStore::public_url`];
 //! the API never serves the bytes itself.
@@ -62,7 +66,7 @@ use fetch::{fetch_metadata, http_client};
 use futures_util::stream::StreamExt;
 use html_meta::ParsedMetadata;
 use std::collections::HashMap;
-use tracing::warn;
+use tracing::{info, warn};
 use url::Url;
 
 /// Hard ceiling on how many preview cards a single message can carry.
@@ -184,6 +188,11 @@ async fn fetch_and_store_image(
     state: &GlobalServerContext,
     image_url: &str,
 ) -> Option<PreviewImage> {
+    // A page names its picture, which may be at an address inside a network (`app::outbound`).
+    if !url::Url::parse(image_url).is_ok_and(|url| crate::app::outbound::may_fetch(&url)) {
+        info!(url = image_url, "preview image URL refused");
+        return None;
+    }
     let response = match http_client().get(image_url).send().await {
         Ok(r) => r,
         Err(e) => {
