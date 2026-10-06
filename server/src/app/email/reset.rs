@@ -9,8 +9,10 @@
 //!    Each address and code is counted before it is checked, so a burst of guesses sent at once
 //!    is checked no more than [`ATTEMPTS`] times, whatever the rate limits allow.
 //! 3. [`complete`]: they type the code and a new password. The password is replaced, every
-//!    sign-in of the account ends, and the address is told. The account's second factors stay:
-//!    signing in still asks for one. Each reset takes [`ATTEMPTS`] wrong codes before it ends.
+//!    sign-in of the account ends, the second factors added and recovery codes issued in the
+//!    last week go (`two_factor::remove_recent`), in case whoever took the account added them,
+//!    and the address is told. The older factors stay: signing in still asks for one. Each
+//!    reset takes [`ATTEMPTS`] wrong codes before it ends.
 //!
 //! Only an account of this deployment with a verified address can be reset this way; bots,
 //! foreign users, and the system account cannot. What `start` shows confirms that the username
@@ -239,8 +241,8 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
     Ok(())
 }
 
-/// Replaces the password with `new_password`, given the code mailed for the reset, and ends
-/// every sign-in of the account.
+/// Replaces the password with `new_password`, given the code mailed for the reset, ends every
+/// sign-in of the account, and removes the second factors added in the last week.
 pub async fn complete(
     state: &GlobalServerContext,
     id: &str,
@@ -284,7 +286,14 @@ pub async fn complete(
                 return Err(app::Error::PasswordResetExpired);
             }
             app::login::revoke_all_sessions(state, conn, user_id).await?;
-            outbox::queue(conn, user_id, None, &Mail::PasswordWasReset).await
+            let removed_factors = app::two_factor::remove_recent(conn, user_id).await?;
+            outbox::queue(
+                conn,
+                user_id,
+                None,
+                &Mail::PasswordWasReset { removed_factors },
+            )
+            .await
         }
         .scope_boxed()
     })

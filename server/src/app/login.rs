@@ -533,8 +533,8 @@ pub enum ChangePasswordOutcome {
 }
 
 /// Changes the caller's password and expires every other session and refresh token belonging
-/// to them, so a stolen credential stops working the moment the owner rotates their password.
-/// The session performing the change stays valid. The old password proves who the caller is
+/// to them, so a stolen credential stops working the moment the owner rotates their password,
+/// and tells the account's verified address. The session performing the change stays valid. The old password proves who the caller is
 /// for an account without two-factor sign-in; one with it also needs a recent verification. A
 /// wrong old password counts toward the user's failure limit (`two_factor::limited`), as one
 /// given to re-verify does, so a stolen session cannot guess it.
@@ -589,7 +589,14 @@ pub async fn try_change_password(
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
             .await?;
-            revoke_other_sessions(state, conn, user_id, &current_session).await
+            revoke_other_sessions(state, conn, user_id, &current_session).await?;
+            app::email::outbox::notify(
+                state,
+                conn,
+                user_id,
+                &app::email::outbox::Mail::PasswordChanged,
+            )
+            .await
         }
         .scope_boxed()
     })

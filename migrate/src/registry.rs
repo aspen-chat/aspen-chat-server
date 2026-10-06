@@ -92,4 +92,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261005_140058_attachment_previews::M,
     &migrations::m20261005_165400_reply_echo::M,
     &migrations::m20261006_150944_token_digests::M,
+    &migrations::m20261006_154118_recovery_code_created_at::M,
 ];

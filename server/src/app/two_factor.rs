@@ -15,6 +15,7 @@
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment_settings::DeploymentSettings;
+use crate::app::email::outbox::{Factor, Mail};
 use crate::app::{self, UserId};
 use crate::aspen_config::AuthConfig;
 use crate::database::schema::{passkey, recovery_code, refresh_token, totp_secret, user};
@@ -36,6 +37,14 @@ pub const RECOVERY_CODE_COUNT: usize = 10;
 /// Wrong codes or passwords a user may enter within `FAILURE_WINDOW_SECONDS`.
 const MAX_FAILURES: i64 = 10;
 const FAILURE_WINDOW_SECONDS: i64 = 15 * 60;
+/// Wrong codes or passwords a user may enter within `DAILY_WINDOW_SECONDS`, however the shorter
+/// windows fall: without it, ten guesses every quarter hour would be nearly a thousand a day,
+/// enough to find a six-digit code within months.
+const DAILY_MAX_FAILURES: i64 = 20;
+const DAILY_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+/// How far back a password reset by email reaches to remove second factors and recovery codes
+/// (`remove_recent`).
+pub const RESET_REACH: Duration = Duration::days(7);
 
 /// RFC 6238 parameters every authenticator app supports: HMAC-SHA1, six digits, 30 seconds.
 const TOTP_STEP_SECONDS: i64 = 30;
@@ -191,6 +200,10 @@ fn failures_key(user_id: UserId) -> String {
     format!("auth:failures:{}", user_id.0)
 }
 
+fn daily_failures_key(user_id: UserId) -> String {
+    format!("auth:failures-daily:{}", user_id.0)
+}
+
 /// Counts one attempt and answers how many the window holds now, starting the window with the
 /// first. One script, so the count and its expiry are set together and a lost connection never
 /// leaves a count that does not expire.
@@ -211,14 +224,45 @@ end
 return 0
 ";
 
-/// Runs `check`, which answers whether a presented secret was right, under the failure limit:
-/// refused outright once the limit is reached, a wrong answer counted, a right one clearing the
-/// count.
+/// Runs `check`, which answers whether a presented secret was right, under the failure limits:
+/// refused outright once either is reached, a wrong answer counted, a right one clearing the
+/// quarter hour's count. When a wrong answer reaches the daily limit, the account's address is
+/// told (`outbox::Mail::SignInLocked`), once.
 pub async fn limited<F>(state: &GlobalServerContext, user_id: UserId, check: F) -> app::Result<bool>
 where
     F: AsyncFnOnce() -> app::Result<bool>,
 {
-    limited_in(&state.valkey, &failures_key(user_id), check).await
+    let windows = Windows {
+        short: failures_key(user_id),
+        daily: daily_failures_key(user_id),
+    };
+    match limited_in(&state.valkey, &windows, check).await? {
+        Attempt::Checked(right) => Ok(right),
+        Attempt::Refused { locked_now } => {
+            if locked_now {
+                tracing::warn!(user = %user_id.0, "a day's worth of wrong codes or passwords; refusing them for a day");
+                let mut conn = state.connection_pool.get().await?;
+                app::email::outbox::notify(state, &mut conn, user_id, &Mail::SignInLocked).await?;
+            }
+            Err(app::Error::TooManyAttempts)
+        }
+    }
+}
+
+/// The counts one user's attempts are kept in.
+struct Windows {
+    /// `MAX_FAILURES` in `FAILURE_WINDOW_SECONDS`.
+    short: String,
+    /// `DAILY_MAX_FAILURES` in `DAILY_WINDOW_SECONDS`.
+    daily: String,
+}
+
+enum Attempt {
+    /// Checked, and whether it was right.
+    Checked(bool),
+    /// Refused unchecked, a limit having been reached; `locked_now` when this attempt is the
+    /// first the daily limit refuses.
+    Refused { locked_now: bool },
 }
 
 /// Counts one attempt at the count `key`, whose window of `window_seconds` starts with its first
@@ -244,26 +288,36 @@ pub(crate) async fn uncount_attempt(valkey: &fred::clients::Client, key: &str) -
     Ok(())
 }
 
-/// `limited` on the count at `key`. The attempt is counted before `check` runs, so however many
-/// arrive at once, no more than `MAX_FAILURES` are checked in a window without one succeeding.
-/// A right answer clears the count; an attempt that could not be checked (an error, not a wrong
-/// answer) is taken back off it.
-async fn limited_in<F>(valkey: &fred::clients::Client, key: &str, check: F) -> app::Result<bool>
+/// `limited` on the counts `windows`. The attempt is counted before `check` runs, so however
+/// many arrive at once, no more than `MAX_FAILURES` are checked in a quarter hour, or
+/// `DAILY_MAX_FAILURES` in a day, without one succeeding. A right answer clears the quarter
+/// hour's count and is taken off the day's, which keeps its wrong ones; an attempt that could
+/// not be checked (an error, not a wrong answer) is taken back off both.
+async fn limited_in<F>(
+    valkey: &fred::clients::Client,
+    windows: &Windows,
+    check: F,
+) -> app::Result<Attempt>
 where
     F: AsyncFnOnce() -> app::Result<bool>,
 {
-    let attempts = count_attempt(valkey, key, FAILURE_WINDOW_SECONDS).await?;
-    if attempts > MAX_FAILURES {
-        return Err(app::Error::TooManyAttempts);
+    let short = count_attempt(valkey, &windows.short, FAILURE_WINDOW_SECONDS).await?;
+    let daily = count_attempt(valkey, &windows.daily, DAILY_WINDOW_SECONDS).await?;
+    if short > MAX_FAILURES || daily > DAILY_MAX_FAILURES {
+        return Ok(Attempt::Refused {
+            locked_now: daily == DAILY_MAX_FAILURES + 1,
+        });
     }
     match check().await {
         Ok(true) => {
-            let _: i64 = valkey.del(key).await?;
-            Ok(true)
+            let _: i64 = valkey.del(&windows.short).await?;
+            uncount_attempt(valkey, &windows.daily).await?;
+            Ok(Attempt::Checked(true))
         }
-        Ok(false) => Ok(false),
+        Ok(false) => Ok(Attempt::Checked(false)),
         Err(e) => {
-            uncount_attempt(valkey, key).await?;
+            uncount_attempt(valkey, &windows.short).await?;
+            uncount_attempt(valkey, &windows.daily).await?;
             Err(e)
         }
     }
@@ -445,7 +499,15 @@ pub async fn confirm_totp(
                 // Replaced or confirmed by another request since it was read.
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            factor_added(state, conn, user_id, &sign_in, first).await
+            factor_added(
+                state,
+                conn,
+                user_id,
+                &sign_in,
+                first,
+                Factor::AuthenticatorApp,
+            )
+            .await
         }
         .scope_boxed()
     })
@@ -456,17 +518,19 @@ pub async fn confirm_totp(
 pub async fn remove_totp(state: &GlobalServerContext, caller: &Caller) -> app::Result<()> {
     caller.ensure_recently_verified(&state.config.auth)?;
     let user_id = caller.user;
-    let require = state.settings().require_two_factor;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let removed = diesel::delete(totp_secret::table.filter(totp_secret::user.eq(user_id)))
-                .execute(conn)
-                .await?;
-            if removed == 0 {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+            let confirmed: Option<DateTime<Utc>> =
+                diesel::delete(totp_secret::table.filter(totp_secret::user.eq(user_id)))
+                    .returning(totp_secret::confirmed_at)
+                    .get_result(conn)
+                    .await?;
+            // One never confirmed was not a factor.
+            if confirmed.is_none() {
+                return Ok(());
             }
-            factor_removed(conn, user_id, require).await
+            factor_removed(state, conn, user_id, Factor::AuthenticatorApp).await
         }
         .scope_boxed()
     })
@@ -611,17 +675,19 @@ pub async fn regenerate_recovery_codes(
 // Adding and removing factors
 // ---------------------------------------------------------------------------------------------
 
-/// Called in the transaction that added a factor, by the sign-in named `sign_in`
+/// Called in the transaction that added `factor`, by the sign-in named `sign_in`
 /// (`login::sign_in_id`). `first` says whether the account had none before it; if so,
 /// two-factor sign-in has just turned on, so the account gets recovery codes and every other
-/// sign-in is signed out.
+/// sign-in is signed out. The account's address is told either way.
 pub async fn factor_added(
-    state: &impl crate::app::events::Publishing,
+    state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
     sign_in: &str,
     first: bool,
+    factor: Factor,
 ) -> app::Result<Option<Vec<String>>> {
+    app::email::outbox::notify(state, conn, user_id, &Mail::SecondFactorAdded { factor }).await?;
     if !first {
         return Ok(None);
     }
@@ -630,24 +696,60 @@ pub async fn factor_added(
     Ok(Some(codes))
 }
 
-/// Called in the transaction that removed a factor. When it was the last, two-factor sign-in
-/// is off and the recovery codes go with it, unless the server requires a second factor, in
-/// which case the removal is refused and the transaction rolls back.
+/// Called in the transaction that removed `factor`, telling the account's address. When it was
+/// the last, two-factor sign-in is off and the recovery codes go with it, unless the server
+/// requires a second factor, in which case the removal is refused and the transaction rolls
+/// back.
 pub async fn factor_removed(
+    state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    require_two_factor: bool,
+    factor: Factor,
 ) -> app::Result<()> {
+    if !methods(conn, user_id).await?.any_factor() {
+        if state.settings().require_two_factor {
+            return Err(app::Error::LastSecondFactor);
+        }
+        diesel::delete(recovery_code::table.filter(recovery_code::user.eq(user_id)))
+            .execute(conn)
+            .await?;
+    }
+    app::email::outbox::notify(state, conn, user_id, &Mail::SecondFactorRemoved { factor }).await
+}
+
+/// Removes the second factors added to `user_id`'s account within [`RESET_REACH`], and the
+/// recovery codes issued within it, as a password reset by email does, answering how many
+/// factors went. Someone who took over the account (its password and a session) can add a
+/// factor of their own, and with the account's first factor receive its recovery codes; a
+/// reset by its owner takes those away, while the factors the owner held before keep it
+/// asking for one of theirs. Codes issued with or after a recent factor are as suspect as the
+/// factor, so they go too; when no factor is left, so do the rest, as removing the last one
+/// does, and the owner adds one again (being asked to, where the deployment requires one).
+pub async fn remove_recent(conn: &mut AsyncPgConnection, user_id: UserId) -> app::Result<u32> {
+    let since = Utc::now() - RESET_REACH;
+    let apps = diesel::delete(
+        totp_secret::table
+            .filter(totp_secret::user.eq(user_id))
+            .filter(totp_secret::confirmed_at.ge(since)),
+    )
+    .execute(conn)
+    .await?;
+    let passkeys = diesel::delete(
+        passkey::table
+            .filter(passkey::user.eq(user_id))
+            .filter(passkey::created_at.ge(since)),
+    )
+    .execute(conn)
+    .await?;
+    let codes = recovery_code::table.filter(recovery_code::user.eq(user_id));
     if methods(conn, user_id).await?.any_factor() {
-        return Ok(());
+        diesel::delete(codes.filter(recovery_code::created_at.ge(since)))
+            .execute(conn)
+            .await?;
+    } else {
+        diesel::delete(codes).execute(conn).await?;
     }
-    if require_two_factor {
-        return Err(app::Error::LastSecondFactor);
-    }
-    diesel::delete(recovery_code::table.filter(recovery_code::user.eq(user_id)))
-        .execute(conn)
-        .await?;
-    Ok(())
+    Ok(u32::try_from(apps + passkeys).unwrap_or(u32::MAX))
 }
 
 /// Removes every credential of a user whose account is being deleted.
@@ -668,20 +770,29 @@ pub async fn remove_all(conn: &mut AsyncPgConnection, user_id: UserId) -> app::R
 // Verifying
 // ---------------------------------------------------------------------------------------------
 
-/// Checks a second factor presented as text, under the failure limit.
+/// Checks a second factor presented as text: an authenticator code under the failure limits, a
+/// recovery code outside them. A recovery code is 50 random bits, one of ten, beyond guessing at
+/// any pace the endpoints allow, and leaving it outside the limits means someone who knows the
+/// password and keeps them reached with wrong authenticator codes cannot lock the owner out of
+/// the codes that are their way back in.
 pub async fn verify(
     state: &GlobalServerContext,
     user_id: UserId,
     factor: &SecondFactor,
 ) -> app::Result<bool> {
-    limited(state, user_id, async || {
-        let mut conn = state.connection_pool.get().await?;
-        match factor {
-            SecondFactor::Totp(code) => use_totp(&mut conn, user_id, code).await,
-            SecondFactor::RecoveryCode(code) => use_recovery_code(&mut conn, user_id, code).await,
+    match factor {
+        SecondFactor::Totp(code) => {
+            limited(state, user_id, async || {
+                let mut conn = state.connection_pool.get().await?;
+                use_totp(&mut conn, user_id, code).await
+            })
+            .await
         }
-    })
-    .await
+        SecondFactor::RecoveryCode(code) => {
+            let mut conn = state.connection_pool.get().await?;
+            use_recovery_code(&mut conn, user_id, code).await
+        }
+    }
 }
 
 /// Records that `user_id`'s live sign-in named `sign_in` (`login::sign_in_id`) has just proved
@@ -821,17 +932,43 @@ mod tests {
         client
     }
 
+    fn test_windows() -> Windows {
+        let id = uuid::Uuid::now_v7();
+        Windows {
+            short: format!("auth:failures:test:{id}"),
+            daily: format!("auth:failures-daily:test:{id}"),
+        }
+    }
+
+    async fn clear(valkey: &fred::clients::Client, windows: &Windows) {
+        let _: i64 = valkey
+            .del(vec![windows.short.clone(), windows.daily.clone()])
+            .await
+            .unwrap();
+    }
+
+    /// What `limited` answers for an attempt.
+    fn answer(attempt: app::Result<Attempt>) -> app::Result<bool> {
+        match attempt? {
+            Attempt::Checked(right) => Ok(right),
+            Attempt::Refused { .. } => Err(app::Error::TooManyAttempts),
+        }
+    }
+
     #[tokio::test]
     async fn attempts_arriving_at_once_are_checked_no_more_than_the_limit_allows() {
         let valkey = test_valkey().await;
-        let key = format!("auth:failures:test:{}", uuid::Uuid::now_v7());
+        let windows = test_windows();
         let checked = std::sync::atomic::AtomicI64::new(0);
-        let attempts = (0..3 * MAX_FAILURES).map(|_| {
-            limited_in(&valkey, &key, async || {
-                checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                Ok(false)
-            })
+        let attempts = (0..3 * MAX_FAILURES).map(|_| async {
+            answer(
+                limited_in(&valkey, &windows, async || {
+                    checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    Ok(false)
+                })
+                .await,
+            )
         });
         let results = futures_util::future::join_all(attempts).await;
         let refused = results
@@ -843,26 +980,53 @@ mod tests {
             MAX_FAILURES
         );
         assert_eq!(refused as i64, 2 * MAX_FAILURES);
-        let ttl: i64 = valkey.ttl(&key).await.unwrap();
+        let ttl: i64 = valkey.ttl(&windows.short).await.unwrap();
         assert!(ttl > 0 && ttl <= FAILURE_WINDOW_SECONDS);
-        let _: i64 = valkey.del(&key).await.unwrap();
+        let ttl: i64 = valkey.ttl(&windows.daily).await.unwrap();
+        assert!(ttl > FAILURE_WINDOW_SECONDS && ttl <= DAILY_WINDOW_SECONDS);
+        clear(&valkey, &windows).await;
     }
 
     #[tokio::test]
     async fn a_right_answer_clears_the_count_and_an_error_is_not_counted() {
         let valkey = test_valkey().await;
-        let key = format!("auth:failures:test:{}", uuid::Uuid::now_v7());
-        assert!(!limited_in(&valkey, &key, async || Ok(false)).await.unwrap());
-        assert!(
-            limited_in(&valkey, &key, async || Err(app::Error::Busy))
-                .await
-                .is_err()
-        );
-        let count: Option<i64> = valkey.get(&key).await.unwrap();
+        let windows = test_windows();
+        let attempt = async |right: app::Result<bool>| {
+            answer(limited_in(&valkey, &windows, async || right).await)
+        };
+        assert!(!attempt(Ok(false)).await.unwrap());
+        assert!(attempt(Err(app::Error::Busy)).await.is_err());
+        let count: Option<i64> = valkey.get(&windows.short).await.unwrap();
         assert_eq!(count, Some(1));
-        assert!(limited_in(&valkey, &key, async || Ok(true)).await.unwrap());
-        let count: Option<i64> = valkey.get(&key).await.unwrap();
+        assert!(attempt(Ok(true)).await.unwrap());
+        let count: Option<i64> = valkey.get(&windows.short).await.unwrap();
         assert_eq!(count, None);
+        // The day keeps its wrong answer, and not the right one.
+        let count: Option<i64> = valkey.get(&windows.daily).await.unwrap();
+        assert_eq!(count, Some(1));
+        clear(&valkey, &windows).await;
+    }
+
+    #[tokio::test]
+    async fn the_daily_limit_holds_however_the_quarter_hours_fall() {
+        let valkey = test_valkey().await;
+        let windows = test_windows();
+        let mut locks = 0;
+        for _ in 0..DAILY_MAX_FAILURES + 5 {
+            // A new quarter hour each time.
+            let _: i64 = valkey.del(&windows.short).await.unwrap();
+            match limited_in(&valkey, &windows, async || Ok(false))
+                .await
+                .unwrap()
+            {
+                Attempt::Checked(right) => assert!(!right),
+                Attempt::Refused { locked_now } => locks += i32::from(locked_now),
+            }
+        }
+        let count: i64 = valkey.get(&windows.daily).await.unwrap();
+        assert_eq!(count, DAILY_MAX_FAILURES + 5);
+        assert_eq!(locks, 1);
+        clear(&valkey, &windows).await;
     }
 
     /// RFC 6238 appendix B, SHA-1 rows, truncated to six digits.
