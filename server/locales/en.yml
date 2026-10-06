@@ -32,6 +32,7 @@ customEmojiNotHere: "Custom emoji can be used only in the community they belong 
 customEmojiUnknown: "That emoji is not one of this community's."
 usernameBlankOrPadded: "Username must not be empty or start or end with whitespace."
 usernameTooLong: "Username must be at most %{max} characters long."
+usernameReserved: "The username %{name} is reserved for the deployment's own account. Choose another."
 preferencesTooLarge: "Preferences must fit in %{max} bytes."
 communityLimit: "You can belong to at most %{max} communities."
 tooManyIds: "At most %{max} ids can be asked for at once."
