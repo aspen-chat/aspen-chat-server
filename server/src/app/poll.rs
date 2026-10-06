@@ -26,8 +26,11 @@ use crate::app::context::GlobalServerContext;
 use crate::app::message::Message;
 use crate::app::message::MessageKind;
 use crate::app::permissions::{
-    Permissions, channel_access, channel_access_moderating, channel_access_reading, missing,
+    ChannelAccess, Permissions, channel_access, channel_access_moderating, channel_access_reading,
+    missing,
 };
+use crate::app::plugin::intercept;
+use crate::app::plugin::manifest::InterceptHook;
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
 use crate::database::schema::{message, poll, poll_option, poll_vote};
@@ -168,6 +171,27 @@ pub async fn create_poll(
     // A poll is posted as a message, so it takes sending here as well.
     access.require(access.send_permission())?;
     access.require(Permissions::CREATE_POLLS)?;
+    // Plugins decide its question and answers as they decide a message, once the creator is
+    // known to be allowed to post it, with the connection back in the pool while they run.
+    let running =
+        intercept::wanted(state, conn.as_mut(), InterceptHook::MessageCreate, channel).await?;
+    if !running.is_empty() {
+        drop(conn);
+        intercept::decide_unchanged(
+            state,
+            InterceptHook::MessageCreate,
+            running,
+            intercept::Draft {
+                author: creator,
+                access: &access,
+                content: shown_text(&row.question, &options),
+                attachments: &[],
+                editing: None,
+            },
+        )
+        .await?;
+        conn = state.connection_pool.get().await?;
+    }
     conn.transaction(|conn| {
         async move {
             diesel::insert_into(poll::table)
@@ -226,6 +250,16 @@ pub async fn create_poll(
         .scope_boxed()
     })
     .await
+}
+
+/// A poll's text as plugins decide it: its question, then each answer on a line of its own.
+fn shown_text(question: &str, options: &[PollOptionRecord]) -> String {
+    let mut text = question.to_string();
+    for option in options {
+        text.push('\n');
+        text.push_str(&option.label);
+    }
+    text
 }
 
 /// The message row of kind `kind` that refers to `poll`, authored by the poll's creator.
@@ -653,17 +687,43 @@ pub async fn write_in(
         )));
     }
     let mut conn = state.connection_pool.get().await?;
+    // Plugins decide the answer as they decide a message, once the writer is known to be allowed
+    // to add it, with the connection back in the pool while they run.
+    let row: Poll = poll::table
+        .select(Poll::as_select())
+        .filter(poll::id.eq(id))
+        .first(conn.as_mut())
+        .await?;
+    let access = may_write_in(state, conn.as_mut(), user, &row, Utc::now()).await?;
+    let running = intercept::wanted(
+        state,
+        conn.as_mut(),
+        InterceptHook::MessageCreate,
+        row.channel,
+    )
+    .await?;
+    if !running.is_empty() {
+        drop(conn);
+        intercept::decide_unchanged(
+            state,
+            InterceptHook::MessageCreate,
+            running,
+            intercept::Draft {
+                author: user,
+                access: &access,
+                content: label.clone(),
+                attachments: &[],
+                editing: None,
+            },
+        )
+        .await?;
+        conn = state.connection_pool.get().await?;
+    }
     conn.transaction(|conn| {
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            channel_access(state, conn.as_mut(), user, row.channel)
-                .await?
-                .ensure_unblocked()?;
-            ensure_open(&row, now)?;
-            if !row.allow_write_ins {
-                return Err(app::Error::Validation(t!("pollWriteInsOff")));
-            }
+            may_write_in(state, conn.as_mut(), user, &row, now).await?;
             let options: Vec<PollOption> = poll_option::table
                 .select(PollOption::as_select())
                 .filter(poll_option::poll.eq(id))
@@ -713,6 +773,26 @@ pub async fn write_in(
         .scope_boxed()
     })
     .await
+}
+
+/// Checks that `user` may write an answer in on `row` at `now`: that they may view its channel
+/// and post there, as an answer is shown to everyone who reads the poll, that no block stands
+/// in the way, and that the poll is open and takes write-ins.
+async fn may_write_in(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    row: &Poll,
+    now: DateTime<Utc>,
+) -> app::Result<ChannelAccess> {
+    let access = channel_access(state, conn, user, row.channel).await?;
+    access.ensure_unblocked()?;
+    access.require(access.send_permission())?;
+    ensure_open(row, now)?;
+    if !row.allow_write_ins {
+        return Err(app::Error::Validation(t!("pollWriteInsOff")));
+    }
+    Ok(access)
 }
 
 /// Removes the written-in answer at `option` and every vote for it, keeping its index. Only

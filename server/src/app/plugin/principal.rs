@@ -16,7 +16,8 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use std::sync::Arc;
 
 /// Does `action` as `plugin`'s principal, refusing while the principal is banned from the
-/// deployment. Whatever it publishes is settled as a request's is (`app::events::settle`).
+/// deployment. Whatever it publishes is settled as a request's is (`app::events::settle_after`),
+/// even when it is cut off part way.
 pub(super) async fn act(
     state: &GlobalServerContext,
     plugin: &LoadedPlugin,
@@ -107,9 +108,9 @@ pub(super) async fn act(
             .map(|_| None),
         }
     };
-    let (result, noted) = app::events::noting(work).await;
-    app::events::settle(state, noted, result.is_err()).await;
-    result
+    // A host call cut off at the plugin's deadline drops the action part way, perhaps after it
+    // published and before it committed, which `settle_after` settles as failed.
+    app::events::settle_after(state, work, Result::is_err).await
 }
 
 /// Runs what a plugin asked to do while intercepting, now that the hook has answered.

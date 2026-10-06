@@ -117,6 +117,8 @@ struct Seen {
     change: Option<String>,
     id: Option<MessageId>,
     content: Option<String>,
+    /// Present on a message's update when its attachments changed.
+    attachments: Option<serde::de::IgnoredAny>,
     // `botCommandInvoked`
     invocation: Option<MessageId>,
     channel: Option<ChannelId>,
@@ -215,7 +217,9 @@ async fn handle(
             Some(ObserveHook::MessageCreate)
         }
         ("message", Some("update"))
-            if reads && wants(ObserveHook::MessageEdit) && seen.content.is_some() =>
+            if reads
+                && wants(ObserveHook::MessageEdit)
+                && (seen.content.is_some() || seen.attachments.is_some()) =>
         {
             Some(ObserveHook::MessageEdit)
         }

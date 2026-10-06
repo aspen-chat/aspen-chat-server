@@ -9,6 +9,7 @@ use super::{CHANGED_SUBJECT, Mode, PluginPermission, settings};
 use crate::app::context::GlobalServerContext;
 use crate::app::events::ChannelHome;
 use crate::app::{self, CommunityId, UserId};
+use crate::aspen_config::PluginsConfig;
 use crate::database::schema::{community_plugin, plugin, user};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -98,6 +99,18 @@ pub struct Plugins {
     observers: Mutex<HashMap<String, (DateTime<Utc>, tokio::task::AbortHandle)>>,
     /// Serializes reloads, so two announcements close together load in order.
     reloading: tokio::sync::Mutex<()>,
+    /// Places for calls of every plugin together (`[plugins] concurrency`).
+    calls: Arc<tokio::sync::Semaphore>,
+    /// Places for each plugin's calls, by id (`[plugins] concurrency_per_plugin`), kept across
+    /// reloads so an upgrade does not open a second set.
+    calls_per_plugin: Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    per_plugin: usize,
+}
+
+/// One call's places among its plugin's calls and every plugin's, given back when it drops.
+pub(super) struct CallPermit {
+    _own: tokio::sync::OwnedSemaphorePermit,
+    _shared: tokio::sync::OwnedSemaphorePermit,
 }
 
 /// What `CHANGED_SUBJECT` carries: a community whose use of plugins changed, or nothing when
@@ -110,7 +123,7 @@ pub struct Change {
 
 impl Plugins {
     /// The engine and linker every plugin of this server runs with, and nothing loaded yet.
-    pub fn new() -> app::Result<Self> {
+    pub fn new(config: &PluginsConfig) -> app::Result<Self> {
         let engine = host::engine().map_err(|e| app::Error::Plugin(format!("{e:#}")))?;
         let linker = host::linker(&engine).map_err(|e| app::Error::Plugin(format!("{e:#}")))?;
         Ok(Plugins {
@@ -120,6 +133,35 @@ impl Plugins {
             communities: Mutex::default(),
             observers: Mutex::default(),
             reloading: tokio::sync::Mutex::new(()),
+            calls: Arc::new(tokio::sync::Semaphore::new(config.concurrency.max(1))),
+            calls_per_plugin: Mutex::default(),
+            per_plugin: config.concurrency_per_plugin.max(1),
+        })
+    }
+
+    /// A place for one call of `plugin`, among its own and among every plugin's, waited for
+    /// until `deadline`; `None` when none came in time. The call holds it until it ends.
+    pub(super) async fn admit(&self, plugin: &str, deadline: Instant) -> Option<CallPermit> {
+        let own = self
+            .calls_per_plugin
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(plugin.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.per_plugin)))
+            .clone();
+        let deadline = tokio::time::Instant::from_std(deadline);
+        // Its own place first, so a plugin waiting on itself holds none of the shared ones.
+        let own = tokio::time::timeout_at(deadline, own.acquire_owned())
+            .await
+            .ok()?
+            .ok()?;
+        let shared = tokio::time::timeout_at(deadline, self.calls.clone().acquire_owned())
+            .await
+            .ok()?
+            .ok()?;
+        Some(CallPermit {
+            _own: own,
+            _shared: shared,
         })
     }
 

@@ -299,6 +299,16 @@ pub struct PluginsConfig {
     /// The most memory one call of a plugin may use, in MiB.
     #[default = 64]
     pub memory_mib: u64,
+    /// The most calls of plugins this server runs at once, of every plugin together; two per
+    /// logical CPU by default. A call waits for a place within its own time limit, and counts
+    /// as failed when none comes in time. With `memory_mib`, it bounds what plugins can take of
+    /// the server's memory.
+    #[default(_code = "2 * default_event_feed_shards()")]
+    pub concurrency: usize,
+    /// The most calls of any one plugin this server runs at once, so one busy plugin leaves
+    /// room for the rest; one per logical CPU by default.
+    #[default(_code = "default_event_feed_shards()")]
+    pub concurrency_per_plugin: usize,
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the

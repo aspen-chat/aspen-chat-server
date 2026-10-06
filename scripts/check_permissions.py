@@ -276,6 +276,22 @@ def poll_votes(world: World, check: Checks) -> None:
     check("which still counts", world.as_owner("GET", f"/polls/{poll}")["data"]["results"][0]["count"] == 1)
 
 
+def poll_write_ins(world: World, check: Checks) -> None:
+    say("an answer written in takes posting in the poll's channel")
+    stack, member = world.stack, world.member
+    ballot = world.channel("write-ins")
+    poll = world.as_owner("POST", f"/channels/{ballot}/polls", {
+        "question": "Which?", "options": [{"label": "this"}, {"label": "that"}], "multipleChoice": False,
+        "allowWriteIns": True, "anonymous": False, "durationSeconds": 3600})["id"]
+    world.as_owner("PUT", f"/channels/{ballot}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("without Send messages, the member cannot write an answer in",
+          stack.status("POST", f"/polls/{poll}/write-ins", {"label": "another"}, member["token"]) == 403)
+    check("though they may still vote", stack.status("PUT", f"/polls/{poll}/votes/0/@me", token=member["token"]) == 201)
+    world.as_owner("PUT", f"/channels/{ballot}/overrides/{world.everyone}", {"allow": [], "deny": []})
+    check("given it back, they may",
+          stack.status("POST", f"/polls/{poll}/write-ins", {"label": "another"}, member["token"]) == 201)
+
+
 def deleted_parents(world: World, check: Checks) -> None:
     say("a thread whose channel is deleted")
     stack, member = world.stack, world.member["token"]
@@ -1141,7 +1157,8 @@ def plugins(world: World, check: Checks) -> None:
     watched = world.channel("plugin-watched")
     world.stream.gather(0.5)
     turned_on = world.as_owner("PUT", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}",
-                               {"settings": {"watchWords": ["pineapple"]}, "grant": ["viewChannel", "sendMessages"]})
+                               {"settings": {"watchWords": ["pineapple"], "words": ["durian"]},
+                                "grant": ["viewChannel", "sendMessages"]})
     check("the owner turns it on", turned_on.get("enabled") is True, turned_on)
     got = world.stream.gather(1.0)
     check("its settings there do not reach a member without Manage plugins", not of(got, "communityPlugin"),
@@ -1160,6 +1177,14 @@ def plugins(world: World, check: Checks) -> None:
     check("as does its event in the channel", bool(of(got, "pluginEvent", channel=watched)))
     count = f"/plugins/{WORD_FILTER_ID}/routes/channels/{watched}/count"
     check("its route answers the member about the channel", stack.status("GET", count, token=world.member["token"]) == 200)
+    ballot = {"question": "Fruit?", "options": [{"label": "apple"}, {"label": "durian"}], "multipleChoice": False,
+              "allowWriteIns": True, "anonymous": False, "durationSeconds": 3600}
+    check("it decides a poll's answers as it decides a message, refusing what it would mask",
+          stack.status("POST", f"/channels/{watched}/polls", ballot, world.owner["token"]) == 422)
+    ballot["options"][1]["label"] = "pear"
+    poll = world.as_owner("POST", f"/channels/{watched}/polls", ballot)["id"]
+    check("and an answer written in",
+          stack.status("POST", f"/polls/{poll}/write-ins", {"label": "durian"}, world.member["token"]) == 422)
 
     world.as_owner("PUT", f"/channels/{watched}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     world.stream.gather(1.0)
@@ -1382,7 +1407,7 @@ def invite_previews(world: World, check: Checks) -> None:
 
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
-             poll_votes, deleted_parents, thread_echoes, calls, attachments,
+             poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons, uploads]

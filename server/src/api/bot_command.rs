@@ -91,7 +91,8 @@ pub async fn channel_commands(
 /// checks that the bot can see the channel and answers the command, and each argument against
 /// its parameter's type, then shows the command in the channel as the caller's message of kind
 /// `command` and tells the bot alone (`botCommandInvoked`). Files an `attachmentId` argument
-/// names are uploaded first and listed in `attachments`.
+/// names are uploaded first and listed in `attachments`. Plugins that decide messages there
+/// decide the command as the text it shows, with its files.
 #[utoipa::path(
     post,
     path = "/channels/{channel}/commands",
@@ -105,7 +106,9 @@ pub async fn channel_commands(
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden` without Send messages (or Send in threads), or `blocked`", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or one the caller may not view", body = Problem),
+        (status = UNPROCESSABLE_ENTITY, description = "`pluginRefused`: a plugin refused the command as shown, or would have changed its text", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`pluginUnavailable`: a plugin that must decide what is posted here could not", body = Problem),
     )
 )]
 pub async fn invoke_command(

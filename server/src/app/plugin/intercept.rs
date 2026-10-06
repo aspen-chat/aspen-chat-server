@@ -217,6 +217,32 @@ pub async fn decide(
     })
 }
 
+/// Runs `running`'s plugins on `draft` as [`decide`] does, for text that is posted as it was
+/// written or not at all: a command, whose arguments its bot receives, and a poll's question and
+/// answers. A plugin that would rewrite it refuses it (`pluginRefused`), naming the plugin.
+pub async fn decide_unchanged(
+    state: &GlobalServerContext,
+    hook: InterceptHook,
+    running: Vec<Running>,
+    draft: Draft<'_>,
+) -> app::Result<()> {
+    let decided = decide(state, hook, running, draft).await?;
+    match decided.altered_by.first() {
+        None => Ok(()),
+        Some(rewriter) => {
+            let locale = app::locale::current();
+            let plugin = state
+                .plugins
+                .get(rewriter)
+                .map_or_else(|| rewriter.clone(), |p| p.name(locale));
+            Err(app::Error::PluginRefused(t!(
+                "pluginWouldRewrite",
+                plugin = plugin
+            )))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

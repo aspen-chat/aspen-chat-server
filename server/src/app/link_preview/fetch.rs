@@ -47,6 +47,8 @@ pub(super) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            // A proxy would resolve names itself, past `PublicResolver`.
+            .no_proxy()
             .dns_resolver(Arc::new(PublicResolver {
                 allow_private: false,
             }))

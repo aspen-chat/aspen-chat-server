@@ -166,7 +166,10 @@ keys are its own.
 `message.create` and `message.edit`, more by addition. The host calls the plugin with the draft:
 its text, author (with their roles in the community), place, and attachments' records, before
 the transaction that saves it opens, so a slow plugin holds no database connection or lock. The
-author's permission to post is checked first; what they may not post never reaches a plugin.
+author's permission to post is checked first, and that every attachment is their own upload (on
+an edit, or already the message's); what they may not post never reaches a plugin.
+`message.edit` is called for every edit, of the text, the attachments, or both, with the text as
+it will stand; on an edit of the attachments alone, a rewrite of that text changes it too.
 
 The plugin answers `allow`, `rewrite` with new text (with `messages.rewrite`), or `refuse` with a
 reason from its `messages` (with `messages.refuse`), which the person reads, in their language,
@@ -174,8 +177,12 @@ as the refusal's detail (`pluginRefused`). Plugins that intercept the same hook 
 operator's order, each seeing what the one before left; a refusal ends it. A rewrite never adds
 tags: tags are read from the text as saved, and a rewrite that would tag someone or something
 the author's text did not is refused (`pluginRewriteTagged`, failing the plugin as below).
-Commands and moderators' warnings are not intercepted, and a principal's own messages are not
-intercepted by its own plugin.
+A poll is intercepted by `message.create` too, as its question followed by each answer on a
+line of its own, and so is an answer written in to a poll, as its text; neither can be rewritten,
+so a rewrite refuses them. A command is intercepted by `message.create` as the text it shows (`/name` and its arguments)
+with the files it takes; its arguments are what its bot receives, so a rewrite that would change
+the text refuses the command instead (`pluginRefused`). Moderators' warnings are not intercepted,
+and a principal's own messages and commands are not intercepted by its own plugin.
 
 A rewritten message is marked: its record carries `alteredBy`, the ids of the plugins that
 changed it, so every client, this deployment's or another's, can say so beside it, and its
@@ -189,7 +196,7 @@ filter that must hold fails closed; one that only improves things fails open.
 ### Observe, after saving
 
 After a record commits, the host hands its event to each plugin that observes it: `message.create`,
-`message.edit`, `message.delete`, `command.invoke` (a command sent to its principal), and
+`message.edit` (its text or its attachments changed), `message.delete`, `command.invoke` (a command sent to its principal), and
 `plugin.enable` and `plugin.disable` (a community turned it on or off). Observing is where slow
 work goes: reading an attachment, calling a service, acting.
 
@@ -253,7 +260,8 @@ body (at most 64 KiB), the caller, and their locale, and answers with a status, 
 and a body. While it answers a route, every read it makes through the host is made as the caller:
 a message the caller may not read is not found, and storage in a channel's or community's scope
 is readable only by those who may view the channel or belong to the community, and in a user's
-scope only by that user.
+scope only by that user. So it is with what it sends: an event published, or a notice sent, while
+answering goes only to a channel the caller may view, a community they belong to, or themself.
 
 ### Events
 
@@ -340,7 +348,10 @@ without signing in, for a calendar app's feed and the like:
 answering at all once they are banned or their account is deleted. The person's URL for a name is
 the same each time the plugin asks for it, until the plugin revokes it (`revoke-capability`).
 
-Routes under `aspen/` are the host's to call: a person's own requests never reach them.
+Routes under `aspen/` are the host's to call: a person's own requests never reach them. A
+person's request whose path has an empty, `.`, or `..` segment, or begins with `aspen` in any
+case, as it stands or once percent-decoded again, is not found, so a plugin that normalises
+or decodes its path is never led there.
 
 Later: a view of a community's own, outside any channel, and plugins posting cards on messages
 other than their own, if a need for either appears.
