@@ -1107,6 +1107,7 @@ def stop_reviewing(world: World) -> None:
 
 WORD_FILTER_ID = "org.aspenchat.wordfilter"
 CALENDAR_ID = "org.aspenchat.calendar"
+BLACKJACK_ID = "org.aspenchat.blackjack"
 
 
 def example(name: str) -> Path:
@@ -1381,11 +1382,85 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
+def blackjack_tables(world: World, check: Checks) -> None:
+    say("a game's table: who may watch and play, and chips kept straight under simultaneous requests")
+    from concurrent.futures import ThreadPoolExecutor
+
+    stack, member = world.stack, world.member
+    stack.command("plugins", "install", str(example("blackjack")), "--yes")
+    stack.command("plugins", "enable", BLACKJACK_ID)
+    running(world, BLACKJACK_ID)
+    world.as_owner("PUT", f"/communities/{world.community}/plugins/{BLACKJACK_ID}", {"settings": {}})
+    table = world.as_owner("POST", "/channels", {
+        "name": "blackjack", "ty": "plugin", "pluginType": f"{BLACKJACK_ID}:table",
+        "community": world.community, "sortIndex": 4})["id"]
+    base = f"/plugins/{BLACKJACK_ID}/routes/tables/{table}"
+    seen = stack.api("GET", base, token=member["token"])
+    check("a member sits down to a table with 1,000 chips", seen.get("chips") == 1000, seen)
+
+    # The member's bet sent eight times at once, and the owner's beside them: each write to the
+    # table reads it first, so without storage-swap one would overwrite another.
+    bets = [(member["token"], 100)] * 8 + [(world.owner["token"], 50)]
+    with ThreadPoolExecutor(len(bets)) as pool:
+        statuses = list(pool.map(
+            lambda bet: stack.status("POST", f"{base}/bet", {"amount": bet[1]}, bet[0]), bets))
+    check("of eight bets a member sends at once, one is taken", statuses[:8].count(200) == 1, statuses)
+    after = stack.api("GET", base, token=member["token"])
+    check("and its chips taken once", after.get("chips") == 900, after)
+    check("while another player's bet made at the same moment keeps its seat",
+          statuses[8] == 200 and {s["user"] for s in after["table"]["seats"]} == {member["id"], world.owner["id"]},
+          after["table"]["seats"])
+    got = world.stream.gather(1.0)
+    check("everyone viewing the table hears of it", bool(of(got, "pluginEvent", channel=table)),
+          [e["serverEvent"] for e in got])
+
+    for who in (member, world.owner):
+        stack.api("POST", f"{base}/ready", None, who["token"])
+    tokens = {member["id"]: member["token"], world.owner["id"]: world.owner["token"]}
+    decided_twice = None
+    deadline = time.monotonic() + 30
+    while True:
+        now = stack.api("GET", base, token=world.owner["token"])["table"]
+        phase = now["phase"]
+        if phase["name"] == "settled" or time.monotonic() > deadline:
+            break
+        if phase["name"] == "playing":
+            token = tokens[now["seats"][phase["seat"]]["user"]]
+            decision = {"action": "stand", "version": now["version"]}
+            stack.api("POST", f"{base}/actions", decision, token)
+            if decided_twice is None:
+                decided_twice = stack.request("POST", f"{base}/actions", decision, token)
+        time.sleep(0.2)
+    check("the timer deals, and the round is played to its end", phase["name"] == "settled", phase)
+    if decided_twice is not None:
+        check("a decision sent twice counts once", decided_twice[0] == 409 and "stale" in decided_twice[1],
+              decided_twice)
+    hand = next(s for s in now["seats"] if s["user"] == member["id"])["hands"][0]
+    won = {"blackjack": 250, "win": 200, "push": 100}.get(hand.get("outcome"), 0)
+    check(f"the member's payout ({hand.get('outcome')}) reaches their chips",
+          soon(lambda: stack.api("GET", base, token=member["token"])["chips"] == 900 + won, 5),
+          stack.api("GET", base, token=member["token"]))
+
+    world.as_owner("PUT", f"/channels/{table}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("without Send messages, a member may watch",
+          stack.status("GET", base, token=member["token"]) == 200)
+    refused = stack.request("POST", f"{base}/bet", {"amount": 10}, member["token"])
+    check("but not play", refused[0] == 403 and "cannotPlay" in refused[1], refused)
+    world.as_owner("PUT", f"/channels/{table}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    stack.api("POST", f"{base}/bet", {"amount": 10}, world.owner["token"])
+    got = world.stream.gather(1.5)
+    check("once they lose the channel, its table's events stop reaching them",
+          not of(got, "pluginEvent", channel=table), [e["serverEvent"] for e in got])
+    check("and its routes answer them nothing of it", stack.status("GET", base, token=member["token"]) == 404)
+    stack.command("plugins", "disable", BLACKJACK_ID)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons, uploads]
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews, previews, icons, uploads]
 
 
 def main() -> None:

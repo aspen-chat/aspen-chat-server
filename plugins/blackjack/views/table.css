@@ -1,0 +1,198 @@
+/* The table takes the app's colours and fonts from the bridge (`--aspen-*`). */
+:root {
+  color-scheme: light dark;
+  font-family: var(--aspen-font-sans, system-ui, sans-serif);
+  color: var(--aspen-ink, CanvasText);
+  background: var(--aspen-surface, Canvas);
+}
+body {
+  margin: 0;
+  padding: 16px;
+  max-width: 56rem;
+  margin-inline: auto;
+}
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+button,
+input {
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--aspen-line, GrayText);
+  background: var(--aspen-surface-raised, ButtonFace);
+  color: inherit;
+  padding: 6px 12px;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+button.primary {
+  background: var(--aspen-accent, Highlight);
+  color: var(--aspen-accent-contrast, HighlightText);
+  border-color: transparent;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--aspen-accent, Highlight);
+  outline-offset: 2px;
+}
+input {
+  width: 7ch;
+}
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.chips {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.hint,
+.meta {
+  color: var(--aspen-ink-muted, GrayText);
+  font-size: 0.85rem;
+}
+.felt {
+  border: 1px solid var(--aspen-line, GrayText);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--aspen-surface-sunken, Canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.dealer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.seats {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 10px;
+}
+.seat {
+  border: 1px solid var(--aspen-line, GrayText);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--aspen-surface-raised, Canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.seat.mine {
+  border-color: var(--aspen-accent, Highlight);
+}
+.seat .name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+}
+.hand.active {
+  border-color: var(--aspen-accent, Highlight);
+}
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 3.5rem;
+}
+.card {
+  box-sizing: border-box;
+  width: 2.5rem;
+  height: 3.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--aspen-line, GrayText);
+  background: #fff;
+  color: #1b1b1f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.card.red {
+  color: #b3261e;
+}
+.card.back {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--aspen-accent, Highlight) 0 4px,
+    var(--aspen-accent-strong, HighlightText) 4px 8px
+  );
+}
+.outcome {
+  font-weight: 600;
+}
+.outcome.good {
+  color: var(--aspen-online, green);
+}
+.outcome.bad {
+  color: var(--aspen-danger, red);
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.error {
+  color: var(--aspen-danger, red);
+  margin: 0;
+}
+@media (forced-colors: active) {
+  .card,
+  .card.red {
+    background: Canvas;
+    color: CanvasText;
+  }
+  .card.back {
+    background: GrayText;
+  }
+  .hand.active,
+  .seat.mine {
+    border-color: Highlight;
+  }
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}

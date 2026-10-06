@@ -1,0 +1,23 @@
+[package]
+name = "aspen_blackjack"
+version = "1.0.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "An example Aspen plugin: blackjack tables, a kind of channel where members play for chips that are not money"
+publish = false
+
+# Its own workspace, built for `wasm32-wasip2`, as the word filter is.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.62.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
