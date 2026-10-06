@@ -437,7 +437,9 @@ impl Retained {
     fn first_sequence(&self) -> u64 {
         self.order
             .front()
-            .map_or(self.last_sequence + 1, |(_, _, sequence)| *sequence)
+            .map_or(self.last_sequence.saturating_add(1), |(_, _, sequence)| {
+                *sequence
+            })
     }
 
     fn push(&mut self, event: Arc<FeedEvent>) {
@@ -488,12 +490,13 @@ impl Retained {
 
     /// Where a connection's catch-up starts and whether that honours `resume_after`: a position
     /// the stream still holds the next event after, and not ahead of it (which happens when the
-    /// in-memory stream was recreated and its sequence restarted).
+    /// in-memory stream was recreated and its sequence restarted). `resume_after` is the
+    /// client's to choose, so it is compared without arithmetic that could overflow.
     fn start_after(&self, resume_after: Option<u64>) -> (u64, bool) {
-        let first = self.first_sequence();
+        let before_first = self.first_sequence().saturating_sub(1);
         match resume_after {
-            Some(after) if after + 1 >= first && after <= self.last_sequence => (after, true),
-            _ => (first - 1, false),
+            Some(after) if after >= before_first && after <= self.last_sequence => (after, true),
+            _ => (before_first, false),
         }
     }
 
@@ -1138,7 +1141,7 @@ async fn dispatch(
                             _ => error!("event feed consumer ended, reopening"),
                         }
                         let policy = DeliverPolicy::ByStartSequence {
-                            start_sequence: retained.last_sequence + 1,
+                            start_sequence: retained.last_sequence.saturating_add(1),
                         };
                         (messages, _) = reopen(&context, policy).await;
                         continue;
@@ -1148,7 +1151,7 @@ async fn dispatch(
                     continue;
                 };
                 let last = retained.last_sequence;
-                if last != 0 && event.sequence != last + 1 {
+                if last != 0 && last.checked_add(1) != Some(event.sequence) {
                     warn!(
                         last,
                         next = event.sequence,
@@ -1394,6 +1397,7 @@ mod tests {
         assert_eq!(retained.start_after(Some(8)), (9, false));
         assert_eq!(retained.start_after(Some(21)), (9, false));
         assert_eq!(retained.start_after(None), (9, false));
+        assert_eq!(retained.start_after(Some(u64::MAX)), (9, false));
         retained.evict(Instant::now() + MAX_EVENT_AGE);
         assert_eq!(retained.first_sequence(), 21);
         assert_eq!(retained.bytes, 0);
