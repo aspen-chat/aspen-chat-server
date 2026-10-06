@@ -130,7 +130,8 @@ raised. Nobody is woken for a message while they are using Aspen on another devi
 channel, or by someone they blocked.
 
 **A voice server was disabled.** `failure_threshold` people failed to start a call on it within
-`failure_window_seconds`. Fix the cause (usually its TLS proxy or its ports), then enable it
+`failure_window_seconds`, each of them sent to it by a join offer moments before (a report from
+anyone else, or from a bot, does not count). Fix the cause (usually its TLS proxy or its ports), then enable it
 again in the dashboard.
 
 **The server will not start.** It says why on standard error: a setting it cannot read, no

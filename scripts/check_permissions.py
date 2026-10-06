@@ -279,6 +279,12 @@ def calls(world: World, check: Checks) -> None:
              lambda: stack.status("POST", f"/channels/{room}/voice/join", {}, world.member["token"]) == 200, 90)
 
     first = offer()
+    server = first["candidates"][0]["id"]
+    stranger = stack.api("POST", f"/voice-servers/{server}/failures", None, world.owner["token"])
+    check("a failure report from someone no offer sent to the voice server counts for nothing",
+          stranger.get("counted") is False and stranger.get("failures") == 0, stranger)
+    offered = stack.api("POST", f"/voice-servers/{server}/failures", None, world.member["token"])
+    check("one from someone an offer sent there counts", offered.get("counted") is True, offered)
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)

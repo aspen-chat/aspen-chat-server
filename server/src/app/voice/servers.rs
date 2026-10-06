@@ -20,6 +20,8 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use fred::interfaces::KeysInterface;
+use fred::types::Expiration;
 use rand::seq::SliceRandom;
 use tracing::warn;
 use uuid::Uuid;
@@ -300,6 +302,7 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
+    note_offered(state, user, &candidates).await;
     let Grants {
         speak,
         share_screen,
@@ -343,12 +346,72 @@ pub(super) fn grants_of(file_transfers: bool, access: &ChannelAccess) -> Grants 
 // ---------------------------------------------------------------------------------------------
 // Failure reports
 
+/// How long after its join token expires a failure report from someone offered a server still
+/// counts against it: the client reports each candidate as it gives up on it, within the
+/// token's lifetime, and the margin covers the report's own trip.
+const OFFER_REPORT_GRACE_SECONDS: u64 = 60;
+
+/// The Valkey key saying `user` was recently offered `server`.
+fn offered_key(server: VoiceServerId, user: UserId) -> String {
+    format!("voice_offered:{}:{}", server.0, user.0)
+}
+
+/// Notes that `user` was offered `servers`, so their failure reports about them count. A
+/// Valkey outage is logged and the offer goes ahead; reports from it then count for nothing,
+/// which leaves servers enabled rather than letting anyone disable them.
+async fn note_offered(state: &GlobalServerContext, user: UserId, servers: &[VoiceServer]) {
+    let ttl = state
+        .config
+        .voice
+        .join_token_ttl_seconds
+        .saturating_add(OFFER_REPORT_GRACE_SECONDS);
+    let ttl = i64::try_from(ttl).unwrap_or(i64::MAX);
+    let pipeline = state.valkey.pipeline();
+    let noted: Result<Vec<fred::types::Value>, fred::error::Error> = async {
+        for server in servers {
+            let () = pipeline
+                .set(
+                    offered_key(server.id, user),
+                    1,
+                    Some(Expiration::EX(ttl)),
+                    None,
+                    false,
+                )
+                .await?;
+        }
+        pipeline.all().await
+    }
+    .await;
+    if let Err(e) = noted {
+        warn!(error = %e, "could not note the voice servers offered to a joiner");
+    }
+}
+
+/// Whether `user` was offered `server` recently enough for their report about it to count. A
+/// Valkey outage counts as not offered.
+async fn was_offered(state: &GlobalServerContext, user: UserId, server: VoiceServerId) -> bool {
+    match state
+        .valkey
+        .exists::<i64, _>(offered_key(server, user))
+        .await
+    {
+        Ok(found) => found > 0,
+        Err(e) => {
+            warn!(error = %e, "could not read whether a voice server was offered to a reporter");
+            false
+        }
+    }
+}
+
 /// The outcome of a failure report.
 pub struct FailureOutcome {
-    /// Distinct users who reported this server within the window, this one included.
+    /// Distinct users whose reports about this server count within the window, this one
+    /// included when it counted.
     pub failures: u32,
     /// Whether the server is now disabled.
     pub disabled: bool,
+    /// Whether this report counted against the server.
+    pub counted: bool,
 }
 
 /// Whether `failures` distinct users within the window is enough to take a server out.
@@ -356,44 +419,48 @@ fn should_disable(failures: u32, threshold: u32) -> bool {
     threshold > 0 && failures >= threshold
 }
 
-/// Records that `user` could not start a session on the server. The report counts once per
-/// user within the window, at their latest attempt; once the configured number of distinct
-/// users have reported, the server is disabled until an operator enables it again.
+/// Records that `user` could not start a session on the server. A report counts only from a
+/// person (not a bot, whose owner may have many) who was offered the server in a join offer
+/// within the token's lifetime and `OFFER_REPORT_GRACE_SECONDS`, so no one can take out a
+/// server they were never sent to; any other report is answered with the server's standing
+/// and changes nothing. A report counts once per user within the window, at their latest
+/// attempt; once the configured number of distinct users have reported, the server is
+/// disabled until an operator enables it again.
 pub async fn report_failure(
     state: &GlobalServerContext,
     user: UserId,
+    bot: bool,
     server: VoiceServerId,
 ) -> app::Result<FailureOutcome> {
     let voice = &state.config.voice;
     let now = Utc::now();
+    let counted = !bot && was_offered(state, user, server).await;
+    let window_start =
+        now - Duration::seconds(i64::try_from(voice.failure_window_seconds).unwrap_or(3600));
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            // The row references the server; an unknown server is a foreign key violation,
-            // which the caller sees as "no such server".
-            diesel::insert_into(voice_server_failure::table)
-                .values(&VoiceServerFailure {
-                    voice_server: server,
-                    user,
-                    reported_at: now,
-                })
-                .on_conflict((
-                    voice_server_failure::voice_server,
-                    voice_server_failure::user,
-                ))
-                .do_update()
-                .set(voice_server_failure::reported_at.eq(now))
-                .execute(conn.as_mut())
-                .await
-                .map_err(|e| match e {
-                    diesel::result::Error::DatabaseError(
-                        diesel::result::DatabaseErrorKind::ForeignKeyViolation,
-                        _,
-                    ) => diesel::result::Error::NotFound,
-                    other => other,
-                })?;
-            let window_start = now
-                - Duration::seconds(i64::try_from(voice.failure_window_seconds).unwrap_or(3600));
+            let enabled: bool = voice_server::table
+                .select(voice_server::enabled)
+                .filter(voice_server::id.eq(server))
+                .first(conn.as_mut())
+                .await?;
+            if counted {
+                diesel::insert_into(voice_server_failure::table)
+                    .values(&VoiceServerFailure {
+                        voice_server: server,
+                        user,
+                        reported_at: now,
+                    })
+                    .on_conflict((
+                        voice_server_failure::voice_server,
+                        voice_server_failure::user,
+                    ))
+                    .do_update()
+                    .set(voice_server_failure::reported_at.eq(now))
+                    .execute(conn.as_mut())
+                    .await?;
+            }
             let failures: i64 = voice_server_failure::table
                 .filter(
                     voice_server_failure::voice_server
@@ -404,8 +471,8 @@ pub async fn report_failure(
                 .get_result(conn.as_mut())
                 .await?;
             let failures = u32::try_from(failures).unwrap_or(u32::MAX);
-            let mut disabled = false;
-            if should_disable(failures, voice.failure_threshold) {
+            let mut disabled = !enabled;
+            if counted && should_disable(failures, voice.failure_threshold) {
                 let changed = diesel::update(voice_server::table)
                     .filter(
                         voice_server::id
@@ -423,7 +490,11 @@ pub async fn report_failure(
                 }
                 disabled = true;
             }
-            Ok(FailureOutcome { failures, disabled })
+            Ok(FailureOutcome {
+                failures,
+                disabled,
+                counted,
+            })
         }
         .scope_boxed()
     })
