@@ -309,6 +309,7 @@ pub struct ChangePasswordRequest {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`, `oldPasswordIncorrect`, or `reauthenticationRequired`", body = Problem),
         (status = UNPROCESSABLE_ENTITY, description = "`passwordRequirementsNotMet`", body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`tooManyAttempts`: too many wrong passwords or codes recently", body = Problem),
         (status = SERVICE_UNAVAILABLE, description = "`serverBusy`: too many password checks queued; `Retry-After` says when to try again", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

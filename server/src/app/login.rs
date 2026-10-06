@@ -503,9 +503,11 @@ pub enum ChangePasswordOutcome {
 /// Changes the caller's password and expires every other session and refresh token belonging
 /// to them, so a stolen credential stops working the moment the owner rotates their password.
 /// The session performing the change stays valid. The old password proves who the caller is
-/// for an account without two-factor sign-in; one with it also needs a recent verification.
+/// for an account without two-factor sign-in; one with it also needs a recent verification. A
+/// wrong old password counts toward the user's failure limit (`two_factor::limited`), as one
+/// given to re-verify does, so a stolen session cannot guess it.
 pub async fn try_change_password(
-    state: &impl Publishing,
+    state: &GlobalServerContext,
     mut conn: impl AsMut<AsyncPgConnection>,
     caller: &two_factor::Caller,
     config: &crate::aspen_config::AuthConfig,
@@ -528,7 +530,12 @@ pub async fn try_change_password(
         )
         .first(conn)
         .await?;
-    if !check_password(old_password.to_string(), entry_password_hash).await? {
+    let old_password = old_password.to_string();
+    let right = two_factor::limited(state, user_id, async || {
+        check_password(old_password, entry_password_hash).await
+    })
+    .await?;
+    if !right {
         return Ok(ChangePasswordOutcome::OldPasswordIncorrect);
     }
     if new_password.len() < PASSWORD_MIN_LENGTH {
