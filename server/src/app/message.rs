@@ -604,13 +604,20 @@ pub async fn update_message(
     if command.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
         access.require(Permissions::ATTACH_FILES)?;
     }
-    // An echo shows its reply's content; there is nothing of its own to edit.
-    if kind == MessageKind::ThreadEcho {
-        return Err(app::Error::Validation(t!("echoNotEditable")));
-    }
-    // A command was sent as it stands, and its bot has already answered it.
-    if kind == MessageKind::Command {
-        return Err(app::Error::Validation(t!("commandNotEditable")));
+    // Only text its author wrote is theirs to edit. An echo shows its reply's content; a
+    // command was sent as it stands, and its bot has already answered it; the other kinds
+    // record what Aspen keeps (a poll, a call, a warning) and have no text of their author's.
+    match kind {
+        MessageKind::Standard => {}
+        MessageKind::ThreadEcho => return Err(app::Error::Validation(t!("echoNotEditable"))),
+        MessageKind::Command => return Err(app::Error::Validation(t!("commandNotEditable"))),
+        MessageKind::Poll
+        | MessageKind::PollClosed
+        | MessageKind::Call
+        | MessageKind::MissedCall
+        | MessageKind::Warning => {
+            return Err(app::Error::Validation(t!("messageNotEditable")));
+        }
     }
     // Plugins decide new text as they decide a new message's, and the edit records who
     // rewrote it.
