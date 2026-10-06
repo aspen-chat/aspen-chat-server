@@ -29,7 +29,8 @@ deployments use too, are described by those two.
     about; the kinds so far:
     - `dmJoined` (`channel`, `by`): the user is in a DM on the sender, started with them or
       with them added. The home passes it on to the user's devices only while the user still
-      uses the sender.
+      uses the sender, and may ignore one whose `by` names someone in a way it would not
+      accept of its own users.
     - `accountDeleted`: sent by a home to every deployment its user used; the account is gone,
       and each retires its user. Since it only takes away, a deployment takes it from any home
       whose key it has pinned, whatever its gates now say of that home.

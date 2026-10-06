@@ -12,6 +12,7 @@
 //! - `accountDeleted`, from a home to the deployments its user used: the account is gone, and
 //!   each retires its user from there (`app::user::retire`).
 
+use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
@@ -81,6 +82,18 @@ pub enum About {
 pub struct Person {
     pub name: String,
     pub display_name: Option<String>,
+}
+
+impl Person {
+    /// The same checks a name and display name chosen here pass, since a home shows them to
+    /// its user as it would its own users'.
+    fn check(&self) -> app::Result<()> {
+        app::user::validate_username(&self.name)?;
+        app::user::validate_profile(&UserUpdateRequest {
+            display_name: Some(self.display_name.clone()),
+            ..UserUpdateRequest::default()
+        })
+    }
 }
 
 impl Statement for Notice {
@@ -279,6 +292,11 @@ pub async fn receive_notice(state: &GlobalServerContext, token: &str) -> app::Re
     } = receive::<Notice>(state, token, senders).await?;
     match claims.about {
         About::DmJoined { channel, by } => {
+            // Taken, as every notice that verifies is, but not passed on.
+            if let Err(error) = by.check() {
+                tracing::info!(%from, %error, "ignored a notice naming someone in a way this deployment does not accept");
+                return Ok(());
+            }
             dm_joined(state, &from, &lists, claims.sub, channel, by).await
         }
         About::AccountDeleted => account_deleted(state, &from, claims.sub).await,
