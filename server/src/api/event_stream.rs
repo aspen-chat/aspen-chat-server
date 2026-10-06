@@ -418,7 +418,7 @@ async fn identify(
     if caller.verification_required(&state.settings()) {
         return Err(Rejection(EventStreamErrorCode::EmailVerificationRequired));
     }
-    let expires = app::user::sign_in_expires(state, &caller.refresh_token)
+    let expires = app::user::sign_in_expires(state, &caller.refresh_digest)
         .await?
         .map(|at| {
             let left = (at - chrono::Utc::now()).to_std().unwrap_or_default();

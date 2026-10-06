@@ -671,20 +671,20 @@ impl Retired {
     }
 }
 
-/// When the sign-in whose refresh token is `refresh_token` ends by itself, for closing what it
-/// holds open then (an event stream). A bot's token, which has no refresh token, never expires:
-/// `Ok(None)`. A sign-in that is gone already ends now.
+/// When the sign-in whose refresh token's digest is `refresh_digest` ends by itself, for closing
+/// what it holds open then (an event stream). A bot's token, which has no refresh token, never
+/// expires: `Ok(None)`. A sign-in that is gone already ends now.
 pub async fn sign_in_expires(
     state: &GlobalServerContext,
-    refresh_token: &str,
+    refresh_digest: &str,
 ) -> app::Result<Option<chrono::DateTime<Utc>>> {
-    if refresh_token.is_empty() {
+    if refresh_digest.is_empty() {
         return Ok(None);
     }
     let mut conn = state.connection_pool.get().await?;
     let expires: Option<chrono::NaiveDateTime> = refresh_token::table
         .select(refresh_token::expires)
-        .filter(refresh_token::token.eq(refresh_token))
+        .filter(refresh_token::token.eq(refresh_digest))
         .first(conn.as_mut())
         .await
         .optional()?;
