@@ -519,19 +519,35 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
 
 /// Handles a request inside `app::events::settle_after`, which settles what it published once
 /// it is done (`app::events::settle`): the calls its events changed access to are rechecked,
-/// and when it failed, or its client went away before it finished, after publishing about
-/// communities, those are announced as possibly not having happened, since its transaction may
-/// have been rolled back after they were published.
+/// and when it failed after publishing, what it published in a transaction that did not commit,
+/// or outside one, is announced as possibly not having happened.
+///
+/// The request is handled in a task of its own, which runs to its end even when the client goes
+/// away part way (closing the connection, or resetting its stream): a request dropped between
+/// publishing and committing would otherwise roll back what it announced, and anyone could make
+/// every member of a community reload by abandoning their requests at the right moment.
 async fn settle_after_request(
     axum::extract::State(state): axum::extract::State<GlobalServerContext>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    app::events::settle_after(&state, next.run(request), |response| {
-        let status = response.status();
-        status.is_client_error() || status.is_server_error()
+    use tracing::Instrument as _;
+    let locale = app::locale::current();
+    let work = app::locale::scope(locale, async move {
+        app::events::settle_after(&state, next.run(request), |response| {
+            let status = response.status();
+            status.is_client_error() || status.is_server_error()
+        })
+        .await
     })
-    .await
+    .in_current_span();
+    match tokio::spawn(work).await {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!("a request's handler failed: {e}");
+            axum::response::IntoResponse::into_response(ApiError::new(ProblemCode::Internal))
+        }
+    }
 }
 
 /// Starts the server's work: connects to the services, starts the metrics listener and the
