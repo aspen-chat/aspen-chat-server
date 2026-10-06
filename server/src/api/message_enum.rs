@@ -231,6 +231,8 @@ enum MessageEnumSource {
         id: MessageId,
         #[message_gen(parent)]
         channel_id: ChannelId,
+        // At most 10000 characters (`app::message::MAX_CONTENT_CHARS`), counted as Unicode
+        // scalar values.
         content: String,
         #[message_gen(server_authoritative)]
         author: UserId,
@@ -369,6 +371,8 @@ enum MessageEnumSource {
         id: ChannelId,
         parent_category: Option<CategoryId>,
         community: Option<CommunityId>,
+        // A community channel's is trimmed, from 1 to 100 characters
+        // (`app::community::MAX_NAME_CHARS`); a thread's or DM's is empty.
         name: String,
         #[message_gen(permanent)]
         ty: ChannelType,
@@ -402,12 +406,14 @@ enum MessageEnumSource {
         id: CategoryId,
         #[message_gen(parent)]
         community: CommunityId,
+        // Trimmed, from 1 to 100 characters (`app::community::MAX_NAME_CHARS`).
         name: String,
         sort_index: i32,
     },
     Community {
         #[message_gen(id)]
         id: CommunityId,
+        // Trimmed, from 1 to 100 characters (`app::community::MAX_NAME_CHARS`).
         name: String,
         icon: Option<IconId>,
         // Who owns it: every permission, and alone may delete it or hand it on. `None` for a

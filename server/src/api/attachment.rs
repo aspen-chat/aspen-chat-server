@@ -86,9 +86,11 @@ pub(crate) fn attachment_to_api(
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUploadInitRequest {
+    /// At most 255 characters (`app::attachment::MAX_FILE_NAME_CHARS`).
     pub file_name: String,
-    /// What the file is, as the uploader's system names it; any type. Kept on the record and
-    /// shown by apps; the file is uploaded and served as `contentType` on the handle.
+    /// What the file is, as the uploader's system names it; any type, at most 255 bytes
+    /// (`app::attachment::MAX_MIME_TYPE_BYTES`). Kept on the record and shown by apps; the file
+    /// is uploaded and served as `contentType` on the handle.
     pub mime_type: String,
     /// The file's size in bytes, at most the deployment's `[media] max_attachment_bytes`. Given,
     /// the upload URL accepts exactly this many bytes; without it, an upload of more is refused
@@ -142,7 +144,7 @@ pub struct AttachmentUploadHandle {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = AttachmentUploadHandle, headers(("Location" = String, description = "URL of the attachment once confirmed"))),
-        (status = BAD_REQUEST, description = "`validation`, as when `byteSize` is over the deployment's limit", body = Problem),
+        (status = BAD_REQUEST, description = "`validation`, as when `byteSize` is over the deployment's limit, or `fileName` or `mimeType` is too long", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

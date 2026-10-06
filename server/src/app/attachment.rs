@@ -128,6 +128,13 @@ pub fn description(raw: Option<String>) -> app::Result<Option<String>> {
     Ok(Some(text.to_owned()))
 }
 
+/// The longest name a file may be sent with, in characters.
+pub const MAX_FILE_NAME_CHARS: usize = 255;
+
+/// The longest type a file may be declared as, in bytes; a media type is ASCII (RFC 6838
+/// allows 127 characters for each half).
+pub const MAX_MIME_TYPE_BYTES: usize = 255;
+
 /// The kinds of file served as what they are, for apps and browsers to show in place: pictures,
 /// video, and sound in the formats browsers play, plain text, and PDF, none of which runs script
 /// in a page that opens it. Any other kind (an HTML page, an SVG, XML, a script, an archive, or
@@ -285,6 +292,18 @@ pub async fn init_upload(
     let max_bytes = state.config.media.max_attachment_bytes;
     if byte_size.is_some_and(|bytes| bytes > max_bytes) {
         return Err(too_large(max_bytes));
+    }
+    if file_name.chars().count() > MAX_FILE_NAME_CHARS {
+        return Err(app::Error::Validation(t!(
+            "attachmentFileNameLength",
+            max = MAX_FILE_NAME_CHARS
+        )));
+    }
+    if mime_type.len() > MAX_MIME_TYPE_BYTES {
+        return Err(app::Error::Validation(t!(
+            "attachmentMimeType",
+            max = MAX_MIME_TYPE_BYTES
+        )));
     }
     let served = served(&mime_type, &file_name);
     let id = AttachmentId::new();

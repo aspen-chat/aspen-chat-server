@@ -106,6 +106,7 @@ pub async fn create_channel(
     let Some(community) = request.community else {
         return Err(app::Error::Validation(t!("channelNeedsCommunity")));
     };
+    let name = channel_name(&request.name)?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -125,7 +126,7 @@ pub async fn create_channel(
             )
             .await?;
             let new = NewChannel {
-                name: request.name,
+                name,
                 sort_index: request.sort_index,
                 ty: request.ty,
                 community,
@@ -524,6 +525,11 @@ pub(crate) async fn managed_channel(
     }
 }
 
+/// A community channel's name as given, trimmed and within `app::community::MAX_NAME_CHARS`.
+fn channel_name(name: &str) -> app::Result<String> {
+    app::community::trimmed_name(name, |max| t!("channelNameLength", max = max))
+}
+
 /// Renames or moves a community channel the caller may view, which takes Manage channels; a
 /// deployment moderator may rename one. A channel stays in its community, and a category it moves into must be one
 /// of that community's.
@@ -531,8 +537,9 @@ pub(crate) async fn update_channel(
     state: &GlobalServerContext,
     caller: UserId,
     id: ChannelId,
-    command: ChannelUpdateRequest,
+    mut command: ChannelUpdateRequest,
 ) -> app::error::Result<Channel> {
+    command.name = command.name.as_deref().map(channel_name).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

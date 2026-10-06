@@ -13,6 +13,7 @@ use crate::app::{
     publish_event,
 };
 use crate::database::schema::{category, category_override, channel};
+use crate::t;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     Selectable, SelectableHelper,
@@ -48,6 +49,11 @@ impl Loadable for Category {
     }
 }
 
+/// A category's name as given, trimmed and within `app::community::MAX_NAME_CHARS`.
+fn category_name(name: &str) -> app::Result<String> {
+    app::community::trimmed_name(name, |max| t!("categoryNameLength", max = max))
+}
+
 /// Makes a category, which takes Manage categories.
 pub(crate) async fn create_category(
     state: &GlobalServerContext,
@@ -56,6 +62,7 @@ pub(crate) async fn create_category(
     sort_index: i32,
     community: CommunityId,
 ) -> app::error::Result<Category> {
+    let name = category_name(&name)?;
     let id = CategoryId::new();
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -218,8 +225,9 @@ pub(crate) async fn update_category(
     state: &GlobalServerContext,
     caller: UserId,
     id: CategoryId,
-    command: CategoryUpdateRequest,
+    mut command: CategoryUpdateRequest,
 ) -> app::error::Result<Category> {
+    command.name = command.name.as_deref().map(category_name).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
