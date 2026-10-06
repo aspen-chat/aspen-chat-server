@@ -1080,6 +1080,28 @@ def plugins(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", WORD_FILTER_ID)
 
 
+def profile_annotations(world: World, check: Checks) -> None:
+    say("a plugin's annotation of a person reaches only those who share a community with them")
+    stack, member = world.stack, world.member
+    if psql(f"SELECT count(*) FROM plugin WHERE id = '{WORD_FILTER_ID}'", stack.database) != "1":
+        check("the word filter is installed, to annotate with", False, "the plugins scenario installs it")
+        return
+    # No example plugin annotates people, so the row is written as a plugin's would be.
+    psql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
+         f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
+         "'{\"key\": \"checked\"}')", stack.database)
+    outsider = world.account("outsider")
+    path = f"/users/{member['id']}/annotations"
+    check("the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
+    check("and so does someone who shares a community with them",
+          len(stack.api("GET", path, token=world.owner["token"])) == 1)
+    check("but nobody else", stack.api("GET", path, token=outsider["token"]) == [])
+    world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
+    check("nor anyone they no longer share a community with",
+          stack.api("GET", path, token=world.owner["token"]) == [])
+    psql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'", stack.database)
+
+
 def calendar_channels(world: World, check: Checks) -> None:
     say("a plugin's channel, its notices, its cards, and a private URL")
     stack = world.stack
@@ -1251,7 +1273,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
-             group_dm_moderators, plugins, calendar_channels, email, invite_previews, previews]
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews]
 
 
 def main() -> None:
