@@ -89,4 +89,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261004_214803_remove_content_permission::M,
     &migrations::m20261004_214820_attachment_descriptions::M,
     &migrations::m20261004_224404_email::M,
+    &migrations::m20261005_140058_attachment_previews::M,
 ];

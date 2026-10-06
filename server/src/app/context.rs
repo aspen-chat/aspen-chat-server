@@ -153,7 +153,7 @@ impl GlobalServerContext {
 
 /// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
 /// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
-/// dispatcher, the mail sender and digest scheduler, and the plugins with their observers, making the federation and push keys where
+/// dispatcher, the mail sender and digest scheduler, the attachment preview maker and held message releaser, the sweeper of staging uploads, and the plugins with their observers, making the federation and push keys where
 /// they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
     app::deployment_settings::spawn_watcher(context.clone());
@@ -169,6 +169,9 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     app::push::spawn_dispatcher(context.clone());
     app::email::outbox::spawn_sender(context.clone());
     app::email::digest::spawn_scheduler(context.clone());
+    app::attachment::preview::spawn_maker(context.clone());
+    app::message::held::spawn_releaser(context.clone());
+    app::media_store::spawn_upload_sweeper(context.clone());
     app::plugin::registry::start(context).await?;
     Ok(())
 }

@@ -315,6 +315,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             message::delete_message
         ))
         .routes(routes!(message::search_messages))
+        .routes(routes!(message::list_held_messages))
         .routes(routes!(push::create_push_subscription))
         .routes(routes!(push::delete_push_subscription))
         .routes(routes!(message::open_thread))

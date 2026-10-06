@@ -29,6 +29,8 @@ import {
 } from "./permissions";
 import type {
   Attachment,
+  HeldEntry,
+  HeldMessage,
   BotCommands,
   ChannelMute,
   ChannelVoice,
@@ -166,6 +168,13 @@ export class RecordStore {
   /** The messages warnings are about, deleted or not, by id; read only with their warnings. */
   readonly #warned = new Map<string, KeptMessage>();
   readonly #attachments = new Map<string, Attachment>();
+  /** The caller's held messages, by id, in the order they were held. */
+  readonly #heldMessages = new Map<string, HeldEntry>();
+  /**
+   * Held messages already posted or dropped, which a `202` read after their event must not
+   * bring back.
+   */
+  readonly #settledHeld = new Set<string>();
   readonly #icons = new Map<string, Icon>();
   readonly #voiceSessions = new Map<string, VoiceSession>();
   /** `session -> user -> participant`. */
@@ -366,6 +375,56 @@ export class RecordStore {
 
   attachment(id: string): Attachment | undefined {
     return this.#attachments.get(id);
+  }
+
+  /** Topic `held:<channelId>`: the caller's messages there held for their previews. */
+  heldMessages(channelId: string): readonly HeldEntry[] {
+    return this.#memoized(`held:${channelId}`, () =>
+      Array.from(this.#heldMessages.values()).filter(
+        (entry) => entry.message.channelId === channelId,
+      ),
+    );
+  }
+
+  /** A held message's entry, when the store holds it. */
+  heldMessage(id: string): HeldEntry | undefined {
+    return this.#heldMessages.get(id);
+  }
+
+  /** Keeps a message the server held, unless its posting or dropping was heard of first. */
+  putHeldMessage(message: HeldMessage): void {
+    if (this.#settledHeld.has(message.id)) {
+      return;
+    }
+    this.#heldMessages.set(message.id, { message, failure: null });
+    this.#touch(`held:${message.channelId}`);
+  }
+
+  /**
+   * Replaces the held messages with those the server holds, keeping those it dropped, which
+   * only this app still shows.
+   */
+  replaceHeldMessages(messages: readonly HeldMessage[]): void {
+    this.#batch(() => {
+      for (const [id, entry] of this.#heldMessages) {
+        if (entry.failure === null) {
+          this.#heldMessages.delete(id);
+          this.#touch(`held:${entry.message.channelId}`);
+        }
+      }
+      for (const message of messages) {
+        this.putHeldMessage(message);
+      }
+    });
+  }
+
+  /** Lets a dropped held message go, or one sent again. */
+  forgetHeldMessage(id: string): void {
+    const entry = this.#heldMessages.get(id);
+    if (entry !== undefined) {
+      this.#heldMessages.delete(id);
+      this.#touch(`held:${entry.message.channelId}`);
+    }
   }
 
   /** Topic `voice:<channelId>`: the call on the channel and who is in it. */
@@ -1339,8 +1398,7 @@ export class RecordStore {
         this.#putCategory(category);
       }
       for (const attachment of included.attachments ?? []) {
-        this.#attachments.set(attachment.id, attachment);
-        this.#touch(`attachment:${attachment.id}`);
+        this.#putAttachment(attachment);
       }
       for (const poll of included.polls ?? []) {
         this.#putPoll(poll);
@@ -1790,6 +1848,8 @@ export class RecordStore {
       this.#categories.clear();
       this.#messages.clear();
       this.#attachments.clear();
+      this.#heldMessages.clear();
+      this.#settledHeld.clear();
       this.#icons.clear();
       this.#voiceSessions.clear();
       this.#voiceParticipants.clear();
@@ -2238,6 +2298,28 @@ export class RecordStore {
         case "pluginEvent":
           // A plugin's own events are for views of its own, which this client does not run.
           break;
+        case "attachmentPreviewed": {
+          const attachment = this.#attachments.get(event.attachment);
+          if (attachment !== undefined) {
+            this.#attachments.set(attachment.id, { ...attachment, preview: event.preview });
+            this.#touch(`attachment:${attachment.id}`);
+          }
+          break;
+        }
+        case "heldMessagePosted":
+          // The message itself arrives by its own event.
+          this.#settledHeld.add(event.held);
+          this.forgetHeldMessage(event.held);
+          break;
+        case "heldMessageFailed": {
+          this.#settledHeld.add(event.held);
+          const entry = this.#heldMessages.get(event.held);
+          if (entry !== undefined) {
+            this.#heldMessages.set(event.held, { ...entry, failure: event.detail });
+            this.#touch(`held:${event.channel}`);
+          }
+          break;
+        }
       }
       if (this.#commands.size > 0 && this.#changesCommands(event)) {
         this.#forgetCommands();
@@ -2267,6 +2349,19 @@ export class RecordStore {
 
   // ---------------------------------------------------------------------------------------
   // Internals
+
+  /**
+   * Keeps an attachment record. A preview is never taken away once made, so a record read
+   * before its preview was made keeps the preview `attachmentPreviewed` brought meanwhile.
+   */
+  #putAttachment(attachment: Attachment): void {
+    const preview = attachment.preview ?? this.#attachments.get(attachment.id)?.preview;
+    this.#attachments.set(
+      attachment.id,
+      preview == null ? attachment : { ...attachment, preview },
+    );
+    this.#touch(`attachment:${attachment.id}`);
+  }
 
   #memoized<T>(topic: Topic, compute: () => T): T {
     if (this.#memo.has(topic)) {

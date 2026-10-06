@@ -20,6 +20,7 @@ import { files } from "./en/files";
 import { folders } from "./en/folders";
 import { fonts } from "./en/fonts";
 import { gallery } from "./en/gallery";
+import { held } from "./en/held";
 import { layout } from "./en/layout";
 import { members } from "./en/members";
 import { mute } from "./en/mute";
@@ -258,6 +259,7 @@ export const en = {
   viewAllImages: "View all {count} images",
   moreImages: "+{count}",
   gallery,
+  held,
   playVideo: "Play {title}",
   revealSpoiler: "Spoiler, activate to reveal",
   poll,

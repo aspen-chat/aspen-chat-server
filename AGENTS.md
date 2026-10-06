@@ -26,6 +26,7 @@ Federation, letting a user of one deployment use others, is being built in phase
 - **TLS:** rustls (with self-signed cert generation via `rcgen` for development)
 - **Federation signatures:** `ring` (Ed25519 keys, compact JWS with EdDSA)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with `chrono-tz` for each digest's time zone; see Email
+- **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi` giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)
@@ -63,6 +64,7 @@ Federation, letting a user of one deployment use others, is being built in phase
    - `nats_auth_token` — NATS authentication token
    - `[voice]` — `token_secret` shared with the voice servers, the failure threshold and window, the join token lifetime, the candidate cap, the two silence limits, and the idle call limit. The voice servers themselves are rows of `voice_server`, registered from the dashboard or with `aspen-chat-server voice-servers add` (see Voice)
    - `[media.s3]` — the object storage for attachments, icons, and preview images: `endpoint` (the S3 API as this server reaches it), `public_endpoint` (the same API as clients reach it, which the presigned upload URLs they are handed name; left out, they name `endpoint`, which only suits clients on this machine), `public_base_url` (where clients download objects), `bucket`, `region`, the credentials, and `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be reachable from every client and allow their origins by CORS.
+   - `[media.previews]` — `make` (whether this server makes previews; every server queues them), `concurrency`, `max_picture_bytes` and `max_picture_pixels`, `ffmpeg` and `ffprobe` (the programs that take videos' posters; empty, none are taken), and `max_video_bytes`; see Attachment previews
    - `[limits] max_communities_per_user` — the most communities one user may belong to (500 by default); it bounds what an event stream connection reads and how far a profile change fans out
    - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by default), and `[auth.passkeys]` with `rp_id` (the domain passkeys belong to) and `origins` (every page origin that may complete a ceremony: this server's public origin and any web client origin under `rp_id`). Passkeys are offered only when `[auth.passkeys]` is set, and changing `rp_id` orphans every registered passkey. `password_hashing_threads` (one per logical CPU by default) and `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
    - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before showing as away (600 by default)
@@ -205,6 +207,7 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and their record
 - `docs/architecture/federation.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
+- `docs/architecture/attachment-previews.md` — previews of pictures and videos' posters, how they are made and queued, and messages held for them
 - `docs/architecture/email.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
 - `docs/architecture/event-routing.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export

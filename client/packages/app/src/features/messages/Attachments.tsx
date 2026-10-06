@@ -1,12 +1,20 @@
 import type { Attachment } from "@aspen/protocol";
-import { PaperclipIcon, XIcon } from "@phosphor-icons/react";
+import { PaperclipIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
 import { useLayoutEffect, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
-import { isImageType, pictureAlt, splitInline, type Picture } from "@/features/messages/images";
+import {
+  inlinePreview,
+  isImageType,
+  isVideoType,
+  pictureAlt,
+  splitInline,
+  type InlinePreview,
+  type Picture,
+} from "@/features/messages/images";
 import { useKeepStill } from "@/features/messages/keepStill";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -17,10 +25,12 @@ const imageClass = "block max-h-80 max-w-full rounded-md border border-line obje
 
 /**
  * What a message carries besides its text: uploaded attachments, shown inline when they are
- * images and as download chips otherwise, then links in the text that point straight at an
- * image, then links the server found to be images. Up to three pictures show inline; with
- * more, a button in their place opens the whole set in a gallery, and so does any picture.
- * With `onRemove`, each attachment shown carries a control that takes it off the message.
+ * images, as their posters when they are videos the server took one of, and as download chips
+ * otherwise, then links in the text that point straight at an image, then links the server
+ * found to be images. Up to three pictures show inline; with more, a button in their place
+ * opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
+ * smaller copy the server made of it where there is one; the gallery shows the original. With
+ * `onRemove`, each attachment shown carries a control that takes it off the message.
  */
 export function MessageMedia({
   attachmentIds,
@@ -45,6 +55,7 @@ export function MessageMedia({
   }
   const pictures: Picture[] = [];
   const files: Attachment[] = [];
+  const videos: Attachment[] = [];
   const unavailable: string[] = [];
   const coming: string[] = [];
   attachments.forEach((attachment, i) => {
@@ -59,7 +70,10 @@ export function MessageMedia({
         width: attachment.width,
         height: attachment.height,
         description: attachment.description,
+        preview: inlinePreview(attachment.preview),
       });
+    } else if (isVideoType(attachment.mimeType) && attachment.preview != null) {
+      videos.push(attachment);
     } else {
       files.push(attachment);
     }
@@ -100,6 +114,30 @@ export function MessageMedia({
             />
           )}
           <CopyIdButton id={attachment.id} thing="attachment" />
+        </li>
+      ))}
+      {videos.map((attachment) => (
+        <li
+          key={attachment.id}
+          data-attachment-id={attachment.id}
+          className="relative min-w-0 max-w-full"
+        >
+          <InlineVideo attachment={attachment} />
+          <span className="absolute top-1 end-1 flex gap-1">
+            {onRemove !== undefined && (
+              <RemoveButton
+                name={attachment.fileName}
+                onPress={() => {
+                  onRemove(attachment.id);
+                }}
+              />
+            )}
+            <CopyIdButton
+              id={attachment.id}
+              thing="attachment"
+              className="bg-surface-raised/90 shadow-sm"
+            />
+          </span>
         </li>
       ))}
       {shown.map((picture, i) => (
@@ -174,24 +212,34 @@ function keptRoom(width: number, height: number): CSSProperties {
 const MAX_PICTURE_HEIGHT = 320;
 
 /**
- * A picture in the message; pressing it opens the message's gallery on that picture. A picture
- * whose size is known keeps exactly its room while it loads (`keptRoom`). One whose size is not
- * keeps a fixed square, a conservative guess, until it has arrived, and then takes its own size:
- * rendered as it arrives and told to the list in the same task (`useKeepStill`), so the list
- * keeps the view still through the change before anything else runs. Either pulses as a
- * skeleton until it has loaded.
+ * A picture in the message; pressing it opens the message's gallery on that picture. It shows
+ * the server's smaller copy where there is one, at the copy's exact size, and the original if
+ * the copy cannot be loaded; an original already loaded stays when a copy arrives later, as its
+ * bytes are already here. A picture whose size is known keeps exactly its room while it loads
+ * (`keptRoom`). One whose size is not keeps a fixed square, a conservative guess, until it has
+ * arrived, and then takes its own size: rendered as it arrives and told to the list in the same
+ * task (`useKeepStill`), so the list keeps the view still through the change before anything
+ * else runs. Either pulses as a skeleton until it has loaded.
  */
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
   const keepStill = useKeepStill();
   const [arrived, setArrived] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
-  const known = picture.width != null && picture.height != null;
-  const waiting = arrived !== picture.src;
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const preview: InlinePreview | undefined =
+    picture.preview !== undefined && !failed.has(picture.preview.src) && arrived !== picture.src
+      ? picture.preview
+      : undefined;
+  const src = preview?.src ?? picture.src;
+  const width = preview?.width ?? picture.width;
+  const height = preview?.height ?? picture.height;
+  const size = width != null && height != null ? { width, height } : undefined;
+  const known = size !== undefined;
+  const waiting = arrived !== src;
   const guessed = !known && waiting;
   const arrive = () => {
     flushSync(() => {
-      setArrived(picture.src);
+      setArrived(src);
     });
   };
   useLayoutEffect(() => {
@@ -199,7 +247,7 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   }, [arrived, failed, keepStill]);
   // A link named like a picture that is not one (a page, or one gone) shows as the link it
   // is, not as a broken picture; a stored picture that fails is said to be unavailable.
-  if (failed === picture.src) {
+  if (failed.has(picture.src)) {
     return picture.attachmentId === undefined ? (
       <a
         href={picture.src}
@@ -220,18 +268,18 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
       className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <img
-        src={picture.src}
+        src={src}
         alt={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
         loading="lazy"
         // A finger dragging from the picture pans the list; it does not pick the picture up.
         draggable={false}
         referrerPolicy="no-referrer"
-        {...(known ? { width: picture.width ?? 0, height: picture.height ?? 0 } : {})}
-        style={known ? keptRoom(picture.width ?? 1, picture.height ?? 1) : undefined}
+        {...(size ?? {})}
+        style={size === undefined ? undefined : keptRoom(size.width, size.height)}
         onLoad={arrive}
         onError={() => {
           flushSync(() => {
-            setFailed(picture.src);
+            setFailed((before) => new Set(before).add(src));
           });
         }}
         className={
@@ -243,6 +291,71 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
             : " bg-surface-sunken")
         }
       />
+    </Button>
+  );
+}
+
+/**
+ * A video the server took a poster of: the poster, at its size, with a play control, which
+ * swaps in a player of the original, so nothing of the video is fetched until the reader asks.
+ * The player keeps the poster's room. A video the browser cannot play is offered for download
+ * instead, as one without a poster always is.
+ */
+function InlineVideo({ attachment }: { attachment: Attachment }) {
+  const m = useMessages();
+  const keepStill = useKeepStill();
+  const [playing, setPlaying] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const poster = inlinePreview(attachment.preview);
+  useLayoutEffect(() => {
+    keepStill();
+  }, [failed, keepStill]);
+  if (poster === undefined || failed) {
+    return <FileChip attachment={attachment} />;
+  }
+  const room = keptRoom(poster.width, poster.height);
+  const label = attachment.description ?? attachment.fileName;
+  return playing ? (
+    <video
+      src={attachment.downloadUrl}
+      poster={poster.src}
+      controls
+      autoPlay
+      playsInline
+      aria-label={label}
+      {...(attachment.description == null ? {} : { "aria-description": attachment.description })}
+      width={poster.width}
+      height={poster.height}
+      style={room}
+      onError={() => {
+        flushSync(() => {
+          setFailed(true);
+        });
+      }}
+      className="block h-auto max-h-80 max-w-full rounded-md border border-line bg-black"
+    />
+  ) : (
+    <Button
+      onPress={() => {
+        setPlaying(true);
+      }}
+      aria-label={format(m.playVideo, { title: label })}
+      className="group relative inline-flex max-w-full items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+    >
+      <img
+        src={poster.src}
+        alt=""
+        loading="lazy"
+        draggable={false}
+        referrerPolicy="no-referrer"
+        width={poster.width}
+        height={poster.height}
+        style={room}
+        className={imageClass + " h-auto bg-surface-sunken"}
+      />
+      <span className="absolute flex h-14 w-14 items-center justify-center rounded-full bg-black/60 text-white shadow transition-transform group-hover:scale-110">
+        <PlayIcon size={28} weight="fill" aria-hidden="true" />
+      </span>
     </Button>
   );
 }

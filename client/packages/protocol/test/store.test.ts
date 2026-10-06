@@ -1698,3 +1698,90 @@ describe("RecordStore plugins", () => {
     expect(store.communityPlugins(aspen.id)?.[0]?.enabled).toBe(true);
   });
 });
+
+describe("RecordStore previews and held messages", () => {
+  const photo = {
+    id: id(6000),
+    fileName: "photo.jpg",
+    mimeType: "image/jpeg",
+    downloadUrl: "https://media.example/attachments/photo",
+    width: 4032,
+    height: 3024,
+  };
+  const preview = {
+    url: "https://media.example/attachment-previews/photo",
+    mimeType: "image/webp",
+    width: 1280,
+    height: 960,
+  };
+  const held = {
+    id: id(6100),
+    channelId: general.id,
+    content: "look",
+    attachments: [photo.id],
+    echoToParent: false,
+    heldAt: "2026-10-05T12:00:00Z",
+  };
+
+  it("gives an attachment the preview made after it was read", () => {
+    const store = new RecordStore();
+    store.ingest({ attachments: [photo] });
+    store.applyEvent({
+      serverEvent: "attachmentPreviewed",
+      attachment: photo.id,
+      message: null,
+      preview,
+    });
+    expect(store.attachment(photo.id)?.preview).toEqual(preview);
+  });
+
+  it("keeps a preview when a read from before it was made lands after its event", () => {
+    const store = new RecordStore();
+    store.ingest({ attachments: [{ ...photo, preview }] });
+    store.ingest({ attachments: [photo] });
+    expect(store.attachment(photo.id)?.preview).toEqual(preview);
+  });
+
+  it("shows a held message until it is posted", () => {
+    const store = new RecordStore();
+    store.putHeldMessage(held);
+    expect(store.heldMessages(general.id)).toEqual([{ message: held, failure: null }]);
+    expect(store.heldMessages(dev.id)).toEqual([]);
+    store.applyEvent({
+      serverEvent: "heldMessagePosted",
+      held: held.id,
+      channel: general.id,
+      message: id(6200),
+    });
+    expect(store.heldMessages(general.id)).toEqual([]);
+  });
+
+  it("does not bring back a held message whose posting was heard of before its 202", () => {
+    const store = new RecordStore();
+    store.applyEvent({
+      serverEvent: "heldMessagePosted",
+      held: held.id,
+      channel: general.id,
+      message: id(6200),
+    });
+    store.putHeldMessage(held);
+    expect(store.heldMessages(general.id)).toEqual([]);
+  });
+
+  it("keeps a dropped held message, with why, through a fresh read, until it is let go", () => {
+    const store = new RecordStore();
+    store.putHeldMessage(held);
+    store.applyEvent({
+      serverEvent: "heldMessageFailed",
+      held: held.id,
+      channel: general.id,
+      detail: "You can no longer post here.",
+    });
+    store.replaceHeldMessages([]);
+    expect(store.heldMessages(general.id)).toEqual([
+      { message: held, failure: "You can no longer post here." },
+    ]);
+    store.forgetHeldMessage(held.id);
+    expect(store.heldMessages(general.id)).toEqual([]);
+  });
+});

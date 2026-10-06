@@ -39,7 +39,7 @@ import {
 } from "./preferences";
 import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
-import type { Included, Invocation, NotificationLevel } from "./storeTypes";
+import type { HeldMessage, Included, Invocation, NotificationLevel } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type UploadTarget, describeAttachment, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
@@ -58,6 +58,9 @@ type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
 export type MessageHolding = components["schemas"]["MessageHolding"];
+
+/** What became of a message sent: posted, or held by the server for its previews. */
+export type Sent = { kind: "posted"; message: Message } | { kind: "held"; held: HeldMessage };
 
 /** What to search messages for (`AspenSync.searchMessages`); at least one of the first four. */
 export interface MessageSearch {
@@ -773,26 +776,52 @@ export class AspenSync {
    * Posts a message, optionally naming uploaded attachments. In a thread, `echoToParent` also
    * shows it in the thread's parent channel. The result is cached at once unless the stream
    * delivered the message first, in which case the streamed copy is newer and is kept.
+   *
+   * The server may hold a message while a preview of one of its attachments is being made, up to
+   * twenty seconds from the upload, and post it then: the held message is kept in the store
+   * (`heldMessages`) and shown waiting until `heldMessagePosted` or `heldMessageFailed`.
    */
   async sendMessage(
     channelId: string,
     content: string,
     attachments: readonly string[] = [],
     options: { echoToParent?: boolean } = {},
-  ): Promise<Message> {
+  ): Promise<Sent> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/messages", {
       params: { path: { channel: channelId } },
       body: {
         content,
         attachments: [...attachments],
         ...(options.echoToParent === true ? { echoToParent: true } : {}),
+        mayHold: true,
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.addMessage(result.data);
-    return result.data;
+    if (result.response.status === 202) {
+      const held = result.data as HeldMessage;
+      this.store.putHeldMessage(held);
+      return { kind: "held", held };
+    }
+    const message = result.data as Message;
+    this.store.addMessage(message);
+    return { kind: "posted", message };
+  }
+
+  /**
+   * Sends a held message the server dropped once more, as it was written, and lets the dropped
+   * one go once the server has it.
+   */
+  async sendHeldAgain(heldId: string): Promise<Sent | undefined> {
+    const entry = this.store.heldMessage(heldId);
+    if (entry === undefined) {
+      return undefined;
+    }
+    const { channelId, content, attachments, echoToParent } = entry.message;
+    const sent = await this.sendMessage(channelId, content, attachments, { echoToParent });
+    this.store.forgetHeldMessage(heldId);
+    return sent;
   }
 
   /**
@@ -2614,7 +2643,7 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms, admin, blocks, plugins] = await Promise.all([
+      const [me, communities, dms, admin, blocks, plugins, heldMessages] = await Promise.all([
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
         this.#client.api.GET("/api/v1/users/{user}/communities", {
           params: {
@@ -2645,6 +2674,7 @@ export class AspenSync {
           params: { query: { include: ["users"] } },
         }),
         this.#client.api.GET("/api/v1/plugins"),
+        this.#client.api.GET("/api/v1/users/@me/held-messages"),
       ]);
       if (generation !== this.#generation) {
         return false;
@@ -2678,6 +2708,9 @@ export class AspenSync {
       this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
       // A deployment without plugins, or one that does not say, runs none.
       this.store.setPlugins(plugins.data ?? []);
+      // Read before the events held back meanwhile, applied below, which settle any posted
+      // since; a deployment that does not hold messages has none.
+      this.store.replaceHeldMessages(heldMessages.data ?? []);
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );

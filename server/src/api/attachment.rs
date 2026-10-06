@@ -44,6 +44,24 @@ pub struct Attachment {
     /// absent when it has none. Apps give it as the attachment's text alternative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// A smaller copy of a picture or video, made by the server for showing it inline, where
+    /// one was made and is worth having (`app::attachment::preview`); absent otherwise, and
+    /// until it is made, which `attachmentPreviewed` announces. The original, at `downloadUrl`,
+    /// is what is shown at full size and saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<AttachmentPreview>,
+}
+
+/// A smaller copy of an attachment for showing it inline: a picture fitted within
+/// `app::attachment::preview::BOX` and encoded for the web, or the same of a video.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentPreview {
+    pub url: String,
+    pub mime_type: String,
+    /// Its size in pixels, as it is shown upright.
+    pub width: u32,
+    pub height: u32,
 }
 
 pub(crate) fn attachment_to_api(
@@ -51,6 +69,7 @@ pub(crate) fn attachment_to_api(
     row: app::attachment::Attachment,
 ) -> Attachment {
     let download_url = state.media_store.public_url(&row.storage_key);
+    let preview = app::attachment::preview::of(state, &row);
     Attachment {
         id: row.id,
         file_name: row.file_name,
@@ -59,6 +78,7 @@ pub(crate) fn attachment_to_api(
         width: row.width.and_then(|w| u32::try_from(w).ok()),
         height: row.height.and_then(|h| u32::try_from(h).ok()),
         description: row.description,
+        preview,
     }
 }
 

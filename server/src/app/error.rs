@@ -80,6 +80,9 @@ pub enum Error {
         #[from]
         Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::head_object::HeadObjectError>>,
     ),
+    /// Copying, listing, or a multipart copy in the media store (`app::media_store::MediaStore::promote`).
+    #[error("error in a media store request {0}")]
+    S3Request(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("error presigning media store request {0}")]
     S3Presign(#[from] aws_sdk_s3::presigning::PresigningConfigError),
     #[error("user not authorized")]
