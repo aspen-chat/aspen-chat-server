@@ -118,7 +118,9 @@ pub struct PollReadQuery {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
+        (status = UNPROCESSABLE_ENTITY, description = "`pluginRefused`: a plugin refused the question or answers, or would have changed them", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`pluginUnavailable`: a plugin that must decide what is posted here could not", body = Problem),
     )
 )]
 pub async fn create_poll(
@@ -264,8 +266,8 @@ pub async fn remove_vote(
     Ok(NoContent)
 }
 
-/// Adds the caller's own answer to a poll that allows write-ins, and votes for it for them. An
-/// answer the poll already has (ignoring case and spacing) is voted for instead of added, and
+/// Adds the caller's own answer to a poll that allows write-ins, and votes for it for them,
+/// which takes posting in its channel. An answer the poll already has (ignoring case and spacing) is voted for instead of added, and
 /// does not use up the caller's one write-in.
 #[utoipa::path(
     post,
@@ -279,10 +281,12 @@ pub async fn remove_vote(
         (status = OK, description = "The poll already had this answer; the caller's vote went to it", body = WriteInResult),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (write-ins not allowed, answer length, or the poll holds all it may)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden` without Send messages (or Send in threads); `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = CONFLICT, description = "`pollClosed`, or `conflict`: the caller already has a write-in on this poll", body = Problem),
+        (status = UNPROCESSABLE_ENTITY, description = "`pluginRefused`: a plugin refused the answer, or would have changed it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`pluginUnavailable`: a plugin that must decide what is posted here could not", body = Problem),
     )
 )]
 pub async fn add_write_in(

@@ -54,8 +54,9 @@ interface types {
     record draft {
         author: person,
         place: place,
-        /// Its text. For a command, the text it shows: `/name` and its arguments, which cannot
-        /// be rewritten, so a rewrite refuses it.
+        /// Its text. For a command, the text it shows: `/name` and its arguments; for a poll, its
+        /// question and then each answer on a line of its own; for an answer written in to a
+        /// poll, that answer. None of those three can be rewritten, so a rewrite refuses them.
         content: string,
         attachments: list<attachment>,
         /// The message being edited, for `message.edit`.
