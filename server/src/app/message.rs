@@ -20,9 +20,10 @@ use crate::app::plugin::intercept;
 use crate::app::plugin::manifest::InterceptHook;
 use crate::app::report::Warning;
 use crate::app::user::User;
+use crate::app::visibility::Visibility;
 use crate::app::{
-    AttachmentId, ChannelId, CommunityId, EventScope, PollId, UserId, publish_event, read_state,
-    system_account, thread,
+    AttachmentId, ChannelId, EventScope, PollId, UserId, publish_event, read_state, system_account,
+    thread,
 };
 use crate::app::{HeldMessageId, MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
@@ -875,14 +876,15 @@ pub(crate) async fn soft_delete(
     Ok(())
 }
 
-/// Deletes every message `author` posted since `since` in `community`'s channels and threads,
-/// or with no community anywhere on the deployment, DMs included, inside the caller's
-/// transaction, which has checked who may (a ban with a deletion window, `app::ban` and
-/// `app::user_ban`). Echoes go with their replies. Returns the ids.
+/// Deletes every message `author` posted since `since` in the channels `visible` covers that its
+/// user may view, and their threads, as deleting each one by one would let them, or with no
+/// `visible` anywhere on the deployment, DMs included, inside the caller's transaction, which
+/// has checked who may (a ban with a deletion window, `app::ban` and `app::user_ban`). Echoes go
+/// with their replies. Returns the ids.
 pub(crate) async fn delete_recent_by(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
-    community: Option<CommunityId>,
+    visible: Option<&Visibility>,
     author: UserId,
     since: DateTime<Utc>,
 ) -> Result<Vec<MessageId>, app::Error> {
@@ -895,8 +897,15 @@ pub(crate) async fn delete_recent_by(
         .filter(message::kind.ne(MessageKind::ThreadEcho))
         .order(message::id.desc())
         .into_boxed();
-    if let Some(community) = community {
-        query = query.filter(channel::community.eq(community));
+    if let Some(visible) = visible {
+        let channels = visible.visible_channels();
+        query = query
+            .filter(channel::community.eq_any(visible.communities().to_vec()))
+            .filter(
+                channel::id
+                    .eq_any(channels.clone())
+                    .or(channel::parent_channel.eq_any(channels)),
+            );
     }
     let ids: Vec<MessageId> = query.load(conn).await?;
     for id in &ids {

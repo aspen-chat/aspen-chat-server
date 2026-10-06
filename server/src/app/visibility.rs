@@ -472,9 +472,19 @@ impl Visibility {
         communities: &[CommunityId],
     ) -> app::Result<Self> {
         let mut conn = state.connection_pool.get().await?;
-        let models = CommunityModel::load(conn.as_mut(), communities).await?;
-        let roles = member_roles(conn.as_mut(), user, communities).await?;
-        let moderator = app::deployment::is_moderator(conn.as_mut(), user).await?;
+        Self::load_on(conn.as_mut(), user, communities).await
+    }
+
+    /// As `load`, on a connection the caller holds, such as inside the transaction that acts on
+    /// what it allows.
+    pub async fn load_on(
+        conn: &mut AsyncPgConnection,
+        user: UserId,
+        communities: &[CommunityId],
+    ) -> app::Result<Self> {
+        let models = CommunityModel::load(conn, communities).await?;
+        let roles = member_roles(conn, user, communities).await?;
+        let moderator = app::deployment::is_moderator(conn, user).await?;
         let listed = communities.to_vec();
         let communities = models
             .iter()

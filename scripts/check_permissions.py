@@ -1062,6 +1062,32 @@ def ban_ranks(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def ban_deletions(world: World, check: Checks) -> None:
+    say("a ban's deletion window reaches only channels the banner may view")
+    stack, member = world.stack, world.member
+    banners = world.role("Banners", ["banMembers", "manageMessages"])
+    world.give(banners)
+    target = world.account("target")
+    invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+    stack.api("PUT", f"/communities/{world.community}/members/@me",
+              {"inviteCode": invite.get("code") or invite.get("id")}, target["token"])
+    hidden = world.channel("hidden-from-banners",
+                           overrides=[{"role": banners, "allow": [], "deny": ["viewChannel"]}])
+    shown = world.channel("seen-by-banners")
+
+    def said(channel: str) -> str:
+        return stack.api("POST", f"/channels/{channel}/messages",
+                         {"content": "soon banned", "attachments": []}, target["token"])["id"]
+
+    in_hidden, in_shown = said(hidden), said(shown)
+    stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
+              {"deleteMessagesSeconds": 3600}, member["token"])
+    check("the message where the banner may view is deleted",
+          stack.status("GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404)
+    check("the one in a channel hidden from the banner stays",
+          stack.status("GET", f"/messages/{in_hidden}", token=world.owner["token"]) == 200)
+
+
 def dm_reads(world: World, check: Checks) -> None:
     say("a deployment moderator's every read of a DM they are not in is logged")
     stack, member = world.stack, world.member
@@ -1413,7 +1439,7 @@ def invite_previews(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, dm_reads,
+             nicknames, review_powers, ban_ranks, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons, uploads]
 
 

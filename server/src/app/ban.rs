@@ -11,6 +11,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::{EventScope, publish_event};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, community_access, require_member};
+use crate::app::visibility::Visibility;
 use crate::app::{CommunityId, UserId};
 use crate::database::schema::community_ban;
 use crate::t;
@@ -217,10 +218,12 @@ pub async fn ban_member(
                         .await?;
                     }
                     let since = Utc::now() - Duration::seconds(i64::from(window));
+                    // Only where the banner may view, as deleting one by one would allow.
+                    let visible = Visibility::load_on(conn.as_mut(), caller, &[community]).await?;
                     app::message::delete_recent_by(
                         state,
                         conn.as_mut(),
-                        Some(community),
+                        Some(&visible),
                         member,
                         since,
                     )
