@@ -76,6 +76,7 @@ uses one of these codes, after a message saying why:
 | 4403 | Two factors are required and the account has none, when the stream opens or when the requirement is turned on while it is open. |
 | 4408 | No `identify` within ten seconds. Usually a very slow connection. |
 | 4410 | The account was banned from this deployment. The app signs out and says why. |
+| 4429 | The account, or the address it connects from, already holds as many live connections to this API server as `[limits] max_event_streams_per_user` or `max_event_streams_per_address` allow. The app keeps trying and connects once another closes. Many people behind one address, or a reverse proxy missing from `[rate_limits] trusted_proxies` so that every client seems to come from it, call for raising the cap or listing the proxy. |
 
 If connections drop every minute or so, a proxy between clients and the server is closing idle
 WebSockets: the server pings every thirty seconds, so any idle timeout must be longer than that.

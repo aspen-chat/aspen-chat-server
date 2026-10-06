@@ -676,8 +676,10 @@ pub(crate) async fn read_community_members(
     if communities.is_empty() {
         return Ok(Vec::new());
     }
-    // Presence is anyone's, whichever community they were found connected through.
-    let connected: HashSet<UserId> = try_join_all(
+    // Presence is anyone's, whichever community they were found connected through, except
+    // that of those who blocked the caller (`app::user_status::presence_visible`), who are
+    // ordered as if not connected.
+    let mut connected: HashSet<UserId> = try_join_all(
         communities
             .iter()
             .map(|community| app::user_status::connected_members(state, *community)),
@@ -687,6 +689,16 @@ pub(crate) async fn read_community_members(
     .flat_map(|members| members.iter().copied())
     .collect();
     let mut conn = state.connection_pool.get().await?;
+    if !connected.is_empty() {
+        let blockers: Vec<UserId> = crate::database::schema::user_block::table
+            .select(crate::database::schema::user_block::blocker)
+            .filter(crate::database::schema::user_block::blocked.eq(caller))
+            .load(conn.as_mut())
+            .await?;
+        for blocker in blockers {
+            connected.remove(&blocker);
+        }
+    }
     // The rank of a member's highest role shown apart is looked up only for those connected,
     // since it orders no one else.
     let rows: Vec<CommunityMember> = diesel::sql_query(
@@ -752,7 +764,7 @@ async fn memberships_of(
         .map(|(community, user)| (*community, user.id))
         .collect();
     let mut roles = app::role::roles_of_members(conn, &keys).await?;
-    let users = app::user::with_online_status(state, users).await?;
+    let users = app::user::with_online_status(state, caller, users).await?;
     Ok(communities
         .into_iter()
         .zip(sort_indexes)

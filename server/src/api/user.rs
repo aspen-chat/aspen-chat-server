@@ -187,7 +187,7 @@ pub async fn get_user(
     session: SessionUser,
     Path(user): Path<UserRef>,
 ) -> ApiResult<Json<User>> {
-    let user = app::user::read_user(&state, user.resolve(&session)).await?;
+    let user = app::user::read_user(&state, session.user.id, user.resolve(&session)).await?;
     Ok(Json(User::from(user)))
 }
 
@@ -467,7 +467,7 @@ pub struct UserStatusRecord {
     params(StatusesQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, description = "The presence of each asked-for user, in the order asked; presence is pulled, never pushed", body = Vec<UserStatusRecord>),
+        (status = OK, description = "The presence of each asked-for user, in the order asked; presence is pulled, never pushed. A user the caller shares no community or DM with, or who blocked the caller, reads as `offline`", body = Vec<UserStatusRecord>),
         (status = BAD_REQUEST, description = "A malformed id, or too many", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -475,7 +475,7 @@ pub struct UserStatusRecord {
 )]
 pub async fn get_statuses(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    session: SessionUser,
     Query(query): Query<StatusesQuery>,
 ) -> ApiResult<Json<Vec<UserStatusRecord>>> {
     let mut ids = Vec::new();
@@ -492,7 +492,7 @@ pub async fn get_statuses(
     if ids.len() > STATUS_QUERY_LIMIT {
         return Err(app::Error::Validation(t!("tooManyIds", max = STATUS_QUERY_LIMIT)).into());
     }
-    let statuses = app::user_status::users_online_status(&state, ids).await?;
+    let statuses = app::user_status::statuses_for(&state, session.user.id, ids).await?;
     Ok(Json(
         statuses
             .into_iter()

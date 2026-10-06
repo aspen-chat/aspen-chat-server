@@ -1292,6 +1292,54 @@ describe("RecordStore roles and access", () => {
     expect(store.channel(general.id)).toBeUndefined();
   });
 
+  it("lets go of a category the caller may no longer view, keeping its channels they may", () => {
+    const store = withRoles();
+    store.applyEvent({
+      serverEvent: "channelOverride",
+      type: "create",
+      channel: dev.id,
+      role: everyone.id,
+      allow: ["viewChannel"],
+      deny: [],
+    });
+    store.applyEvent({
+      serverEvent: "categoryOverride",
+      type: "create",
+      category: work.id,
+      role: everyone.id,
+      allow: [],
+      deny: ["viewChannel"],
+    });
+    expect(store.category(work.id)).toBeUndefined();
+    expect(store.categoryOverrides(work.id)).toEqual([]);
+    // Its own override lets the caller view dev, still filed under the category.
+    expect(store.channel(dev.id)?.parentCategory).toBe(work.id);
+    expect(store.channelAccess(dev.id).has("viewChannel")).toBe(true);
+    // A channel moved into the category they no longer hold is hidden with it.
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: general.id,
+      parentCategory: work.id,
+    });
+    expect(store.channel(general.id)).toBeUndefined();
+  });
+
+  it("drops a deleted category's overrides with it", () => {
+    const store = withRoles();
+    store.applyEvent({
+      serverEvent: "categoryOverride",
+      type: "create",
+      category: work.id,
+      role: moderator.id,
+      allow: ["viewChannel"],
+      deny: [],
+    });
+    store.applyEvent({ serverEvent: "category", type: "delete", id: work.id });
+    expect(store.categoryOverrides(work.id)).toEqual([]);
+    expect(store.channel(dev.id)?.parentCategory).toBeNull();
+  });
+
   it("forgets the bans it held once the caller may not ban", () => {
     const store = withRoles();
     store.applyEvent({

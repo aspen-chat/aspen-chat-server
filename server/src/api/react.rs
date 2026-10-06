@@ -94,14 +94,15 @@ pub async fn list_reactors(
     )
     .await?;
     // Read in one batch, then put back in the list's order.
-    let mut users: std::collections::HashMap<UserId, User> = app::user::read_users(&state, &ids)
-        .await?
-        .into_iter()
-        .map(|u| {
-            let record = User::from(u);
-            (record.id, record)
-        })
-        .collect();
+    let mut users: std::collections::HashMap<UserId, User> =
+        app::user::read_users(&state, user.id, &ids)
+            .await?
+            .into_iter()
+            .map(|u| {
+                let record = User::from(u);
+                (record.id, record)
+            })
+            .collect();
     Ok(Json(ids.iter().filter_map(|id| users.remove(id)).collect()))
 }
 

@@ -1,16 +1,14 @@
 use crate::api::message_enum;
 use crate::api::message_enum::request::CategoryUpdateRequest;
-use crate::api::message_enum::server_event::{
-    CategoryEvent, CategoryOverrideEvent, ChannelEvent, ServerEvent,
-};
+use crate::api::message_enum::server_event::{CategoryEvent, ChannelEvent, ServerEvent};
 use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
 use crate::app::context::GlobalServerContext;
-use crate::app::permissions::{CommunityAccess, Permissions, in_category, missing, require_member};
+use crate::app::permissions::{CommunityAccess, Permissions, in_category, require_member};
+use crate::app::visibility::Visibility;
 use crate::app::{
-    CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, RoleId, UserId,
-    publish_event,
+    CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, UserId, publish_event,
 };
 use crate::database::schema::{category, category_override, channel};
 use crate::t;
@@ -116,64 +114,74 @@ async fn member_category(
     Ok((category, access))
 }
 
-/// A live category for `caller` to manage, which takes Manage categories and viewing what the
-/// category's own overrides let them view: nobody changes or removes the overrides that hide its
-/// channels from them. Not found for anyone who is not a member.
-pub(crate) async fn managed_category(
+/// A live category `caller` may learn of: a member (or deployment moderator) whom the category's
+/// own overrides leave View channel there (`in_category`, as
+/// `app::visibility::CommunityModel::can_view_category` decides it for the event stream). Not
+/// found for anyone else, so a hidden category's name and overrides stay hidden.
+pub(crate) async fn viewed_category(
     conn: &mut AsyncPgConnection,
     caller: UserId,
     id: CategoryId,
 ) -> app::Result<(Category, CommunityAccess)> {
     let (category, access) = member_category(conn, caller, id).await?;
-    access.require(Permissions::MANAGE_CATEGORIES)?;
     if !in_category(conn, &access, id)
         .await?
         .contains(Permissions::VIEW_CHANNEL)
     {
-        return Err(missing(Permissions::VIEW_CHANNEL));
+        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     }
     Ok((category, access))
 }
 
+/// A live category for `caller` to manage, which takes viewing it (`viewed_category`), so
+/// nobody changes or removes the overrides that hide it and its channels from them, and Manage
+/// categories.
+pub(crate) async fn managed_category(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    id: CategoryId,
+) -> app::Result<(Category, CommunityAccess)> {
+    let (category, access) = viewed_category(conn, caller, id).await?;
+    access.require(Permissions::MANAGE_CATEGORIES)?;
+    Ok((category, access))
+}
+
+/// A category the caller may learn of (`viewed_category`).
 pub(crate) async fn read_category(
     state: &GlobalServerContext,
     caller: UserId,
     id: CategoryId,
 ) -> app::error::Result<Category> {
     let mut conn = state.connection_pool.get().await?;
-    Ok(member_category(conn.as_mut(), caller, id).await?.0)
+    Ok(viewed_category(conn.as_mut(), caller, id).await?.0)
 }
 
+/// The live categories of `community` the caller may learn of, by sort index.
 pub(crate) async fn read_community_categories(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
 ) -> app::error::Result<Vec<Category>> {
-    let mut conn = state.connection_pool.get().await?;
-    require_member(conn.as_mut(), caller, community).await?;
-    let categories = category::table
-        .select(Category::as_select())
-        .filter(
-            category::community
-                .eq(community)
-                .and(category::deleted_at.is_null()),
-        )
-        .order_by(category::sort_index.asc())
-        .load(conn.as_mut())
-        .await?;
-    Ok(categories)
+    {
+        let mut conn = state.connection_pool.get().await?;
+        require_member(conn.as_mut(), caller, community).await?;
+    }
+    let visible = Visibility::load(state, caller, &[community]).await?;
+    read_communities_categories(state, &visible).await
 }
 
-/// Every live category of each of `communities`, ordered by community and then sort index.
+/// Every live category of each of the communities `visible` covers that its user may learn of
+/// (`Visibility::can_view_category`), ordered by community and then sort index.
 pub(crate) async fn read_communities_categories(
     state: &GlobalServerContext,
-    communities: &[CommunityId],
+    visible: &Visibility,
 ) -> app::error::Result<Vec<Category>> {
+    let communities = visible.communities();
     if communities.is_empty() {
         return Ok(Vec::new());
     }
     let mut conn = state.connection_pool.get().await?;
-    let categories = category::table
+    let categories: Vec<Category> = category::table
         .select(Category::as_select())
         .filter(
             category::community
@@ -183,18 +191,21 @@ pub(crate) async fn read_communities_categories(
         .order_by((category::community.asc(), category::sort_index.asc()))
         .load(conn.as_mut())
         .await?;
-    Ok(categories)
+    Ok(categories
+        .into_iter()
+        .filter(|category| visible.can_view_category(*category.community.id(), category.id))
+        .collect())
 }
 
+/// The channels the caller may view in a category they may learn of.
 pub(crate) async fn read_category_channels(
     state: &GlobalServerContext,
     caller: UserId,
     category: CategoryId,
 ) -> app::error::Result<Vec<Channel>> {
     let mut conn = state.connection_pool.get().await?;
-    let (row, _) = member_category(conn.as_mut(), caller, category).await?;
-    let visibility =
-        crate::app::visibility::Visibility::load(state, caller, &[*row.community.id()]).await?;
+    let (row, _) = viewed_category(conn.as_mut(), caller, category).await?;
+    let visibility = Visibility::load(state, caller, &[*row.community.id()]).await?;
     let channels: Vec<Channel> = channel::table
         .select(Channel::as_select())
         .filter(
@@ -265,7 +276,9 @@ pub(crate) async fn update_category(
 }
 
 /// Deletes a category, which takes Manage categories and viewing it (`managed_category`). Its
-/// channels are left in no category and its overrides are cleared.
+/// channels are left in no category, each move announced, and its overrides are cleared, which
+/// its deletion's event tells of (`app::visibility::ModelChange::CategoryDeleted`): announcing
+/// each would show the category, once its last override went, to everyone.
 pub(crate) async fn delete_category(
     state: &GlobalServerContext,
     caller: UserId,
@@ -316,23 +329,9 @@ pub(crate) async fn delete_category(
                 )
                 .await?;
             }
-            let cleared: Vec<RoleId> =
-                diesel::delete(category_override::table.filter(category_override::category.eq(id)))
-                    .returning(category_override::role)
-                    .get_results(conn.as_mut())
-                    .await?;
-            for role in cleared {
-                publish_event(
-                    state,
-                    conn.as_mut(),
-                    EventScope::CommunityOfCategory(id),
-                    &ServerEvent::CategoryOverride(CategoryOverrideEvent::Delete {
-                        category: id,
-                        role,
-                    }),
-                )
+            diesel::delete(category_override::table.filter(category_override::category.eq(id)))
+                .execute(conn.as_mut())
                 .await?;
-            }
             publish_event(
                 state,
                 conn.as_mut(),

@@ -156,6 +156,8 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 | Setting | Default | |
 | --- | --- | --- |
 | `max_communities_per_user` | `500` | The most communities one account may belong to. It bounds how much each connection reads and how far one profile change spreads. |
+| `max_event_streams_per_user` | `20` | The most live connections (event streams) one account may hold open on each API server. One more is closed with code 4429. Each window or device of the app holds one. |
+| `max_event_streams_per_address` | `200` | The most live connections one client address may hold open on each API server, counted before they sign in (an IPv6 address by its `[rate_limits] ipv6_prefix` network). One more is closed with code 4429. Raise it when many people reach the deployment from one address, behind one NAT or one proxy you have not listed in `trusted_proxies`. |
 
 ## `[presence]`
 

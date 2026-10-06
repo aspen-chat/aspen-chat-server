@@ -119,7 +119,7 @@ pub async fn list_dms(
             .into_iter()
             .collect();
         Some(
-            app::user::read_users(&state, &ids)
+            app::user::read_users(&state, user.id, &ids)
                 .await?
                 .into_iter()
                 .map(crate::api::message_enum::User::from)

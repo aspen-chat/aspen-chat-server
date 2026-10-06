@@ -34,10 +34,10 @@ use crate::app::user::UserPg;
 use crate::app::{CommunityId, UserId};
 use crate::database::schema::community_user;
 use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 const KEY_PREFIX: &str = "user:";
@@ -275,18 +275,92 @@ pub async fn connected_members(
         .await
 }
 
-pub async fn user_online_status(
-    state: &GlobalServerContext,
-    user_id: UserId,
-) -> crate::app::Result<UserOnlineStatus> {
-    Ok(users_online_status(state, vec![user_id])
-        .await?
-        .pop()
-        .map_or(UserOnlineStatus::Offline, |(_, status)| status))
+/// Which of `users` `viewer` may learn the presence of: themself, and anyone who shares a
+/// community or a DM with them, or is a bot they own, unless that person has blocked them. Of
+/// anyone else, presence would tell a stranger when someone is about, so they learn nothing.
+pub async fn presence_visible(
+    conn: &mut AsyncPgConnection,
+    viewer: UserId,
+    users: &[UserId],
+) -> app::Result<HashSet<UserId>> {
+    use diesel::sql_types::{Array, Uuid};
+    #[derive(QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Uuid)]
+        id: uuid::Uuid,
+    }
+    if users.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows: Vec<Row> = diesel::sql_query(
+        r#"
+        SELECT asked.id
+        FROM unnest($2::uuid[]) AS asked(id)
+        WHERE asked.id = $1
+           OR ((EXISTS (
+                    SELECT 1 FROM community_user mine
+                    JOIN community_user theirs ON theirs.community = mine.community
+                    WHERE mine."user" = $1 AND theirs."user" = asked.id
+                )
+                OR EXISTS (
+                    SELECT 1 FROM dm_recipient mine
+                    JOIN dm_recipient theirs ON theirs.channel = mine.channel
+                    WHERE mine."user" = $1 AND theirs."user" = asked.id
+                )
+                OR EXISTS (
+                    SELECT 1 FROM "user" bot WHERE bot.id = asked.id AND bot.bot_owner = $1
+                ))
+               AND NOT EXISTS (
+                    SELECT 1 FROM user_block WHERE blocker = asked.id AND blocked = $1
+               ))
+        "#,
+    )
+    .bind::<Uuid, _>(viewer.0)
+    .bind::<Array<Uuid>, _>(users.iter().map(|u| u.0).collect::<Vec<_>>())
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().map(|row| UserId(row.id)).collect())
 }
 
-/// The presence of each user (`app::user_status`), read in one round trip.
-pub async fn users_online_status(
+/// The presence of each of `users` as `viewer` may learn it (`presence_visible`), in the order
+/// given: `offline` for anyone whose presence is not theirs to learn.
+pub async fn statuses_for(
+    state: &GlobalServerContext,
+    viewer: UserId,
+    users: Vec<UserId>,
+) -> app::Result<Vec<(UserId, UserOnlineStatus)>> {
+    if users.is_empty() {
+        return Ok(Vec::new());
+    }
+    let visible = {
+        let mut conn = state.connection_pool.get().await?;
+        presence_visible(conn.as_mut(), viewer, &users).await?
+    };
+    let asked: Vec<UserId> = users
+        .iter()
+        .copied()
+        .filter(|user| visible.contains(user))
+        .collect();
+    let known: HashMap<UserId, UserOnlineStatus> = users_online_status(state, asked)
+        .await?
+        .into_iter()
+        .collect();
+    Ok(users
+        .into_iter()
+        .map(|user| {
+            let status = known
+                .get(&user)
+                .copied()
+                .unwrap_or(UserOnlineStatus::Offline);
+            (user, status)
+        })
+        .collect())
+}
+
+/// The presence of each user (`app::user_status`), read in one round trip, whoever asks: for
+/// counting and ordering members (`online_among`, `connected_members`). What a person is told of
+/// someone's presence goes through `statuses_for`.
+async fn users_online_status(
     state: &GlobalServerContext,
     user_ids: Vec<UserId>,
 ) -> crate::app::Result<Vec<(UserId, UserOnlineStatus)>> {

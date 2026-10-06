@@ -3064,8 +3064,14 @@ export class AspenSync {
         return community != null && holds(community, event.role) ? community : null;
       }
       case "categoryOverride": {
-        const community = this.store.category(event.category)?.community;
-        return community !== undefined && holds(community, event.role) ? community : null;
+        // One about a category the caller does not hold reaches them because they may now
+        // learn of it (the server sends a category's events to those its own overrides let
+        // view it, before or after the change).
+        const category = this.store.category(event.category);
+        const community = category?.community ?? this.#communityOfRole(event.role);
+        return community !== undefined && (category === undefined || holds(community, event.role))
+          ? community
+          : null;
       }
       case "userCommunity":
         return event.type === "update" && event.user === me && event.roles != null

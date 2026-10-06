@@ -135,9 +135,15 @@ pub struct PushKey {
     pair: EcdsaKeyPair,
     /// The `Authorization` header made for each audience and subject, and when its token
     /// expires. RFC 8292 lets a token be reused until then, so a message waking thousands of
-    /// phones through one relay is signed once, not once per phone.
+    /// phones through one relay is signed once, not once per phone. Every endpoint's origin is
+    /// an audience, and endpoints are chosen by whoever subscribes, so it holds at most
+    /// [`MAX_TOKENS`], letting go of the tokens too near expiry to be used first and then of
+    /// those nearest it.
     tokens: Mutex<HashMap<(String, Option<String>), Token>>,
 }
+
+/// The most `Authorization` headers a key keeps for reuse.
+const MAX_TOKENS: usize = 1024;
 
 /// An `Authorization` header made earlier, and when its token expires.
 struct Token {
@@ -189,7 +195,21 @@ impl PushKey {
             return Ok(token.header.clone());
         }
         let header = self.sign(audience, subject, now)?;
-        self.tokens.lock().expect("token cache").insert(
+        let mut tokens = self.tokens.lock().expect("token cache");
+        if tokens.len() >= MAX_TOKENS && !tokens.contains_key(&slot) {
+            tokens.retain(|_, token| token.expires - now >= TOKEN_RENEW_SECONDS);
+            while tokens.len() >= MAX_TOKENS {
+                let nearest = tokens
+                    .iter()
+                    .min_by_key(|(_, token)| token.expires)
+                    .map(|(slot, _)| slot.clone());
+                match nearest {
+                    Some(nearest) => tokens.remove(&nearest),
+                    None => break,
+                };
+            }
+        }
+        tokens.insert(
             slot,
             Token {
                 expires: now + TOKEN_LIFETIME_SECONDS,
@@ -317,6 +337,22 @@ mod tests {
             at("https://push.example", 1_001 + TOKEN_RENEW_SECONDS),
             first
         );
+    }
+
+    #[test]
+    fn the_vapid_token_cache_is_bounded() {
+        let (document, _) = PushKey::generate().unwrap();
+        let key = PushKey::from_pkcs8(&document).unwrap();
+        for n in 0..MAX_TOKENS + 10 {
+            key.authorization(&format!("https://{n}.example"), None, n as i64)
+                .unwrap();
+        }
+        let tokens = key.tokens.lock().unwrap();
+        assert_eq!(tokens.len(), MAX_TOKENS);
+        // The newest are kept.
+        let newest = format!("https://{}.example", MAX_TOKENS + 9);
+        assert!(tokens.contains_key(&(newest, None)));
+        assert!(!tokens.contains_key(&("https://0.example".to_string(), None)));
     }
 
     #[test]

@@ -82,6 +82,9 @@ pub struct UserChangeset {
     pub status_emoji: Option<Option<String>>,
 }
 
+/// Loads the user with their presence answered as `offline`: who may learn it depends on who
+/// asks (`app::user_status::statuses_for`), which loading by id does not know. `read_user`
+/// gives it as the caller may see it.
 impl Loadable for User {
     type Id = UserId;
 
@@ -93,7 +96,7 @@ impl Loadable for User {
             .await?;
         Ok(User {
             user_pg,
-            online_status: app::user_status::user_online_status(state, id).await?,
+            online_status: UserOnlineStatus::Offline,
         })
     }
 
@@ -319,15 +322,26 @@ pub async fn create_user(
     Ok(new_user_id)
 }
 
-pub async fn read_user(state: &GlobalServerContext, id: UserId) -> crate::app::Result<User> {
+/// A live user, with their presence as `viewer` may learn it.
+pub async fn read_user(
+    state: &GlobalServerContext,
+    viewer: UserId,
+    id: UserId,
+) -> crate::app::Result<User> {
     let user = User::load_from_db(state, id).await?;
-    Ok(user)
+    Ok(with_online_status(state, viewer, vec![user.user_pg])
+        .await?
+        .remove(0))
 }
 
-/// Loads every live user among `ids`, in no particular order. Ids of deleted or unknown users
-/// are skipped rather than reported, because callers use this to sideload the authors of
-/// records that may outlive their accounts.
-pub async fn read_users(state: &GlobalServerContext, ids: &[UserId]) -> app::Result<Vec<User>> {
+/// Loads every live user among `ids`, in no particular order, with their presence as `viewer`
+/// may learn it. Ids of deleted or unknown users are skipped rather than reported, because
+/// callers use this to sideload the authors of records that may outlive their accounts.
+pub async fn read_users(
+    state: &GlobalServerContext,
+    viewer: UserId,
+    ids: &[UserId],
+) -> app::Result<Vec<User>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -337,16 +351,19 @@ pub async fn read_users(state: &GlobalServerContext, ids: &[UserId]) -> app::Res
         .filter(user::id.eq_any(ids).and(user::deleted_at.is_null()))
         .load(conn.as_mut())
         .await?;
-    with_online_status(state, users).await
+    drop(conn);
+    with_online_status(state, viewer, users).await
 }
 
-/// Pairs each row with its live online status in one round trip to Valkey.
+/// Pairs each row with its online status as `viewer` may learn it
+/// (`app::user_status::statuses_for`).
 pub(crate) async fn with_online_status(
     state: &GlobalServerContext,
+    viewer: UserId,
     users: Vec<UserPg>,
 ) -> app::Result<Vec<User>> {
     let online_status =
-        app::user_status::users_online_status(state, users.iter().map(|u| u.id).collect()).await?;
+        app::user_status::statuses_for(state, viewer, users.iter().map(|u| u.id).collect()).await?;
     Ok(users
         .into_iter()
         .zip(online_status)
@@ -416,7 +433,12 @@ pub(crate) async fn update_user(
         app::icon::require_own(conn.as_mut(), requesting_user, icon, t!("iconMissing")).await?;
     }
     drop(conn);
-    apply_profile_update(state, id, command).await
+    let updated = apply_profile_update(state.clone(), id, command).await?;
+    Ok(
+        with_online_status(&state, requesting_user, vec![updated.user_pg])
+            .await?
+            .remove(0),
+    )
 }
 
 /// Writes a checked profile update to `id`'s account and announces it to everyone who shares a
@@ -474,9 +496,10 @@ pub(crate) async fn apply_profile_update(
                 }),
             )
             .await?;
+            // Presence is the caller's to fill in, as whoever reads it may learn it.
             Ok(User {
                 user_pg,
-                online_status: app::user_status::user_online_status(&state, id).await?,
+                online_status: UserOnlineStatus::Offline,
             })
         }
         .scope_boxed()
@@ -646,6 +669,28 @@ impl Retired {
             }
         }
     }
+}
+
+/// When the sign-in whose refresh token is `refresh_token` ends by itself, for closing what it
+/// holds open then (an event stream). A bot's token, which has no refresh token, never expires:
+/// `Ok(None)`. A sign-in that is gone already ends now.
+pub async fn sign_in_expires(
+    state: &GlobalServerContext,
+    refresh_token: &str,
+) -> app::Result<Option<chrono::DateTime<Utc>>> {
+    if refresh_token.is_empty() {
+        return Ok(None);
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let expires: Option<chrono::NaiveDateTime> = refresh_token::table
+        .select(refresh_token::expires)
+        .filter(refresh_token::token.eq(refresh_token))
+        .first(conn.as_mut())
+        .await
+        .optional()?;
+    Ok(Some(
+        expires.map_or_else(Utc::now, |expires| expires.and_utc()),
+    ))
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.

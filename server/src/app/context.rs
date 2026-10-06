@@ -149,6 +149,7 @@ impl GlobalServerContext {
                     context.clone(),
                     config.event_queue_size,
                     config.event_feed_shards,
+                    app::event_feed::StreamCaps::new(&config.limits),
                 ),
                 Role::PrivateWorker => app::event_feed::EventFeed::idle(),
             },

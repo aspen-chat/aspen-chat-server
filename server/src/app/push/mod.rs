@@ -25,15 +25,16 @@ use crate::app::{
     PushSubscriptionId, UserId,
 };
 use crate::database::schema::{
-    channel, channel_mute, community_member_role, community_user, dm_recipient, message,
-    notification_setting, push_key, push_subscription, read_state, user_block,
+    self, channel, channel_mute, community_member_role, community_user, dm_recipient, message,
+    notification_setting, push_key, push_subscription, read_state, refresh_token, user_block,
 };
 use crate::t;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::prelude::{KeysInterface as _, SetsInterface as _};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,10 @@ const TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_BADGED: usize = 100;
 /// The longest endpoint URL taken.
 const MAX_ENDPOINT_CHARS: usize = 2048;
+/// The most phones one account has woken. Subscribing another lets go of the oldest beyond it,
+/// and of any whose sign-in has expired, so a message tagging someone costs a bounded number
+/// of pushes however often they sign in.
+const MAX_SUBSCRIPTIONS_PER_USER: i64 = 10;
 /// How much of a push service's refusal is read, for the log.
 const MAX_REFUSAL_BYTES: usize = 4096;
 
@@ -165,28 +170,63 @@ pub async fn subscribe(
         return Err(app::Error::Validation(t!("pushKeys")));
     }
     let mut conn = state.connection_pool.get().await?;
-    Ok(diesel::insert_into(push_subscription::table)
-        .values((
-            push_subscription::id.eq(PushSubscriptionId::new()),
-            push_subscription::user.eq(caller.user),
-            push_subscription::refresh_token.eq(&caller.refresh_digest),
-            push_subscription::endpoint.eq(&new.endpoint),
-            push_subscription::p256dh.eq(&new.p256dh),
-            push_subscription::auth.eq(&new.auth),
-            push_subscription::push_key.eq(key),
-        ))
-        .on_conflict(push_subscription::refresh_token)
-        .do_update()
-        .set((
-            push_subscription::endpoint.eq(&new.endpoint),
-            push_subscription::p256dh.eq(&new.p256dh),
-            push_subscription::auth.eq(&new.auth),
-            push_subscription::push_key.eq(key),
-            push_subscription::created_at.eq(diesel::dsl::now),
-        ))
-        .returning(PushSubscription::as_returning())
-        .get_result(conn.as_mut())
-        .await?)
+    let user = caller.user;
+    conn.transaction(|conn| {
+        async move {
+            // Subscriptions of one account are made one at a time, so the cap holds however
+            // many arrive at once.
+            schema::user::table
+                .select(schema::user::id)
+                .filter(schema::user::id.eq(user))
+                .for_no_key_update()
+                .first::<UserId>(conn)
+                .await?;
+            let made = diesel::insert_into(push_subscription::table)
+                .values((
+                    push_subscription::id.eq(PushSubscriptionId::new()),
+                    push_subscription::user.eq(user),
+                    push_subscription::refresh_token.eq(&caller.refresh_digest),
+                    push_subscription::endpoint.eq(&new.endpoint),
+                    push_subscription::p256dh.eq(&new.p256dh),
+                    push_subscription::auth.eq(&new.auth),
+                    push_subscription::push_key.eq(key),
+                ))
+                .on_conflict(push_subscription::refresh_token)
+                .do_update()
+                .set((
+                    push_subscription::endpoint.eq(&new.endpoint),
+                    push_subscription::p256dh.eq(&new.p256dh),
+                    push_subscription::auth.eq(&new.auth),
+                    push_subscription::push_key.eq(key),
+                    push_subscription::created_at.eq(diesel::dsl::now),
+                ))
+                .returning(PushSubscription::as_returning())
+                .get_result(conn)
+                .await?;
+            let kept: Vec<PushSubscriptionId> = push_subscription::table
+                .inner_join(refresh_token::table)
+                .select(push_subscription::id)
+                .filter(push_subscription::user.eq(user))
+                .filter(refresh_token::expires.gt(diesel::dsl::now))
+                .order((
+                    push_subscription::created_at.desc(),
+                    push_subscription::id.desc(),
+                ))
+                .limit(MAX_SUBSCRIPTIONS_PER_USER)
+                .load(conn)
+                .await?;
+            diesel::delete(
+                push_subscription::table
+                    .filter(push_subscription::user.eq(user))
+                    .filter(push_subscription::id.ne_all(kept)),
+            )
+            .execute(conn)
+            .await?;
+            Ok(made)
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Stops waking one of the caller's phones.

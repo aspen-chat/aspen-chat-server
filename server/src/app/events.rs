@@ -52,6 +52,10 @@ pub const EVENT_ID_HEADER: &str = "Aspen-Event-Id";
 /// The header naming the community channel an event is about or happens in: the channel whose
 /// View channel permission decides who receives it, which for a thread is its parent's.
 pub const CHANNEL_HEADER: &str = "Aspen-Channel";
+/// The header naming the category an event is about (its own events and its overrides'): the
+/// category whose own overrides decide who receives it, by whether they leave the reader View
+/// channel there (`app::visibility::CommunityModel::can_view_category`).
+pub const CATEGORY_HEADER: &str = "Aspen-Category";
 /// The header naming the community permission an event needs besides membership, as its wire
 /// name (`manageInvites`); with it, `CREATOR_HEADER` may name one member who receives it anyway.
 pub const REQUIRES_HEADER: &str = "Aspen-Requires";
@@ -414,6 +418,27 @@ async fn to_channel(conn: &mut AsyncPgConnection, scope: EventScope) -> app::Res
 
 /// The community channel whose View channel permission decides who receives an event with
 /// this scope, if it is about one.
+/// The category whose own overrides decide who receives `event` (`CATEGORY_HEADER`): the one a
+/// category's own event, or one of its overrides', is about.
+fn governing_category(event: &ServerEvent) -> Option<CategoryId> {
+    use crate::api::message_enum::server_event::{CategoryEvent, CategoryOverrideEvent};
+    match event {
+        ServerEvent::Category(CategoryEvent::Create(category)) => Some(category.id),
+        ServerEvent::Category(CategoryEvent::Update { id, .. } | CategoryEvent::Delete { id }) => {
+            Some(*id)
+        }
+        ServerEvent::CategoryOverride(
+            CategoryOverrideEvent::Create(crate::api::message_enum::CategoryOverride {
+                category,
+                ..
+            })
+            | CategoryOverrideEvent::Update { category, .. }
+            | CategoryOverrideEvent::Delete { category, .. },
+        ) => Some(*category),
+        _ => None,
+    }
+}
+
 async fn governing_channel(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
@@ -674,18 +699,41 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
 /// What the work in `noting` published that matters once it is done.
 #[derive(Debug, Default)]
 pub struct Noted {
-    /// The communities it published events about.
-    pub communities: HashSet<CommunityId>,
-    /// The users it published events to alone, on their own subjects.
-    pub users: HashSet<UserId>,
+    /// What it published inside a transaction (not a savepoint within one), by the
+    /// transaction's id (`pg_current_xact_id`): it stands or falls with that transaction, which
+    /// the database says committed or not once the work is done.
+    in_transactions: HashMap<String, Published>,
+    /// What it published anywhere else (outside a transaction, inside a savepoint, or where the
+    /// transaction's id could not be read): it stands or falls with the work.
+    elsewhere: Published,
     /// The calls its events may have changed access to (`rechecks_of`).
-    pub rechecks: HashSet<Recheck>,
+    rechecks: HashSet<Recheck>,
+}
+
+/// Whom some events were published to.
+#[derive(Debug, Default)]
+struct Published {
+    /// The communities they were about.
+    communities: HashSet<CommunityId>,
+    /// The users they were published to alone, on their own subjects.
+    users: HashSet<UserId>,
+}
+
+impl Published {
+    fn is_empty(&self) -> bool {
+        self.communities.is_empty() && self.users.is_empty()
+    }
+
+    fn extend(&mut self, other: Published) {
+        self.communities.extend(other.communities);
+        self.users.extend(other.users);
+    }
 }
 
 impl Noted {
     /// Whether nothing was noted, so there is nothing to settle.
     fn is_empty(&self) -> bool {
-        self.communities.is_empty() && self.users.is_empty() && self.rechecks.is_empty()
+        self.in_transactions.is_empty() && self.elsewhere.is_empty() && self.rechecks.is_empty()
     }
 }
 
@@ -713,9 +761,10 @@ fn take_noted(noted: &Mutex<Noted>) -> Noted {
 }
 
 /// Runs `work` inside `noting` and settles what it published (`settle`), as having failed when
-/// `failed` says its result is a failure. Work dropped before it finishes, as a request is when
-/// its client goes away, is settled as failed in a task of its own: its transactions were
-/// rolled back with it, perhaps after it published.
+/// `failed` says its result is a failure. Work dropped before it finishes (a panic, or a
+/// shutdown; a request's goes on when its client goes away, `api::settle_after_request`) is
+/// settled as failed in a task of its own: its open transactions were rolled back with it,
+/// perhaps after it published.
 pub async fn settle_after<T>(
     state: &GlobalServerContext,
     work: impl std::future::Future<Output = T>,
@@ -760,13 +809,29 @@ pub async fn settle_after<T>(
 /// Finishes what `noting` recorded, once the work is done and its transactions have committed
 /// or rolled back: rechecks the calls its events may have changed access to
 /// (`app::voice::recheck`, which changes nothing where nothing changed), and when the work
-/// `failed`, announces that what it published may not have happened (`announce_resync`).
+/// `failed`, announces that what it published may not have happened (`announce_resync`) for
+/// what may indeed not have (`unborne`): a failure after the transaction that published
+/// committed leaves what it published true.
 pub async fn settle(state: &GlobalServerContext, noted: Noted, failed: bool) {
-    for which in noted.rechecks {
+    let Noted {
+        in_transactions,
+        elsewhere,
+        rechecks,
+    } = noted;
+    for which in rechecks {
         app::voice::recheck(state, which);
     }
-    if failed && (!noted.communities.is_empty() || !noted.users.is_empty()) {
-        announce_resync(state, noted.communities, noted.users).await;
+    if !failed || (in_transactions.is_empty() && elsewhere.is_empty()) {
+        return;
+    }
+    match state.connection_pool.get().await {
+        Ok(mut conn) => {
+            let resync = unborne(conn.as_mut(), in_transactions, elsewhere).await;
+            if !resync.is_empty() {
+                announce_resync_in(state, conn.as_mut(), resync.communities, resync.users).await;
+            }
+        }
+        Err(e) => tracing::error!("could not settle what failed work published: {e}"),
     }
 }
 
@@ -778,13 +843,95 @@ pub async fn settle_in(
     noted: Noted,
     failed: bool,
 ) {
-    for which in noted.rechecks {
+    let Noted {
+        in_transactions,
+        elsewhere,
+        rechecks,
+    } = noted;
+    for which in rechecks {
         if let Err(e) = app::voice::recheck_in(state, conn, which).await {
             tracing::error!(?which, "could not recheck who may stay in calls: {e}");
         }
     }
-    if failed && (!noted.communities.is_empty() || !noted.users.is_empty()) {
-        announce_resync_in(state, conn, noted.communities, noted.users).await;
+    if failed {
+        let resync = unborne(conn, in_transactions, elsewhere).await;
+        if !resync.is_empty() {
+            announce_resync_in(state, conn, resync.communities, resync.users).await;
+        }
+    }
+}
+
+/// Of what failed work published, what the database may not bear out: everything published
+/// outside a transaction of its own, and what was published in each transaction that did not
+/// commit. A transaction the database cannot answer for counts as not committed.
+async fn unborne(
+    conn: &mut AsyncPgConnection,
+    in_transactions: HashMap<String, Published>,
+    elsewhere: Published,
+) -> Published {
+    let mut resync = elsewhere;
+    if in_transactions.is_empty() {
+        return resync;
+    }
+    #[derive(QueryableByName)]
+    struct Status {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        id: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        status: Option<String>,
+    }
+    let ids: Vec<String> = in_transactions.keys().cloned().collect();
+    let committed: HashSet<String> = match diesel::sql_query(
+        "SELECT id, pg_xact_status(id::xid8) AS status FROM unnest($1::text[]) AS id",
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(ids)
+    .load::<Status>(conn)
+    .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .filter(|row| row.status.as_deref() == Some("committed"))
+            .map(|row| row.id)
+            .collect(),
+        Err(e) => {
+            tracing::error!("could not read whether failed work's transactions committed: {e}");
+            HashSet::new()
+        }
+    };
+    for (id, published) in in_transactions {
+        if !committed.contains(&id) {
+            resync.extend(published);
+        }
+    }
+    resync
+}
+
+/// The id of the transaction `conn` is in (`pg_current_xact_id`), when it is in one and not in
+/// a savepoint within it, whose rollback the id would not tell of.
+async fn transaction_of(conn: &mut AsyncPgConnection) -> Option<String> {
+    use diesel_async::TransactionManager as _;
+    let depth =
+        <AsyncPgConnection as diesel_async::AsyncConnection>::TransactionManager::transaction_manager_status_mut(conn)
+            .transaction_depth()
+            .ok()
+            .flatten()?;
+    if depth.get() != 1 {
+        return None;
+    }
+    #[derive(QueryableByName)]
+    struct Id {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        id: String,
+    }
+    match diesel::sql_query("SELECT pg_current_xact_id()::text AS id")
+        .get_result::<Id>(conn)
+        .await
+    {
+        Ok(row) => Some(row.id),
+        Err(e) => {
+            tracing::warn!("could not read the publishing transaction's id: {e}");
+            None
+        }
     }
 }
 
@@ -795,20 +942,6 @@ pub async fn settle_in(
 /// it holds of the community and the connections reading it, or the user's connections, which
 /// resume with it loaded afresh; clients read the community, or everything the user's own
 /// subject told them of, again.
-async fn announce_resync(
-    state: &GlobalServerContext,
-    communities: HashSet<CommunityId>,
-    users: HashSet<UserId>,
-) {
-    match state.connection_pool.get().await {
-        Ok(mut conn) => announce_resync_in(state, conn.as_mut(), communities, users).await,
-        Err(e) => {
-            tracing::error!("could not announce a resync of {communities:?} and {users:?}: {e}")
-        }
-    }
-}
-
-/// `announce_resync` on `conn`.
 async fn announce_resync_in(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
@@ -873,18 +1006,27 @@ pub async fn publish_event(
     };
     let rechecks = rechecks_of(event, &scope);
     let subjects = subjects(state, conn, scope).await?;
+    let transaction = if NOTED.try_with(|_| ()).is_ok() {
+        transaction_of(conn).await
+    } else {
+        None
+    };
     // Noted before publishing, since a failure may come after some copies are out.
     let noted = NOTED.try_with(|noted| {
         let mut noted = noted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let published = match transaction {
+            Some(id) => noted.in_transactions.entry(id).or_default(),
+            None => &mut noted.elsewhere,
+        };
         for subject in &subjects {
             match subject_owner(subject) {
                 Some(SubjectOwner::Community(community)) => {
-                    noted.communities.insert(community);
+                    published.communities.insert(community);
                 }
                 Some(SubjectOwner::User(user)) => {
-                    noted.users.insert(user);
+                    published.users.insert(user);
                 }
                 None => {}
             }
@@ -904,6 +1046,9 @@ pub async fn publish_event(
     headers.insert(EVENT_ID_HEADER, event_id.as_str());
     if let Some(channel) = governing {
         headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+    }
+    if let Some(category) = governing_category(event) {
+        headers.insert(CATEGORY_HEADER, category.0.to_string().as_str());
     }
     if let Some((permission, creator)) = &audience {
         headers.insert(REQUIRES_HEADER, permission.to_string().as_str());
