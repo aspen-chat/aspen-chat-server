@@ -311,6 +311,8 @@ def calls(world: World, check: Checks) -> None:
     kicked = frame_of(call, "kicked")
     check("taking Join voice away removes them, saying why",
           kicked is not None and kicked.get("reason") == "accessLost", kicked)
+    check("and closes their socket, so it can act in the call no more",
+          soon(lambda: call.receive(0.2) is None and call.closed is not None, 10), call.closed)
     call.close()
     # A token issued before a change is brought in line once its join is recorded.
     world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")

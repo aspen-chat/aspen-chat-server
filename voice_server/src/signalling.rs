@@ -214,12 +214,12 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         close(outbox, writer).await;
         return;
     }
-    let connection = match state
+    let seat = match state
         .rooms
         .join(channel, user, outbox.clone(), claims.grants())
         .await
     {
-        Ok(connection) => connection,
+        Ok(seat) => seat,
         Err(e) => {
             warn!(error = e.to_string(), "join failed");
             outbox.send(&ServerMessage::Error {
@@ -259,13 +259,10 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 Err(RoomError::BadParameters("already identified".to_string()))
             }
             ClientMessage::SetCapabilities { rtp_capabilities } => {
-                state
-                    .rooms
-                    .set_capabilities(channel, user, rtp_capabilities)
-                    .await
+                state.rooms.set_capabilities(seat, rtp_capabilities).await
             }
             ClientMessage::CreateTransport { direction } => {
-                state.rooms.create_transport(channel, user, direction).await
+                state.rooms.create_transport(seat, direction).await
             }
             ClientMessage::ConnectTransport {
                 transport_id,
@@ -273,11 +270,11 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .connect_transport(channel, user, &transport_id, dtls_parameters)
+                    .connect_transport(seat, &transport_id, dtls_parameters)
                     .await
             }
             ClientMessage::Produce { source, .. } | ClientMessage::ProduceRtp { source }
-                if !state.rooms.grants(channel, user).may_produce(source) =>
+                if !state.rooms.grants(seat).may_produce(source) =>
             {
                 Err(RoomError::NotPermitted(source))
             }
@@ -289,31 +286,21 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .produce(channel, user, &transport_id, kind, source, rtp_parameters)
+                    .produce(seat, &transport_id, kind, source, rtp_parameters)
                     .await
             }
-            ClientMessage::ProduceRtp { source } => {
-                state.rooms.produce_rtp(channel, user, source).await
-            }
-            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(channel, user).await,
+            ClientMessage::ProduceRtp { source } => state.rooms.produce_rtp(seat, source).await,
+            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(seat).await,
             ClientMessage::CloseProducer { producer_id } => {
-                state
-                    .rooms
-                    .close_producer(channel, user, &producer_id)
-                    .await
+                state.rooms.close_producer(seat, &producer_id).await
             }
             ClientMessage::ResumeConsumer { consumer_id } => {
-                state
-                    .rooms
-                    .resume_consumer(channel, user, &consumer_id)
-                    .await
+                state.rooms.resume_consumer(seat, &consumer_id).await
             }
             ClientMessage::SetState { muted, deafened } => {
-                state.rooms.set_state(channel, user, muted, deafened).await
+                state.rooms.set_state(seat, muted, deafened).await
             }
-            ClientMessage::OfferFile { .. }
-                if !state.rooms.grants(channel, user).transfer_files =>
-            {
+            ClientMessage::OfferFile { .. } if !state.rooms.grants(seat).transfer_files => {
                 Err(RoomError::TransferNotPermitted)
             }
             ClientMessage::OfferFile {
@@ -325,40 +312,23 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .offer_file(
-                        channel,
-                        user,
-                        offer,
-                        name,
-                        size,
-                        allow_direct,
-                        valid_for_seconds,
-                    )
+                    .offer_file(seat, offer, name, size, allow_direct, valid_for_seconds)
                     .await
             }
-            ClientMessage::WithdrawFile { offer } => {
-                state.rooms.withdraw_file(channel, user, offer)
-            }
+            ClientMessage::WithdrawFile { offer } => state.rooms.withdraw_file(seat, offer),
             ClientMessage::AcceptFile { offer, mode } => {
-                state.rooms.accept_file(channel, user, offer, mode).await
+                state.rooms.accept_file(seat, offer, mode).await
             }
             ClientMessage::TransferSignal {
                 offer,
                 peer,
                 signal,
-            } => state
-                .rooms
-                .transfer_signal(channel, user, offer, peer, signal),
+            } => state.rooms.transfer_signal(seat, offer, peer, signal),
             ClientMessage::EndTransfer {
                 offer,
                 peer,
                 reason,
-            } => {
-                state
-                    .rooms
-                    .end_transfer(channel, user, offer, peer, reason)
-                    .await
-            }
+            } => state.rooms.end_transfer(seat, offer, peer, reason).await,
             ClientMessage::Leave => break,
         };
         if let Err(e) = result {
@@ -370,10 +340,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         }
     }
     info!(user = user.to_string(), "socket closed");
-    state
-        .rooms
-        .leave(channel, user, Some(connection), None)
-        .await;
+    state.rooms.leave_seat(seat).await;
     close(outbox, writer).await;
 }
 
