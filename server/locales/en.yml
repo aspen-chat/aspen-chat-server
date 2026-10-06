@@ -83,6 +83,7 @@ iconImageType: "A picture must be a PNG, JPEG, WebP, or GIF. Save it as one of t
 iconMissing: "That picture isn't one you uploaded, or its upload hasn't finished. Upload it again."
 iconTooLarge: "A picture may be at most %{max}. Make it smaller and upload it again."
 iconUploadNotFound: "Upload was not found in storage. Please try uploading the icon again."
+uploadSizeRequired: "The app didn't say how large the file is, which this server needs before it takes an upload. Update the app and try again."
 attachmentTooLarge: "A file may be at most %{max} on this deployment. Send a smaller one, or share it another way."
 attachmentNotReady: "Some attachments haven't finished uploading. Wait for them, or remove them, and send again."
 attachmentDimensions: "A picture's width and height must be given together, each a whole number of pixels from 1 to %{max}, or not at all. Upload the picture again, and if this happens again the app needs updating."

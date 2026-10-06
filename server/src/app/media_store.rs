@@ -16,10 +16,12 @@
 //!    key and deleting the staging object, so the bytes readers see are
 //!    written by the server alone, and the URL, which stays valid until it
 //!    expires, can write only to a key nothing reads. The URL is signed for
-//!    one `Content-Type`, which the server chooses, and, where the client
-//!    declares the upload's size, for that `Content-Length`; promoting refuses
-//!    an object over the caller's limit, and gives the copy the type and
-//!    `Content-Disposition` it is served with ([`Served`]). What a URL writes after
+//!    one `Content-Type`, which the server chooses, and for the
+//!    `Content-Length` the client declared; promoting refuses an object over
+//!    the caller's limit, copies only the object it weighed (by its `ETag`, so
+//!    a second upload to the same URL in between is not what is copied), and
+//!    gives the copy the type and `Content-Disposition` it is served with
+//!    ([`Served`]). What a URL writes after
 //!    its upload was promoted, and what was uploaded and never confirmed, the
 //!    sweeper deletes once the URL has expired ([`spawn_upload_sweeper`]).
 //!
@@ -38,6 +40,7 @@
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::presigning::PresigningConfig;
@@ -70,6 +73,30 @@ pub fn upload_key(key: &str) -> String {
 
 fn request_error(e: impl std::error::Error + Send + Sync + 'static) -> app::Error {
     app::Error::S3Request(Box::new(e))
+}
+
+/// How many times [`MediaStore::promote`] weighs an upload replaced while it was being copied.
+const PROMOTE_ATTEMPTS: u32 = 3;
+
+/// Why a copy of a client's upload did not happen.
+enum CopyError {
+    /// The upload was replaced after it was weighed: the store refused the copy with `412
+    /// Precondition Failed`.
+    Replaced,
+    Other(app::Error),
+}
+
+impl<E> From<SdkError<E, HttpResponse>> for CopyError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(e: SdkError<E, HttpResponse>) -> Self {
+        if e.raw_response().map(|response| response.status().as_u16()) == Some(412) {
+            Self::Replaced
+        } else {
+            Self::Other(request_error(e))
+        }
+    }
 }
 
 /// Result of a successful presign request.
@@ -172,15 +199,18 @@ impl MediaStore {
     /// Mint a short-lived presigned `PUT` URL for what becomes `key` once [`promote`]d: it
     /// writes the staging key ([`upload_key`]), never `key` itself.
     ///
-    /// The client must upload with `Content-Type: <content_type>`, and, when `length` is
-    /// given, exactly that many bytes: both are part of the canonical request the signature
-    /// covers, so the store refuses anything else.
+    /// The client must upload with `Content-Type: <content_type>` and exactly `length` bytes:
+    /// both are part of the canonical request the signature covers, so the store refuses
+    /// anything else.
     pub async fn presign_upload(
         &self,
         key: &str,
         content_type: &str,
-        length: Option<u64>,
+        length: u64,
     ) -> app::error::Result<PresignedUpload> {
+        let length = i64::try_from(length).map_err(|_| {
+            app::Error::S3Request("an upload's length is beyond what S3 takes".into())
+        })?;
         let presigning = PresigningConfig::expires_in(self.upload_url_ttl)?;
         let presigned = self
             .presign_client
@@ -188,7 +218,7 @@ impl MediaStore {
             .bucket(&self.bucket)
             .key(upload_key(key))
             .content_type(content_type)
-            .set_content_length(length.and_then(|length| i64::try_from(length).ok()))
+            .content_length(length)
             .presigned(presigning)
             .await
             .map_err(Box::new)?;
@@ -208,6 +238,11 @@ impl MediaStore {
     /// validation error to the client), so 404s are folded into `Ok(None)`;
     /// every other transport / auth failure is propagated as `S3HeadObject`.
     pub async fn head_object(&self, key: &str) -> app::error::Result<Option<u64>> {
+        Ok(self.head(key).await?.map(|(size, _)| size))
+    }
+
+    /// The size in bytes and the `ETag` of the object at `key`, or `None` when there is none.
+    async fn head(&self, key: &str) -> app::error::Result<Option<(u64, Option<String>)>> {
         match self
             .client
             .head_object()
@@ -216,11 +251,12 @@ impl MediaStore {
             .send()
             .await
         {
-            Ok(head) => Ok(Some(
+            Ok(head) => Ok(Some((
                 head.content_length()
                     .and_then(|length| u64::try_from(length).ok())
                     .unwrap_or_default(),
-            )),
+                head.e_tag().map(str::to_owned),
+            ))),
             Err(SdkError::ServiceError(svc))
                 if matches!(svc.err(), HeadObjectError::NotFound(_)) =>
             {
@@ -264,6 +300,10 @@ impl MediaStore {
     /// object is deleted after it. An upload of more than `max_bytes` is deleted instead. An
     /// upload promoted already, by a confirm that then failed, is answered as it is, since only
     /// the server writes `key`.
+    ///
+    /// What is copied is the object weighed and no other (`x-amz-copy-source-if-match` with its
+    /// `ETag`): the URL can write the staging key again until it expires, and an object replaced
+    /// between the weighing and the copy is weighed afresh, up to [`PROMOTE_ATTEMPTS`] times.
     pub async fn promote(
         &self,
         key: &str,
@@ -271,32 +311,53 @@ impl MediaStore {
         served: &Served,
     ) -> app::error::Result<Promotion> {
         let staging = upload_key(key);
-        let Some(size) = self.head_object(&staging).await? else {
-            return Ok(match self.head_object(key).await? {
-                Some(size) => Promotion::Promoted(size),
-                None => Promotion::NotUploaded,
-            });
-        };
-        if size > max_bytes {
-            self.delete(&staging).await?;
-            return Ok(Promotion::TooLarge);
-        }
         let source = format!("{}/{}", self.bucket, staging);
-        if size <= MAX_SINGLE_COPY_BYTES {
-            self.client
-                .copy_object()
-                .bucket(&self.bucket)
-                .key(key)
-                .copy_source(&source)
-                .metadata_directive(MetadataDirective::Replace)
-                .content_type(&served.content_type)
-                .set_content_disposition(served.disposition.clone())
-                .send()
-                .await
-                .map_err(request_error)?;
-        } else {
-            self.copy_in_parts(&source, key, size, served).await?;
-        }
+        let mut attempts = 0;
+        let size = loop {
+            attempts += 1;
+            let Some((size, e_tag)) = self.head(&staging).await? else {
+                return Ok(match self.head_object(key).await? {
+                    Some(size) => Promotion::Promoted(size),
+                    None => Promotion::NotUploaded,
+                });
+            };
+            if size > max_bytes {
+                self.delete(&staging).await?;
+                return Ok(Promotion::TooLarge);
+            }
+            let Some(e_tag) = e_tag else {
+                return Err(app::Error::S3Request(
+                    "the store gave an upload no ETag, so it cannot be copied safely".into(),
+                ));
+            };
+            let copied = if size <= MAX_SINGLE_COPY_BYTES {
+                self.client
+                    .copy_object()
+                    .bucket(&self.bucket)
+                    .key(key)
+                    .copy_source(&source)
+                    .copy_source_if_match(&e_tag)
+                    .metadata_directive(MetadataDirective::Replace)
+                    .content_type(&served.content_type)
+                    .set_content_disposition(served.disposition.clone())
+                    .send()
+                    .await
+                    .map(|_| ())
+                    .map_err(CopyError::from)
+            } else {
+                self.copy_in_parts(&source, &e_tag, key, size, served).await
+            };
+            match copied {
+                Ok(()) => break size,
+                Err(CopyError::Replaced) if attempts < PROMOTE_ATTEMPTS => {}
+                Err(CopyError::Replaced) => {
+                    return Err(app::Error::S3Request(
+                        "an upload kept changing while it was confirmed".into(),
+                    ));
+                }
+                Err(CopyError::Other(e)) => return Err(e),
+            }
+        };
         if let Err(e) = self.delete(&staging).await {
             tracing::warn!(error = %e, key = staging, "could not delete a promoted upload");
         }
@@ -308,10 +369,11 @@ impl MediaStore {
     async fn copy_in_parts(
         &self,
         source: &str,
+        e_tag: &str,
         key: &str,
         size: u64,
         served: &Served,
-    ) -> app::error::Result<()> {
+    ) -> Result<(), CopyError> {
         let upload = self
             .client
             .create_multipart_upload()
@@ -321,7 +383,7 @@ impl MediaStore {
             .set_content_disposition(served.disposition.clone())
             .send()
             .await
-            .map_err(request_error)?;
+            .map_err(|e| CopyError::Other(request_error(e)))?;
         let upload_id = upload.upload_id().unwrap_or_default().to_string();
         let copied = async {
             let mut parts = Vec::new();
@@ -337,10 +399,10 @@ impl MediaStore {
                     .upload_id(&upload_id)
                     .part_number(number)
                     .copy_source(source)
+                    .copy_source_if_match(e_tag)
                     .copy_source_range(format!("bytes={start}-{end}"))
                     .send()
-                    .await
-                    .map_err(request_error)?;
+                    .await?;
                 parts.push(
                     CompletedPart::builder()
                         .part_number(number)
@@ -365,8 +427,8 @@ impl MediaStore {
                 )
                 .send()
                 .await
-                .map_err(request_error)?;
-            app::error::Result::Ok(())
+                .map_err(|e| CopyError::Other(request_error(e)))?;
+            Ok(())
         };
         let result = copied.await;
         if result.is_err() {
@@ -417,26 +479,15 @@ impl MediaStore {
         Ok(swept)
     }
 
-    /// Reads the object at `key` and its content type, as the server serves a copy of it
-    /// itself (`app::federation::abroad`).
-    pub async fn get_bytes(&self, key: &str) -> app::error::Result<(Vec<u8>, Option<String>)> {
-        let object = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(Box::new)?;
-        let content_type = object.content_type().map(str::to_string);
-        let bytes = object
-            .body
-            .collect()
-            .await
-            .map_err(std::io::Error::other)?
-            .into_bytes()
-            .to_vec();
-        Ok((bytes, content_type))
+    /// Reads the object at `key`, as the server serves a copy of it itself
+    /// (`app::federation::abroad`); `None`, having read no more than `limit` bytes of it, when
+    /// it holds more.
+    pub async fn get_bytes(&self, key: &str, limit: u64) -> app::error::Result<Option<Vec<u8>>> {
+        let mut bytes = Vec::new();
+        Ok(self
+            .copy_object_to(key, limit, &mut bytes)
+            .await?
+            .map(|_| bytes))
     }
 
     pub async fn delete(&self, key: &str) -> app::error::Result<()> {
@@ -497,7 +548,7 @@ mod tests {
         };
         let store = MediaStore::from_s3(&internal).await.unwrap();
         let url = store
-            .presign_upload("attachments/a", "text/plain", None)
+            .presign_upload("attachments/a", "text/plain", 1)
             .await
             .unwrap()
             .url;
@@ -511,7 +562,7 @@ mod tests {
         };
         let store = MediaStore::from_s3(&public).await.unwrap();
         let url = store
-            .presign_upload("attachments/a", "text/plain", None)
+            .presign_upload("attachments/a", "text/plain", 1)
             .await
             .unwrap()
             .url;
@@ -519,7 +570,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_urls_are_signed_for_their_type_and_declared_size() {
+    async fn upload_urls_are_signed_for_their_type_and_size() {
         let store = MediaStore::from_s3(&MediaS3Config::default())
             .await
             .unwrap();
@@ -532,7 +583,7 @@ mod tests {
                 .unwrap_or_default()
         };
         let sized = store
-            .presign_upload("attachments/a", "application/octet-stream", Some(1234))
+            .presign_upload("attachments/a", "application/octet-stream", 1234)
             .await
             .unwrap()
             .url;
@@ -542,15 +593,5 @@ mod tests {
             "{headers}"
         );
         assert!(headers.split(';').any(|h| h == "content-type"), "{headers}");
-        let unsized_url = store
-            .presign_upload("attachments/a", "image/png", None)
-            .await
-            .unwrap()
-            .url;
-        let headers = signed_headers(&unsized_url);
-        assert!(
-            !headers.split(';').any(|h| h == "content-length"),
-            "{headers}"
-        );
     }
 }

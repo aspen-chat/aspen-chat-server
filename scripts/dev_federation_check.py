@@ -282,7 +282,7 @@ def check_abroad(admin: str) -> None:
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     )
-    upload = api(ALPHA, "POST", "/icons", {"mimeType": "image/png"}, token=traveller)
+    upload = api(ALPHA, "POST", "/icons", {"mimeType": "image/png", "byteSize": len(png)}, token=traveller)
     put = urllib.request.Request(upload["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
     with urllib.request.urlopen(put, timeout=20) as response:
         if response.status not in (200, 201):

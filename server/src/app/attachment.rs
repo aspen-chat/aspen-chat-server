@@ -304,9 +304,15 @@ pub fn storage_key(id: AttachmentId) -> String {
     format!("attachments/{}", id.0)
 }
 
+/// An upload's size as its client declares it, which every upload URL is signed for, so storage
+/// takes no more; a client that does not say is refused.
+pub fn declared_size(byte_size: Option<u64>) -> app::Result<u64> {
+    byte_size.ok_or_else(|| app::Error::Validation(t!("uploadSizeRequired")))
+}
+
 /// Reserve a row and mint a presigned `PUT` URL, for the type the file is served as
-/// ([`served`]) and, when the client declares it, for exactly `byte_size` bytes, which may be at
-/// most `[media] max_attachment_bytes`.
+/// ([`served`]) and for exactly `byte_size` bytes, which the client must declare and which may
+/// be at most `[media] max_attachment_bytes`.
 ///
 /// On any failure after the row insert (presign error, etc.), the
 /// freshly-inserted row is rolled back so a client retry doesn't leak
@@ -321,7 +327,8 @@ pub async fn init_upload(
     description: Option<String>,
 ) -> app::Result<AttachmentUpload> {
     let max_bytes = state.config.media.max_attachment_bytes;
-    if byte_size.is_some_and(|bytes| bytes > max_bytes) {
+    let byte_size = declared_size(byte_size)?;
+    if byte_size > max_bytes {
         return Err(too_large(max_bytes));
     }
     if file_name.chars().count() > MAX_FILE_NAME_CHARS {

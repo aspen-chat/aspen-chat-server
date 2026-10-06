@@ -93,10 +93,11 @@ pub struct AttachmentUploadInitRequest {
     /// Kept on the record and shown by apps; the file is uploaded and served as `contentType`
     /// on the handle.
     pub mime_type: String,
-    /// The file's size in bytes, at most the deployment's `[media] max_attachment_bytes`. Given,
-    /// the upload URL accepts exactly this many bytes; without it, an upload of more is refused
-    /// when confirmed.
+    /// The file's size in bytes, at most the deployment's `[media] max_attachment_bytes`; the
+    /// upload URL accepts exactly this many bytes. Required: a request without it is refused
+    /// with `validation`.
     #[serde(default)]
+    #[schema(required = true, nullable = false, value_type = u64)]
     pub byte_size: Option<u64>,
     /// A picture's size in pixels, both or neither, each at most
     /// `app::attachment::MAX_PICTURE_SIDE`; a client that measures pictures before sending them
@@ -146,7 +147,7 @@ pub struct AttachmentUploadHandle {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = AttachmentUploadHandle, headers(("Location" = String, description = "URL of the attachment once confirmed"))),
-        (status = BAD_REQUEST, description = "`validation`, as when `byteSize` is over the deployment's limit, `fileName` is too long, or `mimeType` is too long or holds a comma, a quote, or a control character", body = Problem),
+        (status = BAD_REQUEST, description = "`validation`, as when `byteSize` is missing or over the deployment's limit, `fileName` is too long, or `mimeType` is too long or holds a comma, a quote, or a control character", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
