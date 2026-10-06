@@ -10,6 +10,7 @@ import { WakeThisPhone } from "@/api/push";
 import { NotifyOnMessages } from "@/features/notifications/NotifyOnMessages";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
+import { AttributionsScreen } from "@/features/about/AttributionsScreen";
 import { DeploymentWelcome } from "@/features/auth/DeploymentWelcome";
 import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
@@ -48,7 +49,8 @@ export function RootLayout() {
  * Signed out: the deployment's welcome above the sign-in or create-account form. An invite link
  * naming another deployment says the user's account may be on any deployment. A registration link (`/register`, with `?invite=` from the Administration
  * Dashboard) opens on the create-account screen with the invite filled in. A sign-in code
- * (`/device-link`) opens its own screen instead.
+ * (`/device-link`) opens its own screen instead, as does Open Source Attributions
+ * (`/attributions`), which anyone may read.
  */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
@@ -81,6 +83,9 @@ function SignedOut() {
         <DeviceLinkRoute />
       </main>
     );
+  }
+  if (pathname === "/attributions") {
+    return <AttributionsScreen signedOut />;
   }
   return (
     <main className="flex min-h-full flex-col items-center justify-center gap-4 p-6">

@@ -106,6 +106,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+      # The Open Source Attributions list is made from `cargo metadata` when the app is built
+      # or served (`client/packages/app/attributions/plugin.ts`).
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
@@ -188,6 +192,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      # The Open Source Attributions list is made from `cargo metadata` when the app is built
+      # or served (`client/packages/app/attributions/plugin.ts`).
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       - name: Build the web shell and copy it into the Android project

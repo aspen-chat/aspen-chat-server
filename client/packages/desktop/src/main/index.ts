@@ -1,6 +1,7 @@
 import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell } from "electron";
 import { join } from "node:path";
 import { claimAppLinks, serveAppLinks } from "./appLinks";
+import { serveChromiumNotices } from "./chromiumNotices";
 import { serveGameCapture } from "./gameCapture";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
@@ -198,6 +199,7 @@ app
       return;
     }
     serveAppLinks();
+    serveChromiumNotices();
     serveDisplayMedia();
     serveGameCapture();
     servePasskeyHandoff();

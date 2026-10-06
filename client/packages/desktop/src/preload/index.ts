@@ -66,6 +66,10 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       };
     },
   },
+  // Chromium's notices, opened in the system's browser; answers whether they could be.
+  chromiumNotices: {
+    open: () => ipcRenderer.invoke("chromium-notices:open"),
+  },
   // Game capture through libobs; the main process owns the helper that captures and sends it.
   gameCapture: {
     kinds: () => ipcRenderer.invoke("voice:capture-kinds"),

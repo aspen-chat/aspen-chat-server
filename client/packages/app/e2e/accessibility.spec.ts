@@ -140,6 +140,19 @@ for (const { palette, scheme, contrast } of combinations) {
       await expectAccessible(page, "bots");
     });
 
+    test("open source attributions", async ({ page }) => {
+      await page.goto("/attributions");
+      await expect(page.getByRole("heading", { name: /^The servers/, level: 2 })).toBeVisible({
+        timeout: 60_000,
+      });
+      await page
+        .getByRole("listitem")
+        .filter({ hasText: /^react-aria-components/ })
+        .getByRole("button", { name: "License text" })
+        .click();
+      await expectAccessible(page, "attributions");
+    });
+
     test("message search", async ({ page }) => {
       await openChannel(page, "general");
       await page.getByRole("button", { name: "Search messages" }).click();

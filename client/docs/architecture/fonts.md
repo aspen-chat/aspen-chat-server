@@ -41,8 +41,8 @@
   and a family of four takes one advance, since a colour font can load and still draw nothing.
 - The emoji picker names system emoji fonts of its own with `!important`;
   `styles.css` overrides it with `--font-emoji`, so an emoji looks the same picked as sent.
-- Each build carries every bundled font's licence at `licenses/fonts.txt`, gathered by the
-  plugin from each `@fontsource` dependency and the emoji fonts' directory.
+- Every bundled font's licence is on the Open Source Attributions page with every other
+  package's (`about.md`): each `@fontsource` dependency's, and the emoji fonts' directory's.
 - Bundled fonts come to about 39 MB of WOFF2 in the build, nearly all of it CJK and emoji. The
   web client fetches only the slices a page draws, and of the emoji fonts the one its browser
   draws, whole, once the page shows an emoji; the desktop and mobile apps ship them all.

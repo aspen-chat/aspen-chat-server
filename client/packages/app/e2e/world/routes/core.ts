@@ -39,7 +39,19 @@ export function coreRoutes({
   bans,
 }: Asked): WorldRoute[] {
   return [
-    ["GET", /^\/auth\/methods$/, () => ({ passkeys: null, twoFactorRequired: false })],
+    [
+      "GET",
+      /^\/auth\/methods$/,
+      () => ({
+        passkeys: null,
+        twoFactorRequired: false,
+        registrationInviteRequired: false,
+        federationDomain: null,
+        protocol: { version: 1, minimum: 1, capabilities: [] },
+        software: { name: "aspen", version: "0.1.0" },
+        push: null,
+      }),
+    ],
     ["POST", /^\/auth\/login$/, () => JSON.parse(signedIn()) as unknown],
     [
       "POST",

@@ -8,3 +8,6 @@ packages/protocol/src/generated
 packages/desktop/native/obs-capture/target
 # The Android project is Gradle's and Android Studio's to format, and holds their build output.
 packages/mobile/android/
+# License texts are kept exactly as their projects publish them.
+packages/app/attributions/texts/
+packages/app/attributions/spdx/

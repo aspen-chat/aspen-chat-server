@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { detectShell } from "@/config";
 import { AdminDashboard } from "@/features/admin/AdminDashboard";
+import { AttributionsScreen } from "@/features/about/AttributionsScreen";
 import { ChannelSidebarLayout, CommunityIndex } from "@/features/channels/CommunityScreen";
 import { DmIndex, DmLayout } from "@/features/dms/DmLayout";
 import { ForeignIndex, Home } from "@/features/home/Home";
@@ -47,6 +48,8 @@ import { RegisterLanding } from "@/features/auth/RegisterLanding";
  *                                                       tab the caller may open, or at one
  *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
  *                                                       community, with the permissions named
+ *   /attributions                                       Open Source Attributions, signed in or
+ *                                                       out
  *   /at/{domain}/communities/…, /at/{domain}/dms/…, /at/{domain}/invite/{code}
  *                                                       the same on another deployment the user
  *                                                       signs in to from home, named by its
@@ -104,6 +107,12 @@ export const adminTabRoute = createRoute({
     const { tab } = adminTabRoute.useParams();
     return <AdminDashboard tab={tab} />;
   },
+});
+
+export const attributionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/attributions",
+  component: () => <AttributionsScreen />,
 });
 
 export const botAddRoute = createRoute({
@@ -284,6 +293,7 @@ const routeTree = rootRoute.addChildren([
   deviceLinkRoute,
   adminRoute,
   adminTabRoute,
+  attributionsRoute,
   botAddRoute,
   inviteRoute,
   communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),
