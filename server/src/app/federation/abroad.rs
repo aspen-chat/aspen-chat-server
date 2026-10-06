@@ -550,7 +550,8 @@ async fn copy_avatar(
 }
 
 /// The avatar `icon` of one of this deployment's own users, with its type, for a deployment
-/// they sign in to: nothing else is served this way.
+/// they sign in to: nothing else is served this way, and only a picture of one of
+/// [`app::icon::IMAGE_TYPES`].
 pub async fn home_avatar(
     state: &GlobalServerContext,
     icon: IconId,
@@ -560,6 +561,7 @@ pub async fn home_avatar(
         .select(app::icon::Icon::as_select())
         .filter(icon::id.eq(icon))
         .filter(icon::ready_at.is_not_null())
+        .filter(icon::icon_mime_type.eq_any(app::icon::IMAGE_TYPES))
         .filter(diesel::dsl::exists(
             user::table.filter(
                 user::icon
@@ -575,7 +577,8 @@ pub async fn home_avatar(
     Ok((bytes, row.mime_type))
 }
 
-/// An avatar's bytes and type, as its home serves them.
+/// An avatar's bytes and type, as its home serves them; only a picture of one of
+/// [`app::icon::IMAGE_TYPES`] is taken.
 async fn fetch_avatar(
     state: &GlobalServerContext,
     home: &Domain,
@@ -598,7 +601,13 @@ async fn fetch_avatar(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !response.status().is_success() || !mime_type.starts_with("image/") {
+    let mime_type = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !response.status().is_success() || !app::icon::IMAGE_TYPES.contains(&mime_type.as_str()) {
         return Err(unreachable());
     }
     let mut bytes = Vec::new();

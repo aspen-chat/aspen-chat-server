@@ -535,6 +535,52 @@ def previews(world: World, check: Checks) -> None:
               stack.api("GET", f"/channels/{shared}/messages", token=world.owner["token"])["data"]))
 
 
+def upload_icon(world: World, token: str, png: bytes) -> str:
+    handle = world.stack.api("POST", "/icons", {"mimeType": "image/png"}, token)
+    put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
+    urllib.request.urlopen(put, timeout=15).close()
+    world.stack.api("POST", f"/icons/{handle['id']}/confirm", token=token)
+    return handle["id"]
+
+
+def icons(world: World, check: Checks) -> None:
+    say("icons: only pictures, and only the uploader's to give")
+    stack = world.stack
+    png = picture(16, 16)
+    check("an icon that is not a picture every browser shows safely is refused",
+          stack.status("POST", "/icons", {"mimeType": "image/svg+xml"}, world.owner["token"]) == 400
+          and stack.status("POST", "/icons", {"mimeType": "text/html"}, world.owner["token"]) == 400)
+    handle = world.as_owner("POST", "/icons", {"mimeType": "image/png"})
+    put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
+    urllib.request.urlopen(put, timeout=15).close()
+    check("nobody else confirms another's upload",
+          stack.status("POST", f"/icons/{handle['id']}/confirm", token=world.member["token"]) == 404)
+    world.as_owner("POST", f"/icons/{handle['id']}/confirm")
+    icon = handle["id"]
+    check("nor gives it to their own profile",
+          stack.status("PATCH", "/users/@me", {"icon": icon}, world.member["token"]) == 400)
+    check("nor to a community they make",
+          stack.status("POST", "/communities", {"name": "Not mine", "icon": icon}, world.member["token"]) == 400)
+    manager = world.role("icon managers", ["manageCommunity"])
+    world.give(manager)
+    check("nor, managing the community, to it",
+          stack.status("PATCH", f"/communities/{world.community}", {"icon": icon}, world.member["token"]) == 400)
+    world.as_owner("PATCH", f"/communities/{world.community}", {"icon": icon})
+    check("though a manager may keep the icon another gave it",
+          stack.status("PATCH", f"/communities/{world.community}", {"icon": icon, "name": "Kept"},
+                       world.member["token"]) == 200)
+    check("its uploader gives it to their own profile",
+          stack.status("PATCH", "/users/@me", {"icon": icon}, world.owner["token"]) == 200)
+    own = upload_icon(world, world.member["token"], png)
+    check("and a manager their own upload to the community",
+          stack.status("PATCH", f"/communities/{world.community}", {"icon": own}, world.member["token"]) == 200)
+    with urllib.request.urlopen(f"{stack.base}/api/v1/federation/icons/{icon}", timeout=15) as avatar:
+        check("an avatar served from the web client's origin can run nothing there",
+              avatar.headers.get("x-content-type-options") == "nosniff"
+              and "sandbox" in (avatar.headers.get("content-security-policy") or "")
+              and avatar.headers.get("content-type") == "image/png")
+
+
 def operators(world: World, check: Checks) -> None:
     say("the operator commands")
     stack = world.stack
@@ -1306,7 +1352,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews]
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons]
 
 
 def main() -> None:

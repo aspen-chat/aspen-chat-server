@@ -8,10 +8,13 @@
 //! mime type, so the wire surface is one field shorter; everything else
 //! is symmetric.
 //!
-//! An icon records who uploaded it (`icon.uploaded_by`). Through the API
-//! only they may delete it ([`delete_own_icon`]), and only while nothing
-//! uses it: a profile, a community, a custom emoji, the deployment's
-//! profile, or a profile a report or a warning keeps as it was.
+//! An icon is a picture of one of [`IMAGE_TYPES`], and records who uploaded
+//! it (`icon.uploaded_by`). Through the API only they may confirm it, give it
+//! to something ([`require_own`]: their profile or a bot's, a community, a
+//! custom emoji, the deployment's profile), or delete it
+//! ([`delete_own_icon`]), and that only while nothing uses it: a profile, a
+//! community, a custom emoji, the deployment's profile, or a profile a report
+//! or a warning keeps as it was.
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
@@ -21,11 +24,17 @@ use crate::database::schema::icon;
 use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::{
-    BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,
-    SelectableHelper,
+    BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable,
+    Selectable, SelectableHelper,
 };
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use std::borrow::Cow;
 use tracing::warn;
+
+/// The kinds of picture an icon may be: raster formats every browser and every service that
+/// unfurls links shows, none of which can carry script, as an SVG or an HTML page could when
+/// opened from storage or from [`crate::api::federation`]'s avatars.
+pub const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = icon)]
@@ -72,6 +81,9 @@ pub async fn init_upload(
     uploader: UserId,
     mime_type: String,
 ) -> app::Result<IconUpload> {
+    if !IMAGE_TYPES.contains(&mime_type.as_str()) {
+        return Err(app::Error::Validation(t!("iconImageType")));
+    }
     let id = IconId::new();
     let key = storage_key(id);
     let row = Icon {
@@ -109,11 +121,21 @@ pub async fn init_upload(
     }
 }
 
-pub async fn confirm_upload(state: &GlobalServerContext, id: IconId) -> app::Result<Icon> {
+/// Confirms an upload `caller` started; anyone else's is not found.
+pub async fn confirm_upload(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: IconId,
+) -> app::Result<Icon> {
     let mut conn = state.connection_pool.get().await?;
     let row: Icon = icon::table
         .select(Icon::as_select())
-        .filter(icon::id.eq(id).and(icon::ready_at.is_null()))
+        .filter(
+            icon::id
+                .eq(id)
+                .and(icon::ready_at.is_null())
+                .and(icon::uploaded_by.eq(caller)),
+        )
         .first(conn.as_mut())
         .await?;
     if state.media_store.promote(&row.storage_key).await?.is_none() {
@@ -142,6 +164,32 @@ pub async fn read_icon(state: &GlobalServerContext, id: IconId) -> app::Result<I
         .first(conn.as_mut())
         .await
         .map_err(Into::into)
+}
+
+/// Checks that `caller` may give something the icon `id`: one they uploaded and confirmed, of one
+/// of [`IMAGE_TYPES`]. Anything else is refused with `missing`, which tells them to upload it,
+/// or, for a picture of another kind, with `iconImageType`. Callers skip it for the icon the
+/// thing already has, so a community's managers may keep an icon another of them gave it.
+pub async fn require_own(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    id: IconId,
+    missing: Cow<'static, str>,
+) -> app::Result<()> {
+    let found: Option<(Option<UserId>, String)> = icon::table
+        .select((icon::uploaded_by, icon::icon_mime_type))
+        .filter(icon::id.eq(id).and(icon::ready_at.is_not_null()))
+        .first(conn)
+        .await
+        .optional()?;
+    match found {
+        Some((uploader, _)) if uploader != Some(caller) => Err(app::Error::Validation(missing)),
+        None => Err(app::Error::Validation(missing)),
+        Some((_, mime_type)) if !IMAGE_TYPES.contains(&mime_type.as_str()) => {
+            Err(app::Error::Validation(t!("iconImageType")))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 /// Whether anything uses the icon: a user's or community's picture, a custom emoji, the

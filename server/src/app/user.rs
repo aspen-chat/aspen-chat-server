@@ -368,8 +368,8 @@ pub(crate) async fn update_user(
     validate_profile(&command)?;
     // A foreign user's profile is their home's, written from each sign-in; only their status
     // is this deployment's.
-    let foreign: bool = user::table
-        .select(user::home_domain.is_not_null())
+    let (foreign, current_icon): (bool, Option<IconId>) = user::table
+        .select((user::home_domain.is_not_null(), user::icon))
         .filter(user::id.eq(id))
         .first(conn.as_mut())
         .await?;
@@ -384,6 +384,12 @@ pub(crate) async fn update_user(
     }
     if let Some(name) = &command.name {
         validate_username(name)?;
+    }
+    // A new picture must be one the caller uploaded: their own, or for a bot, its owner's.
+    if let Some(Some(icon)) = command.icon
+        && Some(icon) != current_icon
+    {
+        app::icon::require_own(conn.as_mut(), requesting_user, icon, t!("iconMissing")).await?;
     }
     drop(conn);
     apply_profile_update(state, id, command).await

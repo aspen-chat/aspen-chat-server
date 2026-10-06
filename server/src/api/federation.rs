@@ -816,6 +816,8 @@ pub async fn home_avatar(
     Path(icon): Path<IconId>,
 ) -> ApiResult<Response> {
     let (bytes, mime_type) = abroad::home_avatar(&state, icon).await?;
+    // Served from the web client's own origin, so nothing in it may run there, whatever a
+    // browser makes of it.
     Ok((
         [
             (
@@ -826,6 +828,14 @@ pub async fn home_avatar(
             (
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=3600"),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("default-src 'none'; sandbox"),
             ),
         ],
         bytes,

@@ -25,7 +25,6 @@ customEmojiNameTaken: "The community has an emoji of that name already. Choose a
 customEmojiNameLength: "An emoji's name must be %{min} to %{max} characters."
 customEmojiNameChars: "An emoji's name cannot hold spaces or colons."
 customEmojiIconMissing: "Upload the emoji's picture first, and confirm the upload."
-customEmojiImageType: "An emoji's picture must be a PNG, JPEG, WebP, or GIF."
 customEmojiIconUsed: "That picture is another emoji's already. Upload it again."
 customEmojiLimit: "The community has reached its %{limit} custom emoji. Remove one to add another."
 customEmojiNotHere: "Custom emoji can be used only in the community they belong to."
@@ -79,6 +78,8 @@ eventStreamIdentifyTimeout: "The live connection didn't identify itself in time.
 # Media uploads
 attachmentUploadNotFound: "Upload was not found in storage. Please try uploading the file again."
 iconInUse: "That picture is in use, so it can't be deleted. Stop using it first."
+iconImageType: "A picture must be a PNG, JPEG, WebP, or GIF. Save it as one of those and upload it again."
+iconMissing: "That picture isn't one you uploaded, or its upload hasn't finished. Upload it again."
 iconUploadNotFound: "Upload was not found in storage. Please try uploading the icon again."
 attachmentNotReady: "Some attachments haven't finished uploading. Wait for them, or remove them, and send again."
 attachmentDimensions: "A picture's width and height must be given together, each a whole number of pixels from 1 to %{max}, or not at all. Upload the picture again, and if this happens again the app needs updating."

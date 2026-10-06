@@ -33,6 +33,7 @@ pub(crate) fn icon_to_api(state: &GlobalServerContext, row: app::icon::Icon) -> 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IconUploadInitRequest {
+    /// `image/png`, `image/jpeg`, `image/webp`, or `image/gif`.
     pub mime_type: String,
 }
 
@@ -53,7 +54,7 @@ pub struct IconUploadHandle {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = IconUploadHandle, headers(("Location" = String, description = "URL of the icon once confirmed"))),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: `mimeType` is not PNG, JPEG, WebP, or GIF", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -84,16 +85,16 @@ pub async fn init_icon_upload(
         (status = OK, body = Icon),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (object not found in storage)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = NOT_FOUND, description = "No such upload pending, or one the caller did not start", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn confirm_icon_upload(
     State(state): State<GlobalServerContext>,
-    _: SessionUser,
+    SessionUser { user, .. }: SessionUser,
     Path(icon): Path<IconId>,
 ) -> ApiResult<Json<Icon>> {
-    let row = app::icon::confirm_upload(&state, icon)
+    let row = app::icon::confirm_upload(&state, user.id, icon)
         .await
         .map_err(|e| match e {
             app::Error::Validation(reason) => {

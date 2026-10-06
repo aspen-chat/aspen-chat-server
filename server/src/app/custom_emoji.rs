@@ -10,7 +10,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::{EventScope, publish_event};
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, CustomEmojiId, IconId, UserId};
-use crate::database::schema::{custom_emoji, icon};
+use crate::database::schema::custom_emoji;
 use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::{
@@ -24,9 +24,6 @@ use tracing::warn;
 /// How long a name may be, in characters.
 pub const NAME_MIN_CHARS: usize = 2;
 pub const NAME_MAX_CHARS: usize = 32;
-
-/// The picture formats an emoji may be, as the icon's mime type.
-pub const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = custom_emoji)]
@@ -117,8 +114,8 @@ pub async fn read_emoji(
     read_communities_emoji(state, &[community_id]).await
 }
 
-/// Adds an emoji to a community from an uploaded icon, which must be a picture format and
-/// not yet anyone's, under the community's limit. Takes Manage custom emoji.
+/// Adds an emoji to a community from an icon the caller uploaded, which must be a picture format
+/// and not yet another emoji's, under the community's limit. Takes Manage custom emoji.
 pub async fn create_emoji(
     state: &GlobalServerContext,
     caller: UserId,
@@ -133,25 +130,10 @@ pub async fn create_emoji(
         async move {
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_CUSTOM_EMOJI)?;
-            // The icon must be uploaded and confirmed, a picture format, and not already
-            // an emoji's; it is deleted with the emoji, so no two may share one.
-            let (mime_type, ready_at): (String, Option<DateTime<Utc>>) = icon::table
-                .select((icon::icon_mime_type, icon::ready_at))
-                .filter(icon::id.eq(icon_id))
-                .first(conn.as_mut())
-                .await
-                .map_err(|e| match e {
-                    diesel::result::Error::NotFound => {
-                        app::Error::Validation(t!("customEmojiIconMissing"))
-                    }
-                    other => app::Error::Diesel(other),
-                })?;
-            if ready_at.is_none() {
-                return Err(app::Error::Validation(t!("customEmojiIconMissing")));
-            }
-            if !IMAGE_TYPES.contains(&mime_type.as_str()) {
-                return Err(app::Error::Validation(t!("customEmojiImageType")));
-            }
+            // The icon must be the caller's, uploaded and confirmed, and not already an
+            // emoji's; it is deleted with the emoji, so no two may share one.
+            app::icon::require_own(conn.as_mut(), caller, icon_id, t!("customEmojiIconMissing"))
+                .await?;
             let taken: i64 = custom_emoji::table
                 .filter(custom_emoji::icon.eq(icon_id))
                 .count()

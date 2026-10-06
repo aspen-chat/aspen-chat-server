@@ -40,9 +40,6 @@ const ASPEN_IMAGE: &str = "open-graph.png";
 const ASPEN_IMAGE_SIZE: u32 = 512;
 /// The name a deployment that has not given one goes by.
 const ASPEN: &str = "Aspen";
-/// The kinds of picture every service that unfurls links shows; an icon of another kind is
-/// passed over for the next picture.
-const SHOWN_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 /// What the page says about itself, written into its head by `open_graph.html`.
 struct Tags {
@@ -296,9 +293,10 @@ fn page_url(base: &str, uri: &Uri) -> String {
         .map_or_else(|_| format!("{base}{path}"), String::from)
 }
 
-/// The picture of something named `name`, when it has an icon every unfurler shows.
+/// The picture of something named `name`, when it has an icon every unfurler shows (one of
+/// [`app::icon::IMAGE_TYPES`]); an icon of another kind is passed over for the next picture.
 fn image(state: &GlobalServerContext, icon: Option<Icon>, name: &str) -> Option<Image> {
-    let icon = icon.filter(|icon| SHOWN_IMAGE_TYPES.contains(&icon.mime_type.as_str()))?;
+    let icon = icon.filter(|icon| app::icon::IMAGE_TYPES.contains(&icon.mime_type.as_str()))?;
     Some(Image {
         url: state.media_store.public_url(&icon.storage_key),
         mime_type: icon.mime_type,
