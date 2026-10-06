@@ -92,6 +92,11 @@ pub struct RateLimitConfig {
     /// /channels/{channel}/messages"`).
     #[serde(default)]
     pub endpoints: HashMap<String, RuleTable>,
+    /// Endpoints (`*` matching any run of characters) refused while the limits cannot be
+    /// counted, rather than let through: those that guess a secret (a password, a code, an
+    /// invite). The username limit of `POST /auth/login` is always counted so.
+    #[serde(default)]
+    pub fail_closed: Vec<String>,
 }
 
 /// The `[rate_limits]` of `aspen.toml`, laid over the built-in limits. Each limit given
@@ -105,6 +110,8 @@ pub struct RateLimitOverrides {
     pub trusted_proxies: Option<Vec<String>>,
     pub ipv6_prefix: Option<u8>,
     pub max_suspension_seconds: Option<u64>,
+    /// Replaces the built-in list whole.
+    pub fail_closed: Option<Vec<String>>,
     #[serde(default)]
     pub default: RuleTable,
     #[serde(default)]
@@ -134,6 +141,9 @@ impl RateLimitConfig {
         }
         if let Some(max) = overrides.max_suspension_seconds {
             self.max_suspension_seconds = max;
+        }
+        if let Some(fail_closed) = overrides.fail_closed {
+            self.fail_closed = fail_closed;
         }
         self.default.extend(overrides.default);
         for (name, group) in overrides.groups {

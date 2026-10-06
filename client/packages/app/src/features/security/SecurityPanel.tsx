@@ -43,8 +43,8 @@ function errorText(e: unknown): string | null {
 const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
 
 /**
- * The password, authenticator app, passkeys, recovery codes, and signing in other devices by a QR
- * code. Changes that need a fresh verification ask for one first.
+ * The password, authenticator app, passkeys, recovery codes, signing in other devices by a QR
+ * code, and signing out everywhere else. Changes that need a fresh verification ask for one first.
  */
 export function SecurityPanel({ transport }: { transport: PasskeyTransport | null }) {
   const m = useMessages();
@@ -119,6 +119,11 @@ function Sections({
           second factor has no sign-in to give. */}
       {me?.homeDomain == null && client.session?.twoFactorEnrollmentRequired !== true && (
         <OtherDevicesSection />
+      )}
+      {/* A user of another deployment's sign-ins are their home's to end, and an account still
+          owing a second factor may do nothing else first. */}
+      {me?.homeDomain == null && client.session?.twoFactorEnrollmentRequired !== true && (
+        <SignOutEverywhereSection />
       )}
       <RecoveryCodesDialog
         codes={codes}
@@ -622,6 +627,55 @@ function OtherDevicesSection() {
       <OtherDeviceSignIn
         className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}
       />
+    </section>
+  );
+}
+
+/** Ending every other sign-in of the account, for someone who fears another device has it. */
+function SignOutEverywhereSection() {
+  const m = useMessages();
+  const client = useAspenClient();
+  const withReauth = useReauth();
+  const [pending, setPending] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <section aria-labelledby="security-sign-ins" className={planeClass}>
+      <SectionHeading id="security-sign-ins">{m.security.signInsHeading}</SectionHeading>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm">{done ? m.security.signedOutElsewhere : m.security.signInsHint}</p>
+        <Button
+          isDisabled={pending}
+          onPress={() => {
+            setPending(true);
+            setError(null);
+            // `withReauth` answers `undefined` when the user declines to verify.
+            withReauth(async () => {
+              await api.endOtherSignIns(client);
+              return true;
+            })
+              .then((ended) => {
+                if (ended === true) {
+                  setDone(true);
+                }
+              })
+              .catch((e: unknown) => {
+                setError(errorText(e));
+              })
+              .finally(() => {
+                setPending(false);
+              });
+          }}
+          className={secondaryButtonClass + " shrink-0 text-danger"}
+        >
+          {m.security.signOutEverywhere}
+        </Button>
+      </div>
+      {error !== null && (
+        <p role="alert" className={alertClass}>
+          {error}
+        </p>
+      )}
     </section>
   );
 }

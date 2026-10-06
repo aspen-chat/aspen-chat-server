@@ -13,7 +13,7 @@ use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment::DeploymentPermission;
 use crate::app::permissions::{Permissions, require_member};
-use crate::app::user::{User, UserPg, validate_profile, validate_username, with_online_status};
+use crate::app::user::{User, UserPg, validate_new_username, validate_profile, with_online_status};
 use crate::app::{self, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{bot_token, community_user, user};
 use crate::t;
@@ -68,8 +68,8 @@ pub async fn user_for_token(
     Ok(found.map(|bot| {
         let caller = app::two_factor::Caller {
             user: bot.id,
-            session_token: token.to_string(),
-            refresh_token: String::new(),
+            session_digest: String::new(),
+            refresh_digest: String::new(),
             verified_at: chrono::DateTime::<Utc>::MIN_UTC,
             has_second_factor: false,
             bot: true,
@@ -163,7 +163,7 @@ pub async fn create(
     if !state.settings().bots_enabled {
         return Err(app::Error::Forbidden(t!("botsDisabled")));
     }
-    validate_username(&name)?;
+    validate_new_username(&name)?;
     validate_profile(&crate::api::message_enum::request::UserUpdateRequest {
         display_name: Some(display_name.clone()),
         ..Default::default()

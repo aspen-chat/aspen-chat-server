@@ -21,7 +21,7 @@ machine, or millions across a fleet. Nothing in it assumes you have read the cod
 | PostgreSQL | Every account, community, message, and setting, and this deployment's federation key. | **Yes: back it up.** |
 | Object storage (S3 compatible) | Attachments, icons, avatars, and link preview images. | **Yes: back it up.** |
 | NATS with JetStream | Carries events between servers. Keeps the last minute of them in memory, and the voice servers' reports until an API server has applied them. | No. |
-| Valkey | Rate limit counters, presence, and short-lived sign-in state. | No: losing it signs no one out and loses nothing but a few minutes of counters. |
+| Valkey | Rate limit counters, presence, and short-lived sign-in state. | No: losing it signs no one out and loses nothing but a few minutes of counters. While it is unreachable, signing in, password resets, registration, and invites are refused. |
 | The web client | `pnpm build` in `client/`, served by each API server. The desktop and mobile apps need no hosting. | No. |
 
 Every server reads its settings from a file in its working directory (`aspen.toml` for the API

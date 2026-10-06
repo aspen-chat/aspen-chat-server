@@ -23,6 +23,7 @@
 
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
+use crate::app::email::outbox::Factor;
 use crate::app::ephemeral_token;
 use crate::app::login::{self, Session};
 use crate::app::two_factor::{self, Caller, PasskeySummary};
@@ -341,7 +342,7 @@ pub async fn start(
                 options,
                 Pending::Register {
                     user: caller.user,
-                    starter: login::sign_in_id(&caller.refresh_token),
+                    starter: caller.sign_in(),
                     name,
                     state: registration,
                 },
@@ -362,7 +363,7 @@ pub async fn start(
                 serde_json::to_value(&challenge)?,
                 Pending::Reauthenticate {
                     user: caller.user,
-                    starter: login::sign_in_id(&caller.refresh_token),
+                    starter: caller.sign_in(),
                     state: auth_state,
                 },
             )
@@ -427,11 +428,7 @@ pub async fn describe(state: &GlobalServerContext, id: &str) -> app::Result<Desc
 fn ensure_starter(starter: Option<&str>, caller: Option<&Caller>) -> app::Result<()> {
     match starter {
         None => Ok(()),
-        Some(starter)
-            if caller.is_some_and(|caller| login::sign_in_id(&caller.refresh_token) == starter) =>
-        {
-            Ok(())
-        }
+        Some(starter) if caller.is_some_and(|caller| caller.sign_in() == starter) => Ok(()),
         Some(_) => Err(app::Error::Forbidden(t!("passkeyCeremonyNotYours"))),
     }
 }
@@ -636,8 +633,12 @@ async fn take_effect(
                             ))
                             .execute(conn)
                             .await?;
+                        let factor = Factor::Passkey {
+                            name: summary.name.clone(),
+                        };
                         let codes =
-                            two_factor::factor_added(state, conn, user_id, &starter, first).await?;
+                            two_factor::factor_added(state, conn, user_id, &starter, first, factor)
+                                .await?;
                         app::Result::Ok((summary, codes))
                     }
                     .scope_boxed()
@@ -771,21 +772,18 @@ pub async fn remove(
 ) -> app::Result<()> {
     caller.ensure_recently_verified(&state.config.auth)?;
     let user_id = caller.user;
-    let require = state.settings().require_two_factor;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let removed = diesel::delete(
+            let name: String = diesel::delete(
                 passkey::table
                     .filter(passkey::id.eq(id))
                     .filter(passkey::user.eq(user_id)),
             )
-            .execute(conn)
+            .returning(passkey::name)
+            .get_result(conn)
             .await?;
-            if removed == 0 {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            }
-            two_factor::factor_removed(conn, user_id, require).await
+            two_factor::factor_removed(state, conn, user_id, Factor::Passkey { name }).await
         }
         .scope_boxed()
     })

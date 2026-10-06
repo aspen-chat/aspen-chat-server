@@ -291,11 +291,12 @@ async fn issue(
     let session_token_expires = now + SESSION_TOKEN_LIFETIME;
     app::user_ban::check_not_banned(conn, user_id).await?;
     conn.transaction(|conn| {
-        let (refresh_token, session_token) = (&refresh_token, &session_token);
+        let (refresh_token, session_token) =
+            (token_digest(&refresh_token), token_digest(&session_token));
         async move {
             diesel::insert_into(refresh_token::table)
                 .values((
-                    refresh_token::dsl::token.eq(refresh_token),
+                    refresh_token::dsl::token.eq(&refresh_token),
                     refresh_token::dsl::user.eq(user_id),
                     refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
                     refresh_token::dsl::verified_at.eq(verified_at),
@@ -306,7 +307,7 @@ async fn issue(
             diesel::insert_into(session::table)
                 .values((
                     session::dsl::token.eq(session_token),
-                    session::dsl::refresh_token.eq(refresh_token),
+                    session::dsl::refresh_token.eq(&refresh_token),
                     session::dsl::expires.eq(session_token_expires.naive_utc()),
                 ))
                 .execute(conn)
@@ -407,10 +408,11 @@ pub async fn try_token_refresh(
 ) -> Result<TokenRefreshOutcome, app::Error> {
     use schema::{refresh_token, session, user};
     let conn = conn.as_mut();
+    let refresh_digest = token_digest(refresh_token_value);
     let found: Option<(NaiveDateTime, UserId)> = refresh_token::table
         .inner_join(user::table)
         .select((refresh_token::expires, refresh_token::user))
-        .filter(refresh_token::dsl::token.eq(refresh_token_value))
+        .filter(refresh_token::dsl::token.eq(&refresh_digest))
         .filter(user::deleted_at.is_null())
         .first(conn)
         .await
@@ -431,9 +433,9 @@ pub async fn try_token_refresh(
     let session_token_expires = Utc::now() + SESSION_TOKEN_LIFETIME;
     diesel::insert_into(session::table)
         .values((
-            session::dsl::token.eq(&new_token),
+            session::dsl::token.eq(token_digest(&new_token)),
             session::dsl::expires.eq(session_token_expires.naive_utc()),
-            session::dsl::refresh_token.eq(refresh_token_value),
+            session::dsl::refresh_token.eq(&refresh_digest),
         ))
         .execute(conn)
         .await?;
@@ -444,24 +446,34 @@ pub async fn try_token_refresh(
     })
 }
 
-/// Names a sign-in (a refresh token and the sessions issued from it) without revealing it: the
-/// first half of the SHA-256 of its refresh token, in hex. Event streams know which sign-in
-/// they belong to by it, `signInsEnded` events name the sign-ins that ended by it, and what
-/// waits in Valkey to act on a sign-in (a passkey ceremony, a device link) keeps it rather than
-/// the sign-in's tokens.
-pub fn sign_in_id(refresh_token: &str) -> String {
+/// The form refresh and session tokens are kept in: the SHA-256 of the token, in hex. The
+/// database holds no token itself, so a copy of it (a backup, a leaked dump) signs no one in;
+/// a presented token is looked up by its digest. The tokens are 256 random bits, so an
+/// unsalted, fast digest gives nothing to guess from.
+pub fn token_digest(token: &str) -> String {
     use sha2::Digest;
-    let digest = sha2::Sha256::digest(refresh_token.as_bytes());
-    digest[..16]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex(&sha2::Sha256::digest(token.as_bytes()))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Names a sign-in (a refresh token and the sessions issued from it) without revealing it: the
+/// first half of its refresh token's digest (`token_digest`), from that digest. Event streams
+/// know which sign-in they belong to by it, `signInsEnded` events name the sign-ins that ended
+/// by it, and what waits in Valkey to act on a sign-in (a passkey ceremony, a device link)
+/// keeps it rather than the sign-in's tokens.
+pub fn sign_in_id(refresh_digest: &str) -> String {
+    refresh_digest
+        .get(..32)
+        .unwrap_or(refresh_digest)
+        .to_string()
 }
 
 /// `sign_in_id` of the `refresh_token` row in scope, in SQL, compared with the bound value that
 /// follows it.
-pub const SIGN_IN_ID_IS_SQL: &str =
-    "substr(encode(sha256(convert_to(refresh_token.token, 'UTF8')), 'hex'), 1, 32) = ";
+pub const SIGN_IN_ID_IS_SQL: &str = "substr(refresh_token.token, 1, 32) = ";
 
 /// Tells `user`'s event streams that sign-ins ended: `ended` alone, or without it every one but
 /// `kept`. The streams of those sign-ins close.
@@ -490,21 +502,21 @@ pub async fn try_logout(
     refresh_token_value: &str,
 ) -> Result<bool, app::Error> {
     use schema::{refresh_token, session};
-    let refresh_token_value = refresh_token_value.to_string();
+    let refresh_digest = token_digest(refresh_token_value);
     conn.transaction(|conn| {
         async move {
             diesel::delete(session::table)
-                .filter(session::dsl::refresh_token.eq(&refresh_token_value))
+                .filter(session::dsl::refresh_token.eq(&refresh_digest))
                 .execute(conn)
                 .await?;
             let owner: Option<UserId> = diesel::delete(refresh_token::table)
-                .filter(refresh_token::dsl::token.eq(&refresh_token_value))
+                .filter(refresh_token::dsl::token.eq(&refresh_digest))
                 .returning(refresh_token::user)
                 .get_result(conn)
                 .await
                 .optional()?;
             if let Some(user) = owner {
-                let ended = Some(sign_in_id(&refresh_token_value));
+                let ended = Some(sign_in_id(&refresh_digest));
                 announce_ended(state, conn, user, ended, None).await?;
             }
             Ok(owner.is_some())
@@ -521,8 +533,9 @@ pub enum ChangePasswordOutcome {
 }
 
 /// Changes the caller's password and expires every other session and refresh token belonging
-/// to them, so a stolen credential stops working the moment the owner rotates their password.
-/// The session performing the change stays valid. The old password proves who the caller is
+/// to them, and every plugin capability URL of theirs (`app::plugin::capability::revoke_all`), so
+/// a stolen credential stops working the moment the owner rotates their password, and tells the
+/// account's verified address. The session performing the change stays valid. The old password proves who the caller is
 /// for an account without two-factor sign-in; one with it also needs a recent verification. A
 /// wrong old password counts toward the user's failure limit (`two_factor::limited`), as one
 /// given to re-verify does, so a stolen session cannot guess it.
@@ -539,7 +552,7 @@ pub async fn try_change_password(
         caller.ensure_recently_verified(config)?;
     }
     let user_id = caller.user;
-    let current_session_token = caller.session_token.as_str();
+    let current_session = caller.session_digest.as_str();
     let conn = conn.as_mut();
     let entry_password_hash: String = schema::user::table
         .select(schema::user::password_hash)
@@ -564,7 +577,7 @@ pub async fn try_change_password(
         ));
     }
     let new_password_hash = hash_password(new_password.to_string()).await?;
-    let current_session_token = current_session_token.to_string();
+    let current_session = current_session.to_string();
     conn.transaction(|conn| {
         async move {
             diesel::update(
@@ -577,7 +590,15 @@ pub async fn try_change_password(
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
             .await?;
-            revoke_other_sessions(state, conn, user_id, &current_session_token).await
+            revoke_other_sessions(state, conn, user_id, &current_session).await?;
+            app::plugin::capability::revoke_all(conn, user_id).await?;
+            app::email::outbox::notify(
+                state,
+                conn,
+                user_id,
+                &app::email::outbox::Mail::PasswordChanged,
+            )
+            .await
         }
         .scope_boxed()
     })
@@ -606,9 +627,30 @@ pub async fn revoke_all_sessions(
     announce_ended(state, conn, user_id, None, None).await
 }
 
+/// Ends every sign-in of the caller but their own, and every plugin capability URL of theirs, as
+/// signing out everywhere else does, so whatever a stolen credential opened stops working. It
+/// needs a recently verified session, so a stolen session cannot sign the owner out.
+pub async fn end_other_sign_ins(
+    state: &GlobalServerContext,
+    caller: &two_factor::Caller,
+) -> app::Result<()> {
+    caller.ensure_recently_verified(&state.config.auth)?;
+    let user_id = caller.user;
+    let kept = caller.sign_in();
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            revoke_other_sign_ins(state, conn, user_id, &kept).await?;
+            app::plugin::capability::revoke_all(conn, user_id).await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 /// Expires every sign-in of `user_id` and its sessions except the sign-in named `kept`
-/// (`sign_in_id`), as adding a first second factor does, so a stolen credential stops working once
-/// its owner secures the account.
+/// (`sign_in_id`), as adding a first second factor and signing out everywhere else do, so a
+/// stolen credential stops working once its owner secures the account.
 pub async fn revoke_other_sign_ins(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
@@ -647,13 +689,14 @@ pub async fn revoke_other_sign_ins(
     announce_ended(state, conn, user_id, None, Some(kept.to_string())).await
 }
 
-/// Expires every session and sign-in of `user_id` except the one `current_session_token`
-/// belongs to, so a stolen credential stops working once its owner secures the account.
+/// Expires every session and sign-in of `user_id` except the one the session whose digest is
+/// `current_session` (`token_digest`) belongs to, so a stolen credential stops working once its
+/// owner secures the account.
 pub async fn revoke_other_sessions(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    current_session_token: &str,
+    current_session: &str,
 ) -> app::Result<()> {
     diesel::sql_query(
         "
@@ -666,7 +709,7 @@ pub async fn revoke_other_sessions(
             AND session.expires > now();
     ",
     )
-    .bind::<diesel::sql_types::Text, _>(current_session_token)
+    .bind::<diesel::sql_types::Text, _>(current_session)
     .bind::<diesel::sql_types::Uuid, _>(&user_id)
     .execute(conn)
     .await?;
@@ -681,17 +724,32 @@ pub async fn revoke_other_sessions(
             );
     ",
     )
-    .bind::<diesel::sql_types::Text, _>(current_session_token)
+    .bind::<diesel::sql_types::Text, _>(current_session)
     .bind::<diesel::sql_types::Uuid, _>(&user_id)
     .execute(conn)
     .await?;
     let kept: Option<String> = schema::session::table
         .select(schema::session::refresh_token)
-        .filter(schema::session::token.eq(current_session_token))
+        .filter(schema::session::token.eq(current_session))
         .first(conn)
         .await
         .optional()?;
     announce_ended(state, conn, user_id, None, kept.as_deref().map(sign_in_id)).await
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::*;
+
+    #[test]
+    fn a_sign_in_id_is_the_first_half_of_its_refresh_tokens_digest() {
+        let digest = token_digest("abc");
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(sign_in_id(&digest), "ba7816bf8f01cfea414140de5dae2223");
+    }
 }
 
 #[cfg(test)]

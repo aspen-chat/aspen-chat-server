@@ -38,6 +38,31 @@ ipv6_prefix = 64
 # The longest this server honours a suspension of its limits (`limits suspend`), counted from
 # when it started, whatever the suspension says: a day.
 max_suspension_seconds = 86400
+# Endpoints refused (`503` `serverBusy`) rather than let through while Valkey cannot be reached
+# to count their limits: everything that guesses a password, a code, or an invite. Every other
+# endpoint is let through then. The username limit of `POST /auth/login` is always refused so.
+fail_closed = [
+  "GET /auth/passkey",
+  "POST /auth/login",
+  "POST /auth/login/second-factor",
+  "POST /auth/federated-sign-in",
+  "POST /auth/passkey-ceremonies",
+  "GET /auth/passkey-ceremonies/{ceremony}",
+  "POST /auth/passkey-ceremonies/{ceremony}/credential",
+  "POST /auth/passkey-ceremonies/{ceremony}/claim",
+  "POST /auth/device-links",
+  "POST /auth/device-links/{link}/scan",
+  "GET /auth/device-links/{link}",
+  "POST /auth/device-links/{link}/claim",
+  "POST /auth/password-resets",
+  "POST /auth/password-resets/{reset}/codes",
+  "POST /auth/password-resets/{reset}/completion",
+  "POST /users",
+  "GET /registration-invites/{code}",
+  "GET /invites/{code}",
+  "GET /invite/{code}",
+  "PUT /communities/{community}/members/@me",
+]
 
 # Applies to every endpoint, beneath any group or endpoint setting.
 [rate_limits.default]
@@ -88,6 +113,7 @@ endpoints = [
   "PATCH /users/{user}/passkeys/{passkey}",
   "DELETE /users/{user}/passkeys/{passkey}",
   "POST /users/{user}/recovery-codes",
+  "DELETE /users/{user}/sign-ins",
   "PUT /users/{user}/email/address",
   "DELETE /users/{user}/email/address",
   "POST /users/{user}/email/verification",

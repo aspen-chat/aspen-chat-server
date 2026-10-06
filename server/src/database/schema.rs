@@ -668,6 +668,7 @@ diesel::table! {
         user -> Uuid,
         code_hash -> Bytea,
         used_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
     }
 }
 

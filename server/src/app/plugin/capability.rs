@@ -2,8 +2,10 @@
 //! routes gives the caller a path of theirs by a name of its own (`feed:{channel}`), which reaches
 //! the plugin's route `aspen/capabilities/{name}` as that person without signing in, for what
 //! cannot sign in, such as a calendar app following a feed. The path is the same each time it is
-//! asked for, until the plugin revokes it; a request to it answers only what the person may
-//! still see, and nothing once they are banned or their account is gone.
+//! asked for, until the plugin revokes it or the person secures their account (changing or
+//! resetting their password, or signing out everywhere else, which end every path of theirs:
+//! [`revoke_all`]); a request to it answers only what the person may still see, and nothing once
+//! they are banned or their account is gone.
 
 use super::route::{self, Answer};
 use crate::app::{self, UserId};
@@ -84,6 +86,16 @@ pub async fn revoke(
     )
     .execute(conn)
     .await?;
+    Ok(())
+}
+
+/// Ends every path of `user`'s, of every plugin, as securing their account does: a path is a
+/// standing credential like a sign-in, and one copied by whoever took the account must stop
+/// working with the rest. Plugins hand out fresh ones when next asked.
+pub async fn revoke_all(conn: &mut AsyncPgConnection, user: UserId) -> app::Result<()> {
+    diesel::delete(plugin_capability::table.filter(plugin_capability::user.eq(user)))
+        .execute(conn)
+        .await?;
     Ok(())
 }
 

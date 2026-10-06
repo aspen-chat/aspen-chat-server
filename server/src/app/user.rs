@@ -182,12 +182,36 @@ pub(crate) fn validate_username(name: &str) -> Result<(), app::Error> {
     Ok(())
 }
 
-/// Rejects a bad username, and passwords that fail the same length rule `try_change_password`
-/// enforces.
+/// Rejects what [`validate_username`] does, and the names no one may take for an account of
+/// their own: the system account's (`app::system_account::USERNAME`), in any case, which would
+/// pass for the deployment speaking. For registration, renames, and bots; a foreign user's name
+/// is their home's.
+pub(crate) fn validate_new_username(name: &str) -> Result<(), app::Error> {
+    validate_username(name)?;
+    if name.to_lowercase() == app::system_account::USERNAME {
+        return Err(app::Error::Validation(t!("usernameReserved", name = name)));
+    }
+    Ok(())
+}
+
+/// Rejects a bad username, passwords that fail the same length rule `try_change_password`
+/// enforces, and a profile `update_user` would refuse.
 fn validate_registration(command: &UserCreateRequest) -> Result<(), app::Error> {
-    validate_username(&command.name)?;
+    validate_new_username(&command.name)?;
     if command.password.len() < PASSWORD_MIN_LENGTH {
         return Err(app::Error::PasswordRequirement(PasswordRequirement::Length));
+    }
+    validate_profile(&UserUpdateRequest {
+        display_name: Some(command.display_name.clone()),
+        pronouns: Some(command.pronouns.clone()),
+        bio: Some(command.bio.clone()),
+        status: Some(command.status.clone()),
+        ..Default::default()
+    })?;
+    // A picture must be one the account uploaded itself (`app::icon::require_own`), and an
+    // account being made has uploaded none.
+    if command.icon.is_some() {
+        return Err(app::Error::Validation(t!("iconMissing")));
     }
     Ok(())
 }
@@ -383,7 +407,7 @@ pub(crate) async fn update_user(
         return Err(app::Error::Forbidden(t!("foreignProfileAtHome")));
     }
     if let Some(name) = &command.name {
-        validate_username(name)?;
+        validate_new_username(name)?;
     }
     // A new picture must be one the caller uploaded: their own, or for a bot, its owner's.
     if let Some(Some(icon)) = command.icon
@@ -647,7 +671,7 @@ pub async fn user_for_token(
         ))
         .filter(
             session::dsl::token
-                .eq(&token)
+                .eq(app::login::token_digest(token))
                 .and(session::dsl::expires.ge(now))
                 .and(refresh_token::dsl::expires.ge(now))
                 .and(schema::user::deleted_at.is_null())
@@ -664,11 +688,11 @@ pub async fn user_for_token(
         .await
         .optional()?;
     Ok(found.map(
-        |(user, refresh_token, verified_at, method, has_second_factor, email_unverified)| {
+        |(user, refresh_digest, verified_at, method, has_second_factor, email_unverified)| {
             let caller = app::two_factor::Caller {
                 user: user.id,
-                session_token: token.to_string(),
-                refresh_token,
+                session_digest: app::login::token_digest(token),
+                refresh_digest,
                 verified_at,
                 has_second_factor,
                 // A bot holds a session only abroad, from its home's assertion.
@@ -680,4 +704,21 @@ pub async fn user_for_token(
             (user, caller)
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_accounts_name_is_reserved_in_any_case() {
+        for name in ["system", "System", "SYSTEM"] {
+            assert!(matches!(
+                validate_new_username(name),
+                Err(app::Error::Validation(_))
+            ));
+        }
+        assert!(validate_new_username("systems").is_ok());
+        assert!(validate_username("system").is_ok());
+    }
 }

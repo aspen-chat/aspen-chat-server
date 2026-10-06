@@ -3,7 +3,7 @@
 //! program shows no HTML reads the same thing. Mail that belongs to a list carries the RFC 8058
 //! one-click unsubscribe headers and a link to leave it at its foot (`api::email`).
 
-use super::outbox::{List, Mail, Recipient};
+use super::outbox::{Factor, List, Mail, Recipient};
 use super::{Mailer, newsletter};
 use crate::app;
 use crate::app::context::GlobalServerContext;
@@ -183,18 +183,98 @@ fn write(
             outro: vec![t!("emailResetIgnore").into()],
             ..Letter::default()
         },
-        Mail::PasswordWasReset => Letter {
-            subject: t!("emailPasswordWasResetSubject", deployment = deployment).into(),
-            title: t!("emailPasswordWasResetTitle").into(),
-            intro: vec![
+        Mail::PasswordWasReset { removed_factors } => {
+            let mut intro = vec![
                 t!(
                     "emailPasswordWasResetIntro",
                     name = name,
                     deployment = deployment
                 )
                 .into(),
+            ];
+            if *removed_factors > 0 {
+                intro.push(
+                    t!(
+                        "emailPasswordWasResetFactorsRemoved",
+                        count = removed_factors
+                    )
+                    .into(),
+                );
+            }
+            Letter {
+                subject: t!("emailPasswordWasResetSubject", deployment = deployment).into(),
+                title: t!("emailPasswordWasResetTitle").into(),
+                intro,
+                outro: vec![t!("emailPasswordWasResetNotYou").into()],
+                ..Letter::default()
+            }
+        }
+        Mail::PasswordChanged => Letter {
+            subject: t!("emailPasswordChangedSubject", deployment = deployment).into(),
+            title: t!("emailPasswordChangedTitle").into(),
+            intro: vec![
+                t!(
+                    "emailPasswordChangedIntro",
+                    name = name,
+                    deployment = deployment
+                )
+                .into(),
             ],
-            outro: vec![t!("emailPasswordWasResetNotYou").into()],
+            outro: vec![t!("emailSecurityNotYou").into()],
+            ..Letter::default()
+        },
+        Mail::SecondFactorAdded { factor } => Letter {
+            subject: t!("emailFactorAddedSubject", deployment = deployment).into(),
+            title: t!("emailFactorAddedTitle").into(),
+            intro: vec![match factor {
+                Factor::AuthenticatorApp => {
+                    t!("emailFactorAddedApp", name = name, deployment = deployment).into()
+                }
+                Factor::Passkey { name: passkey } => t!(
+                    "emailFactorAddedPasskey",
+                    name = name,
+                    deployment = deployment,
+                    passkey = passkey.as_str()
+                )
+                .into(),
+            }],
+            outro: vec![t!("emailSecurityNotYou").into()],
+            ..Letter::default()
+        },
+        Mail::SecondFactorRemoved { factor } => Letter {
+            subject: t!("emailFactorRemovedSubject", deployment = deployment).into(),
+            title: t!("emailFactorRemovedTitle").into(),
+            intro: vec![match factor {
+                Factor::AuthenticatorApp => t!(
+                    "emailFactorRemovedApp",
+                    name = name,
+                    deployment = deployment
+                )
+                .into(),
+                Factor::Passkey { name: passkey } => t!(
+                    "emailFactorRemovedPasskey",
+                    name = name,
+                    deployment = deployment,
+                    passkey = passkey.as_str()
+                )
+                .into(),
+            }],
+            outro: vec![t!("emailSecurityNotYou").into()],
+            ..Letter::default()
+        },
+        Mail::SignInLocked => Letter {
+            subject: t!("emailSignInLockedSubject", deployment = deployment).into(),
+            title: t!("emailSignInLockedTitle").into(),
+            intro: vec![
+                t!(
+                    "emailSignInLockedIntro",
+                    name = name,
+                    deployment = deployment
+                )
+                .into(),
+                t!("emailSignInLockedStillWorks").into(),
+            ],
+            outro: vec![t!("emailSecurityNotYou").into()],
             ..Letter::default()
         },
         Mail::AddressChanged { new_address } => Letter {

@@ -21,7 +21,9 @@
 //! live on different shards. A key that refuses is left unchanged; the others still count the
 //! request, so hammering past one limit also spends the wider ones. When Valkey cannot be
 //! reached the limiter lets requests through and logs, since most of the API does not otherwise
-//! need Valkey.
+//! need Valkey, except on the endpoints listed in `fail_closed` (those that guess a secret: a
+//! password, a code, an invite) and for the username limit of sign-in, which it refuses
+//! (`Decision::Unavailable`) so an outage does not open them to unlimited guessing.
 //!
 //! An operator may suspend the limits for a while (`aspen_limits::suspension`): for requests
 //! from given networks, the limits that count by address are skipped, or with `scope = all`
@@ -39,7 +41,7 @@ use aspen_limits::suspension::{Exemption, SuspensionState};
 use fred::clients::Client;
 use fred::interfaces::LuaInterface;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -223,7 +225,12 @@ pub struct Identity<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decision {
     Allowed,
-    Limited { retry_after: Duration },
+    Limited {
+        retry_after: Duration,
+    },
+    /// The limits could not be counted, and this endpoint is refused rather than let through
+    /// while they cannot.
+    Unavailable,
 }
 
 #[derive(Debug)]
@@ -232,6 +239,8 @@ pub struct RateLimiter {
     addresses: ClientAddresses,
     suspension: SuspensionState,
     rules: HashMap<String, Vec<Rule>>,
+    /// The routes refused while the limits cannot be counted.
+    fail_closed: HashSet<String>,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
     /// minute rather than on every request.
     last_failure_log: AtomicU64,
@@ -253,6 +262,16 @@ impl RateLimiter {
                     "rate_limits.endpoints.{key:?} names no endpoint (write the method in capitals and the path template without /api/v1, as in openapi.yaml)"
                 ));
             }
+        }
+        let mut fail_closed = HashSet::new();
+        for pattern in &config.fail_closed {
+            let matched: Vec<&Route> = routes.iter().filter(|r| glob(pattern, &r.key)).collect();
+            if matched.is_empty() {
+                return Err(format!(
+                    "rate_limits.fail_closed: {pattern:?} matches no endpoint"
+                ));
+            }
+            fail_closed.extend(matched.into_iter().map(|r| r.key.clone()));
         }
         let mut groups = Vec::new();
         for (name, group) in &config.groups {
@@ -337,6 +356,7 @@ impl RateLimiter {
             addresses,
             suspension: SuspensionState::new(Duration::from_secs(config.max_suspension_seconds)),
             rules,
+            fail_closed,
             last_failure_log: AtomicU64::new(0),
         })
     }
@@ -397,8 +417,13 @@ impl RateLimiter {
             match wait {
                 Ok(wait) => longest = longest.max(wait),
                 Err(e) => {
+                    let refused = stage == Stage::Username || self.fail_closed.contains(route);
                     self.log_failure(&e);
-                    return Decision::Allowed;
+                    return if refused {
+                        Decision::Unavailable
+                    } else {
+                        Decision::Allowed
+                    };
                 }
             }
         }
@@ -455,7 +480,10 @@ impl RateLimiter {
                 .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
-            tracing::error!(%error, "rate limits unavailable, letting requests through");
+            tracing::error!(
+                %error,
+                "rate limits unavailable, refusing the endpoints that fail closed and letting other requests through"
+            );
         }
     }
 }
@@ -520,7 +548,7 @@ fn compile_rule(dimension: Dimension, limit: &Limit, route: &str) -> Rule {
 }
 
 /// Matches `text` against `pattern`, where `*` stands for any run of characters.
-fn glob(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob(pattern: &str, text: &str) -> bool {
     let mut parts = pattern.split('*');
     let first = parts.next().unwrap_or("");
     let Some(mut rest) = text.strip_prefix(first) else {
@@ -580,6 +608,7 @@ mod tests {
             ]),
             groups: Default::default(),
             endpoints: Default::default(),
+            fail_closed: Default::default(),
         }
     }
 
@@ -823,6 +852,27 @@ mod tests {
             dimensions(&limiter, "POST /channels/{channel}/messages")
                 .contains(&"user_per_channel".to_string())
         );
+        for guessing in [
+            SIGN_IN_ROUTE,
+            "POST /auth/login/second-factor",
+            "POST /auth/password-resets/{reset}/completion",
+            "GET /registration-invites/{code}",
+            "GET /invites/{code}",
+        ] {
+            assert!(limiter.fail_closed.contains(guessing), "{guessing}");
+        }
+        assert!(
+            !limiter
+                .fail_closed
+                .contains("POST /channels/{channel}/messages")
+        );
+    }
+
+    #[test]
+    fn a_fail_closed_pattern_must_match_an_endpoint() {
+        let mut config = config();
+        config.fail_closed = vec!["POST /nowhere".into()];
+        assert!(RateLimiter::compile(&config, &routes()).is_err());
     }
 
     #[test]

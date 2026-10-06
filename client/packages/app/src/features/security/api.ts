@@ -85,3 +85,14 @@ export async function changePassword(
     throw new ApiProblemError(problemOf(result.error, result.response));
   }
 }
+
+/**
+ * Signs out everywhere else: the server ends every other sign-in of the account, and every
+ * plugin capability URL, and keeps this one. Needs a recent verification.
+ */
+export async function endOtherSignIns(client: AspenClient): Promise<void> {
+  const result = await client.api.DELETE(`${API_PREFIX}/users/{user}/sign-ins`, me);
+  if (result.error !== undefined) {
+    throw new ApiProblemError(problemOf(result.error, result.response));
+  }
+}

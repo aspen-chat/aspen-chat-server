@@ -723,6 +723,17 @@ def sign_ins(world: World, check: Checks) -> None:
     check("but not the one that changed it", world.stream.closed is None, world.stream.closed)
     stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
               world.member["token"])
+    fourth = world.sign_in(world.member["name"])
+    yet_another = stack.events(fourth["token"])
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, world.member["token"])
+    stack.api("DELETE", "/users/@me/sign-ins", token=world.member["token"])
+    yet_another.gather(1.0)
+    world.stream.gather(0.2)
+    check("signing out everywhere else closes every other sign-in's stream",
+          yet_another.closed == 4401, yet_another.closed)
+    check("and their refresh tokens give no new session",
+          stack.status("POST", "/auth/token-refresh", {"refreshToken": fourth["refresh"]}) == 401)
+    check("but leaves the caller's own sign-in", world.stream.closed is None, world.stream.closed)
 
 
 def removal(world: World, check: Checks) -> None:

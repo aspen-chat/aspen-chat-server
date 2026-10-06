@@ -169,7 +169,7 @@ pub async fn subscribe(
         .values((
             push_subscription::id.eq(PushSubscriptionId::new()),
             push_subscription::user.eq(caller.user),
-            push_subscription::refresh_token.eq(&caller.refresh_token),
+            push_subscription::refresh_token.eq(&caller.refresh_digest),
             push_subscription::endpoint.eq(&new.endpoint),
             push_subscription::p256dh.eq(&new.p256dh),
             push_subscription::auth.eq(&new.auth),

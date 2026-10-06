@@ -8,6 +8,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::rate_limit::{
     Access, Decision, Identity, RateLimiter, Route, SIGN_IN_ROUTE, Stage,
 };
+use crate::t;
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method};
@@ -97,16 +98,16 @@ fn operations(item: &utoipa::openapi::PathItem) -> Vec<(&'static str, &Operation
     .collect()
 }
 
-fn operations_mut(item: &mut utoipa::openapi::PathItem) -> Vec<&mut Operation> {
+fn operations_mut(item: &mut utoipa::openapi::PathItem) -> Vec<(&'static str, &mut Operation)> {
     [
-        &mut item.get,
-        &mut item.post,
-        &mut item.put,
-        &mut item.patch,
-        &mut item.delete,
+        ("GET", &mut item.get),
+        ("POST", &mut item.post),
+        ("PUT", &mut item.put),
+        ("PATCH", &mut item.patch),
+        ("DELETE", &mut item.delete),
     ]
     .into_iter()
-    .filter_map(Option::as_mut)
+    .filter_map(|(method, operation)| operation.as_mut().map(|op| (method, op)))
     .collect()
 }
 
@@ -132,9 +133,20 @@ fn access(operation: &Operation) -> Access {
 
 /// Every operation can be refused for going too fast; the document says so on each.
 pub fn document_rate_limits(openapi: &mut OpenApi) {
-    for item in openapi.paths.paths.values_mut() {
-        for operation in operations_mut(item) {
+    let fail_closed = crate::aspen_config::RateLimitConfig::built_in()
+        .map(|config| config.fail_closed)
+        .unwrap_or_default();
+    for (path, item) in openapi.paths.paths.iter_mut() {
+        let template = path.strip_prefix(API_PREFIX).unwrap_or(path).to_string();
+        for (method, operation) in operations_mut(item) {
             let responses = &mut operation.responses.responses;
+            let key = crate::app::rate_limit::route_key(method, &template);
+            if fail_closed
+                .iter()
+                .any(|pattern| crate::app::rate_limit::glob(pattern, &key))
+            {
+                document_unavailable(responses);
+            }
             match responses.get_mut("429") {
                 Some(RefOr::T(existing)) => {
                     existing.description = format!("{} or `rateLimited`", existing.description);
@@ -161,6 +173,34 @@ pub fn document_rate_limits(openapi: &mut OpenApi) {
 }
 
 /// The route key of a request (`"POST /channels/{channel}/messages"`).
+/// Adds `serverBusy` to the `503` of an operation refused while its limits cannot be counted.
+fn document_unavailable(
+    responses: &mut std::collections::BTreeMap<String, RefOr<utoipa::openapi::Response>>,
+) {
+    match responses.get_mut("503") {
+        Some(RefOr::T(existing)) => {
+            if !existing.description.contains("serverBusy") {
+                existing.description = format!("{} or `serverBusy`", existing.description);
+            }
+        }
+        Some(RefOr::Ref(_)) => {}
+        None => {
+            let busy = ResponseBuilder::new()
+                .description(
+                    "`serverBusy`: the rate limits cannot be counted for now; retry after `Retry-After` seconds",
+                )
+                .content(
+                    "application/json",
+                    ContentBuilder::new()
+                        .schema(Some(Ref::from_schema_name("Problem")))
+                        .build(),
+                )
+                .build();
+            responses.insert("503".into(), RefOr::T(busy));
+        }
+    }
+}
+
 fn route_of(method: &Method, matched: &MatchedPath) -> String {
     let path = matched.as_str();
     crate::app::rate_limit::route_key(
@@ -187,8 +227,14 @@ fn refuse(decision: Decision) -> ApiResult<()> {
     match decision {
         Decision::Allowed => Ok(()),
         Decision::Limited { retry_after } => Err(ApiError::rate_limited(retry_after)),
+        Decision::Unavailable => Err(ApiError::new(ProblemCode::ServerBusy)
+            .with_retry_after(RATE_LIMITS_UNAVAILABLE_RETRY_AFTER)
+            .with_detail(t!("rateLimitsUnavailable"))),
     }
 }
+
+/// How long a client refused while the limits cannot be counted waits before trying again.
+const RATE_LIMITS_UNAVAILABLE_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Middleware on every API route: resolves the client address, then checks the rules that
 /// need no session.

@@ -71,8 +71,21 @@ pub enum Mail {
     AddressChanged { new_address: Option<String> },
     /// The code that resets the password, asked for at the sign-in screen.
     PasswordReset { code: String },
-    /// The password was reset with a code mailed here.
-    PasswordWasReset,
+    /// The password was reset with a code mailed here. `removed_factors` second factors added in
+    /// the week before went with it (`reset::complete`).
+    PasswordWasReset {
+        #[serde(default)]
+        removed_factors: u32,
+    },
+    /// The password was changed by one of the account's sign-ins.
+    PasswordChanged,
+    /// A second factor was added to the account.
+    SecondFactorAdded { factor: Factor },
+    /// A second factor was removed from the account.
+    SecondFactorRemoved { factor: Factor },
+    /// So many wrong codes and passwords were given for the account that they are refused for
+    /// a day (`two_factor::limited`).
+    SignInLocked,
     /// What arrived for the account since its last digest.
     Digest { digest: super::digest::Digest },
     /// A newsletter post, sent to a subscriber, or to its author as a test.
@@ -82,13 +95,33 @@ pub enum Mail {
     },
 }
 
+/// A second factor, as mail about it names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Factor {
+    AuthenticatorApp,
+    /// A passkey, by the name its owner gave it.
+    Passkey {
+        name: String,
+    },
+}
+
 impl Mail {
     /// Higher is sent first.
     fn priority(&self) -> i16 {
         match self {
             Mail::PasswordReset { .. } => 40,
             Mail::Verification { .. } => 30,
-            Mail::AddressChanged { .. } | Mail::PasswordWasReset => 20,
+            Mail::AddressChanged { .. }
+            | Mail::PasswordWasReset { .. }
+            | Mail::PasswordChanged
+            | Mail::SecondFactorAdded { .. }
+            | Mail::SecondFactorRemoved { .. }
+            | Mail::SignInLocked => 20,
             Mail::Newsletter { test: true, .. } => 15,
             Mail::Digest { .. } => 10,
             Mail::Newsletter { test: false, .. } => 0,
@@ -108,6 +141,32 @@ impl Mail {
     fn needs_verified(&self) -> bool {
         !matches!(self, Mail::Verification { .. })
     }
+}
+
+/// Queues `mail`, a notice about the account's security, for `user_id`'s verified address, in the
+/// transaction that made the change it tells of. Nothing is queued where the deployment sends no
+/// mail or the account has no verified address; one verified later is not told of what came
+/// before.
+pub async fn notify(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    mail: &Mail,
+) -> app::Result<()> {
+    if !super::available(state) {
+        return Ok(());
+    }
+    let verified: bool = diesel::select(diesel::dsl::exists(
+        user_email::table
+            .filter(user_email::user.eq(user_id))
+            .filter(user_email::verified_at.is_not_null()),
+    ))
+    .get_result(conn)
+    .await?;
+    if verified {
+        queue(conn, user_id, None, mail).await?;
+    }
+    Ok(())
 }
 
 /// Queues `mail` for `user_id`, to `address`, or to their verified address as it is when the
@@ -423,7 +482,7 @@ mod tests {
             Mail::Verification {
                 code: "123456".to_string(),
             },
-            Mail::PasswordWasReset,
+            Mail::PasswordWasReset { removed_factors: 0 },
             Mail::AddressChanged { new_address: None },
             Mail::Newsletter {
                 post: super::super::newsletter::NewsletterPostId::new(),
@@ -468,6 +527,23 @@ mod tests {
         assert_eq!(retry_wait(2), chrono::Duration::minutes(2));
         let total: i64 = (1..MAX_ATTEMPTS).map(|n| retry_wait(n).num_minutes()).sum();
         assert!((12 * 60..48 * 60).contains(&total), "{total} minutes");
+    }
+
+    #[test]
+    fn a_password_reset_notice_queued_without_its_count_still_reads() {
+        let queued = serde_json::json!({ "kind": "passwordWasReset" });
+        assert_eq!(
+            serde_json::from_value::<Mail>(queued).unwrap(),
+            Mail::PasswordWasReset { removed_factors: 0 }
+        );
+        let mail = Mail::SecondFactorRemoved {
+            factor: Factor::Passkey {
+                name: "Phone".to_string(),
+            },
+        };
+        let json = serde_json::to_value(&mail).unwrap();
+        assert_eq!(json["factor"]["kind"], "passkey");
+        assert_eq!(serde_json::from_value::<Mail>(json).unwrap(), mail);
     }
 
     #[test]
