@@ -127,9 +127,9 @@ enum Pending {
     },
     Register {
         user: UserId,
-        /// `login::sign_in_id` of the sign-in that started it, the only one that may finish it.
+        /// `login::sign_in_id` of the sign-in that started it, the only one that may finish it
+        /// and the one the ceremony acts on. The sign-in's tokens themselves are never kept here.
         starter: String,
-        session_token: String,
         name: String,
         state: PasskeyRegistration,
     },
@@ -137,7 +137,6 @@ enum Pending {
         user: UserId,
         /// As for `Register`.
         starter: String,
-        refresh_token: String,
         state: PasskeyAuthentication,
     },
 }
@@ -164,14 +163,12 @@ enum Verified {
     Registered {
         user: UserId,
         starter: String,
-        session_token: String,
         name: String,
         key: Box<Passkey>,
     },
     Reauthenticated {
         user: UserId,
         starter: String,
-        refresh_token: String,
     },
 }
 
@@ -343,7 +340,6 @@ pub async fn start(
                 Pending::Register {
                     user: caller.user,
                     starter: login::sign_in_id(&caller.refresh_token),
-                    session_token: caller.session_token.clone(),
                     name,
                     state: registration,
                 },
@@ -365,7 +361,6 @@ pub async fn start(
                 Pending::Reauthenticate {
                     user: caller.user,
                     starter: login::sign_in_id(&caller.refresh_token),
-                    refresh_token: caller.refresh_token.clone(),
                     state: auth_state,
                 },
             )
@@ -497,7 +492,6 @@ pub async fn complete(
         Pending::Register {
             user,
             starter,
-            session_token,
             name,
             state: registration,
         } => {
@@ -509,7 +503,6 @@ pub async fn complete(
             Verified::Registered {
                 user,
                 starter,
-                session_token,
                 name,
                 key: Box::new(key),
             }
@@ -517,7 +510,6 @@ pub async fn complete(
         Pending::Reauthenticate {
             user,
             starter,
-            refresh_token,
             state: auth_state,
         } => {
             let credential: PublicKeyCredential =
@@ -527,11 +519,7 @@ pub async fn complete(
                 .map_err(rejected)?;
             let stored = credentials(&mut conn, user).await?;
             record_use(&mut conn, stored, &result).await?;
-            Verified::Reauthenticated {
-                user,
-                starter,
-                refresh_token,
-            }
+            Verified::Reauthenticated { user, starter }
         }
     };
     drop(conn);
@@ -621,8 +609,7 @@ async fn take_effect(
         }),
         Verified::Registered {
             user: user_id,
-            starter: _,
-            session_token,
+            starter,
             name,
             key,
         } => {
@@ -648,8 +635,7 @@ async fn take_effect(
                             .execute(conn)
                             .await?;
                         let codes =
-                            two_factor::factor_added(state, conn, user_id, &session_token, first)
-                                .await?;
+                            two_factor::factor_added(state, conn, user_id, &starter, first).await?;
                         app::Result::Ok((summary, codes))
                     }
                     .scope_boxed()
@@ -660,14 +646,11 @@ async fn take_effect(
                 recovery_codes,
             }
         }
-        Verified::Reauthenticated {
-            user: _,
-            starter: _,
-            refresh_token,
-        } => CeremonyResult::Reauthenticated {
+        Verified::Reauthenticated { user, starter } => CeremonyResult::Reauthenticated {
             verified_until: two_factor::mark_verified(
                 &mut conn,
-                &refresh_token,
+                user,
+                &starter,
                 &state.config.auth,
             )
             .await?,

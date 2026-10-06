@@ -400,7 +400,7 @@ pub async fn confirm_totp(
         return Err(app::Error::VerificationFailed);
     };
     let mut conn = state.connection_pool.get().await?;
-    let session_token = caller.session_token.clone();
+    let sign_in = app::login::sign_in_id(&caller.refresh_token);
     conn.transaction(|conn| {
         async move {
             let first = !methods(conn, user_id).await?.any_factor();
@@ -420,7 +420,7 @@ pub async fn confirm_totp(
                 // Replaced or confirmed by another request since it was read.
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            factor_added(state, conn, user_id, &session_token, first).await
+            factor_added(state, conn, user_id, &sign_in, first).await
         }
         .scope_boxed()
     })
@@ -586,21 +586,22 @@ pub async fn regenerate_recovery_codes(
 // Adding and removing factors
 // ---------------------------------------------------------------------------------------------
 
-/// Called in the transaction that added a factor. `first` says whether the account had none
-/// before it; if so, two-factor sign-in has just turned on, so the account gets recovery codes
-/// and every other session is signed out, as a password change does.
+/// Called in the transaction that added a factor, by the sign-in named `sign_in`
+/// (`login::sign_in_id`). `first` says whether the account had none before it; if so,
+/// two-factor sign-in has just turned on, so the account gets recovery codes and every other
+/// sign-in is signed out.
 pub async fn factor_added(
     state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    session_token: &str,
+    sign_in: &str,
     first: bool,
 ) -> app::Result<Option<Vec<String>>> {
     if !first {
         return Ok(None);
     }
     let codes = replace_recovery_codes(conn, user_id).await?;
-    app::login::revoke_other_sessions(state, conn, user_id, session_token).await?;
+    app::login::revoke_other_sign_ins(state, conn, user_id, sign_in).await?;
     Ok(Some(codes))
 }
 
@@ -658,18 +659,31 @@ pub async fn verify(
     .await
 }
 
-/// Records that the sign-in `refresh_token_value` has just proved who its user is. Returns
-/// until when the session counts as recently verified.
+/// Records that `user_id`'s live sign-in named `sign_in` (`login::sign_in_id`) has just proved
+/// who its user is. Returns until when the session counts as recently verified, or
+/// `Unauthenticated` when that sign-in has ended.
 pub async fn mark_verified(
     conn: &mut AsyncPgConnection,
-    refresh_token_value: &str,
+    user_id: UserId,
+    sign_in: &str,
     config: &AuthConfig,
 ) -> app::Result<DateTime<Utc>> {
     let now = Utc::now();
-    diesel::update(refresh_token::table.filter(refresh_token::token.eq(refresh_token_value)))
-        .set(refresh_token::verified_at.eq(now))
-        .execute(conn)
-        .await?;
+    let marked = diesel::update(
+        refresh_token::table
+            .filter(refresh_token::user.eq(user_id))
+            .filter(refresh_token::expires.gt(now.naive_utc()))
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(app::login::SIGN_IN_ID_IS_SQL)
+                    .bind::<diesel::sql_types::Text, _>(sign_in),
+            ),
+    )
+    .set(refresh_token::verified_at.eq(now))
+    .execute(conn)
+    .await?;
+    if marked == 0 {
+        return Err(app::Error::Unauthenticated);
+    }
     Ok(now + reverify_window(config))
 }
 
@@ -717,7 +731,13 @@ pub async fn reauthenticate(
         return Err(app::Error::VerificationFailed);
     }
     let mut conn = state.connection_pool.get().await?;
-    mark_verified(&mut conn, &caller.refresh_token, &state.config.auth).await
+    mark_verified(
+        &mut conn,
+        user_id,
+        &app::login::sign_in_id(&caller.refresh_token),
+        &state.config.auth,
+    )
+    .await
 }
 
 /// A passkey as its owner sees it.

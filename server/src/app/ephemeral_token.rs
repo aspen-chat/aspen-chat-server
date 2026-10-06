@@ -8,7 +8,8 @@ use fred::types::Expiration;
 use sha2::{Digest, Sha256};
 
 /// Shared by every short-lived secret kept in Valkey: its key holds a digest of the token, so a
-/// dump of the store does not hand out usable tokens.
+/// dump of the store does not hand out usable tokens. For the same reason a value that acts on a
+/// sign-in names it by `login::sign_in_id`, never by its refresh or session token.
 pub fn token_key(prefix: &str, token: &str) -> String {
     format!(
         "{prefix}:{}",

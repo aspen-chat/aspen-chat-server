@@ -433,7 +433,9 @@ pub async fn try_token_refresh(
 
 /// Names a sign-in (a refresh token and the sessions issued from it) without revealing it: the
 /// first half of the SHA-256 of its refresh token, in hex. Event streams know which sign-in
-/// they belong to by it, and `signInsEnded` events name the sign-ins that ended by it.
+/// they belong to by it, `signInsEnded` events name the sign-ins that ended by it, and what
+/// waits in Valkey to act on a sign-in (a passkey ceremony, a device link) keeps it rather than
+/// the sign-in's tokens.
 pub fn sign_in_id(refresh_token: &str) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(refresh_token.as_bytes());
@@ -442,6 +444,11 @@ pub fn sign_in_id(refresh_token: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+/// `sign_in_id` of the `refresh_token` row in scope, in SQL, compared with the bound value that
+/// follows it.
+pub const SIGN_IN_ID_IS_SQL: &str =
+    "substr(encode(sha256(convert_to(refresh_token.token, 'UTF8')), 'hex'), 1, 32) = ";
 
 /// Tells `user`'s event streams that sign-ins ended: `ended` alone, or without it every one but
 /// `kept`. The streams of those sign-ins close.
@@ -584,6 +591,47 @@ pub async fn revoke_all_sessions(
     .execute(conn)
     .await?;
     announce_ended(state, conn, user_id, None, None).await
+}
+
+/// Expires every sign-in of `user_id` and its sessions except the sign-in named `kept`
+/// (`sign_in_id`), as adding a first second factor does, so a stolen credential stops working once
+/// its owner secures the account.
+pub async fn revoke_other_sign_ins(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    kept: &str,
+) -> app::Result<()> {
+    let other = format!("NOT ({SIGN_IN_ID_IS_SQL}$1)");
+    diesel::sql_query(format!(
+        "
+        UPDATE session
+        SET expires = now()
+        FROM refresh_token
+        WHERE refresh_token.token = session.refresh_token
+            AND refresh_token.user = $2
+            AND session.expires > now()
+            AND {other};
+    "
+    ))
+    .bind::<diesel::sql_types::Text, _>(kept)
+    .bind::<diesel::sql_types::Uuid, _>(&user_id)
+    .execute(conn)
+    .await?;
+    diesel::sql_query(format!(
+        "
+        UPDATE refresh_token
+        SET expires = now()
+        WHERE refresh_token.user = $2
+            AND refresh_token.expires > now()
+            AND {other};
+    "
+    ))
+    .bind::<diesel::sql_types::Text, _>(kept)
+    .bind::<diesel::sql_types::Uuid, _>(&user_id)
+    .execute(conn)
+    .await?;
+    announce_ended(state, conn, user_id, None, Some(kept.to_string())).await
 }
 
 /// Expires every session and sign-in of `user_id` except the one `current_session_token`

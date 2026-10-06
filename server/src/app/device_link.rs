@@ -403,10 +403,8 @@ async fn sign_in_stands(
         .filter(user::deleted_at.is_null())
         .filter(refresh_token::expires.gt(Utc::now().naive_utc()))
         .filter(
-            diesel::dsl::sql::<diesel::sql_types::Bool>(
-                "substr(encode(sha256(convert_to(refresh_token.token, 'UTF8')), 'hex'), 1, 32) = ",
-            )
-            .bind::<diesel::sql_types::Text, _>(&giver.sign_in),
+            diesel::dsl::sql::<diesel::sql_types::Bool>(login::SIGN_IN_ID_IS_SQL)
+                .bind::<diesel::sql_types::Text, _>(&giver.sign_in),
         )
         .count()
         .get_result(conn)
