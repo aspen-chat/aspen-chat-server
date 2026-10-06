@@ -589,23 +589,23 @@ pub async fn verify(
     let Some((digest, address)) = stored.as_deref().and_then(|s| s.split_once(':')) else {
         return Err(app::Error::Validation(t!("emailCodeExpired")));
     };
+    // Counted before it is checked, so codes sent all at once are checked no more than
+    // `VERIFICATION_ATTEMPTS` times.
+    let attempts = app::two_factor::count_attempt(
+        &state.valkey,
+        &verification_attempts_key(user_id),
+        VERIFICATION_LIFETIME.as_secs() as i64,
+    )
+    .await?;
+    if attempts > VERIFICATION_ATTEMPTS {
+        let _: i64 = state.valkey.del(verification_key(user_id)).await?;
+        return Err(app::Error::TooManyAttempts);
+    }
     let matches: bool = digest
         .as_bytes()
         .ct_eq(code_digest(given).as_bytes())
         .into();
     if !matches {
-        let attempts: i64 = state
-            .valkey
-            .incr(verification_attempts_key(user_id))
-            .await?;
-        let _: bool = state
-            .valkey
-            .expire(
-                verification_attempts_key(user_id),
-                VERIFICATION_LIFETIME.as_secs() as i64,
-                None,
-            )
-            .await?;
         if attempts >= VERIFICATION_ATTEMPTS {
             let _: i64 = state.valkey.del(verification_key(user_id)).await?;
             return Err(app::Error::TooManyAttempts);

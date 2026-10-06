@@ -6,6 +6,8 @@
 //! 2. [`send_code`]: they type the whole address. Only when it is the account's (ignoring case)
 //!    is a code of [`CODE_DIGITS`] digits mailed there, ahead of all other mail (`outbox`). Each
 //!    reset takes [`ATTEMPTS`] wrong addresses before it ends, and asking again replaces the code.
+//!    Each address and code is counted before it is checked, so a burst of guesses sent at once
+//!    is checked no more than [`ATTEMPTS`] times, whatever the rate limits allow.
 //! 3. [`complete`]: they type the code and a new password. The password is replaced, every
 //!    sign-in of the account ends, and the address is told. The account's second factors stay:
 //!    signing in still asks for one. Each reset takes [`ATTEMPTS`] wrong codes before it ends.
@@ -134,14 +136,29 @@ async fn read(state: &GlobalServerContext, id: &str) -> app::Result<Reset> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-/// Counts a miss of `what` against the reset, ending it at [`ATTEMPTS`].
-async fn miss(state: &GlobalServerContext, id: &str, what: &str) -> app::Result<app::Error> {
-    let misses: i64 = state.valkey.incr(misses_key(id, what)).await?;
-    let _: bool = state
-        .valkey
-        .expire(misses_key(id, what), LIFETIME_SECONDS, None)
-        .await?;
-    if misses >= ATTEMPTS {
+/// Counts an attempt at `what` (the address or the code) against the reset before it is checked,
+/// so attempts sent all at once are checked no more than [`ATTEMPTS`] times: the attempt's
+/// number, or `TooManyAttempts`, ending the reset, once that many have been checked.
+async fn attempt(state: &GlobalServerContext, id: &str, what: &str) -> app::Result<i64> {
+    let attempts =
+        app::two_factor::count_attempt(&state.valkey, &misses_key(id, what), LIFETIME_SECONDS)
+            .await?;
+    if attempts > ATTEMPTS {
+        end(state, id).await?;
+        return Err(app::Error::TooManyAttempts);
+    }
+    Ok(attempts)
+}
+
+/// The error for a wrong `what` that was attempt number `attempts`, ending the reset at the
+/// last one [`ATTEMPTS`] allows.
+async fn miss(
+    state: &GlobalServerContext,
+    id: &str,
+    what: &str,
+    attempts: i64,
+) -> app::Result<app::Error> {
+    if attempts >= ATTEMPTS {
         end(state, id).await?;
         return Ok(app::Error::TooManyAttempts);
     }
@@ -178,9 +195,12 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
         end(state, id).await?;
         return Err(app::Error::PasswordResetExpired);
     };
+    let attempts = attempt(state, id, "address").await?;
     if !super::same_address(address, &on_file) {
-        return Err(miss(state, id, "address").await?);
+        return Err(miss(state, id, "address", attempts).await?);
     }
+    // The right address, which asking again for a code gives each time, counts against nothing.
+    app::two_factor::uncount_attempt(&state.valkey, &misses_key(id, "address")).await?;
     let sent_key = format!("email:reset-sent:{}", reset.user.0);
     let sent: i64 = state.valkey.incr(&sent_key).await?;
     if sent == 1 {
@@ -231,17 +251,19 @@ pub async fn complete(
     let Some(expected) = &reset.code else {
         return Err(app::Error::Validation(t!("passwordResetNoCodeYet")));
     };
+    // Refused before the code is tried, so a short password costs no attempt.
+    if new_password.len() < app::login::PASSWORD_MIN_LENGTH {
+        return Err(app::Error::PasswordRequirement(
+            crate::api::error::PasswordRequirement::Length,
+        ));
+    }
+    let attempts = attempt(state, id, "code").await?;
     let matches: bool = expected
         .as_bytes()
         .ct_eq(super::code_digest(code).as_bytes())
         .into();
     if !matches {
-        return Err(miss(state, id, "code").await?);
-    }
-    if new_password.len() < app::login::PASSWORD_MIN_LENGTH {
-        return Err(app::Error::PasswordRequirement(
-            crate::api::error::PasswordRequirement::Length,
-        ));
+        return Err(miss(state, id, "code", attempts).await?);
     }
     let password_hash = app::login::hash_password(new_password.to_string()).await?;
     // Used once, whatever happens next.

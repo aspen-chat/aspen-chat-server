@@ -221,6 +221,29 @@ where
     limited_in(&state.valkey, &failures_key(user_id), check).await
 }
 
+/// Counts one attempt at the count `key`, whose window of `window_seconds` starts with its first
+/// attempt, and answers how many the window holds now. Counting before checking, as every guess
+/// of a secret here does, means attempts sent all at once are checked no more often than the
+/// limit allows.
+pub(crate) async fn count_attempt(
+    valkey: &fred::clients::Client,
+    key: &str,
+    window_seconds: i64,
+) -> app::Result<i64> {
+    Ok(valkey
+        .eval(COUNT_ATTEMPT, key.to_string(), window_seconds)
+        .await?)
+}
+
+/// Takes back an attempt [`count_attempt`] counted, as for a right answer that is not the last
+/// the window allows.
+pub(crate) async fn uncount_attempt(valkey: &fred::clients::Client, key: &str) -> app::Result<()> {
+    let _: i64 = valkey
+        .eval(UNCOUNT_ATTEMPT, key.to_string(), Vec::<String>::new())
+        .await?;
+    Ok(())
+}
+
 /// `limited` on the count at `key`. The attempt is counted before `check` runs, so however many
 /// arrive at once, no more than `MAX_FAILURES` are checked in a window without one succeeding.
 /// A right answer clears the count; an attempt that could not be checked (an error, not a wrong
@@ -229,9 +252,7 @@ async fn limited_in<F>(valkey: &fred::clients::Client, key: &str, check: F) -> a
 where
     F: AsyncFnOnce() -> app::Result<bool>,
 {
-    let attempts: i64 = valkey
-        .eval(COUNT_ATTEMPT, key.to_string(), FAILURE_WINDOW_SECONDS)
-        .await?;
+    let attempts = count_attempt(valkey, key, FAILURE_WINDOW_SECONDS).await?;
     if attempts > MAX_FAILURES {
         return Err(app::Error::TooManyAttempts);
     }
@@ -242,9 +263,7 @@ where
         }
         Ok(false) => Ok(false),
         Err(e) => {
-            let _: i64 = valkey
-                .eval(UNCOUNT_ATTEMPT, key.to_string(), Vec::<String>::new())
-                .await?;
+            uncount_attempt(valkey, key).await?;
             Err(e)
         }
     }
