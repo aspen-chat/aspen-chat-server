@@ -337,6 +337,11 @@ user_per_message = { requests = 20, per_seconds = 10, burst = 20, bucket = "reac
 [rate_limits.endpoints."PUT /messages/{message}/thread"]
 user = { requests = 20, per_seconds = 60, burst = 10 }
 
+# An echo posts in the parent channel, and deleting it frees the reply to be echoed again.
+[rate_limits.endpoints."PUT /messages/{message}/echo"]
+user = { requests = 20, per_seconds = 60, burst = 10 }
+user_per_message = { requests = 3, per_seconds = 60, burst = 3 }
+
 [rate_limits.endpoints."PUT /polls/{poll}/votes/{option}/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20, bucket = "votes" }
 

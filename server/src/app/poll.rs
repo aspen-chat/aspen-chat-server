@@ -247,6 +247,7 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         warning: None,
         altered_by: Vec::new(),
         card: None,
+        echo: None,
     }
 }
 

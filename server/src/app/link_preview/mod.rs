@@ -409,6 +409,7 @@ async fn run_preview_fetch(
                     linked_messages: None,
                     altered_by: None,
                     card: None,
+                    echo: None,
                 });
                 app::publish_event(
                     state,

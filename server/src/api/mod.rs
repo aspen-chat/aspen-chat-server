@@ -306,6 +306,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(push::create_push_subscription))
         .routes(routes!(push::delete_push_subscription))
         .routes(routes!(message::open_thread))
+        .routes(routes!(message::echo_reply))
         .routes(routes!(message::pin_message, message::unpin_message))
         .routes(routes!(message::remove_attachment))
         .routes(routes!(email::get_email, email::update_email))

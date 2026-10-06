@@ -207,6 +207,16 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "missedCall";
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   const editable = own && message.kind === "standard";
+  // Its author may show a reply in the parent channel later, as the message box offers to as
+  // it is sent, while it has no echo there.
+  const echoParent =
+    inThread &&
+    own &&
+    message.echo == null &&
+    (message.kind === "standard" || message.kind === "command") &&
+    permissions.has("sendMessages")
+      ? parentId
+      : null;
   if (message.kind === "call" || message.kind === "missedCall") {
     return (
       <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
@@ -232,6 +242,7 @@ export const MessageItem = memo(function MessageItem({
     text: message.content,
     permissions,
     canThread,
+    echoParent,
     editable,
     deletable,
     reportable,

@@ -1,4 +1,4 @@
-import { ApiProblemError, isDm } from "@aspen/protocol";
+import { ApiProblemError } from "@aspen/protocol";
 import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
 import { THREAD_PANEL } from "@/features/layout/paneSizes";
 import { ChatsCircleIcon, XIcon } from "@phosphor-icons/react";
@@ -6,6 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import { useBlocked, useChannel, useMessage, useSync, useSyncStatus } from "@/api/hooks";
+import { useEchoTarget } from "@/features/threads/echoTarget";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { BlockedRun } from "@/features/messages/BlockedRun";
 import { Composer } from "@/features/messages/Composer";
@@ -37,7 +38,6 @@ export function ThreadPanel({
   const status = useSyncStatus();
   const navigate = useNavigate();
   const thread = useChannel(threadId);
-  const parent = useChannel(parentId);
   // Each is kept with the thread it concerns, so opening another thread starts clean.
   const [failure, setFailure] = useState<{ threadId: string; message: string } | null>(null);
   const [starterGoneFor, setStarterGoneFor] = useState<string | null>(null);
@@ -77,8 +77,7 @@ export function ThreadPanel({
     };
   }, [sync, threadId, live, m]);
 
-  const echoTarget =
-    parent === undefined || isDm(parent) ? m.threads.thisConversation : `#${parent.name}`;
+  const echoTarget = useEchoTarget(parentId);
   const starter = thread?.starterMessage;
   return (
     // Beside its channel it is complementary; alone on a phone it is the page's main content.

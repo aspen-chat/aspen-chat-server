@@ -5,9 +5,11 @@
 //! both are written in the transaction that makes it. Its `replyCount` and `lastReplyAt` are
 //! kept exact under the thread row's lock as replies come and go.
 //!
-//! A reply may also be echoed to the parent channel: a message of kind `ThreadEcho` there that
-//! names the reply (`echoOf`) and has no content of its own, so an edit to the reply shows in
-//! the echo and deleting the reply deletes its echo.
+//! A reply may also be echoed to the parent channel, as it is posted or later by its author: a
+//! message of kind `ThreadEcho` there that names the reply (`echoOf`) and has no content of its
+//! own, so an edit to the reply shows in the echo and deleting the reply deletes its echo. The
+//! reply names its live echo (`Message.echo`), which deleting the echo alone clears, after which
+//! the reply may be echoed again.
 
 use crate::api::message_enum::server_event::{ChannelEvent, MessageEvent, ServerEvent};
 use crate::app::channel::ChannelType;
@@ -15,6 +17,7 @@ use crate::app::channel::{Channel, record};
 use crate::app::context::GlobalServerContext;
 use crate::app::message::Message;
 use crate::app::message::MessageKind;
+use crate::app::permissions::{Permissions, channel_access};
 use crate::app::{self, ChannelId, EventScope, MaybeLoaded, MessageId, UserId, publish_event};
 use crate::database::schema::{channel, message};
 use crate::t;
@@ -41,9 +44,7 @@ pub async fn open_thread(
                     .for_update()
                     .first(conn.as_mut())
                     .await?;
-            let access =
-                crate::app::permissions::channel_access(state, conn.as_mut(), caller, parent_id)
-                    .await?;
+            let access = channel_access(state, conn.as_mut(), caller, parent_id).await?;
             if let Some(thread) = existing {
                 let thread: Channel = channel::table
                     .select(Channel::as_select())
@@ -56,7 +57,7 @@ pub async fn open_thread(
                 return Err(app::Error::Validation(t!("threadFromEcho")));
             }
             // Opening an existing thread is reading; making one takes Start threads.
-            access.require(crate::app::permissions::Permissions::START_THREADS)?;
+            access.require(Permissions::START_THREADS)?;
             let parent: Channel = channel::table
                 .select(Channel::as_select())
                 .filter(channel::id.eq(parent_id).and(channel::deleted_at.is_null()))
@@ -122,6 +123,7 @@ pub async fn open_thread(
                     linked_messages: None,
                     altered_by: None,
                     card: None,
+                    echo: None,
                 }),
             )
             .await?;
@@ -247,16 +249,17 @@ async fn publish_summary(
     .await
 }
 
-/// Shows a thread reply in the thread's parent channel as an echo naming it, and announces it
-/// there.
+/// Shows a thread reply in the thread's parent channel as the echo `id` naming it, and announces
+/// it there. The reply names `id` as its echo, written in the same transaction.
 pub async fn echo(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     parent: ChannelId,
     reply: &Message,
+    id: MessageId,
 ) -> app::Result<Message> {
     let echo = Message {
-        id: MessageId::new(),
+        id,
         channel: MaybeLoaded::from_id(parent),
         content: String::new(),
         author: MaybeLoaded::from_id(*reply.author.id()),
@@ -275,6 +278,7 @@ pub async fn echo(
         warning: None,
         altered_by: Vec::new(),
         card: None,
+        echo: None,
     };
     diesel::insert_into(message::table)
         .values(&echo)
@@ -292,6 +296,122 @@ pub async fn echo(
     )
     .await?;
     Ok(echo)
+}
+
+/// Echoes a thread reply that was posted without one to the thread's parent channel, which only
+/// its author may do, as posting it with `echo_to_parent` would have: made now (`true`), or the
+/// live echo it already has (`false`). The echo is new in the parent channel, so it sits there
+/// at the time it was made, not the reply's.
+pub async fn echo_reply(
+    state: &GlobalServerContext,
+    caller: UserId,
+    reply: MessageId,
+) -> app::Result<(Message, bool)> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            // The reply is locked so two echoes of it make one.
+            let reply: Message = message::table
+                .select(Message::as_select())
+                .filter(message::id.eq(reply).and(message::deleted_at.is_null()))
+                .for_update()
+                .first(conn.as_mut())
+                .await?;
+            let thread_id = *reply.channel.id();
+            channel_access(state, conn.as_mut(), caller, thread_id).await?;
+            // The echo speaks for its reply's author, so the choice to show it is theirs.
+            if *reply.author.id() != caller {
+                return Err(app::Error::Forbidden(t!("echoOthersMessage")));
+            }
+            if let Some(existing) = reply.echo {
+                let existing: Message = message::table
+                    .select(Message::as_select())
+                    .filter(message::id.eq(existing))
+                    .first(conn.as_mut())
+                    .await?;
+                return Ok((existing, false));
+            }
+            let parent: Option<ChannelId> = channel::table
+                .select(channel::parent_channel)
+                .filter(channel::id.eq(thread_id))
+                .first(conn.as_mut())
+                .await?;
+            let Some(parent) = parent else {
+                return Err(app::Error::Validation(t!("echoOutsideThread")));
+            };
+            // Only what its author wrote is echoed: polls and their results show themselves.
+            if !matches!(reply.kind, MessageKind::Standard | MessageKind::Command) {
+                return Err(app::Error::Validation(t!("echoKind")));
+            }
+            // An echo is posted in the parent channel, so it takes sending there.
+            channel_access(state, conn.as_mut(), caller, parent)
+                .await?
+                .require(Permissions::SEND_MESSAGES)?;
+            let id = MessageId::new();
+            diesel::update(message::table)
+                .set(message::echo.eq(Some(id)))
+                .filter(message::id.eq(reply.id))
+                .execute(conn.as_mut())
+                .await?;
+            let made = echo(state, conn.as_mut(), parent, &reply, id).await?;
+            publish_echo(state, conn.as_mut(), reply.id, Some(id)).await?;
+            Ok((made, true))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Clears a reply's echo when the echo alone is deleted, inside the caller's transaction, and
+/// announces it, so the reply may be echoed again.
+pub async fn forget_echo(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    reply: MessageId,
+    echo: MessageId,
+) -> app::Result<()> {
+    let cleared = diesel::update(message::table)
+        .set(message::echo.eq(None::<MessageId>))
+        .filter(
+            message::id
+                .eq(reply)
+                .and(message::echo.eq(echo))
+                .and(message::deleted_at.is_null()),
+        )
+        .execute(conn)
+        .await?;
+    if cleared > 0 {
+        publish_echo(state, conn, reply, None).await?;
+    }
+    Ok(())
+}
+
+/// Announces the reply's echo, or that it has none.
+async fn publish_echo(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    reply: MessageId,
+    echo: Option<MessageId>,
+) -> app::Result<()> {
+    publish_event(
+        state,
+        conn,
+        EventScope::Message(reply),
+        &ServerEvent::Message(MessageEvent::Update {
+            id: reply,
+            content: None,
+            attachments: None,
+            edited_at: None,
+            link_previews: None,
+            thread: None,
+            mentions: None,
+            linked_messages: None,
+            altered_by: None,
+            card: None,
+            echo: Some(echo),
+        }),
+    )
+    .await
 }
 
 /// Deletes the echo of a deleted thread reply, if it has one, and announces it.

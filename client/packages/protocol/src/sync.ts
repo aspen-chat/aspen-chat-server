@@ -847,6 +847,29 @@ export class AspenSync {
   }
 
   /**
+   * Shows a thread reply that was posted without an echo in the thread's parent channel, which
+   * only its author may do. The echo is cached at once and the reply learns its echo, as the
+   * events that follow would say.
+   */
+  async echoReply(messageId: string): Promise<Message> {
+    const result = await this.#client.api.PUT("/api/v1/messages/{message}/echo", {
+      params: { path: { message: messageId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const echo = result.data;
+    this.store.addMessage(echo);
+    this.store.applyEvent({
+      serverEvent: "message",
+      type: "update",
+      id: messageId,
+      echo: echo.id,
+    });
+    return echo;
+  }
+
+  /**
    * Reads one channel into the store when it is not there yet: a thread opened from a link, or
    * a DM from before the last listing. Resolves to the channel, or rejects when it is gone or
    * not the caller's to see.

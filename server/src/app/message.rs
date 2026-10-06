@@ -72,6 +72,8 @@ pub struct Message {
     pub altered_by: Vec<Option<String>>,
     /// For a message of a plugin's account, the card it shows (`app::plugin::card`).
     pub card: Option<Card>,
+    /// For a thread reply, its live echo in the parent channel (`app::thread::echo`).
+    pub echo: Option<MessageId>,
 }
 
 pub mod held;
@@ -102,6 +104,7 @@ pub fn record(
         warning: row.warning.clone(),
         altered_by: row.altered_by.iter().flatten().cloned().collect(),
         card: row.card.clone(),
+        echo: row.echo,
     }
 }
 
@@ -308,6 +311,8 @@ async fn post(
                     echo_to_parent,
                 )
                 .await?;
+                // The echo is made after the reply, which names it from the start.
+                let echo = echo_to_parent.then(MessageId::new);
                 // A command's text is the command as sent, checked here, and it tags no one.
                 let invoked = match &command {
                     Some(invocation) => Some(
@@ -373,6 +378,7 @@ async fn post(
                     warning,
                     altered_by: altered_by.into_iter().map(Some).collect(),
                     card,
+                    echo,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -422,8 +428,8 @@ async fn post(
                 if target.ty == ChannelType::Thread {
                     thread::record_reply(state, conn.as_mut(), channel_id, message.timestamp)
                         .await?;
-                    if echo_to_parent && let Some(parent) = target.parent_channel {
-                        thread::echo(state, conn.as_mut(), parent, &message).await?;
+                    if let (Some(parent), Some(echo)) = (target.parent_channel, echo) {
+                        thread::echo(state, conn.as_mut(), parent, &message, echo).await?;
                     }
                 } else {
                     read_state::advance(state, conn.as_mut(), author, channel_id, message.id)
@@ -731,6 +737,7 @@ pub async fn update_message(
                         linked_messages: linked_messages.map(|links| links.0),
                         altered_by,
                         card: None,
+                        echo: None,
                     }),
                 )
                 .await?;
@@ -827,6 +834,12 @@ pub(crate) async fn soft_delete(
         &ServerEvent::Message(MessageEvent::Delete { id }),
     )
     .await?;
+    // An echo deleted alone leaves its reply free to be echoed again.
+    if deleted.kind == MessageKind::ThreadEcho
+        && let Some(reply) = deleted.echo_of
+    {
+        thread::forget_echo(state, conn, reply, id).await?;
+    }
     // Deleting the message a poll is shown in ends the poll; its announcement, if any, is an
     // ordinary message and stays.
     if deleted.kind == MessageKind::Poll
@@ -1049,6 +1062,7 @@ pub async fn remove_attachment(
                     linked_messages: None,
                     altered_by: None,
                     card: None,
+                    echo: None,
                 }),
             )
             .await?;

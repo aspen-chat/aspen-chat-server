@@ -21,6 +21,7 @@ import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactio
 import { PinButton } from "@/features/messages/PinButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { ReportMessageButton } from "@/features/reports/ReportDialog";
+import { EchoReplyButton } from "@/features/threads/EchoReplyButton";
 import { useMessages } from "@/i18n/context";
 
 /** One action's button: square, with its icon, at finger size on a touch screen. */
@@ -33,7 +34,7 @@ export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
  * What can be done to a message, as a row of icon buttons: react, pin, see who reacted, reply
- * in a thread, edit, delete, copy its text, copy a link to it, report it, and copy its id. A computer shows the row at the
+ * in a thread, also send a thread reply to its channel, edit, delete, copy its text, copy a link to it, report it, and copy its id. A computer shows the row at the
  * message's corner while the pointer is over it or focus is in it, and the picker and the
  * dialogs open from their buttons. A touch screen shows it in a popover under a long press
  * (`MessageItem`), which every action closes: the ones that open something hand that to
@@ -47,6 +48,7 @@ export function MessageActions({
   text,
   permissions,
   canThread,
+  echoParent,
   editable,
   deletable,
   reportable,
@@ -64,6 +66,8 @@ export function MessageActions({
   text: string | null;
   permissions: ReadonlySet<Permission>;
   canThread: boolean;
+  /** For a thread reply its author may still echo, the thread's parent channel; else null. */
+  echoParent: string | null;
   editable: boolean;
   deletable: boolean;
   /** Whether the reader may report it to the moderators: not their own, nor a notice. */
@@ -135,6 +139,14 @@ export function MessageActions({
         >
           <ChatsCircleIcon size={ACTION_ICON} aria-hidden="true" />
         </Action>
+      )}
+      {echoParent !== null && (
+        <EchoReplyButton
+          messageId={messageId}
+          parentId={echoParent}
+          className={actionClass}
+          {...(onDone === undefined ? {} : { onPressed: onDone })}
+        />
       )}
       {editable && (
         <Action

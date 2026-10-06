@@ -7,6 +7,8 @@ export const threads = {
   lastReply: "last reply {time}",
   viewThread: "View thread",
   echoToParent: "Also send to {channel}",
+  echoed: "Sent to {channel}",
+  echoFailed: "The reply could not be sent there. Try again.",
   placeholder: "Reply…",
   repliedInThread: "replied in a thread",
   replyDeleted: "This reply was deleted.",

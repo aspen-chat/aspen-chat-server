@@ -232,6 +232,7 @@ pub async fn update(
                     linked_messages: None,
                     altered_by: None,
                     card: Some(card),
+                    echo: None,
                 }),
             )
             .await

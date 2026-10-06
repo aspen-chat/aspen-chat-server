@@ -252,6 +252,11 @@ enum MessageEnumSource {
         // content of its own.
         #[message_gen(server_authoritative)]
         echo_of: Option<MessageId>,
+        // For a thread reply, its live `ThreadEcho` in the parent channel: set when the reply is
+        // posted with `echoToParent` or echoed later (`PUT /messages/{message}/echo`), and cleared
+        // when the echo is deleted, each later change announced by an `Update` event.
+        #[message_gen(server_authoritative = "mutable")]
+        echo: Option<MessageId>,
         // Who it tags, as far as its author was allowed to (see `app::mention`); an edit that
         // changes the text tags afresh, announced by an `Update` event carrying the new set.
         #[message_gen(server_authoritative = "mutable")]
@@ -748,6 +753,7 @@ mod tests {
             linked_messages: None,
             altered_by: None,
             card: None,
+            echo: None,
         });
         assert_eq!(
             serde_json::to_value(edited).unwrap(),
@@ -770,6 +776,7 @@ mod tests {
             linked_messages: None,
             altered_by: None,
             card: None,
+            echo: None,
         });
         assert_eq!(
             serde_json::to_value(attachments_only).unwrap(),

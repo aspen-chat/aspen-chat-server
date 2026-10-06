@@ -10,8 +10,12 @@
   it on small screens: the starter, heading the replies in one `MessageList` (its `start`, shown
   once the window reaches the thread's beginning) so the two scroll together however long the
   starter is, and a `Composer` whose `echoTarget` offers to
-  also show the reply in the parent channel (`echoToParent`). Messages in a thread cannot start
-  threads. An echo is a message of kind `threadEcho` naming the reply in `echoOf`; it is drawn
+  also show the reply in the parent channel (`echoToParent`). A reply sent without one offers its
+  author "Also send to …" among its actions (`EchoReplyButton`) while its `echo` is empty and
+  they may send messages there; `AspenSync.echoReply` makes the echo, caches it, and sets the
+  reply's `echo` at once, and a toast names where it went, since on a phone the parent channel
+  is not on screen. The reply's `update` events keep `echo` current, so deleting the echo offers
+  the action again. Messages in a thread cannot start threads. An echo is a message of kind `threadEcho` naming the reply in `echoOf`; it is drawn
   from the reply record itself (sideloaded with `echoes`, or fetched with
   `AspenSync.loadMessage`), so the reply's edits show in it. `RecordStore.channels` leaves
   threads out of their community's list though they record its id. A thread's own link, like

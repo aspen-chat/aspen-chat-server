@@ -748,6 +748,43 @@ pub async fn open_thread(
     Ok((status, Json(app::channel::record(&thread, Vec::new()))))
 }
 
+/// Shows a thread reply that was posted without an echo in the thread's parent channel, as
+/// posting it with `echoToParent` would have: the echo is made now (`201`), or the reply's live
+/// echo is returned as it is (`200`). Only the reply's author may, and it takes Send messages in
+/// the parent channel. Once its echo is deleted, a reply may be echoed again.
+#[utoipa::path(
+    put,
+    path = "/messages/{message}/echo",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path, description = "The thread reply")),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "The echo, just made", body = Message),
+        (status = OK, description = "The echo the reply already has", body = Message),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the message is not in a thread, or is a poll or one of its results)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: the caller did not write the reply, or may not send messages in the parent channel; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn echo_reply(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(message): Path<MessageId>,
+) -> ApiResult<(StatusCode, Json<Message>)> {
+    let (echo, created) = app::thread::echo_reply(&state, user.id, message).await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(app::message::record(&echo, Vec::new(), Vec::new())),
+    ))
+}
+
 /// Pins a message in its channel, after every pin already there: `201` when it was not pinned,
 /// `200` when it was. In a community this takes Pin messages; in a DM any recipient may.
 #[utoipa::path(

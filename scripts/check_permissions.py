@@ -199,6 +199,47 @@ def moves_and_categories(world: World, check: Checks) -> None:
           any(e.get("parentCategory", "unset") is None for e in of(got, "channel", id=lounge)) and world.member_sees(lounge))
 
 
+def thread_echoes(world: World, check: Checks) -> None:
+    say("a thread reply echoed to its channel after it was posted")
+    member = world.member["token"]
+    talk = world.channel("talk")
+    starter = world.post(talk, "start a thread here")
+    thread = world.stack.api("PUT", f"/messages/{starter}/thread", token=member)["id"]
+    reply = world.stack.api("POST", f"/channels/{thread}/messages", {"content": "a reply", "attachments": []},
+                            member)["id"]
+    world.stream.gather(0.8)
+    check("someone other than the reply's author cannot echo it",
+          world.stack.status("PUT", f"/messages/{reply}/echo", token=world.owner["token"]) == 403)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    world.stream.gather(0.8)
+    check("nor can its author while they may not send messages in the channel",
+          world.stack.status("PUT", f"/messages/{reply}/echo", token=member) == 403)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+    echo = world.stack.api("PUT", f"/messages/{reply}/echo", token=member)
+    got = world.stream.gather(1.0)
+    check("once they may, the echo is made in the channel",
+          echo.get("kind") == "threadEcho" and echo.get("echoOf") == reply and echo.get("channelId") == talk)
+    check("and its creation and the reply's new echo reach the stream",
+          bool(of(got, "message", id=echo["id"], type="create"))
+          and bool(of(got, "message", id=reply, type="update", echo=echo["id"])), got)
+    check("echoing it again answers the same echo",
+          world.stack.api("PUT", f"/messages/{reply}/echo", token=member).get("id") == echo["id"])
+    world.as_owner("DELETE", f"/messages/{echo['id']}")
+    got = world.stream.gather(1.0)
+    check("a moderator deleting the echo alone frees the reply, announced",
+          bool(of(got, "message", id=echo["id"], type="delete"))
+          and bool(of(got, "message", id=reply, type="update", echo=None))
+          and world.stack.api("GET", f"/messages/{reply}", token=member)["data"].get("echo") is None, got)
+    again = world.stack.api("PUT", f"/messages/{reply}/echo", token=member)
+    check("after which its author may echo it again", again.get("id") not in (None, echo["id"]))
+    world.stream.gather(0.8)
+    world.as_owner("DELETE", f"/messages/{reply}")
+    got = world.stream.gather(1.0)
+    check("deleting the reply takes its echo with it",
+          bool(of(got, "message", id=again["id"], type="delete"))
+          and world.stack.status("GET", f"/messages/{again['id']}", token=member) == 404)
+
 def join(token: str) -> WebSocket:
     """Joins a call on the voice server with a join token."""
     socket = WebSocket(f"ws://127.0.0.1:{PORTS.voice}/ws")
@@ -1039,8 +1080,8 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
-             deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
+SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, thread_echoes, calls, attachments,
+             operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, plugins, calendar_channels, email, invite_previews, previews]
 
 

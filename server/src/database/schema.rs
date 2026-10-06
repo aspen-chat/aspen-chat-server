@@ -413,6 +413,7 @@ diesel::table! {
         warning -> Nullable<Jsonb>,
         altered_by -> Array<Nullable<Text>>,
         card -> Nullable<Jsonb>,
+        echo -> Nullable<Uuid>,
     }
 }
 
