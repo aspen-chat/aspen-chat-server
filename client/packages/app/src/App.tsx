@@ -16,6 +16,7 @@ import { router } from "@/router";
 export function App() {
   const [serverUrl, setServerUrl] = useState<string | null>(() => defaultServerUrl());
   const [choosingServer, setChoosingServer] = useState(false);
+  const [offeredServer, setOfferedServer] = useState<string | null>(null);
 
   function choose(url: string) {
     rememberServerUrl(url);
@@ -23,10 +24,11 @@ export function App() {
     setChoosingServer(false);
   }
 
-  // A sign-in code opened before any server is chosen names the one to use.
+  // A sign-in code opened before any server is chosen names the one to use, which the server
+  // form offers rather than choosing it: a link can name any server.
   useOpenAppLinks((link) => {
     if (serverUrl === null) {
-      choose(link.server);
+      setOfferedServer(link.server);
     }
   });
 
@@ -35,6 +37,7 @@ export function App() {
       <main className="flex min-h-full items-center justify-center p-6">
         <ServerForm
           onSubmit={choose}
+          offered={serverUrl === null ? offeredServer : null}
           {...(serverUrl === null
             ? {}
             : {

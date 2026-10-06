@@ -71,10 +71,17 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   pairs arrive settled), `request` made as the person through `AspenSync.pluginRoute`
   (`AspenClient.pluginRoute` builds the URL beneath the plugin's `routes/`, refusing `.` and
   `..` segments and methods a route never takes with 400, unsent, so a page cannot reach the
-  rest of the API; `status` 0 when the deployment cannot be reached), `users` from the store or
+  rest of the API; `status` 0 when the deployment cannot be reached; the plugin's answer comes
+  back as it came, since its status codes are its own: its `401` refreshes no session, its
+  `403` flags no enrollment, and its `429` is not waited out), `users` from the store or
   read (`AspenSync.loadUsers`, at most 100), the plugin's `pluginEvent`s for the channel, its
   community, or the person (`AspenSync.onPluginEvent`), and `open` for a channel the store
-  holds.
+  holds. The bridge speaks only to the page the app loaded: a frame's window outlives its
+  page, so the first load of each frame the app makes arms the bridge, and any later load (the
+  page followed a link or was redirected) silences it in both directions and puts "Load the
+  view again" in the frame's place, which makes a new frame. A page the frame went to can still
+  be answered for what it sends before its own load event, which only a bridge whose `hello`
+  hands the page something a later page lacks (a `MessagePort`, say) would close.
 - **Cards.** `PluginCard` (`src/features/plugins/PluginCard.tsx`), drawn by `MessageBody`, shows
   a message's `card` from its plugin's catalogue: a title, fields (a time in the reader's zone
   and language, a count, a person by `PersonName`, a link), and buttons styled as the plugin
@@ -93,6 +100,7 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
 `e2e/plugins.spec.ts` checks an annotation arriving and its popover, a changed message's mark,
 the DM notice, turning a plugin on with its account's permissions, a channel of a plugin's kind
 showing a stand-in page that talks over the bridge (its hello, a route, a path beyond the routes
-refused, a person named, and only its own events) and passes axe, a kind no plugin declares, a
+refused, a person named, and only its own events) and passes axe, the bridge falling silent
+when the view goes to another page until it is loaded again, a kind no plugin declares, a
 card's fields and button, and a notice's system notification; the world answers `GET /plugins`
 and people's annotations with nothing.

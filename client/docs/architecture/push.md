@@ -46,3 +46,9 @@
   and, on a connected device or emulator, the handler end to end against a stand-in deployment
   (debug builds may use plain HTTP to the device itself for it). It needs JDK 21 and the Android
   SDK; CI does not run it yet.
+- Nothing of the Android app leaves the phone in a backup: its storage holds the web view's
+  sessions on each deployment and the push state's keys, which would sign whoever restored them
+  in as the user, so the manifest sets `android:allowBackup="false"` and
+  `res/xml/data_extraction_rules.xml` excludes every domain from cloud backup and from moving to
+  a new device, which Android 12 and later do even without backups. The person signs in again
+  on a new phone.

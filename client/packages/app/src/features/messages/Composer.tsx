@@ -42,6 +42,9 @@ import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
 import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
+import { mediaUrl } from "@/features/layout/safeUrl";
+import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
+import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -108,7 +111,9 @@ export function Composer({
       name: attachment.fileName,
       mimeType: attachment.mimeType,
       description: attachment.description ?? "",
-      thumbnail: isImageType(attachment.mimeType) ? attachment.downloadUrl : null,
+      thumbnail: isImageType(attachment.mimeType)
+        ? (mediaUrl(attachment.downloadUrl) ?? null)
+        : null,
       state: { kind: "ready", attachment },
     })),
   );
@@ -175,7 +180,13 @@ export function Composer({
   const readyIds = pending.flatMap((p) =>
     p.state.kind === "ready" ? [p.state.attachment.id] : [],
   );
-  const canSend = !sending && !uploading && (draft.trim().length > 0 || readyIds.length > 0);
+  // Counted as sent, tags and custom emoji written out as their references.
+  const length = messageLength(emoji.encode(tagging.encode(draft.trim())));
+  const canSend =
+    !sending &&
+    !uploading &&
+    length <= MESSAGE_MAX_CHARS &&
+    (draft.trim().length > 0 || readyIds.length > 0);
 
   // Object URLs hold their file's bytes until revoked; release them once no chip shows them.
   const thumbnails = useRef(new Set<string>());
@@ -567,6 +578,7 @@ export function Composer({
           </Button>
         </Tooltip>
       </div>
+      <MessageLengthNote length={length} />
       {echoTarget !== undefined && permissions.has("sendMessages") && (
         <label className="mt-2 flex w-fit items-center gap-2 text-sm text-ink-muted">
           <input

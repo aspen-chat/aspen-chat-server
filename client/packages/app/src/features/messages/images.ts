@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { mediaUrl } from "@/features/layout/safeUrl";
 import { linkify } from "@/features/messages/linkify";
 
 /** A picture a message shows: where its bytes are and what to call it. */
@@ -26,13 +27,17 @@ export interface InlinePreview {
   height: number;
 }
 
-/** The inline copy an attachment's record names, when it has one. */
+/**
+ * The inline copy an attachment's record names, when it has one at an address a deployment may
+ * serve (`mediaUrl`).
+ */
 export function inlinePreview(
   preview: { url: string; width: number; height: number } | null | undefined,
 ): InlinePreview | undefined {
-  return preview == null
+  const src = mediaUrl(preview?.url);
+  return preview == null || src === undefined
     ? undefined
-    : { src: preview.url, width: preview.width, height: preview.height };
+    : { src, width: preview.width, height: preview.height };
 }
 
 /** Whether a MIME type is a video's. */

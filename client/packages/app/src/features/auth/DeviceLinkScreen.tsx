@@ -52,7 +52,8 @@ function messageOf(e: unknown): string {
  * asking for this account: the phone names it, warns that a stranger's code is a trap, and signs
  * it in only when confirmed. Signed out, it is a computer offering its account: the phone waits
  * for the computer to confirm it, then is signed in. A code for another server is refused when
- * signed in; signed out in the apps, the app moves to that server first.
+ * signed in; signed out in the apps, the app offers to move to that server, naming its host, and
+ * moves only when the person agrees.
  */
 export function DeviceLinkScreen({ server, id }: { server: string; id: string }) {
   const m = useMessages();
@@ -61,13 +62,6 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
   const signedIn = client.session !== null;
   const elsewhere = client.baseUrl !== server;
   const [phase, setPhase] = useState<Phase>({ kind: "scanning" });
-
-  // Signed out in an app, the code says which server to sign in to.
-  useEffect(() => {
-    if (!signedIn && elsewhere && switchServer !== null) {
-      switchServer(server);
-    }
-  }, [signedIn, elsewhere, switchServer, server]);
 
   useEffect(() => {
     if (elsewhere || claimed.has(id)) {
@@ -151,6 +145,33 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
           here: hostOf(client.baseUrl),
         })}
       />
+    );
+  }
+  if (elsewhere && switchServer !== null) {
+    const move = switchServer;
+    // Signed out in an app, the code names the server to sign in to, but anyone can make a link
+    // naming any server, so the app moves there only when the person agrees, shown its host.
+    const host = hostOf(server);
+    return (
+      <Frame>
+        <p className="text-base font-medium">
+          {format(m.deviceLink.switchServerPrompt, { server: host, here: hostOf(client.baseUrl) })}
+        </p>
+        <Caution text={m.deviceLink.switchServerWarning} />
+        <div className="flex flex-wrap justify-end gap-2">
+          <Link to="/" className={secondaryButtonClass}>
+            {m.deviceLink.back}
+          </Link>
+          <Button
+            onPress={() => {
+              move(server);
+            }}
+            className={primaryButtonClass}
+          >
+            {format(m.deviceLink.switchServer, { server: host })}
+          </Button>
+        </div>
+      </Frame>
     );
   }
   switch (phase.kind) {

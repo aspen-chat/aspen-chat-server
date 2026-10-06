@@ -21,7 +21,7 @@ One TypeScript web application, shipped three ways:
 cd client
 pnpm install          # also runs codegen against ../openapi.yaml and ../event_schema.json
 pnpm dev              # Vite dev server on http://localhost:5173
-pnpm build            # web build (site root); the desktop and mobile packages use `build:shell`
+pnpm build            # web build (site root); mobile uses `build:shell`, desktop `build:desktop`
 ```
 
 A deployment is one origin, its API and web client together, so the dev server stands in for it:

@@ -7,6 +7,8 @@ import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { decodeTags } from "@/features/mentions/tags";
 import { useTagging } from "@/features/mentions/useTagging";
+import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
+import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -46,9 +48,12 @@ export function MessageEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const content = emoji.encode(tagging.encode(draft.trim()));
+  const length = messageLength(content);
+  const tooLong = length > MESSAGE_MAX_CHARS;
+
   async function save() {
-    const content = emoji.encode(tagging.encode(draft.trim()));
-    if (content.length === 0 || saving) {
+    if (content.length === 0 || tooLong || saving) {
       return;
     }
     if (content === initial) {
@@ -123,6 +128,7 @@ export function MessageEditor({
           className="message-box-text max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
         />
       </TextField>
+      <MessageLengthNote length={length} />
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
           {error}
@@ -137,7 +143,7 @@ export function MessageEditor({
           {m.cancel}
         </Button>
         <Button
-          isDisabled={saving || draft.trim().length === 0}
+          isDisabled={saving || tooLong || draft.trim().length === 0}
           onPress={() => {
             void save();
           }}

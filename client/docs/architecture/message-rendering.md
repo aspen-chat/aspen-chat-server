@@ -2,7 +2,11 @@
 
 - Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages/Markdown.tsx`
   with `react-markdown` (no raw HTML, unsafe schemes dropped); element styles are the
-  `message-body` rules in `styles.css`. Fenced code is highlighted by highlight.js
+  `message-body` rules in `styles.css`. Only an absolute `http:`, `https:`, or `mailto:` address
+  becomes a link (`messageLinkUrl`); a relative or protocol-relative one (`//host/share/file`),
+  which on a page loaded from a file (the desktop app's) would be a `file:` link, stays plain
+  text. A picture written into the text (`![alt](url)`) is a link named by its alt text, never
+  loaded. Fenced code is highlighted by highlight.js
   (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
   block: its "common" grammars come with that chunk and every other grammar it ships is fetched
   on first use. Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at
@@ -22,9 +26,12 @@
   `sendMessage`. A picture's reservation carries its size, which the composer measures first
   (`measurePicture`), and its record gives it back as `width` and `height`. A message event carries only ids, so `useAttachment` fetches records on
   demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
-  links whose path has an image extension, and links the server found to be images, which
-  arrive as previews with a picture and no text. `MessageMedia` there gathers all three into
-  one strip and shows at most `INLINE_IMAGE_LIMIT` (three) inline; beyond that a `+N` tile,
+  and the pictures of link previews, from links whose path has an image extension or that the
+  server found to be images (previews with a picture and no text). Every picture is loaded
+  from a deployment's storage, never from the address a message links to, which would tell
+  whoever serves it the address of everyone reading: a link to a picture shows as a link until
+  its preview arrives with the server's copy, and stays one when the preview has no picture.
+  `MessageMedia` there gathers them into one strip and shows at most `INLINE_IMAGE_LIMIT` (three) inline; beyond that a `+N` tile,
   like any inline picture, opens `ImageGallery.tsx`, a modal that pages through the whole set.
 - Inline, an attachment shows the preview the server made of it where there is one (the record's
   `preview`: a smaller WebP copy of a picture, fitted within 1920 × 960, or a video's poster; see
@@ -68,3 +75,13 @@
 - What the deployment's plugins say about a message shows beneath it as chips
   (`MessageAnnotations`), and a message a plugin changed is marked "(changed by …)" beside the
   edited mark (`AlteredBy`); see Plugins.
+- Every address a deployment sends, or a message holds, is checked before it becomes a link, a
+  picture, or a window (`src/features/layout/safeUrl.ts`), since any deployment the user holds
+  a session on writes some of them: pages to open (a link preview's, a plugin card's or
+  annotation's) must be `http:` or `https:` (`webPageUrl`), and files a deployment serves
+  (attachments, previews, icons) `https:`, or `http:` at a loopback host or while the page is
+  itself served over plain HTTP, as a development deployment is (`mediaUrl`). An attachment at
+  any other address is unavailable, and a preview's picture there is left out. The desktop
+  shell checks again: the window navigates only to the app's own `index.html` (or the dev
+  server), and hands the system only `http:`, `https:`, and `mailto:` links
+  (`packages/desktop/src/main/navigation.ts`).

@@ -23,6 +23,7 @@ import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
 import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
+import { messageLinkUrl } from "@/features/layout/safeUrl";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -54,9 +55,18 @@ function MessageLink({ href, children }: { href: string | undefined; children: R
   return <ExternalLink href={href}>{children}</ExternalLink>;
 }
 
+/**
+ * A link that opens elsewhere, when it is an absolute web or mail address (`messageLinkUrl`);
+ * any other target, a relative or protocol-relative one included, which on a page loaded from a
+ * file would become a `file:` link, leaves its text as plain text.
+ */
 function ExternalLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+  const target = messageLinkUrl(href);
+  if (target === undefined) {
+    return <span>{children}</span>;
+  }
   return (
-    <a href={href} target="_blank" rel="noreferrer noopener" className={linkClass}>
+    <a href={target} target="_blank" rel="noreferrer noopener" className={linkClass}>
       {children}
     </a>
   );
@@ -132,12 +142,18 @@ function InviteMessageLink({ invite, children }: { invite: InviteRef; children: 
 }
 
 /**
- * Links take the palette accent (see `MessageLink`). `react-markdown` has already dropped any
- * URL whose scheme is not http, https, mailto, or a relative path, so `href` is safe to use.
- * Fenced blocks go through `CodeBlock` for highlighting; inline code is left to the stylesheet.
+ * Links take the palette accent (see `MessageLink`), and only an absolute web or mail address
+ * becomes one (`ExternalLink`). A picture written into the text (`![alt](url)`) is shown as a
+ * link to it, named by its alt text, never loaded: loading it would tell whoever serves it the
+ * address of everyone who reads the message. Fenced blocks go through `CodeBlock` for
+ * highlighting; inline code is left to the stylesheet.
  */
 const components: Components = {
   a: ({ href, children }) => <MessageLink href={href}>{children}</MessageLink>,
+  img: ({ src, alt }) => {
+    const href = typeof src === "string" ? src : undefined;
+    return <MessageLink href={href}>{alt != null && alt !== "" ? alt : href}</MessageLink>;
+  },
   // `remarkSpoilers` marks its spans with `data-spoiler` and `remarkMentions` with
   // `data-mention`; every other span is left as it is.
   span: ({ children, ...props }) => {

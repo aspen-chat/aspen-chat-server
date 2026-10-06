@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useIcon, useIconLoading } from "@/api/hooks";
+import { mediaUrl } from "@/features/layout/safeUrl";
 
 /**
  * A round picture for a user or community: their icon when they have one, otherwise a circle
@@ -18,6 +19,7 @@ export function Avatar({
   size?: "xs" | "sm" | "md" | "lg";
 }) {
   const icon = useIcon(iconId ?? undefined);
+  const src = mediaUrl(icon?.downloadUrl);
   const iconLoading = useIconLoading(iconId ?? undefined);
   const [shown, setShown] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -38,22 +40,22 @@ export function Avatar({
       />
     );
   }
-  if (icon !== undefined && failed !== icon.downloadUrl) {
+  if (src !== undefined && failed !== src) {
     return (
       <img
-        src={icon.downloadUrl}
+        src={src}
         alt=""
         aria-hidden="true"
         draggable={false}
         onLoad={() => {
-          setShown(icon.downloadUrl);
+          setShown(src);
         }}
         onError={() => {
-          setFailed(icon.downloadUrl);
+          setFailed(src);
         }}
         className={
           `${dimensions} shrink-0 rounded-full object-cover select-none ` +
-          (shown === icon.downloadUrl ? "bg-surface-sunken" : skeleton)
+          (shown === src ? "bg-surface-sunken" : skeleton)
         }
       />
     );

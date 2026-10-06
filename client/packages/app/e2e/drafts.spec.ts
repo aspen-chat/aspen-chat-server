@@ -144,3 +144,20 @@ test("sending a message clears its draft", async ({ page }) => {
   await page.reload();
   await expect(box(page)).toHaveValue("");
 });
+
+test("a message longer than the server takes says how far over it is, and waits", async ({
+  page,
+}) => {
+  await signInToWorld(page);
+  await openChannel(page, "general");
+  const send = page.getByRole("button", { name: "Send", exact: true });
+  await box(page).fill("a".repeat(9_500));
+  await expect(page.getByText("9,500 / 10,000")).toBeVisible();
+  await expect(send).toBeEnabled();
+  await box(page).fill("😀".repeat(10_002));
+  await expect(page.getByRole("alert")).toContainText("this one is 2 over");
+  await expect(send).toBeDisabled();
+  await box(page).fill("short again");
+  await expect(page.getByText("/ 10,000")).toHaveCount(0);
+  await expect(send).toBeEnabled();
+});

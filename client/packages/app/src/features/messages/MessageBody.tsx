@@ -2,7 +2,7 @@ import type { LinkPreview, Message } from "@aspen/protocol";
 import { useLayoutEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { MessageMedia } from "@/features/messages/Attachments";
-import { imageUrls, isImageUrl, keptRoom, onlyImageLinks } from "@/features/messages/images";
+import { imageUrls, keptRoom, onlyImageLinks } from "@/features/messages/images";
 import { useKeepStill } from "@/features/messages/keepStill";
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
@@ -11,6 +11,7 @@ import { AlteredBy } from "@/features/plugins/Annotations";
 import { PluginCard } from "@/features/plugins/PluginCard";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
+import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -20,8 +21,8 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 /**
  * What a message says and holds, drawn the same wherever it is shown (the channel, the pins
  * list): its text as Markdown with its tags, marked when edited or changed by a plugin, its
- * poll or plugin's card, its pictures and files, and cards for its links. A message that is nothing but links to pictures shows the
- * pictures alone. `hideText` leaves the text out where something takes its place (the editor,
+ * poll or plugin's card, its pictures and files, and cards for its links. A message that is
+ * nothing but links to pictures the server has previews of shows the pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
  * `still` draws it for reference only, as another message shows it: no poll to vote in, no
  * card's buttons to press.
@@ -42,23 +43,29 @@ export function MessageBody({
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
   const imageLinks = imageUrls(message.content);
-  // A link that looks like a picture by its extension is drawn from the server's copy of what
-  // it found there when the preview carries one: a share page named like a gif
-  // (tenor.com/….gif) is a page, and only the preview's picture, its og:image, is the gif.
-  // Without a preview's picture the link itself is shown, so a plain link to a picture never
-  // waits for the server.
+  // Every picture is the server's copy, kept in its storage, of what it found behind a link,
+  // never the link itself: loading a picture from wherever a message points would tell whoever
+  // serves it the address of everyone who reads the message. A preview whose picture is not a
+  // file a deployment may serve (`mediaUrl`) is taken as having none.
+  const linkPreviews = message.linkPreviews.map((p) => ({
+    ...p,
+    imageUrl: mediaUrl(p.imageUrl) ?? null,
+  }));
+  // A link that looks like a picture by its extension is drawn from the preview's picture: a
+  // share page named like a gif (tenor.com/….gif) is a page, and only the preview's picture,
+  // its og:image, is the gif. Until the preview comes, or when it has no picture, the link
+  // stays a link in the text.
   const found = new Map(
-    message.linkPreviews.flatMap((p) => (p.imageUrl == null ? [] : [[p.url, p] as const])),
+    linkPreviews.flatMap((p) => (p.imageUrl == null ? [] : [[p.url, p] as const])),
   );
-  const linkedImages = imageLinks.filter((url) => !found.has(url));
   const foundImages = imageLinks.flatMap((url) => {
     const p = found.get(url);
     return p?.imageUrl == null
       ? []
       : [{ src: p.imageUrl, name: url, width: p.imageWidth, height: p.imageHeight }];
   });
-  // A link the client already shows as a picture needs no card from the server for the same URL.
-  const previews = message.linkPreviews.filter((p) => !imageLinks.includes(p.url));
+  // A link already shown as a picture needs no card for the same URL.
+  const previews = linkPreviews.filter((p) => !(imageLinks.includes(p.url) && found.has(p.url)));
   // Links the server found to be images themselves join the message's pictures; the rest
   // are cards.
   const previewImages = [
@@ -70,9 +77,8 @@ export function MessageBody({
     ),
   ];
   const cards = previews.filter((p) => !isPictureOnly(p));
-  const pictureOnly = onlyImageLinks(
-    message.content,
-    (url) => isImageUrl(url) || previews.some((p) => p.url === url && isPictureOnly(p)),
+  const pictureOnly = onlyImageLinks(message.content, (url) =>
+    previewImages.some((picture) => picture.name === url),
   );
   return (
     <>
@@ -102,7 +108,6 @@ export function MessageBody({
       <PluginCard message={message} still={still} />
       <MessageMedia
         attachmentIds={message.attachments}
-        linkedImages={linkedImages}
         previewImages={previewImages}
         {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
       />
@@ -126,7 +131,7 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
   const title = preview.title ?? preview.siteName ?? preview.url;
   return (
     <a
-      href={preview.url}
+      href={webPageUrl(preview.url)}
       target="_blank"
       rel="noreferrer"
       className="mt-1 flex max-w-lg flex-col gap-2 rounded-md border border-line bg-surface-raised p-2 text-sm hover:bg-surface-hover"

@@ -50,4 +50,22 @@ describe("Markdown", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain("javascript:");
   });
+
+  it("links only absolute web and mail addresses, so nothing becomes a file link", () => {
+    const html = render(
+      "[a](//attacker/share/payload.exe) [b](/etc/passwd) [c](payload.exe) [d](file:///etc/passwd) [e](mailto:x@example.org)",
+    );
+    expect(html).not.toContain('attacker/share"');
+    expect((html.match(/<a /g) ?? []).length).toBe(1);
+    expect(html).toContain('href="mailto:x@example.org"');
+    expect(html).toContain("<span>a</span>");
+  });
+
+  it("shows pictures written into the text as links, never loading them", () => {
+    const html = render("![a cat](https://tracker.example/cat.png) ![](//attacker/x.png)");
+    expect(html).not.toContain("<img");
+    expect(html).toContain('href="https://tracker.example/cat.png"');
+    expect(html).toContain(">a cat</a>");
+    expect(html).not.toContain('href="//attacker');
+  });
 });

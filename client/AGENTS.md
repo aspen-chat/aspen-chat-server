@@ -329,10 +329,13 @@ commit, as with comments.
   for both directions: logical utilities (`ms-`, `pe-`, `start-`, `border-s`, `text-start`),
   never `ml-`, `pr-`, `left-`, `border-l`, or `text-left`, and an icon that points somewhere
   (a back arrow, a next caret) mirrors with `rtl:-scale-x-100`; a chart of time keeps `dir="ltr"`.
-- Two builds of the same code: `pnpm build` (web, served from a site root, real URL paths) and
-  `pnpm build:shell` (`--base ./`, used by the desktop and mobile packages, which load the bundle
-  from `file://` or an app-local origin and route after a `#`). Never write an absolute
-  `/assets/…` URL by hand; let Vite resolve assets so both builds work.
+- Three builds of the same code: `pnpm build` (web, served from a site root, real URL paths),
+  `pnpm build:shell` (`--base ./`, used by the mobile package, which loads the bundle from an
+  app-local origin and routes after a `#`), and `pnpm build:desktop` (the same for the desktop
+  package's `file://` page, with its Content Security Policy written into the page,
+  `DESKTOP_POLICY` in `vite.config.ts`, since a file has no headers; the web build's comes from
+  the server). Never write an absolute `/assets/…` URL by hand; let Vite resolve assets so every
+  build works.
 - Routing is TanStack Router (`src/router.tsx`), code-based, one route tree for every shell.
   Anything a user might want to share is a route: `/communities/{id}/channels/{id}`,
   `.../messages/{id}`, and `.../threads/{id}`, and the same under `/dms/{id}` for DMs. Read

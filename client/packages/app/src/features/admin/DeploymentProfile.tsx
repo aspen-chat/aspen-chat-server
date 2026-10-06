@@ -17,6 +17,7 @@ import {
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { IconPicker } from "@/features/media/IconPicker";
 import { useMessages } from "@/i18n/context";
+import { mediaUrl } from "@/features/layout/safeUrl";
 
 /** The longest display name, as the server's `DISPLAY_NAME_MAX_CHARS`. */
 const DISPLAY_NAME_MAX_CHARS = 64;
@@ -62,7 +63,7 @@ export function DeploymentProfileSection() {
             <div className="flex flex-wrap items-center gap-3">
               {icon !== null && (
                 <img
-                  src={icon.downloadUrl}
+                  src={mediaUrl(icon.downloadUrl)}
                   alt=""
                   width={96}
                   height={96}

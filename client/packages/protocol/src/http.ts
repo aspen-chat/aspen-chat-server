@@ -618,8 +618,11 @@ export class AspenClient {
   /**
    * Calls a plugin's route as the signed-in user, for a plugin's view (`spec/plugins.md`,
    * Views). Plugins' routes are each plugin's own, outside the OpenAPI document, so the URL is
-   * built here, each segment of `path` encoded; the session's token is sent as for any request.
-   * A route under `aspen/` is the server's alone to call, and answers not found.
+   * built here, each segment of `path` encoded; the session's token is sent as for any request,
+   * refreshed first when it is about to expire. A route under `aspen/` is the server's alone to
+   * call, and answers not found. A route's answer is the plugin's own, so it is handed back as
+   * it came: its `401` does not refresh the session, its `403` flags nothing, and its `429` is
+   * not waited out (`#pluginFetch`).
    */
   async pluginRoute(
     plugin: string,
@@ -642,7 +645,7 @@ export class AspenClient {
     if (request.body !== undefined) {
       headers["content-type"] = request.contentType ?? "application/json";
     }
-    const response = await this.#authenticatedFetch(
+    const response = await this.#pluginFetch(
       new Request(url, {
         method: request.method,
         headers,
@@ -654,6 +657,21 @@ export class AspenClient {
       contentType: response.headers.get("content-type"),
       body: await response.text(),
     };
+  }
+
+  /**
+   * A request to a plugin's route, as the user, without the handling the API's own answers get:
+   * a plugin chooses its status codes and bodies, so one that answered `401`, or `403` with a
+   * Problem naming a requirement, would otherwise refresh the session or put the app behind an
+   * enrollment screen.
+   */
+  async #pluginFetch(request: Request): Promise<Response> {
+    let session = this.session;
+    if (session !== null && sessionTokenExpiresSoon(session, this.#refreshLeewayMs)) {
+      await this.refreshSession();
+      session = this.session;
+    }
+    return this.#fetch(session === null ? request : withBearer(request, session.sessionToken));
   }
 
   async #authenticatedFetch(request: Request): Promise<Response> {

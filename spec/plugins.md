@@ -286,7 +286,9 @@ A plugin's user interface: a page among its `assets`, served by the deployment a
 `/api/v1/plugins/{id}/assets/{path}`, with `Content-Security-Policy: sandbox allow-scripts
 allow-forms allow-popups` (and no `allow-same-origin`), which gives it an origin of its own, opaque
 and shared with nothing, however it is opened; it may load only its own assets and inline
-scripts and styles, and may connect nowhere. A client shows it in a frame sandboxed the same way.
+scripts and styles, and may connect nowhere. A client shows it in a frame sandboxed the same way,
+and answers only the page it loaded there: once the frame loads anything else (the view followed
+a link or was redirected), the client stops answering and sending until it loads the view again.
 The frame never holds the person's session token; it talks to the app only through a bridge of
 `postMessage` messages, each an object with `"aspen": 1`:
 

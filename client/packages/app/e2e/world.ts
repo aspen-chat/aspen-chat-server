@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { administration } from "./world/administration";
 import { answer } from "./world/answer";
-import { me } from "./world/fixtures";
+import { me, PIXEL_PNG, PIXEL_PNG_BYTES } from "./world/fixtures";
 import { lunch } from "./world/poll";
 import type { Publish } from "./world/reply";
 
@@ -93,6 +93,9 @@ export async function signInToWorld(
   /** The community's standing bans, by user, as the tests make and lift them. */
   const bans = new Map<string, Record<string, unknown>>();
   await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks, bans));
+  await page.route(PIXEL_PNG, (route) =>
+    route.fulfill({ contentType: "image/png", body: PIXEL_PNG_BYTES }),
+  );
   await before?.(page);
   await page.goto("/");
   await page.getByLabel("Username").fill("kate");

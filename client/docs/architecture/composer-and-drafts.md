@@ -17,6 +17,11 @@
   latest" answers at once: the pill keeps its own state, so a press repaints it alone, saying
   the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
+- A message's text may be at most `MESSAGE_MAX_CHARS` (10,000) characters, the server's limit,
+  counted as the server counts them (Unicode scalar values) in the text as sent, its tags and
+  custom emoji written out as references (`messageLength.ts`). Within its last thousand, the
+  message box and the editor count beneath themselves (`MessageLengthNote`); over it, they say
+  by how much and what to do, and Send and Save wait until it is shortened.
 - Messages held for their previews (`HeldMessages.tsx`): `AspenSync.sendMessage` sends with
   `mayHold`, so a message whose picture or video is still having its preview made is held by
   the server for up to twenty seconds from the upload and answered `202` with the held message,

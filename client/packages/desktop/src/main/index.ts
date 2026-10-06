@@ -1,8 +1,10 @@
 import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell } from "electron";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { claimAppLinks, serveAppLinks } from "./appLinks";
 import { serveChromiumNotices } from "./chromiumNotices";
 import { serveGameCapture } from "./gameCapture";
+import { externalUrl, isAppPage } from "./navigation";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
 
@@ -78,23 +80,31 @@ function createWindow(): void {
     }
   });
 
-  // Links to other sites open in the user's browser; the window only ever shows the app.
+  // The window only ever shows the app. Links to other sites open in the user's browser, and
+  // only web and mail links leave the app at all (`externalUrl`).
+  const indexFile = join(process.resourcesPath, "app", "index.html");
+  const appPage = isDevelopment() ? { devServerUrl } : { indexUrl: pathToFileURL(indexFile).href };
+  const openOutside = (url: string) => {
+    const external = externalUrl(url);
+    if (external !== null) {
+      void shell.openExternal(external);
+    }
+  };
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openOutside(url);
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event, url) => {
-    const allowed = isDevelopment() ? url.startsWith(devServerUrl) : url.startsWith("file:");
-    if (!allowed) {
+    if (!isAppPage(url, appPage)) {
       event.preventDefault();
-      void shell.openExternal(url);
+      openOutside(url);
     }
   });
 
   if (isDevelopment()) {
     void window.loadURL(devServerUrl);
   } else {
-    void window.loadFile(join(process.resourcesPath, "app", "index.html"));
+    void window.loadFile(indexFile);
   }
 }
 

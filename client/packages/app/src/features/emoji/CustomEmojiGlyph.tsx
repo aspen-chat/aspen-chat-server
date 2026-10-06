@@ -1,5 +1,6 @@
 import { useCustomEmoji, useIcon } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
+import { mediaUrl } from "@/features/layout/safeUrl";
 
 /**
  * One of a community's own emoji, drawn where a glyph would be: its picture at the text's
@@ -44,7 +45,7 @@ export function CustomEmojiGlyph({
   }
   return (
     <img
-      src={icon.downloadUrl}
+      src={mediaUrl(icon.downloadUrl)}
       alt={name}
       title={emoji.name}
       draggable={false}

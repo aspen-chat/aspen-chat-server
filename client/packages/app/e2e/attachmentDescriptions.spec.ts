@@ -26,12 +26,15 @@ async function withUploads(page: Page, recorded: Recorded) {
     id: attachmentId,
     fileName: "cat.png",
     mimeType: "image/png",
-    downloadUrl: `data:image/png;base64,${PIXEL}`,
+    downloadUrl: "https://media.test/cat.png",
     // Drawn larger than its one pixel, as a photo would be, so it is a picture a finger can tap.
     width: 200,
     height: 150,
     ...(description === null ? {} : { description }),
   });
+  await page.route("https://media.test/cat.png", (route) =>
+    route.fulfill({ contentType: "image/png", body: Buffer.from(PIXEL, "base64") }),
+  );
   await page.route(/\/api\/v1\/(attachments|uploads|channels\/[^/]+\/messages)/, (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api/v1", "");

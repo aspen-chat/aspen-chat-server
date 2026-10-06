@@ -16,7 +16,9 @@ use crate::app::email::outbox::List;
 use crate::app::{UserId, email};
 use crate::t;
 use axum::extract::{Query as AxumQuery, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -676,6 +678,7 @@ fn page(title: &str, message: &str, action: Option<&str>) -> impl IntoResponse +
             (CONTENT_TYPE, "text/html; charset=utf-8"),
             (CACHE_CONTROL, "no-store"),
             (CONTENT_SECURITY_POLICY, PAGE_POLICY),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (REFERRER_POLICY, "no-referrer"),
         ],
         html,

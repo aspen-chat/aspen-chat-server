@@ -11,7 +11,9 @@
 //! party's domain, with the same base64url conversions in `@aspen/protocol`'s `passkeys.ts`.
 
 use crate::t;
-use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::response::IntoResponse;
 use std::borrow::Cow;
 
@@ -66,6 +68,7 @@ pub async fn page() -> impl IntoResponse {
         [
             (CONTENT_TYPE, "text/html; charset=utf-8"),
             (CONTENT_SECURITY_POLICY, POLICY),
+            (X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (REFERRER_POLICY, "no-referrer"),
             (CACHE_CONTROL, "no-store"),
         ],
