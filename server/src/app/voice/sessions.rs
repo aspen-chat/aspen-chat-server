@@ -12,13 +12,14 @@ use crate::api::voice::VoiceSessionEndReason;
 use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
-use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::permissions::{Permissions, channel_access, community_access, missing};
 use crate::app::{
     CategoryId, ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId,
     publish_event,
 };
 use crate::database::schema::user as user_table;
 use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
+use crate::t;
 use chrono::{DateTime, Duration, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -34,7 +35,8 @@ use voice_protocol::signal::KickReason;
 
 /// Server-mutes or unmutes someone in a channel's call. The voice server holding the call
 /// applies it and reports the new state, which becomes the participant's `update` event; the
-/// record returned is the state as recorded before the command lands. Takes Manage calls.
+/// record returned is the state as recorded before the command lands. Takes Manage calls and
+/// ranking above them, who may not be the owner.
 pub async fn mute_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -51,7 +53,8 @@ pub async fn mute_participant(
 }
 
 /// Removes someone from a channel's call. The voice server disconnects them, telling them
-/// why, and reports their leaving, which deletes their participant row. Takes Manage calls.
+/// why, and reports their leaving, which deletes their participant row. Takes Manage calls and
+/// ranking above them, who may not be the owner.
 pub async fn kick_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -109,8 +112,24 @@ async fn command_participant(
     let mut conn = state.connection_pool.get().await?;
     let access = channel_access(state, conn.as_mut(), caller, channel).await?;
     // A DM's call has no moderators.
-    if !access.community_has(Permissions::MANAGE_CALLS) {
+    let Some(community) = access
+        .community
+        .as_ref()
+        .filter(|community| community.has(Permissions::MANAGE_CALLS))
+    else {
         return Err(missing(Permissions::MANAGE_CALLS));
+    };
+    // As with removing or banning, a moderator acts only on members ranking below them, and
+    // never on the owner; a participant who is no member (a deployment moderator) ranks as
+    // nobody.
+    if user != caller {
+        match community_access(conn.as_mut(), user, community.community).await? {
+            Some(theirs) if theirs.owner => {
+                return Err(app::Error::Forbidden(t!("permissionRank")));
+            }
+            Some(theirs) if theirs.member => community.require_above(theirs.role_rank())?,
+            _ => {}
+        }
     }
     let session = session_on_channel(conn.as_mut(), channel)
         .await?

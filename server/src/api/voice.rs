@@ -417,7 +417,7 @@ pub async fn report_voice_server_failure(
         (status = ACCEPTED, description = "The voice server has been told; the participant's `update` event follows once it applies", body = VoiceParticipant),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls, or the participant is the owner or ranks at or above the caller", body = Problem),
         (status = NOT_FOUND, description = "No call on the channel, or the user is not in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -443,7 +443,7 @@ pub async fn moderate_voice_participant(
         (status = ACCEPTED, description = "The voice server has been told to disconnect them; their participant `delete` event follows"),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls, or the participant is the owner or ranks at or above the caller", body = Problem),
         (status = NOT_FOUND, description = "No call on the channel, or the user is not in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
