@@ -96,7 +96,11 @@ struct Participant {
     own_preview: HashSet<ProducerId>,
     /// By consumer id: the consumer and whose producer it carries.
     consumers: HashMap<ConsumerId, (Consumer, Uuid)>,
+    /// Muted as the participant themself asked.
     muted: bool,
+    /// Muted by a moderator (`VoiceCommand::Mute`). Only another such command lifts it: while
+    /// it stands their microphone stays paused whatever they ask.
+    server_muted: bool,
     deafened: bool,
     speaking: bool,
     /// What they may send and offer, from their join token and then the API server.
@@ -120,6 +124,12 @@ impl Participant {
         Ok(())
     }
 
+    /// Whether their microphone is paused: by their own choice or a moderator's. This is the
+    /// mute everyone else, and the API server, is told of.
+    fn silenced(&self) -> bool {
+        self.muted || self.server_muted
+    }
+
     fn sharing_screen(&self) -> bool {
         self.producers
             .values()
@@ -129,7 +139,7 @@ impl Participant {
     fn info(&self) -> ParticipantInfo {
         ParticipantInfo {
             user: self.user,
-            muted: self.muted,
+            muted: self.silenced(),
             deafened: self.deafened,
             speaking: self.speaking,
             producers: self
@@ -322,7 +332,7 @@ impl Rooms {
                     .values()
                     .map(|participant| ParticipantSnapshot {
                         user: participant.user,
-                        muted: participant.muted,
+                        muted: participant.silenced(),
                         deafened: participant.deafened,
                         sharing_screen: participant.sharing_screen(),
                     })
@@ -436,6 +446,7 @@ impl Rooms {
             own_preview: HashSet::new(),
             consumers: HashMap::new(),
             muted: false,
+            server_muted: false,
             deafened: false,
             speaking: false,
             grants,
@@ -547,7 +558,7 @@ impl Rooms {
             let mut participants = room.participants.lock().expect("room lock");
             let mut changes = Vec::new();
             for participant in participants.values_mut() {
-                let speaking = loud.contains(&participant.user) && !participant.muted;
+                let speaking = loud.contains(&participant.user) && !participant.silenced();
                 if speaking != participant.speaking {
                     participant.speaking = speaking;
                     changes.push((participant.user, speaking));
@@ -696,7 +707,7 @@ impl Rooms {
             participant.ensure_source_free(source)?;
             (
                 Self::transport(participant, transport_id)?,
-                participant.muted,
+                participant.silenced(),
             )
         };
         let mut options = ProducerOptions::new(media_kind(kind), rtp_parameters);
@@ -947,7 +958,7 @@ impl Rooms {
             session: room.session,
             channel: room.channel,
             user: participant.user,
-            muted: participant.muted,
+            muted: participant.silenced(),
             deafened: participant.deafened,
             sharing_screen: participant.sharing_screen(),
         }
@@ -975,7 +986,8 @@ impl Rooms {
         drop(producer);
     }
 
-    /// Applies a mute or deafen, whether the participant asked or a moderator did.
+    /// Applies the mute and deafen the participant asked for. A moderator's mute stands over
+    /// their own: while it does, unmuting themself leaves their microphone paused.
     pub async fn set_state(
         &self,
         channel: Uuid,
@@ -984,11 +996,27 @@ impl Rooms {
         deafened: bool,
     ) -> Result<(), RoomError> {
         let room = self.room(channel)?;
-        let (microphones, consumers, report) = {
-            let mut participants = room.participants.lock().expect("room lock");
-            let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
+        self.apply_state(&room, user, |participant| {
             participant.muted = muted;
             participant.deafened = deafened;
+        })
+        .await
+    }
+
+    /// Makes `change` to the participant's mute or deafen and carries the result out: their
+    /// microphones paused while they are silenced (`Participant::silenced`), their audio
+    /// consumers while deafened, and everyone, the API server included, told.
+    async fn apply_state(
+        &self,
+        room: &Room,
+        user: Uuid,
+        change: impl FnOnce(&mut Participant),
+    ) -> Result<(), RoomError> {
+        let (muted, deafened, microphones, consumers, report) = {
+            let mut participants = room.participants.lock().expect("room lock");
+            let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
+            change(participant);
+            let (muted, deafened) = (participant.silenced(), participant.deafened);
             let microphones: Vec<Producer> = participant
                 .producers
                 .values()
@@ -1003,9 +1031,11 @@ impl Rooms {
                 .map(|(consumer, _)| consumer.clone())
                 .collect();
             (
+                muted,
+                deafened,
                 microphones,
                 consumers,
-                Self::state_report(&room, participant),
+                Self::state_report(room, participant),
             )
         };
         for producer in &microphones {
@@ -1045,7 +1075,7 @@ impl Rooms {
         );
         self.reporter.report(report);
         if muted {
-            self.apply_speaking(&room, &HashSet::new()).await;
+            self.apply_speaking(room, &HashSet::new()).await;
         }
         Ok(())
     }
@@ -1131,18 +1161,12 @@ impl Rooms {
                 user,
                 muted,
             } => {
-                if let Some(room) = self.room_of_session(session) {
-                    let deafened = room
-                        .participants
-                        .lock()
-                        .expect("room lock")
-                        .get(&user)
-                        .map(|p| p.deafened);
-                    if let Some(deafened) = deafened
-                        && let Err(e) = self.set_state(room.channel, user, muted, deafened).await
-                    {
-                        warn!(error = e.to_string(), "mute command not applied");
-                    }
+                if let Some(room) = self.room_of_session(session)
+                    && let Err(e) = self
+                        .apply_state(&room, user, |participant| participant.server_muted = muted)
+                        .await
+                {
+                    warn!(error = e.to_string(), "mute command not applied");
                 }
             }
             VoiceCommand::Kick {

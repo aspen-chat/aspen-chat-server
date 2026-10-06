@@ -288,6 +288,17 @@ def calls(world: World, check: Checks) -> None:
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
+    stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": True},
+              world.owner["token"], expect=(202,))
+    muted = frame_of(call, "participantState")
+    check("a moderator's mute reaches the call", muted is not None and muted["muted"] is True, muted)
+    call.send({"type": "setState", "muted": False, "deafened": False})
+    still = frame_of(call, "participantState")
+    check("and the member cannot unmute themself", still is not None and still["muted"] is True, still)
+    stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": False},
+              world.owner["token"], expect=(202,))
+    lifted = frame_of(call, "participantState")
+    check("until the moderator unmutes them", lifted is not None and lifted["muted"] is False, lifted)
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["speak"]})
     changed = frame_of(call, "grantsChanged")
     check("taking Speak away reaches the call at once", changed is not None and not changed["grants"]["speak"], changed)

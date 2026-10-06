@@ -204,7 +204,8 @@ impl VoiceReport {
     rename_all_fields = "camelCase"
 )]
 pub enum VoiceCommand {
-    /// Stop or resume forwarding a user's audio to the others.
+    /// Server-mute or unmute a user. While server-muted their microphone is not forwarded,
+    /// whatever they ask; unmuting lifts only this mute, not one they set themself.
     Mute {
         session: Uuid,
         user: Uuid,

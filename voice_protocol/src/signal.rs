@@ -233,6 +233,8 @@ pub enum ClientMessage {
         consumer_id: String,
     },
     /// Muting pauses the microphone producer on the server; deafening pauses every consumer.
+    /// A moderator's mute stands over this one: unmuting leaves the microphone paused while it
+    /// does, and the `participantState` that answers says so.
     SetState {
         muted: bool,
         deafened: bool,

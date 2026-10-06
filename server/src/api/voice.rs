@@ -22,7 +22,9 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceParticipantModerationRequest {
-    /// Server mute: their microphone is no longer forwarded to anyone until unmuted.
+    /// Server mute: their microphone is no longer forwarded to anyone, whatever they ask, until
+    /// a moderator unmutes them. Unmuting lifts only the server mute: someone who also muted
+    /// themself stays muted.
     pub muted: bool,
 }
 
