@@ -77,15 +77,71 @@ fn renders(content_type: &str) -> bool {
 /// followed.
 pub const HOST_PREFIX: &str = "aspen/";
 
+/// `text` with each `%XX` it holds decoded once; a `%` not followed by two hex digits stays.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(high), Some(low)) = (
+                bytes.get(i + 1).copied().and_then(hex),
+                bytes.get(i + 2).copied().and_then(hex),
+            )
+        {
+            out.push((high * 16 + low) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// How many times a path is decoded again in looking for a hidden segment.
+const MAX_DECODINGS: usize = 4;
+
+/// Whether a person may ask for `path` (already decoded once by the router): none of its
+/// segments is empty, `.`, or `..`, it does not begin with the host's segment (`HOST_PREFIX`,
+/// in any case), and neither is so after it is percent-decoded again, however many times, or
+/// read with backslashes as slashes. A plugin that normalises or decodes its path again is
+/// never led into the host's routes.
+fn person_may_ask(path: &str) -> bool {
+    let host_segment = HOST_PREFIX.trim_end_matches('/');
+    let mut form = path.to_string();
+    for _ in 0..=MAX_DECODINGS {
+        let slashed = form.replace('\\', "/");
+        let mut segments = slashed.split('/');
+        if segments
+            .clone()
+            .next()
+            .is_some_and(|first| first.eq_ignore_ascii_case(host_segment))
+            || segments.any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        {
+            return false;
+        }
+        let decoded = percent_decoded(&form);
+        if decoded == form {
+            return true;
+        }
+        form = decoded;
+    }
+    // Encoded more deeply than any path a person means.
+    false
+}
+
 /// `plugin_id`'s answer to `request` from `caller`, who asked for it themself; the host's own
-/// routes (`HOST_PREFIX`) are not theirs to reach.
+/// routes (`HOST_PREFIX`) are not theirs to reach, nor a path that could be read as one
+/// (`person_may_ask`).
 pub async fn answer(
     state: &GlobalServerContext,
     plugin_id: &str,
     caller: UserId,
     request: Request,
 ) -> app::Result<Answer> {
-    if request.path.starts_with(HOST_PREFIX) {
+    if !person_may_ask(&request.path) {
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     }
     answer_host(state, plugin_id, caller, request).await
@@ -169,6 +225,38 @@ pub async fn answer_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_person_never_reaches_the_hosts_routes() {
+        for path in [
+            "channels/abc/count",
+            "events/2026-10-06",
+            "files/a%2Fb",
+            "search",
+            "aspenish/thing",
+        ] {
+            assert!(person_may_ask(path), "{path}");
+        }
+        for path in [
+            "",
+            "aspen/cards/x/y",
+            "ASPEN/cards/x/y",
+            "aspen",
+            "/aspen/cards/x/y",
+            "./aspen/cards/x/y",
+            "x/../aspen/cards/x/y",
+            "x//y",
+            "x/",
+            "%61spen/cards/x/y",
+            "aspen%2Fcards/x/y",
+            "x/%2e%2e/aspen/cards",
+            "x/%252e%252e/aspen/cards",
+            "x\\..\\aspen\\cards",
+            "%2e/aspen",
+        ] {
+            assert!(!person_may_ask(path), "{path}");
+        }
+    }
 
     #[test]
     fn documents_and_scripts_are_never_served_as_such() {

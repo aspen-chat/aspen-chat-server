@@ -347,7 +347,10 @@ without signing in, for a calendar app's feed and the like:
 answering at all once they are banned or their account is deleted. The person's URL for a name is
 the same each time the plugin asks for it, until the plugin revokes it (`revoke-capability`).
 
-Routes under `aspen/` are the host's to call: a person's own requests never reach them.
+Routes under `aspen/` are the host's to call: a person's own requests never reach them. A
+person's request whose path has an empty, `.`, or `..` segment, or begins with `aspen` in any
+case, as it stands or once percent-decoded again, is not found, so a plugin that normalises
+or decodes its path is never led there.
 
 Later: a view of a community's own, outside any channel, and plugins posting cards on messages
 other than their own, if a need for either appears.
