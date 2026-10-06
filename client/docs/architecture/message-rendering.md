@@ -80,7 +80,9 @@
   a session on writes some of them: pages to open (a link preview's, a plugin card's or
   annotation's) must be `http:` or `https:` (`webPageUrl`), and files a deployment serves
   (attachments, previews, icons) `https:`, or `http:` at a loopback host or while the page is
-  itself served over plain HTTP, as a development deployment is (`mediaUrl`). An attachment at
+  itself served over plain HTTP, as a development deployment is (`mediaUrl`). A person's shown email
+  address becomes a `mailto:` link of that address alone, everything but its `@` encoded, so it
+  cannot add recipients, a subject, or a body (`mailtoUrl`). An attachment at
   any other address is unavailable, and a preview's picture there is left out. The desktop
   shell checks again: the window navigates only to the app's own `index.html` (or the dev
   server), and hands the system only `http:`, `https:`, and `mailto:` links
