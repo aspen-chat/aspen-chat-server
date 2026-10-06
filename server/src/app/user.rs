@@ -624,6 +624,28 @@ impl Retired {
     }
 }
 
+/// When the sign-in whose refresh token is `refresh_token` ends by itself, for closing what it
+/// holds open then (an event stream). A bot's token, which has no refresh token, never expires:
+/// `Ok(None)`. A sign-in that is gone already ends now.
+pub async fn sign_in_expires(
+    state: &GlobalServerContext,
+    refresh_token: &str,
+) -> app::Result<Option<chrono::DateTime<Utc>>> {
+    if refresh_token.is_empty() {
+        return Ok(None);
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let expires: Option<chrono::NaiveDateTime> = refresh_token::table
+        .select(refresh_token::expires)
+        .filter(refresh_token::token.eq(refresh_token))
+        .first(conn.as_mut())
+        .await
+        .optional()?;
+    Ok(Some(
+        expires.map_or_else(Utc::now, |expires| expires.and_utc()),
+    ))
+}
+
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.
 /// `None` means the token is unknown, expired, or belongs to a deleted or banned user.
 pub async fn user_for_token(

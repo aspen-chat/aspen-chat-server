@@ -228,9 +228,32 @@ struct Register {
     models: HashMap<CommunityId, CommunityModel>,
     resume_after: Option<u64>,
     deliveries: mpsc::Sender<Delivery>,
-    /// Whether `resume_after` was honoured; or the communities the connection reads once
-    /// caught up whose models it must load before registering again.
-    outcome: oneshot::Sender<Result<bool, Vec<CommunityId>>>,
+    outcome: oneshot::Sender<Outcome>,
+}
+
+/// What became of a registration.
+enum Outcome {
+    /// Registered; whether `resume_after` was honoured.
+    Registered(bool),
+    /// The communities the connection reads once caught up whose models it must load before
+    /// registering again.
+    Load(Vec<CommunityId>),
+    /// Refused: the stream retains an event before the resumed position that ends it.
+    Ended(StreamEnd),
+}
+
+/// Why a connection could not be registered.
+#[derive(Debug)]
+pub enum Refused {
+    /// Its sign-in ended, or its account was banned, by an event the stream still retains.
+    Ended(StreamEnd),
+    Failed(app::Error),
+}
+
+impl From<app::Error> for Refused {
+    fn from(e: app::Error) -> Self {
+        Refused::Failed(e)
+    }
 }
 
 /// How many times a connection loads models it turns out to need before giving up. Each retry
@@ -280,8 +303,12 @@ pub async fn subscribe(
     user: UserId,
     sign_in: String,
     resume_after: Option<u64>,
-) -> app::Result<Subscription> {
-    let mut conn = state.connection_pool.get().await?;
+) -> Result<Subscription, Refused> {
+    let mut conn = state
+        .connection_pool
+        .get()
+        .await
+        .map_err(app::Error::from)?;
     let communities = memberships(conn.as_mut(), user).await?;
     let roles = member_roles(conn.as_mut(), user, &communities).await?;
     let mut models = CommunityModel::load(conn.as_mut(), &communities).await?;
@@ -307,7 +334,7 @@ pub async fn subscribe(
             .await
             .map_err(|_| app::Error::EventFeedStopped)?;
         match outcome_rx.await.map_err(|_| app::Error::EventFeedStopped)? {
-            Ok(resumed) => {
+            Outcome::Registered(resumed) => {
                 return Ok(Subscription {
                     resumed,
                     deliveries,
@@ -317,10 +344,13 @@ pub async fn subscribe(
                     },
                 });
             }
-            Err(missing) => models = CommunityModel::load(conn.as_mut(), &missing).await?,
+            Outcome::Load(missing) => {
+                models = CommunityModel::load(conn.as_mut(), &missing).await?
+            }
+            Outcome::Ended(end) => return Err(Refused::Ended(end)),
         }
     }
-    Err(app::Error::EventFeedStopped)
+    Err(app::Error::EventFeedStopped.into())
 }
 
 /// What an event on `user`'s own subject changes about their memberships, read without parsing
@@ -508,6 +538,11 @@ impl Retained {
     /// database already shows changes nothing), and those after it as they are passed. Channel
     /// events are kept by the model attached to each, or `models`' for one routed before the
     /// dispatcher held its community's.
+    ///
+    /// The session was checked against the database just as possibly before an end of the
+    /// sign-in or a ban was committed, so a retained event at or before `after` that ends the
+    /// connection refuses it, with why: resuming past it is not a way around it. One after
+    /// `after` is in the catch-up, which closes the connection once written.
     fn catch_up(
         &self,
         user: UserId,
@@ -515,7 +550,7 @@ impl Retained {
         reading: Reading,
         after: u64,
         models: &HashMap<CommunityId, Arc<CommunityModel>>,
-    ) -> (Vec<Arc<FeedEvent>>, Reading) {
+    ) -> Result<(Vec<Arc<FeedEvent>>, Reading), StreamEnd> {
         let own = SubjectOwner::User(user);
         let Reading {
             communities: mut reading,
@@ -523,6 +558,11 @@ impl Retained {
             mut moderator,
         } = reading;
         for e in self.since(own, 0).take_while(|e| e.sequence <= after) {
+            if let Some(end) = e.ends
+                && e.reaches(sign_in)
+            {
+                return Err(end);
+            }
             apply_membership(&mut reading, &mut roles, e);
             moderator = e.moderator.unwrap_or(moderator);
         }
@@ -566,7 +606,7 @@ impl Retained {
             roles,
             moderator,
         };
-        (events, caught_up)
+        Ok((events, caught_up))
     }
 }
 
@@ -1192,13 +1232,21 @@ async fn dispatch(
                     roles: registration.roles,
                     moderator: registration.moderator,
                 };
-                let (missed, Reading { communities, roles, moderator }) = retained.catch_up(
+                let caught_up = retained.catch_up(
                     registration.user,
                     &registration.sign_in,
                     reading,
                     after,
                     &models.models,
                 );
+                let (missed, Reading { communities, roles, moderator }) = match caught_up {
+                    Ok(caught_up) => caught_up,
+                    Err(end) => {
+                        models.release_unread();
+                        let _ = registration.outcome.send(Outcome::Ended(end));
+                        continue;
+                    }
+                };
                 let missing: Vec<CommunityId> = communities
                     .iter()
                     .filter(|c| !models.models.contains_key(c))
@@ -1206,7 +1254,7 @@ async fn dispatch(
                     .collect();
                 if !missing.is_empty() {
                     models.release_unread();
-                    let _ = registration.outcome.send(Err(missing));
+                    let _ = registration.outcome.send(Outcome::Load(missing));
                     continue;
                 }
                 if !missed.is_empty()
@@ -1215,7 +1263,7 @@ async fn dispatch(
                     models.release_unread();
                     continue;
                 }
-                if registration.outcome.send(Ok(resumed)).is_err() {
+                if registration.outcome.send(Outcome::Registered(resumed)).is_err() {
                     models.release_unread();
                     continue;
                 }
@@ -1375,12 +1423,12 @@ mod tests {
             roles: HashMap::new(),
             moderator: false,
         };
-        let (missed, caught_up) = retained.catch_up(user, "", reading(), 0, &none);
+        let (missed, caught_up) = retained.catch_up(user, "", reading(), 0, &none).unwrap();
         assert_eq!(sequences(&missed), vec![2, 3, 4, 5, 6]);
         assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
         // Resuming after the join, with a database read from before it was committed, still
         // reads the community joined.
-        let (missed, caught_up) = retained.catch_up(user, "", reading(), 4, &none);
+        let (missed, caught_up) = retained.catch_up(user, "", reading(), 4, &none).unwrap();
         assert_eq!(sequences(&missed), vec![5, 6]);
         assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
     }
@@ -1536,6 +1584,44 @@ mod tests {
         // Changing the password ends every other.
         routes.route(&ended(2, None, Some("a")));
         assert_eq!(received(&mut receivers), vec![false, true, true]);
+    }
+
+    #[test]
+    fn resuming_past_an_end_of_the_sign_in_or_a_ban_is_refused() {
+        let user = UserId::new();
+        let own = SubjectOwner::User(user);
+        let mut retained = Retained::default();
+        retained.push(event(1, own, None));
+        let mut signed_out = plain(2, own, None);
+        signed_out.sign_ins = Some(EndedSignIns {
+            ended: Some("b".to_string()),
+            kept: None,
+        });
+        signed_out.ends = Some(StreamEnd::SignedOut);
+        retained.push(Arc::new(signed_out));
+        retained.push(event(3, own, None));
+        let none = HashMap::new();
+        let reading = || Reading {
+            communities: HashSet::new(),
+            roles: HashMap::new(),
+            moderator: false,
+        };
+        let refused = |sign_in, after| retained.catch_up(user, sign_in, reading(), after, &none);
+        assert_eq!(refused("b", 2).err(), Some(StreamEnd::SignedOut));
+        assert_eq!(refused("b", 3).err(), Some(StreamEnd::SignedOut));
+        // Before it, the end is in the catch-up, which closes the connection.
+        let (missed, _) = refused("b", 1).unwrap();
+        assert_eq!(sequences(&missed), vec![2, 3]);
+        // Another sign-in's end does not concern this one.
+        let (missed, _) = refused("a", 2).unwrap();
+        assert_eq!(sequences(&missed), vec![3]);
+        let mut banned = plain(4, own, None);
+        banned.ends = Some(StreamEnd::Banned);
+        retained.push(Arc::new(banned));
+        assert_eq!(
+            retained.catch_up(user, "a", reading(), 4, &none).err(),
+            Some(StreamEnd::Banned)
+        );
     }
 
     #[test]

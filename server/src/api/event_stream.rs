@@ -28,7 +28,7 @@ use crate::app;
 use crate::app::UserId;
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment_settings::DeploymentSettings;
-use crate::app::event_feed::{Delivery, FeedEvent, StreamEnd, Subscription};
+use crate::app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, Subscription};
 use crate::app::two_factor::Caller;
 use crate::app::user::UserPg;
 use crate::t;
@@ -99,7 +99,8 @@ pub enum EventStreamErrorCode {
     /// The first frame was not a well-formed `identify` message. Close code 4400.
     BadRequest,
     /// The session token is missing, unknown, or expired, or its sign-in ended while the stream
-    /// was open, which the `signInsEnded` event before this frame tells of. Close code 4401.
+    /// was open: signed out or revoked, which the `signInsEnded` event before this frame tells
+    /// of, or expired. Close code 4401.
     Unauthorized,
     /// The server requires a second factor the account has not added yet; the session may only
     /// add one. Sent at `identify`, and to an open stream when the deployment starts requiring
@@ -227,6 +228,24 @@ impl From<app::Error> for Rejection {
     }
 }
 
+impl From<StreamEnd> for EventStreamErrorCode {
+    fn from(end: StreamEnd) -> Self {
+        match end {
+            StreamEnd::Banned => EventStreamErrorCode::Banned,
+            StreamEnd::SignedOut => EventStreamErrorCode::Unauthorized,
+        }
+    }
+}
+
+impl From<Refused> for Rejection {
+    fn from(refused: Refused) -> Self {
+        match refused {
+            Refused::Ended(end) => Rejection(end.into()),
+            Refused::Failed(e) => e.into(),
+        }
+    }
+}
+
 /// Counts an identified stream as open for as long as it lives.
 struct OpenStream;
 
@@ -269,8 +288,8 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
     .await
     {
         Ok(subscription) => subscription,
-        Err(e) => {
-            let Rejection(code) = e.into();
+        Err(refused) => {
+            let Rejection(code) = refused.into();
             reject(&mut socket, code).await;
             return;
         }
@@ -289,8 +308,22 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
         log_send_error(&e);
         return;
     }
-    let Identified { user, caller, .. } = session;
-    pump_events(socket, subscription, &state, &user, &caller, settings).await;
+    let Identified {
+        user,
+        caller,
+        expires,
+        ..
+    } = session;
+    pump_events(
+        socket,
+        subscription,
+        &state,
+        &user,
+        &caller,
+        expires,
+        settings,
+    )
+    .await;
 }
 
 struct Identified {
@@ -299,6 +332,8 @@ struct Identified {
     caller: Caller,
     /// The sign-in the session belongs to (`app::login::sign_in_id`).
     sign_in: String,
+    /// When the sign-in expires, closing the stream; `None` for a bot's, which does not.
+    expires: Option<tokio::time::Instant>,
     resume_after: Option<u64>,
 }
 
@@ -344,11 +379,18 @@ async fn identify(
     if caller.verification_required(&state.settings()) {
         return Err(Rejection(EventStreamErrorCode::EmailVerificationRequired));
     }
+    let expires = app::user::sign_in_expires(state, &caller.refresh_token)
+        .await?
+        .map(|at| {
+            let left = (at - chrono::Utc::now()).to_std().unwrap_or_default();
+            tokio::time::Instant::now() + left
+        });
     app::user_status::mark_user_online(state, &user);
     Ok(Identified {
         user,
         sign_in: app::login::sign_in_id(&caller.refresh_token),
         caller,
+        expires,
         resume_after,
     })
 }
@@ -428,13 +470,15 @@ async fn owes_verified_email(
 /// or a verified email address, the stream closes, and the client's next `identify` decides
 /// afresh, so one that added a factor meanwhile reconnects. Whether the address is verified is
 /// read again when the settings change, and taken from each `emailAccountChanged` of the user,
-/// since they may change their address while the stream is open.
+/// since they may change their address while the stream is open. The stream closes as
+/// unauthorized at `expires`, when the sign-in it belongs to runs out.
 async fn pump_events(
     mut socket: WebSocket,
     mut subscription: Subscription,
     state: &GlobalServerContext,
     user_row: &UserPg,
     caller: &Caller,
+    expires: Option<tokio::time::Instant>,
     mut settings: watch::Receiver<Arc<DeploymentSettings>>,
 ) {
     let user = user_row.id;
@@ -481,11 +525,7 @@ async fn pump_events(
                 }
                 metrics::counter!(aspen_metrics::api::EVENTS_DELIVERED).increment(written as u64);
                 if let Some(end) = ends {
-                    let code = match end {
-                        StreamEnd::Banned => EventStreamErrorCode::Banned,
-                        StreamEnd::SignedOut => EventStreamErrorCode::Unauthorized,
-                    };
-                    reject(&mut socket, code).await;
+                    reject(&mut socket, end.into()).await;
                     return;
                 }
                 let required = settings.borrow().email_verification_required;
@@ -493,6 +533,15 @@ async fn pump_events(
                     reject(&mut socket, EventStreamErrorCode::EmailVerificationRequired).await;
                     return;
                 }
+            },
+            () = async {
+                match expires {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                reject(&mut socket, EventStreamErrorCode::Unauthorized).await;
+                return;
             },
             changed = settings.changed() => {
                 // The server is stopping when its copy of the settings is gone.
