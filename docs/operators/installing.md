@@ -126,6 +126,12 @@ the proxy by the rate limits:
 trusted_proxies = ["127.0.0.1"]
 ```
 
+What the server fetches from addresses others choose (link previews, plugins' calls, other
+deployments, and the push services phones name) it fetches directly, refusing private
+addresses, and ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`: a proxy would resolve names
+itself, past that check. Let the API servers reach the internet on port 443 (and 80, for link
+previews) without one.
+
 Run as many API servers as you need; they share everything through the services, and any of
 them can serve any request.
 

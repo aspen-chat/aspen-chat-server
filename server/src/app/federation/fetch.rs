@@ -40,6 +40,8 @@ pub fn client(config: &FederationConfig) -> app::Result<reqwest::Client> {
         tracing::warn!("federation may call deployments at private network addresses");
     }
     reqwest::Client::builder()
+        // A proxy would resolve names itself, past `PublicResolver`.
+        .no_proxy()
         .user_agent(concat!(
             "Aspen/",
             env!("CARGO_PKG_VERSION"),
