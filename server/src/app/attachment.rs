@@ -331,9 +331,15 @@ pub async fn read_attachment(
         .load(conn.as_mut())
         .await?;
     for channel in channels {
-        if app::permissions::channel_access(state, conn.as_mut(), caller, channel)
-            .await
-            .is_ok()
+        if app::permissions::channel_access_reading(
+            state,
+            conn.as_mut(),
+            caller,
+            channel,
+            Some(id.0.to_string()),
+        )
+        .await
+        .is_ok()
         {
             return Ok(row);
         }

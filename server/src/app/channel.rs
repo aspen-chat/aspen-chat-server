@@ -238,7 +238,8 @@ pub(crate) async fn read_channel(
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
+    // A DM's record, which a deployment moderator's list of someone's DMs already shows them.
+    crate::app::permissions::channel_access_moderating(state, conn.as_mut(), caller, id).await?;
     let recipients = if matches!(channel.ty, ChannelType::Dm | ChannelType::GroupDm) {
         app::events::dm_recipients(conn.as_mut(), id).await?
     } else {
@@ -364,18 +365,8 @@ pub(crate) async fn read_channel_messages(
         .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    let access = crate::app::permissions::channel_access(state, conn.as_mut(), caller, id).await?;
     // Reading a DM one is not in is moderation, and every such reading is logged.
-    if access.dm_moderator {
-        app::message::note_moderation(
-            conn.as_mut(),
-            caller,
-            &access,
-            app::moderation_log::ModerationAction::ReadDm,
-            None,
-        )
-        .await?;
-    }
+    crate::app::permissions::channel_access_reading(state, conn.as_mut(), caller, id, None).await?;
     let query = message::table
         .select(Message::as_select())
         .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
@@ -479,7 +470,8 @@ pub(crate) async fn read_channel_pins(
     channel_id: ChannelId,
 ) -> app::error::Result<Vec<Pin>> {
     let mut conn = state.connection_pool.get().await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    crate::app::permissions::channel_access_reading(state, conn.as_mut(), caller, channel_id, None)
+        .await?;
     channel::table
         .select(Channel::as_select())
         .filter(

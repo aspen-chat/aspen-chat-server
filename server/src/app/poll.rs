@@ -25,7 +25,9 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::message::Message;
 use crate::app::message::MessageKind;
-use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::permissions::{
+    Permissions, channel_access, channel_access_moderating, channel_access_reading, missing,
+};
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
 use crate::database::schema::{message, poll, poll_option, poll_vote};
@@ -431,7 +433,14 @@ pub async fn read_poll(
         .filter(poll::id.eq(id))
         .first(conn.as_mut())
         .await?;
-    channel_access(state, conn.as_mut(), caller, channel).await?;
+    channel_access_reading(
+        state,
+        conn.as_mut(),
+        caller,
+        channel,
+        Some(id.0.to_string()),
+    )
+    .await?;
     load_polls(conn.as_mut(), &[id])
         .await?
         .into_iter()
@@ -722,7 +731,7 @@ pub async fn remove_write_in(
         async move {
             let now = Utc::now();
             let row = lock_poll(conn.as_mut(), id).await?;
-            let access = channel_access(state, conn.as_mut(), user, row.channel).await?;
+            let access = channel_access_moderating(state, conn.as_mut(), user, row.channel).await?;
             ensure_open(&row, now)?;
             let writer: Option<Option<UserId>> = poll_option::table
                 .select(poll_option::written_by)
@@ -967,7 +976,8 @@ pub async fn close_poll(
                 .for_update()
                 .first(conn.as_mut())
                 .await?;
-            let access = channel_access(state, conn.as_mut(), caller, row.channel).await?;
+            let access =
+                channel_access_moderating(state, conn.as_mut(), caller, row.channel).await?;
             if row.created_by != caller {
                 if !access.community_has(Permissions::MANAGE_MESSAGES) {
                     return Err(missing(Permissions::MANAGE_MESSAGES));

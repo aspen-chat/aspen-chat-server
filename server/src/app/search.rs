@@ -181,13 +181,9 @@ async fn readable_channels(
     match scope {
         SearchScope::Channel(channel) => {
             let mut conn = state.connection_pool.get().await?;
-            let access =
-                app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
             // Searching is reading; a deployment moderator reads DMs they are not in only by
-            // opening them, where the reading is logged.
-            if access.dm_moderator {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            }
+            // opening them, where the reading is logged, so `channel_access` finds none here.
+            app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
             Ok(vec![channel])
         }
         SearchScope::Community(community) => {

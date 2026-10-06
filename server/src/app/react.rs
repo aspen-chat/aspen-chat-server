@@ -132,8 +132,13 @@ pub async fn remove_others_react(
             .filter(crate::database::schema::message::id.eq(message_id))
             .first(conn.as_mut())
             .await?;
-        let access =
-            crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
+        let access = crate::app::permissions::channel_access_moderating(
+            state,
+            conn.as_mut(),
+            caller,
+            channel,
+        )
+        .await?;
         let manage = crate::app::permissions::Permissions::MANAGE_MESSAGES;
         if !access.community_has(manage) {
             return Err(crate::app::permissions::missing(manage));
@@ -295,7 +300,14 @@ pub async fn read_reactors(
         .filter(crate::database::schema::message::id.eq(message_id))
         .first(conn.as_mut())
         .await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
+    crate::app::permissions::channel_access_reading(
+        state,
+        conn.as_mut(),
+        caller,
+        channel,
+        Some(message_id.0.to_string()),
+    )
+    .await?;
     let Some(emoji) = canonical_emoji(emoji) else {
         return Ok(Vec::new());
     };

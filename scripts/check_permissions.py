@@ -921,6 +921,39 @@ def ban_ranks(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def dm_reads(world: World, check: Checks) -> None:
+    say("a deployment moderator's every read of a DM they are not in is logged")
+    stack, member = world.stack, world.member
+    made = stack.api("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, member["token"])
+    dm = made.get("id") or made["data"]["id"]
+    secret = stack.api("POST", f"/channels/{dm}/messages", {"content": "between us", "attachments": []},
+                       member["token"])["id"]
+    thumbs = "%F0%9F%91%8D"
+    stack.api("PUT", f"/messages/{secret}/reactions/{thumbs}/@me", token=member["token"])
+    links = world.channel("links")
+    world.post(links, f"see https://localhost/dms/{dm}/messages/{secret}")
+    watcher = world.account("watcher")
+    stack.command("admin", "grant", watcher["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+
+    def logged() -> int:
+        entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])
+        return sum(1 for e in entries if e.get("action") == "readDm" and e.get("channel") == dm)
+
+    before = logged()
+    read = stack.api("GET", f"/channels/{links}/messages?include=linked", token=watcher["token"])
+    check("a DM message sideloaded by a link reaches the moderator",
+          any(m["id"] == secret for m in read.get("included", {}).get("messages", [])), read.get("included"))
+    check("and the reading is logged, once", logged() == before + 1)
+    status = stack.status("GET", f"/messages/{secret}/reactions/{thumbs}", token=watcher["token"])
+    check("reading who reacted in it is logged too", status == 200 and logged() == before + 2, status)
+    check("while what reads no content finds no DM",
+          stack.status("GET", f"/channels/{dm}/read-states/@me", token=watcher["token"]) == 404
+          and stack.status("GET", f"/channels/{dm}/presence", token=watcher["token"]) == 404)
+    stack.command("admin", "deny", "moderateCommunities")
+    stack.command("admin", "revoke", watcher["name"])
+
+
 def stop_review_powers(world: World, reviewer: dict) -> None:
     for permission in MODERATION:
         world.stack.command("admin", "deny", permission)
@@ -1190,7 +1223,7 @@ def invite_previews(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
              thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, plugins, calendar_channels, email, invite_previews, previews]
+             nicknames, review_powers, ban_ranks, dm_reads, plugins, calendar_channels, email, invite_previews, previews]
 
 
 def main() -> None:

@@ -19,7 +19,9 @@
 //! A deployment moderator (Moderate any community, `app::deployment`) reaches every community
 //! and DM without belonging to it: they view every channel whatever the overrides, hold
 //! `MODERATION` everywhere, and rank above every role but below the owner. `moderating` says
-//! when an action was allowed by that alone, which the caller then logs.
+//! when an action was allowed by that alone, which the caller then logs. A DM they are not in
+//! is not found to `channel_access`: only `channel_access_reading`, which logs the reading, and
+//! `channel_access_moderating`, for taking things out of it, reach one.
 
 use crate::app::channel::ChannelType;
 use crate::app::events::{ChannelHome, channel_home};
@@ -470,7 +472,8 @@ pub struct ChannelAccess {
     pub permissions: Permissions,
     /// Whether the channel is a thread, whose posting takes `SEND_IN_THREADS`.
     pub thread: bool,
-    /// Whether the caller reads a DM they are not in, by Moderate any community.
+    /// Whether the caller reads a DM they are not in, by Moderate any community, which only
+    /// `channel_access_reading` and `channel_access_moderating` allow.
     pub dm_moderator: bool,
     /// Whether this is a one-to-one DM with a block between its two people, either way
     /// (`app::block`): they may read it and take their own messages out of it, and nothing
@@ -700,8 +703,6 @@ pub async fn in_category(
     Ok(access.in_channel(&overrides, &[]))
 }
 
-/// What `user` may do in `channel_id`. A channel they may not view, in a community they are
-/// not in, or a DM they are not a recipient of is answered as not found.
 /// What stands between `user` and the other person of `dm`, when it is a one-to-one DM: a
 /// block either way, and whether the other is the system account.
 async fn dm_peer(
@@ -735,11 +736,62 @@ async fn dm_peer(
     }
 }
 
+/// How a deployment moderator who is not in a DM may reach it.
+enum DmModerator {
+    /// Not at all: the DM is not found to them.
+    Refused,
+    /// To read what is in it, `subject` naming what, which is logged as they are let in.
+    Reading(Option<String>),
+    /// To take something out of it, or read its own record, which their DM list already shows
+    /// them; each caller logs what it does.
+    Moderating,
+}
+
+/// What `user` may do in `channel_id`. A channel they may not view, in a community they are
+/// not in, or a DM they are not a recipient of is answered as not found, deployment moderators
+/// included: a path that lets them into DMs says so with `channel_access_reading` or
+/// `channel_access_moderating`.
 pub async fn channel_access(
     state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user: UserId,
     channel_id: ChannelId,
+) -> app::Result<ChannelAccess> {
+    access_to_channel(state, conn, user, channel_id, DmModerator::Refused).await
+}
+
+/// `channel_access` for reading what a channel holds, which also lets a deployment moderator
+/// read a DM they are not in, writing each such reading to the moderation log (`ReadDm`, with
+/// `subject` naming what was read) before anything is read. A read of several messages calls it
+/// once per channel, so a DM is logged once however many of its messages were read.
+pub async fn channel_access_reading(
+    state: &impl crate::app::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    channel_id: ChannelId,
+    subject: Option<String>,
+) -> app::Result<ChannelAccess> {
+    access_to_channel(state, conn, user, channel_id, DmModerator::Reading(subject)).await
+}
+
+/// `channel_access` for taking something out of a channel, or reading its own record, which also
+/// lets a deployment moderator into a DM they are not in, holding `VIEW_CHANNEL` and what
+/// `community_has` gives them there. The caller logs what they do, as moderation.
+pub async fn channel_access_moderating(
+    state: &impl crate::app::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    channel_id: ChannelId,
+) -> app::Result<ChannelAccess> {
+    access_to_channel(state, conn, user, channel_id, DmModerator::Moderating).await
+}
+
+async fn access_to_channel(
+    state: &impl crate::app::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    channel_id: ChannelId,
+    dm_moderator: DmModerator,
 ) -> app::Result<ChannelAccess> {
     let not_found = || app::Error::Diesel(diesel::result::Error::NotFound);
     let (parent, category, thread): (Option<ChannelId>, Option<CategoryId>, bool) = {
@@ -781,8 +833,21 @@ pub async fn channel_access(
             .get_result(conn)
             .await?;
             if !recipient {
-                // A deployment moderator reads any DM, and may take things out of it.
-                if app::deployment::is_moderator(conn, user).await? {
+                // A deployment moderator reads any DM, logged, and may take things out of it.
+                if !matches!(dm_moderator, DmModerator::Refused)
+                    && app::deployment::is_moderator(conn, user).await?
+                {
+                    if let DmModerator::Reading(subject) = dm_moderator {
+                        app::moderation_log::log_moderation(
+                            conn,
+                            user,
+                            app::moderation_log::ModerationAction::ReadDm,
+                            None,
+                            Some(channel_id),
+                            subject,
+                        )
+                        .await?;
+                    }
                     return Ok(ChannelAccess {
                         channel: channel_id,
                         community: None,

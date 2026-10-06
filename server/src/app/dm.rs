@@ -305,7 +305,7 @@ pub async fn add_recipient(
         .filter(channel::id.eq(dm_id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, dm_id).await?;
+    crate::app::permissions::channel_access_moderating(state, conn.as_mut(), caller, dm_id).await?;
     if dm.ty != ChannelType::GroupDm {
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
@@ -391,7 +391,7 @@ pub async fn leave(
         .filter(channel::id.eq(dm_id).and(channel::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    crate::app::permissions::channel_access(state, conn.as_mut(), caller, dm_id).await?;
+    crate::app::permissions::channel_access_moderating(state, conn.as_mut(), caller, dm_id).await?;
     if dm.ty != ChannelType::GroupDm {
         return Err(app::Error::Validation(t!("dmNotGroup")));
     }
