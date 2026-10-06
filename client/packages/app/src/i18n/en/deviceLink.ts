@@ -39,6 +39,12 @@ export const deviceLink = {
   cancelled: "Signing in was cancelled. Make a new code on your computer to try again.",
   needsSignedInPhone:
     "This code asks for a sign-in, so it needs a phone that's already signed in. Sign in here first, or scan it with one that is.",
+  switchServerPrompt: "This code signs in to {server}. This app uses {here}. Switch to {server}?",
+  switchServerWarning:
+    "Only switch if you made this code yourself, on your own computer, just now. A code from anyone else could lead you to a server that only looks like yours.",
+  switchServer: "Switch to {server}",
+  offeredServer:
+    "A sign-in code names {server}. Check that this is your deployment's address before you continue.",
   wrongServer:
     "This code is for {server}, but this app uses {here}. Scan it with an app signed in to {server}.",
   incomplete:

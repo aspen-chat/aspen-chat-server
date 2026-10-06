@@ -48,9 +48,13 @@
   first's): signed in, it shows the computer's name with a warning that a stranger's code is a
   trap, and signs it in only on Sign it in; signed out, it says which account the phone will be
   signed in to and claims until the computer confirms. A code for another server is refused
-  when signed in; signed out, a mobile shell moves to the code's server first
-  (`ServerChoice.switchServer`), and the server form offers to scan a code instead of typing an
-  address, since the code names its server. The root layout shows the screen in place of the
+  when signed in; signed out, an app asks first whether to move to the code's server, naming
+  its host and warning that only a code the person made themselves is safe, since anyone can
+  make a link naming any server, and moves (`ServerChoice.switchServer`) only on Switch;
+  nothing is asked of that server before then. The server form offers to scan a code instead of
+  typing an address, since the code names its server; a scanned code, or one opened as a link
+  (`aspen://app/device-link`) before any server is chosen, fills the address in and says so,
+  and the person continues to it themselves. The root layout shows the screen in place of the
   sign-in forms while signed out (`/device-link`), and the router has it as a route signed in.
 - Email (`src/features/email`): what the deployment does with it is `email` in
   `GET /deployment` (`useEmailPolicy`, read each time a screen offering it opens; absent from a
