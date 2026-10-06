@@ -6,6 +6,7 @@ mod config;
 mod limits;
 mod media;
 mod metrics;
+mod outbox;
 mod reporter;
 mod rooms;
 mod signalling;

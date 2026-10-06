@@ -72,8 +72,8 @@ pub enum RoomError {
     UnknownTransfer,
 }
 
-/// Where a participant's frames go: the writer half of their socket.
-pub type Outbox = mpsc::UnboundedSender<ServerMessage>;
+/// Where a participant's frames go: their socket's outbox.
+pub use crate::outbox::Outbox;
 
 /// One signalling socket's place in a call. A user joining again from another socket replaces
 /// their participant, and the socket replaced must not take the new one out when it closes.
@@ -156,8 +156,7 @@ impl Participant {
     }
 
     fn send(&self, message: ServerMessage) {
-        // A closed outbox means the socket is gone; its participant is removed on that path.
-        let _ = self.outbox.send(message);
+        self.outbox.send(&message);
     }
 }
 
@@ -185,9 +184,10 @@ pub struct Room {
 
 impl Room {
     fn broadcast(&self, message: &ServerMessage, except: Option<Uuid>) {
+        let text = crate::outbox::frame_text(message);
         for participant in self.participants.lock().expect("room lock").values() {
             if Some(participant.user) != except {
-                participant.send(message.clone());
+                participant.outbox.send_text(text.clone());
             }
         }
     }
