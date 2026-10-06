@@ -57,7 +57,8 @@ by each API server, at the same origin.
 | `max_attachment_bytes` | `268435456` (256 MiB) | The largest file anyone may attach. Apps declare a file's size when they ask to upload it, and the upload URL is signed for exactly that size, so storage refuses more; an upload that declared none and holds more is deleted when it is confirmed. Icons are held to 8 MiB and custom emoji to 256 KiB whatever this says. |
 
 Attachments are served from `public_base_url` as what they are only when they are pictures,
-video, or sound in the formats browsers play, plain text, or PDF. Anything else (an HTML page, an
+video, or sound in the formats browsers play, plain text, or PDF, and then as that type alone,
+with none of the parameters the sender's app added but a plain text's `charset`. Anything else (an HTML page, an
 SVG, XML, a script, an archive) is uploaded and stored as `application/octet-stream`, with
 `Content-Disposition: attachment` where the store keeps it, so a browser saves it rather than
 running what it holds at your media address; apps still show the type its sender's system gave

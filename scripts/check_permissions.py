@@ -486,6 +486,13 @@ def uploads(world: World, check: Checks) -> None:
     with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as read:
         check("and it is served as a file, not a page",
               read.headers.get_content_type() == "application/octet-stream")
+    check("a type that would read as a page too is refused",
+          stack.status("POST", "/attachments", {"fileName": "a.txt", "mimeType": "text/plain;x=,text/html",
+                                                "byteSize": 1}, world.owner["token"]) == 400)
+    text = world.as_owner("POST", "/attachments", {"fileName": "a.txt", "byteSize": 1,
+                                                   "mimeType": "text/plain; charset=utf-8; name=a.html"})
+    check("and plain text is sent as plain text alone",
+          text.get("contentType") == "text/plain; charset=utf-8", text)
     check("a file over the deployment's limit is refused before it is sent",
           stack.status("POST", "/attachments", {"fileName": "huge.bin", "mimeType": "application/zip",
                                                 "byteSize": 1 << 40}, world.owner["token"]) == 400)
