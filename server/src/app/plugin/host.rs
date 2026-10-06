@@ -757,6 +757,13 @@ impl Call {
                 "{host} is not among the plugin's hosts, or the URL is not https"
             )));
         }
+        // An address is connected to without the client's resolver, which refuses the inside
+        // of a network only for names.
+        if crate::app::outbound::names_inside_address(&url) {
+            return Err(wit::Error::Denied(format!(
+                "{host} is an address inside a network, which plugins do not call"
+            )));
+        }
         if request.body.len() > MAX_FETCH_BYTES {
             return Err(wit::Error::Limit(format!(
                 "a request body is at most {MAX_FETCH_BYTES} bytes"
