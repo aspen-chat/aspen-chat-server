@@ -16,8 +16,8 @@ import urllib.parse
 import urllib.request
 
 from dev_federation import (
-    ALPHA, BETA, DEPLOYMENTS, PASSWORD, Deployment, Failed, api, expect, request, restart, running_pid, say,
-    sign_in, terminal,
+    ALPHA, BETA, DEPLOYMENTS, PASSWORD, Deployment, Failed, api, bin_of, clean_env, expect, request, restart, run,
+    running_pid, say, sign_in, terminal,
 )
 
 
@@ -105,6 +105,7 @@ def check(_args: argparse.Namespace) -> None:
 
     # The terminal reaches the same directory, the other way round.
     if ALPHA.domain in terminal(BETA, "federation", "list"):
+        terminal(BETA, "federation", "list-remove", ALPHA.domain, "usersSharedBlock")
         terminal(BETA, "federation", "remove", ALPHA.domain)
     output = terminal(BETA, "federation", "add", ALPHA.domain, "--note", "from the terminal")
     expect("pinned" in output, "beta's terminal adds alpha and pins its key")
@@ -247,6 +248,13 @@ def sign_in_abroad(assertion: str, invite: str | None = None, at: Deployment = B
     return status, json.loads(text) if text else {}
 
 
+def subprocess_status(deployment: Deployment, *args: str) -> tuple[int, str]:
+    """Runs an operator command on `deployment` that may fail, and returns its exit status and
+    everything it printed."""
+    done = run(str(bin_of(deployment) / "aspen-chat-server"), *args, cwd=deployment.dir, env=clean_env())
+    return done.returncode, done.stdout + done.stderr
+
+
 def problem(status: int, body: dict) -> str:
     return f"{status} {body.get('code')}"
 
@@ -290,7 +298,6 @@ def check_abroad(admin: str) -> None:
     api(ALPHA, "POST", f"/icons/{upload['id']}/confirm", token=traveller)
     api(ALPHA, "PATCH", "/users/@me", {"icon": upload["id"]}, token=traveller)
     status, again = sign_in_abroad(assertion_for(traveller))
-    abroad = again["sessionToken"]
     me2 = api(BETA, "GET", "/users/@me", token=abroad)
     expect(status == 200 and again["userId"] == session["userId"] and me2["displayName"] == "Traveller Two",
            "signing in again is the same user, with the profile as it is at home")
@@ -308,13 +315,38 @@ def check_abroad(admin: str) -> None:
     expect(status == 403 and json.loads(text)["code"] == "federationRefused",
            "off alpha's allow list, alpha signs nothing for beta")
     api(ALPHA, "PUT", f"{beta_path}/lists/usersEmigrationAllow", token=admin, expect=(201,))
+    expect(abroad_alive(abroad), "the traveller is signed in at beta")
     terminal(BETA, "federation", "list-add", ALPHA.domain, "usersSharedBlock")
+    expect(not abroad_alive(abroad), "putting alpha on beta's block list signs its users out of beta at once")
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
            "on beta's block list, alpha's users are turned away")
+    status, text = subprocess_status(BETA, "federation", "remove", ALPHA.domain)
+    expect(status != 0 and "block list" in text, "beta will not forget alpha while it is on a block list")
     terminal(BETA, "federation", "list-remove", ALPHA.domain, "usersSharedBlock")
 
+    # A block on a name blocks every name under it and every port: alpha is alpha.localhost on
+    # another port.
+    stamp = int(time.time())
+    beta_admin = sign_in(BETA, f"betablocks{stamp}")
+    terminal(BETA, "admin", "grant", f"betablocks{stamp}")
+    bare = "alpha.localhost"
+    bare_path = f"/admin/federation/deployments/{bare}"
+    request("DELETE", f"https://{BETA.domain}/api/v1{bare_path}/lists/usersSharedBlock", token=beta_admin)
+    request("DELETE", f"https://{BETA.domain}/api/v1{bare_path}", token=beta_admin)
+    api(BETA, "POST", "/admin/federation/deployments", {"domain": bare}, token=beta_admin, expect=(201,))
+    status, visit = sign_in_abroad(assertion_for(traveller))
+    expect(status == 200 and abroad_alive(visit["sessionToken"]), "the traveller is signed in at beta again")
+    api(BETA, "PUT", f"{bare_path}/lists/usersSharedBlock", token=beta_admin, expect=(201,))
+    expect(not abroad_alive(visit["sessionToken"]),
+           f"blocking {bare} signs out the users of {ALPHA.domain}, on another port, at once")
+    expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
+           f"and {ALPHA.domain} stays blocked while {bare} is")
+    api(BETA, "DELETE", bare_path, token=beta_admin, expect=(409,))
+    api(BETA, "DELETE", f"{bare_path}/lists/usersSharedBlock", token=beta_admin, expect=(204,))
+    api(BETA, "DELETE", bare_path, token=beta_admin, expect=(204,))
+
     planned = terminal(ALPHA, "federation", "rotate-key", "--planned").split()[-1]
-    status, _ = sign_in_abroad(assertion_for(traveller))
+    status, again = sign_in_abroad(assertion_for(traveller))
     expect(status == 200 and planned in terminal(BETA, "federation", "list"),
            "after alpha hands over to a new key, beta follows the handover on its own")
     compromised = terminal(ALPHA, "federation", "rotate-key", "--compromised").split()[-1]

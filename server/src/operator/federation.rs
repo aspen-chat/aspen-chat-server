@@ -1,7 +1,7 @@
 //! `federation …`: the directory of other deployments and this deployment's key
 //! (`app::federation`).
 
-use super::{database, operator};
+use super::{database, operator, publisher};
 use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
@@ -229,7 +229,10 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             contact(&mut conn, &domain).await?;
         }
         FederationCommand::Remove { domain } => {
-            federation::remove(&mut conn, &domain).await.map_err(fail)?;
+            let publisher = publisher(config).await?;
+            federation::remove(&publisher, &mut conn, &policy, &domain)
+                .await
+                .map_err(fail)?;
             tracing::info!(%domain, operator = operator(), "forgot a deployment");
             println!("forgot {domain}");
         }
@@ -258,9 +261,11 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             print_deployment(&policy, &listed);
         }
         FederationCommand::ListAdd { domain, list } => {
-            let added = federation::set_listed(&mut conn, &domain, list, true, None)
-                .await
-                .map_err(fail)?;
+            let publisher = publisher(config).await?;
+            let added =
+                federation::set_listed(&publisher, &mut conn, &policy, &domain, list, true, None)
+                    .await
+                    .map_err(fail)?;
             if added {
                 tracing::info!(%domain, %list, operator = operator(), "put a deployment on a list");
             }
@@ -270,7 +275,8 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             );
         }
         FederationCommand::ListRemove { domain, list } => {
-            if federation::set_listed(&mut conn, &domain, list, false, None)
+            let publisher = publisher(config).await?;
+            if federation::set_listed(&publisher, &mut conn, &policy, &domain, list, false, None)
                 .await
                 .map_err(fail)?
             {

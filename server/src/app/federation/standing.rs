@@ -14,8 +14,8 @@
 //! given.
 //!
 //! A standing this deployment does not know it takes as `refused`. Sessions also end when this
-//! deployment's own immigration gate no longer admits the home, at once when the gate changes
-//! ([`shut_out`]) and at each pass, and when the home has gone unreached for
+//! deployment's own immigration gate no longer admits the home, at once when the gate or a list
+//! changes ([`shut_out`]) and at each pass, and when the home has gone unreached for
 //! `standing_grace_seconds`. One server does each pass, under an advisory lock, while an
 //! immigration gate admits anyone.
 

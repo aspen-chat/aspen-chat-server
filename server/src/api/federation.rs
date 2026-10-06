@@ -473,7 +473,9 @@ pub async fn update_deployment(
 }
 
 /// Forgets a deployment: its pinned key and the lists it is on. If it is contacted again, its
-/// key is pinned afresh.
+/// key is pinned afresh. One on a block list is not forgotten until it is taken off its block
+/// lists, so forgetting it never admits it. Its users signed in here whom the gates no longer
+/// admit once it is forgotten are signed out at once.
 #[utoipa::path(
     delete,
     path = "/admin/federation/deployments/{domain}",
@@ -486,6 +488,7 @@ pub async fn update_deployment(
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage federation", body = Problem),
         (status = NOT_FOUND, body = Problem),
+        (status = CONFLICT, description = "It is on a block list", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -500,7 +503,7 @@ pub async fn remove_deployment(
         .get()
         .await
         .map_err(app::Error::from)?;
-    federation::remove(conn.as_mut(), &domain).await?;
+    federation::remove(&state, conn.as_mut(), &state.settings().federation, &domain).await?;
     tracing::info!(%domain, admin = %session.user.id.0, "forgot a deployment");
     Ok(NoContent)
 }
@@ -606,7 +609,8 @@ pub async fn accept_key(
 }
 
 /// Puts a known deployment on a list. Any list may be edited; only those the gates put in force
-/// are read.
+/// are read. Users from elsewhere signed in here whom the gates no longer admit are signed out
+/// at once.
 #[utoipa::path(
     put,
     path = "/admin/federation/deployments/{domain}/lists/{list}",
@@ -634,8 +638,16 @@ pub async fn add_to_list(
         .get()
         .await
         .map_err(app::Error::from)?;
-    let added =
-        federation::set_listed(conn.as_mut(), &domain, list, true, Some(session.user.id)).await?;
+    let added = federation::set_listed(
+        &state,
+        conn.as_mut(),
+        &state.settings().federation,
+        &domain,
+        list,
+        true,
+        Some(session.user.id),
+    )
+    .await?;
     if added {
         tracing::info!(%domain, %list, admin = %session.user.id.0, "put a deployment on a list");
     }
@@ -648,7 +660,8 @@ pub async fn add_to_list(
     Ok((status, Json(FederatedDeployment::new(&state, listed))))
 }
 
-/// Takes a deployment off a list. Taking one off a list it is not on is not an error.
+/// Takes a deployment off a list. Taking one off a list it is not on is not an error. Users
+/// from elsewhere signed in here whom the gates no longer admit are signed out at once.
 #[utoipa::path(
     delete,
     path = "/admin/federation/deployments/{domain}/lists/{list}",
@@ -674,7 +687,17 @@ pub async fn remove_from_list(
         .get()
         .await
         .map_err(app::Error::from)?;
-    if federation::set_listed(conn.as_mut(), &domain, list, false, None).await? {
+    if federation::set_listed(
+        &state,
+        conn.as_mut(),
+        &state.settings().federation,
+        &domain,
+        list,
+        false,
+        None,
+    )
+    .await?
+    {
         tracing::info!(%domain, %list, admin = %session.user.id.0, "took a deployment off a list");
     }
     Ok(NoContent)

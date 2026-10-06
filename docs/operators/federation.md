@@ -55,7 +55,8 @@ first time for a registration invite, as `registration-invite-required` does of 
 `aspen-chat-server settings show` shows them all.
 
 Closing an immigration gate, or narrowing it, signs out at once the visitors from deployments it
-no longer admits. Closing an emigration gate stops your people signing in elsewhere; the
+no longer admits, and so does putting a deployment on a block list, taking it off an allow list,
+or forgetting it. Closing an emigration gate stops your people signing in elsewhere; the
 deployments they are visiting sign them out when they next ask about them (`[federation]
 standing_interval_seconds`).
 
@@ -83,6 +84,10 @@ aspen-chat-server federation list-add friends.example.net usersEmigrationAllow
 
 A deployment is also recorded the first time it is in contact, as when one of its people signs
 in here.
+
+`aspen-chat-server federation remove <domain>` (or Forget in the dashboard) forgets a deployment,
+its key and the lists it is on. A deployment on a block list cannot be forgotten, since that
+would take it off the list and let it in: take it off its block lists first if you mean to.
 
 ### Keys
 

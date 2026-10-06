@@ -3,6 +3,8 @@
 
 use super::policy::ListKind;
 use super::{Domain, FederationList, MAX_NOTE_CHARS, own_domain, protocol};
+use super::{FederationPolicy, standing};
+use crate::app::events::Publishing;
 use crate::app::{self, UserId};
 use crate::aspen_config::FederationConfig;
 use crate::database::schema::{federated_deployment, federation_list_entry};
@@ -275,26 +277,52 @@ pub async fn set_note(
 }
 
 /// Forgets a deployment: its pinned key and every list it is on. Contacted again, it is a
-/// stranger whose key is pinned afresh.
-pub async fn remove(conn: &mut AsyncPgConnection, domain: &Domain) -> app::Result<()> {
+/// stranger whose key is pinned afresh. One on a block list is not forgotten, since forgetting
+/// it would take it off the list and admit it wherever a gate blocks only those listed: it must
+/// be taken off its block lists first. Users of its own signed in here whom the gates no longer
+/// admit once it is forgotten, as when it was on an allow list, are signed out at once.
+pub async fn remove(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    policy: &FederationPolicy,
+    domain: &Domain,
+) -> app::Result<()> {
+    let blocked = entries_of(conn, std::slice::from_ref(domain))
+        .await?
+        .remove(domain)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|list| list.parts().2 == ListKind::Block);
+    if let Some(list) = blocked {
+        return Err(app::Error::Conflict(t!(
+            "federationRemoveBlocked",
+            domain = domain.as_str(),
+            list = list.to_string()
+        )));
+    }
     let removed = diesel::delete(federated_deployment::table.find(domain))
         .execute(conn)
         .await?;
     if removed == 0 {
         return Err(diesel::result::Error::NotFound.into());
     }
-    Ok(())
+    standing::shut_out(state, conn, policy).await
 }
 
-/// Puts a known deployment on `list`, or takes it off. Returns whether anything changed.
+/// Puts a known deployment on `list`, or takes it off. Returns whether anything changed. Users
+/// from elsewhere signed in here whom the gates no longer admit, as when a deployment is put on
+/// a block list or taken off an allow list, are signed out at once, whether or not this call
+/// changed anything, so trying again after a failure finishes the job.
 pub async fn set_listed(
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
+    policy: &FederationPolicy,
     domain: &Domain,
     list: FederationList,
     listed: bool,
     by: Option<UserId>,
 ) -> app::Result<bool> {
-    if listed {
+    let changed = if listed {
         let known = diesel::select(diesel::dsl::exists(
             federated_deployment::table.find(domain),
         ))
@@ -312,7 +340,7 @@ pub async fn set_listed(
             .on_conflict_do_nothing()
             .execute(conn)
             .await?;
-        Ok(added > 0)
+        added > 0
     } else {
         let removed = diesel::delete(
             federation_list_entry::table
@@ -321,8 +349,10 @@ pub async fn set_listed(
         )
         .execute(conn)
         .await?;
-        Ok(removed > 0)
-    }
+        removed > 0
+    };
+    standing::shut_out(state, conn, policy).await?;
+    Ok(changed)
 }
 
 /// Accepts the key a deployment offered in place of its pinned one. `offered` must be the key
