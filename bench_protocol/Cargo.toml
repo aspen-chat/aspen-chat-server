@@ -2,7 +2,7 @@
 name = "aspen_bench_protocol"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "What the benchmark tool and the servers exchange: seed plans and manifests, and the coordinator's messages to its agents."
 
 [dependencies]

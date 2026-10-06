@@ -2,7 +2,8 @@
 
 ## About Aspen
 
-The last section of Settings (`AboutSection`, `src/features/about/`) shows Aspen's icon
+A button beside Sign out at the foot of Settings opens About Aspen (`AboutDialog`,
+`src/features/about/`), a modal over Settings of two planes. The first shows Aspen's icon
 (`brand/aspen-icon.svg`), the deployment the user is on (its display name from
 `GET /deployment`, or its address when it has none), and the versions of everything this copy
 of Aspen is made of:
@@ -19,10 +20,12 @@ of Aspen is made of:
   (`protocol` in the same response), each a single version or the range from the oldest a
   side still speaks to the newest.
 
-Its link opens the attributions page and closes Settings. Last comes Your rights: a short
-summary of what the GNU General Public License, version 3 or later, lets the user do (run,
-study, change, and share Aspen, and have its source from whoever gives them a copy) and that it
-comes with no warranty, with links to the license at gnu.org and to the source code. The
+Its link opens the attributions page and closes Settings, and About Aspen with it. The second
+plane is Your rights: a short summary of what the Mozilla Public License 2.0 lets the user do
+(run, study, change, and share Aspen, and learn how to get its source from whoever gives them a
+copy), that changes to Aspen's files are shared under it, that some parts carry licenses of
+their own (the attributions list them), and that it comes with no warranty, with links to the
+license at mozilla.org and to the source code. The
 source link (`BuildInfo.source`) is `repository` in the client's `package.json`, at the commit
 the build was made from when the checkout had no changes of its own, so a fork's build points
 at the fork.

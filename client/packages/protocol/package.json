@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Typed access to the Aspen server: code generated from openapi.yaml and event_schema.json plus the HTTP session and WebSocket event-stream clients built on it.",
-  "license": "GPL-3.0-or-later",
+  "license": "MPL-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

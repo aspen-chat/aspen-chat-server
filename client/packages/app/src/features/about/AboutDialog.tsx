@@ -1,7 +1,9 @@
 import { Capacitor } from "@capacitor/core";
 import { CLIENT_PROTOCOL, type AuthMethods, type Protocol } from "@aspen/protocol";
+import { InfoIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import build from "virtual:build-info";
 import aspenIcon from "../../../../../brand/aspen-icon.svg";
 import { useAspenClient } from "@/api/context";
@@ -9,86 +11,116 @@ import { detectShell } from "@/config";
 import { authMethods } from "@/features/auth/authMethods";
 import { useDeploymentProfile } from "@/features/auth/deploymentProfile";
 import { linkButtonClass } from "@/features/auth/styles";
-import { planeClass } from "@/features/invites/dialog";
+import {
+  dialogClass,
+  overlayClass,
+  planeClass,
+  planesModalClass,
+  secondaryButtonClass,
+} from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 
 /**
- * Settings' About Aspen: Aspen's icon, the deployment the user is on (its name, or its address
- * when it has none), the versions of everything this copy of Aspen is made of (the app and the
- * commit it was built from, the desktop or phone app around it, the server's software, and the
- * protocol versions each side speaks), the way to the Open Source Attributions page, which
- * `onNavigate` is told of so Settings can close, and, last, what the GPL lets the user do,
- * with the license and the source code this build was made from.
+ * About Aspen, opened from Settings by a button of its own: Aspen's icon, the deployment the user
+ * is on (its name, or its address when it has none), the versions of everything this copy of
+ * Aspen is made of (the app and the commit it was built from, the desktop or phone app around
+ * it, the server's software, and the protocol versions each side speaks), the way to the Open
+ * Source Attributions page, which `onNavigate` is told of so Settings can close, and, last, what
+ * the Mozilla Public License lets the user do, with the license and the source code this build
+ * was made from.
  */
-export function AboutSection({ onNavigate }: { onNavigate: () => void }) {
+export function AboutDialog({ onNavigate }: { onNavigate: () => void }) {
+  const m = useMessages();
+  return (
+    <DialogTrigger>
+      <Button className={secondaryButtonClass + " flex items-center gap-1.5"}>
+        <InfoIcon size={16} aria-hidden="true" />
+        {m.about.heading}
+      </Button>
+      <ModalOverlay isDismissable className={overlayClass}>
+        <Modal className={planesModalClass}>
+          <Dialog className={dialogClass}>
+            <DialogHeading>{m.about.heading}</DialogHeading>
+            <AboutPanel onNavigate={onNavigate} />
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </DialogTrigger>
+  );
+}
+
+function AboutPanel({ onNavigate }: { onNavigate: () => void }) {
   const m = useMessages();
   const profile = useDeploymentProfile();
   const server = useServerVersions();
   const deployment =
     profile === undefined ? undefined : (profile.displayName ?? new URL(profile.webClientUrl).host);
   return (
-    <section aria-labelledby="settings-about" className={planeClass}>
-      <h3 id="settings-about" className="text-sm font-semibold text-ink-muted">
-        {m.about.heading}
-      </h3>
-      <div className="flex items-center gap-3">
-        <img src={aspenIcon} alt="" width={48} height={48} className="size-12 select-none" />
-        <div className="flex min-w-0 flex-col">
-          <p className="text-lg font-semibold">{m.appName}</p>
-          <p className="text-sm break-words text-ink-muted" aria-busy={deployment === undefined}>
-            {deployment === undefined ? (
-              <>
-                <Skeleton inline className="w-40" />
-                <LoadingLabel />
-              </>
-            ) : (
-              format(m.about.onDeployment, { name: deployment })
-            )}
-          </p>
+    <>
+      <section aria-labelledby="about-versions" className={planeClass}>
+        <h3 id="about-versions" className="sr-only">
+          {m.about.versions}
+        </h3>
+        <div className="flex items-center gap-3">
+          <img src={aspenIcon} alt="" width={48} height={48} className="size-12 select-none" />
+          <div className="flex min-w-0 flex-col">
+            <p className="text-lg font-semibold">{m.appName}</p>
+            <p className="text-sm break-words text-ink-muted" aria-busy={deployment === undefined}>
+              {deployment === undefined ? (
+                <>
+                  <Skeleton inline className="w-40" />
+                  <LoadingLabel />
+                </>
+              ) : (
+                format(m.about.onDeployment, { name: deployment })
+              )}
+            </p>
+          </div>
         </div>
-      </div>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-        <Version label={m.about.app}>
-          {build.commit === null
-            ? build.version
-            : format(build.modified ? m.about.appVersionModified : m.about.appVersion, {
-                version: build.version,
-                commit: build.commit,
-              })}
-        </Version>
-        <ShellVersion />
-        <Version label={m.about.server}>
-          {server === undefined ? (
-            <Pending />
-          ) : server === null ? (
-            m.about.serverUnknown
-          ) : (
-            `${server.software.name} ${server.software.version}`
-          )}
-        </Version>
-        <Version label={m.about.protocol}>
-          {server === undefined ? (
-            <Pending />
-          ) : (
-            format(m.about.protocolVersions, {
-              app: protocolRange(CLIENT_PROTOCOL, m),
-              server: server === null ? "?" : protocolRange(server.protocol, m),
-            })
-          )}
-        </Version>
-      </dl>
-      <Link to="/attributions" onClick={onNavigate} className={linkButtonClass + " self-start"}>
-        {m.about.attributions}
-      </Link>
-      <section aria-labelledby="settings-about-rights" className="flex flex-col gap-1.5">
-        <h4 id="settings-about-rights" className="text-sm font-semibold">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+          <Version label={m.about.app}>
+            {build.commit === null
+              ? build.version
+              : format(build.modified ? m.about.appVersionModified : m.about.appVersion, {
+                  version: build.version,
+                  commit: build.commit,
+                })}
+          </Version>
+          <ShellVersion />
+          <Version label={m.about.server}>
+            {server === undefined ? (
+              <Pending />
+            ) : server === null ? (
+              m.about.serverUnknown
+            ) : (
+              `${server.software.name} ${server.software.version}`
+            )}
+          </Version>
+          <Version label={m.about.protocol}>
+            {server === undefined ? (
+              <Pending />
+            ) : (
+              format(m.about.protocolVersions, {
+                app: protocolRange(CLIENT_PROTOCOL, m),
+                server: server === null ? "?" : protocolRange(server.protocol, m),
+              })
+            )}
+          </Version>
+        </dl>
+        <Link to="/attributions" onClick={onNavigate} className={linkButtonClass + " self-start"}>
+          {m.about.attributions}
+        </Link>
+      </section>
+      <section aria-labelledby="about-rights" className={planeClass}>
+        <h3 id="about-rights" className="text-sm font-semibold text-ink-muted">
           {m.about.yourRights}
-        </h4>
-        <p className="text-sm text-ink-muted">{m.about.yourRightsSummary}</p>
+        </h3>
+        <p className="text-sm">{m.about.yourRightsSummary}</p>
         <p className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          <a href={GPL_URL} target="_blank" rel="noreferrer" className={linkButtonClass}>
+          <a href={LICENSE_URL} target="_blank" rel="noreferrer" className={linkButtonClass}>
             {m.about.readLicense}
           </a>
           <a href={build.source} target="_blank" rel="noreferrer" className={linkButtonClass}>
@@ -96,12 +128,12 @@ export function AboutSection({ onNavigate }: { onNavigate: () => void }) {
           </a>
         </p>
       </section>
-    </section>
+    </>
   );
 }
 
-/** The GNU General Public License, version 3, as the Free Software Foundation publishes it. */
-const GPL_URL = "https://www.gnu.org/licenses/gpl-3.0.html";
+/** The Mozilla Public License, version 2.0, as Mozilla publishes it. */
+const LICENSE_URL = "https://www.mozilla.org/MPL/2.0/";
 
 function Version({ label, children }: { label: string; children: ReactNode }) {
   return (

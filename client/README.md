@@ -59,4 +59,4 @@ pnpm --filter @aspen/mobile add:android && pnpm --filter @aspen/mobile run:andro
 
 ## License
 
-GPL-3.0-or-later, like the rest of the repository.
+MPL-2.0, like the rest of the repository.

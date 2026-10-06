@@ -3,7 +3,7 @@ import { stubAuthMethods } from "./stubs";
 import { signInToWorld } from "./world";
 
 /**
- * About Aspen in Settings and the Open Source Attributions page, against the stubbed world in
+ * About Aspen, opened from Settings, and the Open Source Attributions page, against the stubbed world in
  * `world.ts`. The page's list is the one the dev server makes from this checkout
  * (`attributions/plugin.ts`), so these look for packages the app is sure to have.
  */
@@ -14,7 +14,11 @@ async function openAbout(page: Page) {
     await back.click();
   }
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  return page.getByRole("region", { name: "About Aspen" });
+  await page
+    .getByRole("dialog", { name: "Settings", exact: true })
+    .getByRole("button", { name: "About Aspen" })
+    .click();
+  return page.getByRole("dialog", { name: "About Aspen" });
 }
 
 test("About Aspen names the deployment and the versions of the app, server, and protocol", async ({
@@ -29,10 +33,10 @@ test("About Aspen names the deployment and the versions of the app, server, and 
   await expect(versions).toContainText(/Server\s*aspen 0\.1\.0/);
   await expect(versions).toContainText(/Protocol\s*This app 1, server 1/);
   const rights = about.getByRole("region", { name: "Your rights" });
-  await expect(rights).toContainText("GNU General Public License, version 3 or later");
+  await expect(rights).toContainText("Mozilla Public License 2.0");
   await expect(rights.getByRole("link", { name: "Read the license" })).toHaveAttribute(
     "href",
-    "https://www.gnu.org/licenses/gpl-3.0.html",
+    "https://www.mozilla.org/MPL/2.0/",
   );
   await expect(rights.getByRole("link", { name: "Source code" })).toHaveAttribute(
     "href",
@@ -40,7 +44,7 @@ test("About Aspen names the deployment and the versions of the app, server, and 
   );
 });
 
-test("the attributions link closes Settings and lists every part's packages with their licenses", async ({
+test("the attributions link closes About Aspen and Settings and lists every part's packages with their licenses", async ({
   page,
 }) => {
   test.slow(); // The dev server reads every package's license files the first time.
@@ -48,6 +52,7 @@ test("the attributions link closes Settings and lists every part's packages with
   const about = await openAbout(page);
   await about.getByRole("link", { name: "Open source attributions" }).click();
   await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "About Aspen" })).toHaveCount(0);
   await expect(page).toHaveURL(/\/attributions$/);
   await expect(
     page.getByRole("heading", { name: "Open source attributions", level: 1 }),

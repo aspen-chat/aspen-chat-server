@@ -19,11 +19,11 @@ export const about = {
   attributions: "Open source attributions",
   yourRights: "Your rights",
   yourRightsSummary:
-    "Aspen is free software under the GNU General Public License, version 3 or later. You may run it for any purpose, study and change how it works, and share copies of it, changed or not. Whoever gives you a copy of Aspen must also offer you its source code under the same license, and anyone who shares a changed copy must share their changes under it too. Aspen comes with no warranty, as far as the law allows.",
+    "Aspen is free software under the Mozilla Public License 2.0. You may run it for any purpose, study and change how it works, and share copies of it, changed or not. Whoever gives you a copy of Aspen must tell you how to get its source code, and anyone who shares a changed copy must share their changes to Aspen's files under the same license. Some parts of Aspen come from other projects under licenses of their own, listed in its open source attributions. Aspen comes with no warranty, as far as the law allows.",
   readLicense: "Read the license",
   sourceCode: "Source code",
   attributionsIntro:
-    "Aspen is free software under the GNU General Public License, version 3 or later. It's made with the work of the projects below, each listed with its license.",
+    "Aspen is free software under the Mozilla Public License 2.0. It's made with the work of the projects below, each listed with its license.",
   attributionsLoading: "Loading attributions…",
   attributionsLoadFailed: "The attributions couldn't be loaded. Reload the page to try again.",
   attributionsIncomplete:

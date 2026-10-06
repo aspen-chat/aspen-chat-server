@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Aspen chat client: one TypeScript web app shipped to browsers, Electron, and Capacitor.",
-  "license": "GPL-3.0-or-later",
+  "license": "MPL-2.0",
   "repository": "https://github.com/aspen-chat/aspen-chat-server",
   "type": "module",
   "packageManager": "pnpm@11.3.0",

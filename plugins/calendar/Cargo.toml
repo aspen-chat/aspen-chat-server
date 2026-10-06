@@ -2,7 +2,7 @@
 name = "aspen_calendar"
 version = "1.0.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "An example Aspen plugin: an event calendar: a kind of channel of events, cards with a Going button, reminders, and a feed for calendar apps"
 publish = false
 
