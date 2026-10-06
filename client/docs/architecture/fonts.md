@@ -39,6 +39,16 @@
   week and opens a pull request when upstream has changed them, so they never wait on someone
   remembering. `e2e/fonts.spec.ts` draws emoji in the face and checks the pixels are coloured
   and a family of four takes one advance, since a colour font can load and still draw nothing.
+- The emoji face's family is `Aspen Noto Color Emoji`, a name no system font has: a page that
+  names it in its stack without having the face (a plugin's view on a deployment that does not
+  serve it) skips it, where the system's Noto Color Emoji has glyphs for the digits and the space
+  and would draw them.
+- Plugins' views draw in the same faces. `src/faces.css` holds Aspen's own (which `main.tsx`
+  imports) and `src/viewFonts.css` those and every fallback face; `viewFonts.ts` builds the
+  second as an entry of its own, written to `view-fonts.css` at the web client's root under that
+  one name, which the bridge hands each view (`plugins.md`), and answers the same name in `vite
+  dev`, sending font files with `Access-Control-Allow-Origin`, since a view's page has an origin
+  of its own.
 - The emoji picker names system emoji fonts of its own with `!important`;
   `styles.css` overrides it with `--font-emoji`, so an emoji looks the same picked as sent.
 - Every bundled font's licence is on the Open Source Attributions page with every other
@@ -72,4 +82,6 @@
   alias, which `--font-sans` and `--font-mono` put first, ahead of the bundled faces, which
   still draw what the user's font lacks. A family removed, or none of whose files the browser
   can draw, falls back to Aspen's own and is forgotten; a library that cannot be read leaves
-  the choice remembered for the next launch.
+  the choice remembered for the next launch. A plugin's view, which cannot read the library, is
+  handed the files of the families drawn now under their aliases (`facesUnder`, through the
+  bridge), and registers them itself.

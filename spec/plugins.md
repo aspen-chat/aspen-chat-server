@@ -294,8 +294,13 @@ The frame never holds the person's session token; it talks to the app only throu
   person (`id`, `name`, `displayName`), their `locale` and text direction (`dir`), the plugin's
   `messages` in that language, `apiBase` (where the deployment's API is, for the capability URLs
   it hands out), and the app's `theme`: its colours by token name
-  (`surface`, `ink`, `accent`, and the rest), its two font stacks, and whether it is light or
-  dark. It says `theme` again when any of that changes.
+  (`surface`, `ink`, `accent`, and the rest), its fonts, and whether it is light or dark. It
+  says `theme` again when any of that changes. The fonts are the two stacks (`sans`, `mono`), a
+  `stylesheet` naming every face the app bundles, on the view's own deployment, which serves it
+  as `view-fonts.css` beside the web client and its faces' files to any origin, and the person's
+  own faces drawn now (`faces`: each a `family`, `weight`, `style`, and the file as `data`),
+  which only the app can read. A page that links the stylesheet and registers the faces with
+  `FontFace` draws in exactly the app's fonts.
 - The frame asks `request` (`id`, `method`, `path`, `query`, `body`), which the app makes to
   the plugin's route as the person and answers `response` (`id`, `status`, `contentType`,
   `body` as text; `status` 0 when the deployment could not be reached). A path that would leave

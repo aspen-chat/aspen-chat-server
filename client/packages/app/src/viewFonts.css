@@ -1,0 +1,5 @@
+/* Every face the app bundles, for plugins' views, which cannot load the app's own stylesheets:
+   built to `view-fonts.css` at the web client's root under that one name (`viewFonts.ts`), which
+   the bridge hands each view with the font stacks that name these faces' families. */
+@import "./faces.css";
+@import "./generated/fontFaces.css";

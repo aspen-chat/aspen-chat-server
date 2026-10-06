@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv } from "vite";
 import { attributions } from "./attributions/plugin";
 import { fallbackFonts } from "./fallbackFonts";
+import { viewFonts } from "./viewFonts";
 
 /**
  * Development proxy target. A deployment is one origin, its API and web client together, so in
@@ -21,7 +22,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxyTarget = env["VITE_DEV_PROXY_TARGET"] ?? defaultDevProxyTarget;
   return {
-    plugins: [fallbackFonts(), attributions(), react(), tailwindcss()],
+    plugins: [fallbackFonts(), viewFonts(), attributions(), react(), tailwindcss()],
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -13,16 +13,10 @@ import {
 } from "./theme/palettes";
 import { followSystemTextSize } from "./theme/systemTextSize";
 import { followZoom } from "./theme/zoom";
-// Aspen's own typefaces, upright and italic, each a variable font split by script so a page
-// fetches only the scripts it shows (`--font-sans` and `--font-mono` in `styles.css`).
-import "@fontsource-variable/inclusive-sans";
-import "@fontsource-variable/inclusive-sans/wght-italic.css";
-import "@fontsource-variable/noto-sans";
-import "@fontsource-variable/noto-sans/wght-italic.css";
+// Aspen's own typefaces.
+import "./faces.css";
 // The order of the Noto faces for every other script and for emoji (`fallbackFonts.ts`).
 import "./generated/fontStacks.css";
-import "@fontsource-variable/intel-one-mono";
-import "@fontsource-variable/intel-one-mono/wght-italic.css";
 import "./styles.css";
 
 applyPalette(storedPalette());

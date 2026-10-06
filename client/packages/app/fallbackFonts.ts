@@ -194,7 +194,12 @@ interface EmojiManifest {
   sbix: string;
 }
 
-const EMOJI_FAMILY = "Noto Color Emoji";
+/**
+ * The emoji face's family, a name of Aspen's own: a page without the face (a plugin's view
+ * whose deployment does not serve it) skips a name no system has, where the system's Noto
+ * Color Emoji, which has glyphs for the digits and the space, would draw every number and gap.
+ */
+const EMOJI_FAMILY = "Aspen Noto Color Emoji";
 
 /**
  * The emoji face: Google's COLRv1 build for the browsers that draw COLRv1 (Chromium and Firefox),

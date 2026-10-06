@@ -68,9 +68,11 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   channel and its name, community, the person, locale and direction, the plugin's catalogue,
   `apiBase`, and the theme), `theme` when the palette, mode, fonts, or the system's scheme
   change (`readTheme` resolves each colour token through a probe element, so `light-dark()`
-  pairs arrive settled, and leaves the emoji family out of the font stacks: a view cannot load
-  the app's faces, and the system's Noto Color Emoji would draw its digits and spaces),
-  `request` made as the person through `AspenSync.pluginRoute`
+  pairs arrive settled; `useBridgeTheme` adds the address of `view-fonts.css` on the view's
+  deployment, which `viewFonts.ts` builds from every face the app bundles, and the files of the
+  user's own faces drawn now, `fontLibrary.facesUnder`, which the view registers with
+  `FontFace`, since its origin is its own and it can reach neither the app's stylesheets nor the
+  library), `request` made as the person through `AspenSync.pluginRoute`
   (`AspenClient.pluginRoute` builds the URL beneath the plugin's `routes/`, refusing `.` and
   `..` segments and methods a route never takes with 400, unsent, so a page cannot reach the
   rest of the API; `status` 0 when the deployment cannot be reached), `users` from the store or
