@@ -10,6 +10,12 @@ export const MEDIUM_SCREEN = "(min-width: 48rem)";
 export const LARGE_SCREEN = "(min-width: 64rem)";
 
 /**
+ * A pointer as coarse as a finger, which Tailwind's `pointer-coarse` variant gives larger
+ * targets, for sizes chosen in code that must make room for them.
+ */
+export const COARSE_POINTER = "(pointer: coarse)";
+
+/**
  * A device typed on with an on-screen keyboard: touch alone, nothing to hover with. Its
  * keyboard has no Shift+Enter for a new line, so Enter writes one there and does not send.
  */

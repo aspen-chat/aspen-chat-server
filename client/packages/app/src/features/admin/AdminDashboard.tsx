@@ -35,6 +35,8 @@ import { FileTransferLog } from "@/features/admin/FileTransferLog";
 import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
+import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
+import { ADMIN_RAIL } from "@/features/layout/paneSizes";
 import { linkButtonClass } from "@/features/auth/styles";
 import { CommunityDirectory, UserDirectory } from "@/features/admin/Directories";
 import { FleetHealth } from "@/features/admin/FleetHealth";
@@ -131,14 +133,16 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
 };
 
 /**
- * The Administration Dashboard, `/admin/{tab}`: a rail of tabs beside the one open, which a
- * one-pane screen sets across the top instead. The user bar (`SidebarFooter`) is at the foot of
- * the rail, or of the screen on a one-pane screen. The tabs are the deployment's totals and their
- * growth, the health of its servers, registration invites, its roles, the reports people made
- * and the categories they make them in, searchable lists of its users and communities, the name and icon it welcomes people with and its policies, its email newsletter, federation with other
- * deployments, its plugins, the moderation log, and the record
- * of file transfers. Each shows only to those with the deployment permission it needs; the
- * server refuses everyone else whatever this page shows. `/admin`, or a tab the caller may not
+ * The Administration Dashboard, `/admin/{tab}`: a rail of tabs, as wide as the reader makes it
+ * (`ResizablePane`), beside the one open, which a one-pane screen sets across the top instead.
+ * The user bar (`SidebarFooter`) is at the foot of the rail, or of the screen on a one-pane
+ * screen. The tabs are the deployment's totals and their growth, the health of its servers,
+ * registration invites, its roles, the reports people made and the categories they make them
+ * in, searchable lists of its users and communities, the name and icon it welcomes people with
+ * and its policies, its email newsletter, federation with other deployments, its plugins, the
+ * moderation log, and the record of file transfers. Each shows only to those with the
+ * deployment permission it needs; the server refuses everyone else whatever this page shows.
+ * `/admin`, or a tab the caller may not
  * open, goes to the first they may.
  */
 export function AdminDashboard({ tab }: { tab: string | undefined }) {
@@ -155,48 +159,58 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
   return (
     // A grid where the rail stands beside the tab, so the user bar can sit at the rail's foot
     // while staying last in reading order, as it is on a one-pane screen.
-    <main className="flex min-w-0 flex-1 flex-col bg-surface md:grid md:grid-cols-[14rem_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto]">
-      <nav
-        aria-label={m.admin.tabs}
-        className="flex shrink-0 flex-col gap-2 border-b border-line bg-surface-sunken p-3 md:col-start-1 md:row-start-1 md:overflow-y-auto md:border-e md:border-b-0"
+    // The rail's column is as wide as the rail's pane, which the user bar below it fills
+    // without widening.
+    <main className="flex min-w-0 flex-1 flex-col bg-surface md:grid md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)_auto]">
+      <ResizablePane
+        sizing={ADMIN_RAIL}
+        edge="end"
+        label={m.layout.adminRail}
+        className="flex shrink-0 flex-col md:col-start-1 md:row-start-1 md:min-h-0"
       >
-        <h1 className="px-2 text-lg font-semibold">{m.admin.title}</h1>
-        {admin && (
-          <ul className="-mx-1 flex gap-1 overflow-x-auto px-1 md:flex-col md:overflow-visible">
-            {allowed.map((t) => {
-              const TabIcon = TAB_ICONS[t];
-              return (
-                <li key={t} className="shrink-0">
-                  <Link
-                    to="/admin/$tab"
-                    params={{ tab: t }}
-                    aria-current={t === open ? "page" : undefined}
-                    ref={t === open ? showOpenTab : undefined}
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm whitespace-nowrap text-ink-muted outline-none hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 aria-[current=page]:bg-surface-raised aria-[current=page]:font-medium aria-[current=page]:text-accent aria-[current=page]:shadow-sm"
-                  >
-                    <TabIcon size={18} aria-hidden="true" />
-                    {label(t)}
-                    {t === "reports" && (
-                      <>
-                        <MentionBadge
-                          count={openReports}
-                          title={format(m.admin.reportsWaiting, { count: String(openReports) })}
-                          className="ms-auto"
-                        />
-                        {openReports > 0 && (
-                          <span className="sr-only">
-                            {format(m.admin.reportsWaiting, { count: String(openReports) })}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </nav>
+        <nav
+          aria-label={m.admin.tabs}
+          className="relative flex flex-col gap-2 border-b border-line bg-surface-sunken p-3 md:min-h-0 md:flex-1 md:border-e md:border-b-0"
+        >
+          <h1 className="px-2 text-lg font-semibold">{m.admin.title}</h1>
+          {admin && (
+            <ul className="-mx-1 flex gap-1 overflow-x-auto px-1 md:-my-1 md:min-h-0 md:flex-col md:overflow-y-auto md:py-1">
+              {allowed.map((t) => {
+                const TabIcon = TAB_ICONS[t];
+                return (
+                  <li key={t} className="shrink-0">
+                    <Link
+                      to="/admin/$tab"
+                      params={{ tab: t }}
+                      aria-current={t === open ? "page" : undefined}
+                      ref={t === open ? showOpenTab : undefined}
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm whitespace-nowrap text-ink-muted md:whitespace-normal outline-none hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50 aria-[current=page]:bg-surface-raised aria-[current=page]:font-medium aria-[current=page]:text-accent aria-[current=page]:shadow-sm"
+                    >
+                      <TabIcon size={18} aria-hidden="true" />
+                      {label(t)}
+                      {t === "reports" && (
+                        <>
+                          <MentionBadge
+                            count={openReports}
+                            title={format(m.admin.reportsWaiting, { count: String(openReports) })}
+                            className="ms-auto"
+                          />
+                          {openReports > 0 && (
+                            <span className="sr-only">
+                              {format(m.admin.reportsWaiting, { count: String(openReports) })}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <PaneEdge />
+        </nav>
+      </ResizablePane>
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto md:col-start-2 md:row-span-2 md:row-start-1">
         <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6 md:px-6">
           {!admin ? (
@@ -206,7 +220,7 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
           )}
         </div>
       </div>
-      <div className="shrink-0 bg-surface-sunken md:col-start-1 md:row-start-2 md:border-e md:border-line">
+      <div className="shrink-0 bg-surface-sunken md:col-start-1 md:row-start-2 md:w-0 md:min-w-full md:border-e md:border-line">
         <SidebarFooter />
       </div>
     </main>

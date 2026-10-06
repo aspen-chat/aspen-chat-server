@@ -10,7 +10,7 @@ import {
 import { usePreference, useSync } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
+import { COARSE_POINTER, MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
 import type { PaneSizing } from "@/features/layout/paneSizes";
 
 /** The edge of the pane a landmark is in, which it renders with `PaneEdge`. */
@@ -62,13 +62,15 @@ export function ResizablePane({
   const m = useMessages();
   const sync = useSync();
   const wide = useMediaQuery(MEDIUM_SCREEN);
+  const coarse = useMediaQuery(COARSE_POINTER);
   const kept = usePreference(sizing.definition);
+  const fallback = coarse ? sizing.coarseFallback : sizing.fallback;
   const [dragging, setDragging] = useState<number | null>(null);
   /** A drag under way: where it began, the width then, which way widens, and the latest width. */
   const drag = useRef<{ x: number; width: number; flip: number; latest: number | null } | null>(
     null,
   );
-  const width = clamp(sizing, dragging ?? kept?.width ?? sizing.fallback);
+  const width = clamp(sizing, dragging ?? kept?.width ?? fallback);
 
   const keep = (next: number) => {
     void sync.preferences.set(sizing.definition, {
@@ -123,7 +125,7 @@ export function ResizablePane({
             : event.key === "End"
               ? sizing.max
               : event.key === "Enter"
-                ? sizing.fallback
+                ? fallback
                 : null;
     if (next !== null) {
       event.preventDefault();
@@ -145,7 +147,7 @@ export function ResizablePane({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={() => {
-        keep(sizing.fallback);
+        keep(fallback);
       }}
       onKeyDown={onKeyDown}
       className={
