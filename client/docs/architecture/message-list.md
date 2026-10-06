@@ -43,7 +43,9 @@ half a second at a time. The browser's own scroll
 anchoring is off on the list. A picture whose size is known keeps exactly its room before it
 loads (`keptRoom` in `Attachments.tsx`), and one whose size is not keeps a square until it
 arrives. The list's own scrolls never pin or unpin it from the bottom; a script's, as
-find-in-page's, do, as the reader's do. `e2e/historyScroll.spec.ts` drags a phone back
+find-in-page's, do, as the reader's do, judged against the content's height measured afresh,
+since the browser also scrolls the box when what lies beneath it shrinks and the bottom it was
+at moves up (the message box losing its files as a message is sent). `e2e/historyScroll.spec.ts` drags a phone back
 through 600 messages of tall pictures and paragraphs, a few pixels at a time, resting the
 finger before each lift, and fails if any step moves what is in view by other than the
 finger's distance, or if the top of what is loaded, where a page would be awaited, ever comes

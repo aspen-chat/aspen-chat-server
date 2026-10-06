@@ -384,6 +384,19 @@ export class ListScroller {
     this.#stopMotion();
     this.#exactTop = null;
     this.#over = 0;
+    // Where the browser left the box decides the pin before anything moves it again: one left
+    // at the bottom is pinned there, the reader's doing or the browser's own when the bottom
+    // moved up (what lies beneath the list shrank), and whatever the rows did meanwhile is then
+    // followed rather than held, as the next settle does.
+    this.measureRange();
+    if (this.#atLatest && this.range.max - box.scrollTop < PIN_SLACK_PX) {
+      this.stickToBottom = true;
+      this.#noteStill();
+      this.#showIndicator();
+      this.#noteDistance();
+      this.#events.moved();
+      return;
+    }
     this.#afterMove(true);
   };
 
@@ -709,6 +722,8 @@ export class ListScroller {
     this.#showIndicator();
     this.#noteDistance();
     if (byUser) {
+      // Measured afresh, as the move may have come with a change of the content or the box.
+      this.measureRange();
       this.stickToBottom = this.#atLatest && this.range.max - box.scrollTop < PIN_SLACK_PX;
     }
     this.#events.moved();
