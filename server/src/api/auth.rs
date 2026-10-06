@@ -114,7 +114,7 @@ pub async fn login(
             if methods.totp {
                 offered.push(SecondFactorMethod::Totp);
             }
-            if methods.passkey && state.config.auth.passkeys.is_some() {
+            if methods.passkey && state.config.auth.rp_id.is_some() {
                 offered.push(SecondFactorMethod::Passkey);
             }
             if methods.recovery_code {
@@ -228,9 +228,7 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
     let auth = &state.config.auth;
     let settings = state.settings();
     Json(AuthMethods {
-        passkeys: auth.passkeys.as_ref().map(|passkeys| PasskeySupport {
-            rp_id: passkeys.rp_id.clone(),
-        }),
+        passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport { rp_id }),
         two_factor_required: settings.require_two_factor,
         registration_invite_required: settings.registration_invite_required,
         federation_domain: app::federation::own_domain(&state.config.federation).map(String::from),

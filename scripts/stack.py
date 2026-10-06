@@ -30,6 +30,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from web_client import stand_in
+
 REPO = Path(__file__).resolve().parent.parent
 # The NATS docker-compose.yaml runs, which a stack runs one of its own of.
 NATS_IMAGE = "nats:2.11-alpine"
@@ -228,6 +230,7 @@ class Stack:
     def _write_configs(self) -> None:
         p = self.ports
         (self.work / "aspen.toml").write_text(
+            f'public_url = "http://127.0.0.1:{p.api}"\n'
             f'database_url = "{self.database_url}"\n'
             f'nats_url = "nats://127.0.0.1:{p.nats}"\n'
             'nats_auth_token = "aspen_test"\n'
@@ -242,6 +245,8 @@ class Stack:
             'public_base_url = "http://127.0.0.1:8888/buckets/aspen-media"\n'
             "[metrics]\n"
             f'listen_addr = "127.0.0.1:{p.api_metrics}"\n'
+            "[web_client]\n"
+            f"dir = {json.dumps(str(stand_in(self.work / 'web-client')))}\n"
             "[voice]\n"
             f'token_secret = "{TOKEN_SECRET}"\n'
         )

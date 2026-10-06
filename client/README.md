@@ -24,11 +24,13 @@ pnpm dev              # Vite dev server on http://localhost:5173
 pnpm build            # web build (site root); the desktop and mobile packages use `build:shell`
 ```
 
-The dev server proxies `/api` to an Aspen server at `http://127.0.0.1:8000` by default (start one
-with `cargo run -- --no-https --port 8000`), so the browser needs neither CORS nor a trusted
-certificate. Point somewhere else with `VITE_DEV_PROXY_TARGET`, or bypass the proxy by setting
-`VITE_ASPEN_SERVER_URL` to the server's origin (which then needs `[cors] allowed_origins` in the
-server's `aspen.toml`). Only the web client reads it: the desktop and mobile apps bake in no
+A deployment is one origin, its API and web client together, so the dev server stands in for it:
+it proxies every path the server answers itself (`/api`, `/auth/passkey`, `/.well-known/aspen`,
+`/email/unsubscribe`) to an Aspen server at `http://127.0.0.1:8000` by default, whose `aspen.toml`
+sets `public_url = "http://localhost:5173"` so links and passkeys name the dev server. Start one
+with `cargo run -- --no-https --port 8000`; it serves the built web client too, and will not start
+until `pnpm build` has made one, though day to day the dev server's is the one you use. Point
+the proxy somewhere else with `VITE_DEV_PROXY_TARGET`. The desktop and mobile apps bake in no
 server and ask for a deployment on first launch.
 
 ## Code generation

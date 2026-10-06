@@ -23,8 +23,8 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `passwordResetExpired` | The reset is older than half an hour, was used, or ended after too many wrong addresses or codes. | Start again from the sign-in screen. |
 | `lastSecondFactor` | Removing the account's only second factor, where two factors are required. | Add another first. |
 | `reauthenticationRequired` | A security change needs a password or code given within `[auth] reverify_seconds`. | The app asks for it. |
-| `passkeysUnavailable` | `[auth.passkeys]` is not set. | Set it (see [Configuration](configuration.md#authpasskeys)) to offer passkeys. |
-| `passkeyRejected` | The passkey's answer did not verify. Most often the page's origin is not in `[auth.passkeys] origins`, or `rp_id` changed since the passkey was made. | Check both settings against the address in the browser. |
+| `passkeysUnavailable` | `public_url` is `http` at a host other than `localhost`, where browsers allow no passkeys. | Serve the deployment over `https` (see [Configuration](configuration.md#the-deployments-address)). |
+| `passkeyRejected` | The passkey's answer did not verify. Most often the page is not at `public_url` (a different address reaching the same server), or `public_url`'s host changed since the passkey was made. | Open the deployment at its `public_url`. |
 | `deviceLinkExpired` | A sign-in code (the QR code one device shows another) is older than a minute unscanned, was declined or already used, or the signed-in device that confirmed it signed out or changed its password before the other claimed it. | Make a new code. If codes expire before anyone can scan them, check the clocks are not the problem: the code's minute is counted on the server. |
 | `deviceLinkUsed` | Another device scanned the sign-in code first. | The person makes a new code and must not confirm the device that scanned the old one. If they did not scan it themselves, someone photographed their screen. |
 | `registrationInviteRequired`, `registrationInviteInvalid` | Registration takes an invite here, and none, or one that is used up, expired, or revoked, was given. | Make one in the dashboard or with `aspen-chat-server invites create`. |
@@ -46,7 +46,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | Code | What it means | What to do |
 | --- | --- | --- |
 | `deploymentUnreachable` | This deployment could not read another's document. The detail says why: its name has no address, it answered only on private addresses, it refused the connection, it timed out, its certificate is expired, not yet valid, for another name, or not from a public authority, it redirected, or it served something that is not an Aspen document. | Each detail says whose to fix. To check by hand: `curl -v https://<domain>/.well-known/aspen`. |
-| `federationRefused` | A gate does not let this crossing happen: yours or theirs, for this deployment, for this kind of account; or federation is off (`[federation] domain` unset); or the two speak no protocol version in common; or the person is banned here. The detail says which. | Change the gate or a list if you mean to allow it. |
+| `federationRefused` | A gate does not let this crossing happen: yours or theirs, for this deployment, for this kind of account; or federation is off (an `http` `public_url`); or the two speak no protocol version in common; or the person is banned here. The detail says which. | Change the gate or a list if you mean to allow it. |
 | `assertionInvalid` | A statement from another deployment was refused: its key changed without a handover, the signature does not match, it was meant for another deployment, it expired or is from the future (a clock is wrong), or it was used before. The detail says which. | For a changed key, see [Keys](federation.md#keys). For clocks, run NTP on every server. |
 | `strongerSignInRequired` | This deployment requires two factors, and the visitor signed in at home with a password alone. | They sign in at home with a second factor or a passkey. |
 
@@ -85,8 +85,8 @@ If they never open, check that the proxy passes `Upgrade` and `Connection` throu
 ## Symptoms
 
 **The web client says it cannot reach the server.** Open `https://<your domain>/api/v1/auth/methods`
-in a browser: it should answer JSON. If the web client is served from another origin, that
-origin must be in `[cors] allowed_origins`.
+in a browser: it should answer JSON. If it answers a page instead, your proxy sends `/api/` to
+something other than the API servers.
 
 **Uploads fail.** The browser uploads straight to `[media.s3] public_endpoint`. It must be
 reachable from the client, over HTTPS when the page is, and allow the page's origin by CORS for
@@ -124,9 +124,10 @@ channel, or by someone they blocked.
 `failure_window_seconds`. Fix the cause (usually its TLS proxy or its ports), then enable it
 again in the dashboard.
 
-**The server will not start.** It says why on standard error: a setting it cannot read, a rate
-limit naming an endpoint that does not exist, a `[federation] domain` other than the one this
-deployment is already known by (or none, once it has one), or a service it cannot reach.
+**The server will not start.** It says why on standard error: a setting it cannot read, no
+built web client in `[web_client] dir`, a rate limit naming an endpoint that does not exist, a
+`public_url` whose host is not the domain this deployment is already known by (or an `http` one,
+once it has a domain), or a service it cannot reach.
 
 **A setting changed but a server did not follow.** Every API server watches NATS for changes to
 the [deployment settings](configuration.md#deployment-settings) and reads them from the database

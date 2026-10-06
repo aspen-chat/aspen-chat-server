@@ -15,6 +15,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// What an API server is started as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Serves the deployment at `public_url`: the API, its event streams, the web client, and
+    /// the pages beside them, and does its share of the background work.
+    Public,
+    /// Opens no listening socket and does only the background work every API server shares (mail
+    /// and digests, the voice report listener, standing checks, plugins' observers and timers,
+    /// push), so it needs no web client, and its event feed reads nothing.
+    PrivateWorker,
+}
+
 #[derive(Clone)]
 pub struct GlobalServerContext {
     pub connection_pool: Pool<AsyncPgConnection>,
@@ -53,7 +65,7 @@ impl GlobalServerContext {
 impl GlobalServerContext {
     /// Connects to everything the server needs. `routes` are the API's routes, which the rate
     /// limits are checked against.
-    pub async fn new(routes: &[app::rate_limit::Route]) -> Result<Self, app::Error> {
+    pub async fn new(routes: &[app::rate_limit::Route], role: Role) -> Result<Self, app::Error> {
         let config = load_config()?;
         app::login::configure_password_work(
             config.auth.password_hashing_threads,
@@ -99,13 +111,14 @@ impl GlobalServerContext {
         valkey.init().await?;
 
         let media_store = Arc::new(app::media_store::MediaStore::new(&config).await?);
-        // Checked now so that a mistake in `[auth.passkeys]` stops the server as it starts.
-        app::passkey::relying_party(&config.auth, app::deployment_settings::DEFAULT_NAME)?;
+        // Built now so that a `public_url` no relying party can be made for stops the server as
+        // it starts.
+        app::passkey::relying_party(&config, app::deployment_settings::DEFAULT_NAME)?;
         let federation_client = app::federation::fetch::client(&config.federation)?;
         let mailer = config
             .email
             .as_ref()
-            .map(app::email::Mailer::new)
+            .map(|email| app::email::Mailer::new(email, &config.public_url))
             .transpose()?
             .map(Arc::new);
         let connection_pool = {
@@ -133,11 +146,14 @@ impl GlobalServerContext {
             channel_presence: Arc::default(),
             connected_members: Arc::default(),
             connection_pool,
-            event_feed: app::event_feed::EventFeed::start(
-                context.clone(),
-                config.event_queue_size,
-                config.event_feed_shards,
-            ),
+            event_feed: match role {
+                Role::Public => app::event_feed::EventFeed::start(
+                    context.clone(),
+                    config.event_queue_size,
+                    config.event_feed_shards,
+                ),
+                Role::PrivateWorker => app::event_feed::EventFeed::idle(),
+            },
             nats_context: Arc::new(context),
             valkey,
             media_store,

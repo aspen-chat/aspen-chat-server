@@ -10,7 +10,7 @@
   server's address. The welcome waits for the read rather than showing the general one and
   then the name; a failed read shows the general one. Which server the app signs in to is
   `defaultServerUrl` (`src/config.ts`): the web client always uses the origin serving the page,
-  or the build's `VITE_ASPEN_SERVER_URL`, and never asks, so it offers no way to change the
+  which is the deployment's (its API and web client share one origin), and never asks, so it offers no way to change the
   server (`ServerChoice.changeServer` is `null`); the desktop and mobile shells bake in none:
   they use the server the user entered, and until there is one ask with `ServerForm` ("Welcome
   to Aspen Chat." under Aspen's icon, above an empty Deployment URL field), keeping only

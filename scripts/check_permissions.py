@@ -34,8 +34,7 @@ PASSWORD = "check-permissions-password"
 # Scenarios make several accounts and many changes in moments, as no person would. Mail goes to
 # an SMTP port nothing listens on, so what is queued stays in the outbox to be read.
 SETTINGS = ("[rate_limits]\nenabled = false\n"
-            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n"
-            "public_url = \"http://localhost\"\n")
+            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n")
 
 
 def say(message: str) -> None:
@@ -928,9 +927,38 @@ def email(world: World, check: Checks) -> None:
     check("and nothing of a channel they lost view of", "not for the member" not in made and hidden not in made, made)
 
 
+def invite_previews(world: World, check: Checks) -> None:
+    say("an invite's link preview, as the invite and its community change")
+    stack = world.stack
+
+    def preview(code: str) -> str:
+        status, page = stack.request("GET", f"{stack.base}/invite/{code}")
+        if status != 200:
+            raise Failed(f"the page of invite {code}: {status} {page[:300]}")
+        return page
+
+    name = f"Previewed {world.run}"
+    world.as_owner("PATCH", f"/communities/{world.community}", {"name": name})
+    code = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+    check("an invite's page previews as its community", f'og:title" content="{name}"' in preview(code))
+    renamed = f"Renamed {world.run}"
+    world.as_owner("PATCH", f"/communities/{world.community}", {"name": renamed})
+    page = preview(code)
+    check("a renamed community previews by its new name at once", renamed in page and name not in page)
+    world.as_owner("DELETE", f"/invites/{code}")
+    check("a revoked invite's page shows nothing of its community", renamed not in preview(code))
+    expiring = world.as_owner("POST", f"/communities/{world.community}/invites",
+                              {"expiresAt": "2000-01-01T00:00:00Z"})
+    expired = expiring["code"]
+    check("nor does an expired one's", renamed not in preview(expired))
+    later = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+    world.as_owner("DELETE", f"/communities/{world.community}")
+    check("nor, once the community is deleted, a working one's", renamed not in preview(later))
+
+
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
              deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, review_powers, plugins, calendar_channels, email]
+             nicknames, review_powers, plugins, calendar_channels, email, invite_previews]
 
 
 def main() -> None:

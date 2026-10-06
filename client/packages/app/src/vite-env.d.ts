@@ -2,11 +2,6 @@
 
 interface ImportMetaEnv {
   /**
-   * Origin of the Aspen server to talk to, e.g. `https://chat.example.org`. Leave unset to use
-   * the page's own origin (same-origin deployment, or the Vite dev proxy).
-   */
-  readonly VITE_ASPEN_SERVER_URL?: string;
-  /**
    * `1` builds the message list with its scroll diagnostics
    * (`features/messages/scrollDiagnostics.ts`), for finding where a view jumps on a device.
    */

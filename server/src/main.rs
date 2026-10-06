@@ -83,6 +83,12 @@ struct Opt {
 
     #[clap(long)]
     gen_openapi_schema: bool,
+    /// Run without serving anything: open no listening socket, need no web client, and do only
+    /// the background work every API server shares (sending mail and making digests, voice
+    /// reports, standing checks, plugins' observers and timers, push). The metrics endpoint is
+    /// still served when it is on.
+    #[clap(long, conflicts_with_all = ["key", "cert", "listen_addr", "port", "no_https", "keylog"])]
+    private_worker: bool,
     /// Run a one-off companion migration task and exit.
     /// Current supported values:
     /// - icon-storage-key-backfill-v1
@@ -237,7 +243,12 @@ async fn run(options: Opt) -> Result<()> {
             Command::Plugins { action } => operator::plugins(&config, action).await,
         };
     }
-    let app = api::make_router(options.gen_openapi_schema).await?;
+    let role = if options.private_worker {
+        app::context::Role::PrivateWorker
+    } else {
+        app::context::Role::Public
+    };
+    let app = api::start(options.gen_openapi_schema, role).await?;
     let (exit_tx, mut exit_rx) = oneshot::channel();
     let mut exit_tx = Some(exit_tx);
     ctrlc::set_handler(move || {
@@ -247,6 +258,11 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
+    let Some(app) = app else {
+        info!("running as a private worker: serving nothing, doing the background work");
+        let _ = exit_rx.await;
+        return Ok(());
+    };
     // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
     // a server reboot to start using the new cert and key.
     let (certs, key) = if let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) {

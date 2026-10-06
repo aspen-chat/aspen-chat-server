@@ -76,7 +76,7 @@ pub struct Mailer {
     /// The SMTP server, on a server that sends; `None` on one that only queues.
     transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
     from: Mailbox,
-    /// Where this server is reached from mail (`EmailConfig::public_url`).
+    /// Where this deployment is reached from mail (`AspenConfig::public_url`).
     public_url: String,
     /// The deployment-wide sending rate, when `max_per_second` sets one.
     rate: Option<aspen_limits::Rate>,
@@ -87,7 +87,7 @@ pub struct Mailer {
 
 impl Mailer {
     /// The mailer `config` describes, which connects only when it first sends.
-    pub fn new(config: &EmailConfig) -> app::Result<Self> {
+    pub fn new(config: &EmailConfig, public_url: &str) -> app::Result<Self> {
         let invalid = |detail: String| {
             app::Error::Config(config::ConfigError::Message(format!(
                 "[email] is not usable: {detail}"
@@ -118,7 +118,7 @@ impl Mailer {
         Ok(Self {
             transport,
             from,
-            public_url: config.public_url().to_string(),
+            public_url: public_url.to_string(),
             rate,
             wake: Notify::new(),
         })

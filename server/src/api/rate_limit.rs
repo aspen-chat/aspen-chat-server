@@ -38,6 +38,12 @@ pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
 /// document; posting to it unsubscribes, under the same limits.
 pub const UNSUBSCRIBE_PAGE: (&str, &str) = ("GET", "/email/unsubscribe");
 
+/// The web client's pages (`api::web_client`), served outside `API_PREFIX` and not in the
+/// OpenAPI document: an invite's, and every other. Each checks its own limits, and over them is
+/// served without reading what it previews as rather than refused. Its files are not limited.
+pub const WEB_CLIENT_INVITE: (&str, &str) = ("GET", "/invite/{code}");
+pub const WEB_CLIENT_PAGE: (&str, &str) = ("GET", "/{*path}");
+
 /// Plugins' own routes (`api::plugin::route`), which are not in the OpenAPI document.
 pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
 /// The files of plugins' views (`api::plugin::asset`), served to frames that hold no session.
@@ -48,7 +54,8 @@ pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
 const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
-/// passkey page, the federation document, and plugins' routes.
+/// passkey page, the federation document, the unsubscribe page, the web client's pages, and
+/// plugins' routes.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::api::openapi();
     let mut routes = Vec::new();
@@ -64,6 +71,8 @@ pub fn routes() -> Vec<Route> {
         WELL_KNOWN,
         UNSUBSCRIBE_PAGE,
         ("POST", UNSUBSCRIBE_PAGE.1),
+        WEB_CLIENT_INVITE,
+        WEB_CLIENT_PAGE,
     ] {
         routes.push(Route::new(method, template, Access::Anonymous));
     }
@@ -236,6 +245,31 @@ pub async fn limit_session(
             .rate_limiter
             .check(&state.valkey, &route, Stage::Session, &identity)
             .await,
+    )
+}
+
+/// Checks the address and parameter rules of `route` from inside its handler, for a route that
+/// answers a request over its limits with less rather than with `429`: whether the request is
+/// within them.
+pub async fn within_limits(
+    state: &GlobalServerContext,
+    (method, template): (&str, &str),
+    peer: Option<PeerAddr>,
+    headers: &HeaderMap,
+    params: Vec<(&str, &str)>,
+) -> bool {
+    let identity = Identity {
+        ip: client_ip(&state.rate_limiter, peer.map(|peer| peer.0.ip()), headers),
+        params,
+        ..Identity::default()
+    };
+    let route = crate::app::rate_limit::route_key(method, template);
+    matches!(
+        state
+            .rate_limiter
+            .check(&state.valkey, &route, Stage::Request, &identity)
+            .await,
+        Decision::Allowed
     )
 }
 

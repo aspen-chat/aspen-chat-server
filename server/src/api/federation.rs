@@ -32,7 +32,7 @@ use utoipa::{IntoParams, ToSchema};
 const DOCUMENT_MAX_AGE_SECONDS: u32 = 300;
 
 /// This deployment's document: its domain, key, and gates. `404` when it has no
-/// `[federation] domain`. Served outside `/api/v1`, at the path every deployment uses, and
+/// federation domain (an `http` `public_url`). Served outside `/api/v1`, at the path every deployment uses, and
 /// read by other deployments rather than clients, so it is not in the OpenAPI document.
 pub async fn well_known(State(state): State<GlobalServerContext>) -> ApiResult<Response> {
     match federation::document(&state).await? {

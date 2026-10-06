@@ -9,16 +9,18 @@ Nothing crosses until you say so. Every gate is closed by default.
 
 ## Before you start
 
-- **A domain that will not change.** `[federation] domain` is this deployment's name among
-  deployments, such as `chat.example.org` (with `:port` if it is not served on 443). Other
-  deployments remember the key they find there, so a deployment that changes its domain is a
-  stranger to all of them. The first server to start with it records it in the database, and a
-  server started with another domain, or none, refuses to start.
+- **A domain that will not change.** The host of an `https` [`public_url`](configuration.md#the-deployments-address)
+  is this deployment's name among deployments, such as `chat.example.org` (with `:port` if it is
+  not served on 443). Other deployments remember the key they find there, so a deployment that
+  changes its domain is a stranger to all of them. The first server to start with it records it
+  in the database, and a server started with another domain, or with an `http` address, refuses
+  to start.
 - **HTTPS with a certificate from a public authority**, such as Let's Encrypt, at
   `https://<domain>`. Other deployments reach yours only there, follow no redirects, refuse
   self-signed certificates, and give up after ten seconds.
-- **`/.well-known/aspen` routed to the API server.** It is the document other deployments read:
-  your domain, your key, and your gates. Check it with
+- **`/.well-known/aspen` reachable.** It is the document other deployments read: your domain,
+  your key, and your gates, served by the API servers like everything at your address. Check it
+  with
   `curl https://chat.example.org/.well-known/aspen`.
 
 The first API server to start with a domain makes this deployment's key and keeps it in the
@@ -46,7 +48,7 @@ at once, without a restart. The usual policies, for people (bots' gates are `--b
 | Both, with anyone | `--users-emigration open --users-immigration open` |
 | Both, only with deployments you choose | `--users-emigration allowList --users-immigration allowList` |
 
-A gate opens only once `[federation] domain` is set. `--users-shared-list true` makes both
+A gate opens only once the deployment has a domain, an `https` `public_url`. `--users-shared-list true` makes both
 directions read one list instead of a list each, when you think of "the deployments we federate
 with" as one set. `--users-immigration-invite-required true` asks a visitor arriving for the
 first time for a registration invite, as `registration-invite-required` does of new accounts.

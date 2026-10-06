@@ -20,7 +20,7 @@ use crate::app::ephemeral_token;
 use crate::app::login::{self, Session};
 use crate::app::two_factor::{self, Caller, PasskeySummary};
 use crate::app::{self, PasskeyId, UserId};
-use crate::aspen_config::{AuthConfig, CorsConfig};
+use crate::aspen_config::AspenConfig;
 use crate::database::schema::{passkey, user};
 use crate::t;
 use base64::Engine;
@@ -47,40 +47,30 @@ const CLAIM_LIFETIME_SECONDS: i64 = 2 * 60;
 /// The longest passkey name kept.
 pub const MAX_NAME_CHARS: usize = 64;
 
-/// The relying party, called `name` in passkey prompts, or `None` when passkeys are not
-/// configured.
-pub fn relying_party(config: &AuthConfig, name: &str) -> app::Result<Option<Webauthn>> {
-    let Some(passkeys) = &config.passkeys else {
+/// The relying party, called `name` in passkey prompts, or `None` where passkeys cannot work
+/// (`AuthConfig::rp_id`). Its one origin is `public_url`, where every page that runs a ceremony
+/// is: the web client's and the handoff page the apps open.
+pub fn relying_party(config: &AspenConfig, name: &str) -> app::Result<Option<Webauthn>> {
+    let Some(rp_id) = &config.auth.rp_id else {
         return Ok(None);
     };
-    let origins = passkeys
-        .origins
-        .iter()
-        .map(|origin| {
-            Url::parse(origin).map_err(|e| {
-                app::Error::Config(config::ConfigError::Message(format!(
-                    "auth.passkeys.origins: {origin} is not a URL: {e}"
-                )))
-            })
-        })
-        .collect::<app::Result<Vec<_>>>()?;
-    let Some((first, rest)) = origins.split_first() else {
-        return Err(app::Error::Config(config::ConfigError::Message(
-            "auth.passkeys.origins must name at least one origin".to_string(),
-        )));
-    };
-    let mut builder = WebauthnBuilder::new(&passkeys.rp_id, first)?.rp_name(name);
-    for origin in rest {
-        builder = builder.append_allowed_origin(origin);
-    }
-    Ok(Some(builder.build()?))
+    let origin = Url::parse(&config.public_url).map_err(|e| {
+        app::Error::Config(config::ConfigError::Message(format!(
+            "public_url {} is not a URL: {e}",
+            config.public_url
+        )))
+    })?;
+    Ok(Some(
+        WebauthnBuilder::new(rp_id, &origin)?
+            .rp_name(name)
+            .build()?,
+    ))
 }
 
 /// The relying party for a ceremony, called what the deployment is called now. Building one
-/// only parses the configured origins, which the server checked as it started.
+/// only parses `public_url`, which the server checked as it started.
 fn relying_party_of(state: &GlobalServerContext) -> app::Result<Webauthn> {
-    relying_party(&state.config.auth, state.settings().name())?
-        .ok_or(app::Error::PasskeysUnavailable)
+    relying_party(&state.config, state.settings().name())?.ok_or(app::Error::PasskeysUnavailable)
 }
 
 /// What a ceremony is for.
@@ -204,8 +194,8 @@ fn rejected(e: impl std::fmt::Display) -> app::Error {
 
 /// Checks where a handoff may send the browser back to: a loopback address with a port (the
 /// desktop app's one-shot listener, RFC 8252 §7.3), the `aspen:` scheme (the mobile apps), or a
-/// web client origin the server already allows through CORS.
-pub fn validate_return_to(return_to: &str, cors: &CorsConfig) -> app::Result<Url> {
+/// page of this deployment's web client, at `public_url`.
+pub fn validate_return_to(return_to: &str, public_url: &str) -> app::Result<Url> {
     let invalid = || app::Error::Validation(t!("invalidReturnTo"));
     let url = Url::parse(return_to).map_err(|_| invalid())?;
     if url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
@@ -220,9 +210,7 @@ pub fn validate_return_to(return_to: &str, cors: &CorsConfig) -> app::Result<Url
     let loopback = url.scheme() == "http" && url.port().is_some() && loopback_host;
     let app_scheme = url.scheme() == "aspen";
     let web_client = matches!(url.scheme(), "http" | "https")
-        && cors.allowed_origins.iter().any(|allowed| {
-            allowed == "*" || allowed.trim_end_matches('/') == url.origin().ascii_serialization()
-        });
+        && url.origin().ascii_serialization() == public_url;
     if loopback || app_scheme || web_client {
         Ok(url)
     } else {
@@ -263,7 +251,7 @@ pub async fn start(
 ) -> app::Result<Started> {
     let webauthn = relying_party_of(state)?;
     if let Some(handoff) = &request.handoff {
-        validate_return_to(&handoff.return_to, &state.config.cors)?;
+        validate_return_to(&handoff.return_to, &state.config.public_url)?;
         validate_code_challenge(&handoff.code_challenge)?;
     }
     let mut conn = state.connection_pool.get().await?;
@@ -706,22 +694,16 @@ pub async fn remove(
 mod tests {
     use super::*;
 
-    fn cors(origins: &[&str]) -> CorsConfig {
-        CorsConfig {
-            allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
-        }
-    }
-
     #[test]
     fn return_to_accepts_loopback_listeners_and_the_app_scheme() {
-        let none = cors(&[]);
+        let none = "https://chat.example.org";
         for ok in [
             "http://127.0.0.1:53817/passkey",
             "http://[::1]:53817/passkey",
             "http://localhost:53817/",
             "aspen://auth/passkey",
         ] {
-            assert!(validate_return_to(ok, &none).is_ok(), "{ok}");
+            assert!(validate_return_to(ok, none).is_ok(), "{ok}");
         }
         for bad in [
             "http://127.0.0.1/passkey",
@@ -733,18 +715,17 @@ mod tests {
             "aspen://auth/passkey#x",
             "not a url",
         ] {
-            assert!(validate_return_to(bad, &none).is_err(), "{bad}");
+            assert!(validate_return_to(bad, none).is_err(), "{bad}");
         }
     }
 
     #[test]
-    fn return_to_accepts_allowed_web_origins() {
-        let listed = cors(&["https://chat.example.org"]);
-        assert!(validate_return_to("https://chat.example.org/login", &listed).is_ok());
-        assert!(validate_return_to("https://other.example.org/login", &listed).is_err());
-        let any = cors(&["*"]);
-        assert!(validate_return_to("https://anything.example/", &any).is_ok());
-        assert!(validate_return_to("ftp://anything.example/", &any).is_err());
+    fn return_to_accepts_the_web_client() {
+        let own = "https://chat.example.org";
+        assert!(validate_return_to("https://chat.example.org/login", own).is_ok());
+        assert!(validate_return_to("https://other.example.org/login", own).is_err());
+        assert!(validate_return_to("http://chat.example.org/login", own).is_err());
+        assert!(validate_return_to("ftp://chat.example.org/", own).is_err());
     }
 
     #[test]

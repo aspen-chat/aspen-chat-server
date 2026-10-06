@@ -25,9 +25,9 @@ pub struct DeploymentProfile {
     pub display_name: Option<String>,
     /// Its picture; `null` when it has none.
     pub icon: Option<Icon>,
-    /// Where its web client is served (`[web_client] url`), which links and QR codes for
-    /// invites and signing in name; `null` when it has not said.
-    pub web_client_url: Option<String>,
+    /// Where it is, its web client and API alike (`public_url`), which links and QR codes for
+    /// invites and signing in name.
+    pub web_client_url: String,
     /// What it does with email, which registration and the account settings offer. Absent
     /// from a deployment that predates it, which sends no mail.
     #[schema(required = false)]
@@ -70,7 +70,7 @@ impl DeploymentProfile {
             email: EmailPolicy::new(state, &read.settings),
             display_name: read.settings.display_name,
             icon: read.icon.map(|icon| icon_to_api(state, icon)),
-            web_client_url: state.config.web_client.url.clone(),
+            web_client_url: state.config.public_url.clone(),
         }
     }
 }

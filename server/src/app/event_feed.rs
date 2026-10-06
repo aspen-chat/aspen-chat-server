@@ -237,6 +237,19 @@ struct Register {
 const REGISTER_ATTEMPTS: usize = 3;
 
 impl EventFeed {
+    /// A feed that reads no events, for a server that holds no event stream connections (a
+    /// private worker, `app::context::Role`). A connection registered with it is refused.
+    pub fn idle() -> Self {
+        let (registrations, _) = mpsc::channel(1);
+        let (unregister, _) = mpsc::unbounded_channel();
+        Self {
+            registrations,
+            unregister,
+            next_id: Arc::new(AtomicU64::new(0)),
+            queue_size: 1,
+        }
+    }
+
     /// Starts the dispatcher on `context`'s event stream, routing through `shards` tasks.
     /// `queue_size` bounds each connection's queue.
     pub fn start(context: jetstream::Context, queue_size: usize, shards: usize) -> Self {

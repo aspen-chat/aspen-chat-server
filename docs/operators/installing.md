@@ -12,7 +12,7 @@ development, with passwords written into it; it is not a production setup.
 - **Valkey** (or anything that speaks the Redis protocol).
 - **Object storage that speaks S3**: SeaweedFS, Garage, MinIO, or AWS S3. It needs a bucket, a
   key pair that may read and write it, and two things clients reach directly: the S3 API (they
-  upload to presigned URLs, so it must allow your web client's origin by CORS) and an anonymous
+  upload to presigned URLs, so it must allow your deployment's origin and the apps' by CORS) and an anonymous
   read path for downloads (a public bucket, a website endpoint, or a CDN in front of one). See
   [`[media.s3]`](configuration.md#medias3).
 
@@ -29,7 +29,7 @@ Python 3. The binaries land in `target/release/`.
 For 64-bit ARM, such as a Raspberry Pi 5, `scripts/cross_aarch64.py` builds everything on an
 x86-64 Linux machine; the binaries need only `libssl3` on the Pi.
 
-The web client is built separately:
+Build the web client too. Every API server serves it, and will not start without it:
 
 ```
 cd client
@@ -37,14 +37,15 @@ pnpm install
 pnpm build
 ```
 
-It lands in `client/packages/app/dist/`, a static site.
+It lands in `client/packages/app/dist/`; copy that directory to each API server's machine.
 
 ## 3. Configuring and migrating
 
-Write `aspen.toml` beside where the API server will run. The required settings are the four
-services:
+Write `aspen.toml` beside where the API server will run. The required settings are your
+deployment's address, where the web client is, and the four services:
 
 ```toml
+public_url = "https://chat.example.org"
 database_url = "postgres://aspen:…@db.internal/aspen"
 nats_url = "nats.internal:4222"
 nats_auth_token = "…"
@@ -61,7 +62,16 @@ secret_key = "…"
 
 [voice]
 token_secret = "a long random string, shared with every voice server"
+
+[web_client]
+dir = "/srv/aspen/dist"
 ```
+
+`public_url` is the one address people use for everything: the API, the web client, and every
+link the deployment hands out. Its host is also your deployment's
+[federation](federation.md) domain and the domain passkeys belong to, so **choose it for good**:
+once a server has started with an `https` address, a server started with another host refuses to
+start, and a new host would make every passkey useless.
 
 To send mail (email verification, password reset by email, the daily digest, and a newsletter),
 add an SMTP server; without it the deployment works without email:
@@ -70,7 +80,6 @@ add an SMTP server; without it the deployment works without email:
 [email]
 smtp_url = "smtps://aspen:…@smtp.example.org"
 from = "Example Chat <noreply@chat.example.org>"
-public_url = "https://chat.example.org"
 ```
 
 Every other setting has a default; [Configuration](configuration.md) lists them all. Each can
@@ -118,36 +127,60 @@ trusted_proxies = ["127.0.0.1"]
 Run as many API servers as you need; they share everything through the services, and any of
 them can serve any request.
 
+### Private workers
+
+Every API server also does a share of the deployment's background work: sending mail and making
+digests, applying the voice servers' reports, confirming visitors with their home deployments,
+running plugins' observers and timers, and waking phones. To give that work machines of its own,
+start a server as a private worker:
+
+```
+aspen-chat-server --private-worker
+```
+
+It opens no listening socket, so it takes no requests and holds no event streams, needs no web
+client, and takes none of the listening or TLS flags. It reads the same `aspen.toml` and needs
+the same services, and serves its metrics like any other when they are on. A private worker with
+`[email] send` on, among servers with it off, is how the SMTP credentials stay on a machine that
+takes no traffic.
+
 ## 5. Serving the web client
 
-Serve the web client and the API from the same origin, `https://chat.example.org`: the web client
-then talks to the server it was loaded from, and needs no CORS. Route these to the API server:
-
-- `/api/` (including the WebSocket at `/api/v1/events`: pass `Upgrade` and `Connection` through)
-- `/auth/passkey` (the page the apps open to use a passkey)
-- `/.well-known/aspen` (the federation document)
-
-and everything else to `client/packages/app/dist/`, answering any path that is not a file with
-`index.html`, since the web client's links are real paths such as `/communities/…`.
-
-With Caddy, that is:
+Each API server serves the web client itself, at `public_url` beside the API: its files from
+[`[web_client] dir`](configuration.md#web_client), and every other path the API does not own
+with its page, since the web client's links are real paths such as `/communities/…`. A reverse
+proxy in front sends everything to the API servers, the WebSocket at `/api/v1/events` included
+(pass `Upgrade` and `Connection` through). With Caddy:
 
 ```
 chat.example.org {
-    @api path /api/* /auth/passkey /.well-known/aspen
-    reverse_proxy @api 127.0.0.1:8080
-    root * /srv/aspen/dist
-    try_files {path} /index.html
-    file_server
+    reverse_proxy 127.0.0.1:8080
 }
 ```
 
-Serving the web client from another origin works too: list that origin in
-[`[cors] allowed_origins`](configuration.md#cors), and build the client with
-`VITE_ASPEN_SERVER_URL=https://api.example.org` so it knows where the API is.
+Files under `/assets/` are named by their contents and sent to be cached for good; everything
+else is revalidated on each load.
 
-Either way, set [`[web_client] url`](configuration.md#web_client) to the web client's address,
-so the invite links and QR codes the desktop and mobile apps share open in a browser too.
+### Link previews
+
+Chat apps, social networks, and search engines preview a link from the page it opens, without
+running the web client, so each page is sent with link preview tags (Open Graph): your
+deployment's name and icon, or, for an invite link, its community's. A deployment without an
+icon previews with the Aspen mark, `open-graph.png` in the web client.
+
+An invite link's preview shows its community's name and icon to anyone who has the link,
+signed in or not, as long as the invite works; a revoked or expired invite previews as the
+deployment. Services that unfurl links keep their own copy of a preview for a while, so a
+renamed or deleted community can still show in previews made before.
+
+### Releasing a new web client
+
+The server reads the web client's files as they are asked for, so a new release needs no
+restart: copy the new build over the old on each API server, `index.html` last. Copy rather
+than replace the directory: browsers that already have the web client open load parts of it
+(the code highlighting for each language, the QR code reader) only when they need them, from the
+release they started with. Remove old files from `assets/` once a release has been out for a few
+days, by deleting what the newest build does not have.
 
 ## 6. Voice servers
 
@@ -251,7 +284,8 @@ scrape them from the same machine, and keep them off public interfaces.
 2. Run `aspen-migrate up`.
 3. Restart the API servers, then the voice servers. Calls on a voice server that restarts end,
    and their clients rejoin on their own.
-4. Replace the web client's files.
+4. Copy the new web client over the old on each API server (see
+   [Releasing a new web client](#releasing-a-new-web-client)).
 
 People's event streams reconnect by themselves when an API server restarts, and pick up exactly
 where they left off.

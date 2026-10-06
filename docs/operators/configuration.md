@@ -2,10 +2,10 @@
 
 The API server reads `aspen.toml` from its working directory. Any setting can be given in the
 environment instead, which overrides the file: `ASPEN_` followed by the key, with `__` between a
-section and its keys (`ASPEN_DATABASE_URL`, `ASPEN_FEDERATION__DOMAIN`,
+section and its keys (`ASPEN_PUBLIC_URL`, `ASPEN_DATABASE_URL`,
 `ASPEN_VOICE__IDLE_SESSION_SECONDS`). A setting left out takes the default shown. A value the
-server cannot read stops it at startup with a message naming the setting; in `[federation]`, so
-does a key it does not know.
+server cannot read stops it at startup with a message naming the setting; in `[federation]`,
+`[web_client]`, and `[email]`, so does a key it does not know.
 
 A voice server reads `voice_server.toml` the same way, with the prefix `ASPEN_VOICE_SERVER_`;
 see [the voice server](#voice_servertoml) at the end.
@@ -16,6 +16,21 @@ register, second factors, bots, community limits, files in calls, and the federa
 kept in the database instead, so every server follows one answer and a change takes effect at
 once without a restart; see [Deployment settings](#deployment-settings). So are the voice servers
 calls run on; see [Voice servers](#voice-servers).
+
+## The deployment's address
+
+A deployment is one address: the API, the web client, and the pages the apps open are all served
+by each API server, at the same origin.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `public_url` | required | Your deployment's address, an origin alone, such as `https://chat.example.org`. Everything that names the deployment follows from it: invite links, registration links, the QR codes for invites and for signing in from another device, and the links in mail all point here; passkeys belong to its host; and over `https` its host, with `:port` when not 443, is the deployment's [federation](federation.md) domain. **Other deployments remember the key they find at that domain, so once federating it can never change:** the first server to start with an `https` address records the domain in the database, and a server started with another refuses to start and says which to set. Changing the host also makes every registered passkey useless. Passkeys are offered over `https`, and at `localhost` and names under it; an `http` address on any other host offers none, and an `http` address takes no part in federation. |
+
+### `[web_client]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `dir` | `client/packages/app/dist` | The built web client (`pnpm build` in `client/`). The server serves its files, and answers every other path the API does not own with its `index.html`, given link preview tags (Open Graph), so a link to your deployment shared in a chat or a post shows your deployment's name and icon, and an invite link its community's. **The server will not start without it.** Files are read as they are asked for, so a new release is served as soon as it is in place; see [Releasing a new web client](installing.md#releasing-a-new-web-client). |
 
 ## The services
 
@@ -43,24 +58,12 @@ addresses are the clients' and must be reachable by them.
 | Setting | Default | |
 | --- | --- | --- |
 | `endpoint` | `http://127.0.0.1:3900` | The S3 API, as this server reaches it. |
-| `public_endpoint` | `endpoint` | The S3 API as clients reach it; the upload URLs they are handed name it. It must allow your web client's origin by CORS (`PUT`, with `Content-Type`). Leaving it out suits only clients on the server's own machine. |
+| `public_endpoint` | `endpoint` | The S3 API as clients reach it; the upload URLs they are handed name it. It must allow uploads by CORS (`PUT`, with `Content-Type`) from `public_url`'s origin and the apps' (`null` for the desktop app, `capacitor://localhost` and `https://localhost` for the mobile apps), or from any origin. Leaving it out suits only clients on the server's own machine. |
 | `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: a public read path on the bucket, such as a website endpoint or a CDN. The server itself never needs to reach it. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
 | `access_key`, `secret_key` | development values | A key pair that may read, write, and delete in the bucket. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
-
-## `[cors]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `allowed_origins` | `[]` | Page origins that may call the API from a browser, such as `["https://app.example.org"]`. Empty sends no CORS headers, which is right when the web client is served from the API's own origin. `["*"]` allows every origin, which is safe because Aspen authenticates with a header, never a cookie, but suits development only. A deployment whose [federation](federation.md) immigration gate admits anyone allows every origin regardless, since its visitors' web clients live elsewhere. |
-
-## `[web_client]`
-
-| Setting | Default | |
-| --- | --- | --- |
-| `url` | none | Where your web client is served, such as `https://chat.example.org` (a path is allowed; a query or fragment is not). Invite links, registration links, and the QR codes for invites and for signing in from another device all point here, so they open on any phone or computer that follows or scans them. Left out, the web client points them at the address it is served from, and the desktop and mobile apps share `aspen://` links, which open only where Aspen is installed. Set it whenever you serve the web client. |
 
 ## `[auth]`
 
@@ -69,15 +72,6 @@ addresses are the clients' and must be reachable by them.
 | `reverify_seconds` | `600` | Changing security settings needs a password or code given within this long. |
 | `password_hashing_threads` | one per CPU | How many passwords may be hashed or checked at once. Each takes 19 MiB and most of a core for a moment. |
 | `password_hashing_wait_seconds` | `10` | How long a sign-in waits for one of those threads before it is refused with `serverBusy`. |
-
-### `[auth.passkeys]`
-
-Passkeys are offered only when this section is present.
-
-| Setting | | |
-| --- | --- | --- |
-| `rp_id` | required | The domain passkeys belong to, such as `chat.example.org`. Browsers offer a passkey only to pages on this domain or under it. **Changing it makes every registered passkey useless.** |
-| `origins` | required | Every page origin that may use a passkey: this server's own (it serves the page the desktop and mobile apps open) and the web client's, if different, such as `["https://chat.example.org"]`. |
 
 ## `[limits]`
 
@@ -132,8 +126,8 @@ the newsletter, when its administrators run one. Mail waits in a queue in the da
 resets first, and is sent by every API server whose `send` is on: by default all of them, so the
 SMTP server must accept connections from each. A large deployment can turn `send` off on most
 servers and leave sending, the SMTP credentials, and the work of making digests to a few, which
-may be API servers kept out of the load balancer for it; those few must reach the SMTP server,
-and the rest need only `from` and `public_url`.
+may be [private workers](installing.md#private-workers) that serve nothing; those few must reach the SMTP server,
+and the rest need only `from`. Links in mail, unsubscribing included, go to `public_url`.
 
 | Setting | Default | |
 | --- | --- | --- |
@@ -141,7 +135,6 @@ and the rest need only `from` and `public_url`.
 | `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
 | `from` | required | Who mail comes from, such as `Example Chat <noreply@chat.example.org>`. Its domain should publish SPF and DKIM records for the SMTP server you use, or mail lands in spam. |
 | `max_per_second` | none | The most mail the whole deployment hands to the SMTP server in a second, however many servers send, counted in Valkey; set it under your provider's sending quota (Amazon SES starts accounts at 14 a second). A second's worth may go back to back. Left out, each sending server sends up to eight at once. |
-| `public_url` | `https://` and `[federation] domain` | This API server's address as people's mail programs reach it, such as `https://chat.example.org`: the unsubscribe links in digests and newsletters, and the one-click unsubscribe mail programs offer, go to `/email/unsubscribe` there. One of the two is required. |
 
 Mail the SMTP server refuses for good (an address that does not exist) is dropped and logged;
 mail it cannot take now is tried again, waiting longer each time, for about a day. The metrics
@@ -179,11 +172,11 @@ startup with a message saying which.
 
 ## `[federation]`
 
-See [Federation](federation.md) for what these mean together.
+See [Federation](federation.md) for what these mean together. The deployment's domain is
+`public_url`'s host.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `domain` | none | This deployment's name among deployments: the domain it is served at, with `:port` when not 443, such as `chat.example.org`. Required before any gate opens. **Other deployments remember the key they find at this name, so it can never change:** the first server to start with it records it in the database, and a server started with another, or with none, refuses to start and says which to set. |
 | `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing. |
 | `standing_grace_seconds` | `86400` | How long another deployment may go unreached before its users' sessions here end. |
 

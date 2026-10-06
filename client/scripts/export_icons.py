@@ -8,7 +8,7 @@ leaves beneath rather than painted, so the mark sits on any background. Wherever
 transparent it is the bare mark; where the platform needs a solid icon (an iPhone's home screen,
 Android's adaptive icon and splash, macOS's Dock) the mark sits on a charcoal tile, since a pale
 tile swallows the pale trunk. A third drawing, the line mark, traces the same leaves and trunk in
-black strokes alone, for the middle of Aspen's QR codes. Everything else is laid out from those: the brand art in `client/brand/`, the web client's favicons, the desktop
+black strokes alone, for the middle of Aspen's QR codes. Everything else is laid out from those: the brand art in `client/brand/`, the web client's favicons and link preview picture, the desktop
 app's icons for each platform, the Android launcher, notification, and splash images, and the
 favicon inlined in the server's passkey page.
 
@@ -368,6 +368,9 @@ def web() -> None:
     ico(APP_PUBLIC / "favicon.ico", [16, 32, 48], bare)
     # iOS rounds the corners itself and turns transparency black, so this one is a full square.
     render(tile(180, rounded=False), APP_PUBLIC / "apple-touch-icon.png", 180)
+    # The picture a link to a deployment without an icon of its own previews with, wherever it
+    # is shared (`api::web_client` in the server); square, for the small card every unfurler shows.
+    render(tile(512, rounded=False), APP_PUBLIC / "open-graph.png", 512)
 
 
 def passkey_page() -> None:

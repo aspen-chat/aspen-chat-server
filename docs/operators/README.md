@@ -16,13 +16,13 @@ machine, or millions across a fleet. Nothing in it assumes you have read the cod
 
 | Part | What it does | Keeps anything? |
 | --- | --- | --- |
-| `aspen-chat-server` | The API, the event stream, the passkey page, and the federation document. Run as many as you need behind a load balancer. | No: everything is in the services below. |
+| `aspen-chat-server` | The API, the event stream, the web client, the passkey page, and the federation document, all at your deployment's one address. Run as many as you need behind a load balancer; with `--private-worker`, one serves nothing and only shares the background work. | No: everything is in the services below. |
 | `voice_server` | Calls: forwards each participant's audio and video to the others. Run one or more, each registered with the API servers. | No. |
 | PostgreSQL | Every account, community, message, and setting, and this deployment's federation key. | **Yes: back it up.** |
 | Object storage (S3 compatible) | Attachments, icons, avatars, and link preview images. | **Yes: back it up.** |
 | NATS with JetStream | Carries events between servers. Keeps the last minute of them in memory, and the voice servers' reports until an API server has applied them. | No. |
 | Valkey | Rate limit counters, presence, and short-lived sign-in state. | No: losing it signs no one out and loses nothing but a few minutes of counters. |
-| The web client | A static site: `pnpm build` in `client/`. The desktop and mobile apps need no hosting. | No. |
+| The web client | `pnpm build` in `client/`, served by each API server. The desktop and mobile apps need no hosting. | No. |
 
 Every server reads its settings from a file in its working directory (`aspen.toml` for the API
 server, `voice_server.toml` for a voice server), and environment variables override the file.

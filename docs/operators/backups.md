@@ -55,7 +55,7 @@ posted them would have to post them again.
 1. Restore the database (`pg_restore`, or your archive's recovery).
 2. Restore the bucket.
 3. Run `aspen-migrate up`, in case the restored database is older than the servers.
-4. Start the API servers with the same `[federation] domain`. They use the key in the restored
+4. Start the API servers with the same `public_url`. They use the key in the restored
    database, so other deployments still recognise yours.
 
 Sessions in the backup still work; anyone who signed in after it was taken signs in again.

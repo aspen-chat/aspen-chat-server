@@ -435,13 +435,15 @@ mod tests {
     }
 
     fn mailer(send: bool, max_per_second: Option<u32>) -> Mailer {
-        Mailer::new(&crate::aspen_config::EmailConfig {
-            smtp_url: send.then(|| "smtp://localhost:1025".to_string()),
-            send,
-            max_per_second,
-            from: "Aspen <noreply@example.org>".to_string(),
-            public_url: Some("https://chat.example.org".to_string()),
-        })
+        Mailer::new(
+            &crate::aspen_config::EmailConfig {
+                smtp_url: send.then(|| "smtp://localhost:1025".to_string()),
+                send,
+                max_per_second,
+                from: "Aspen <noreply@example.org>".to_string(),
+            },
+            "https://chat.example.org",
+        )
         .unwrap()
     }
 

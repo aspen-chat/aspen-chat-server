@@ -76,7 +76,8 @@ function useDeploymentProfile(): DeploymentProfile | undefined {
       }
     };
     client.deploymentProfile().then(settle, () => {
-      settle({ displayName: null, icon: null });
+      // A deployment's web client is at its API's origin.
+      settle({ displayName: null, icon: null, webClientUrl: client.baseUrl });
     });
     return () => {
       current = false;

@@ -51,6 +51,7 @@ pub mod message;
 pub mod message_link;
 pub mod moderation_log;
 pub mod notification_setting;
+pub mod open_graph;
 pub mod outbound;
 pub mod passkey;
 pub mod permissions;

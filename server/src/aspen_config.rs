@@ -2,9 +2,17 @@ pub use aspen_limits::{Limit, LimitSetting, RuleTable};
 use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct AspenConfig {
+    /// The one address of this deployment, such as `https://chat.example.org`: the API, the web
+    /// client this server serves, and the pages it opens are all at this origin. Every link to
+    /// the deployment is built on it (invites, sign-in codes, mail), and the rest of what names
+    /// the deployment follows from it as the config loads
+    /// ([`AspenConfig::derive_from_public_url`]): passkeys belong to its host, and over `https`
+    /// its host is the federation domain.
+    pub public_url: String,
     #[serde(default = "default_event_queue_size")]
     pub event_queue_size: usize,
     /// Tasks that route events to this server's event stream connections, one per logical CPU
@@ -21,8 +29,6 @@ pub struct AspenConfig {
     pub valkey_url: String,
     #[serde(default)]
     pub media: MediaConfig,
-    #[serde(default)]
-    pub cors: CorsConfig,
     #[serde(default)]
     pub voice: VoiceConfig,
     #[serde(default)]
@@ -197,8 +203,14 @@ pub struct AuthConfig {
     /// this many seconds; ten minutes by default.
     #[default = 600]
     pub reverify_seconds: u64,
-    /// Passkeys are offered only when this is set.
-    pub passkeys: Option<PasskeyConfig>,
+    /// The domain passkeys belong to, from `public_url`: its host, where a browser lets a page
+    /// use passkeys (over `https`, or at `localhost` and names under it), and `None` elsewhere,
+    /// where passkeys are not offered. Every page that runs a ceremony is at `public_url`, so it
+    /// is the one origin allowed to. Changing the host orphans every passkey registered; over
+    /// `https` it also changes the federation domain, which `app::deployment_settings::pin_domain`
+    /// refuses.
+    #[serde(skip)]
+    pub rp_id: Option<String>,
     /// Threads password hashing and checking may use at once, one per logical CPU by default.
     /// Each Argon2 hash holds 19 MiB while it runs.
     #[default(crate::app::login::default_password_hashing_threads())]
@@ -207,20 +219,6 @@ pub struct AuthConfig {
     /// with `serverBusy`.
     #[default = 10]
     pub password_hashing_wait_seconds: u64,
-}
-
-/// WebAuthn relying party settings.
-///
-/// A passkey belongs to one domain, `rp_id`, and a browser offers it only to pages whose host is
-/// that domain or under it. `origins` lists every page origin allowed to complete a passkey
-/// ceremony: this server's own public origin, which serves the page the desktop and mobile
-/// apps open in the system browser, and any web client origin under `rp_id` (such as
-/// `https://chat.example.org` for `rp_id = "chat.example.org"`). Changing `rp_id` orphans every
-/// passkey already registered.
-#[derive(Clone, Debug, Deserialize)]
-pub struct PasskeyConfig {
-    pub rp_id: String,
-    pub origins: Vec<String>,
 }
 
 /// Ceilings that keep one user's footprint bounded.
@@ -239,10 +237,12 @@ pub struct LimitsConfig {
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default, deny_unknown_fields)]
 pub struct FederationConfig {
-    /// This deployment's name among deployments: the domain it is served at, with `:port` when
-    /// that is not 443, such as `chat.example.org`. Required before any gate opens. Other
-    /// deployments pin the key they find at this name, so once a server has started with it,
-    /// it may not change (`app::deployment_settings::pin_domain`).
+    /// This deployment's name among deployments, from `public_url`: its host, with `:port` when
+    /// that is not 443, such as `chat.example.org`, when it is `https`, and `None` over `http`,
+    /// which other deployments do not call, so no gate opens. Other deployments pin the key they
+    /// find at this name, so once a server has started with it, it may not change
+    /// (`app::deployment_settings::pin_domain`).
+    #[serde(skip)]
     pub domain: Option<String>,
     /// How often this deployment asks the homes of the users from elsewhere signed in here
     /// whether they are still in good standing there (`app::federation::standing`): an hour.
@@ -267,19 +267,6 @@ pub struct FederationDevelopment {
     /// otherwise refuses so that naming a deployment cannot make it reach inside its own
     /// network.
     pub allow_private_addresses: bool,
-}
-
-impl FederationConfig {
-    fn validate(&self) -> Result<(), config::ConfigError> {
-        if let Some(domain) = &self.domain {
-            crate::app::federation::Domain::parse(domain).map_err(|_| {
-                config::ConfigError::Message(format!(
-                    "federation.domain {domain:?} is not a domain, optionally with a port"
-                ))
-            })?;
-        }
-        Ok(())
-    }
 }
 
 /// Waking phones that are not running Aspen (`app::push`, `spec/push.md`).
@@ -346,43 +333,15 @@ pub struct VoiceConfig {
     pub idle_session_seconds: u64,
 }
 
-/// The web client people open in a browser.
-#[derive(Clone, Debug, Deserialize, Default)]
-#[serde(default)]
+/// The web client this server serves at `public_url` (`api::web_client`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default, deny_unknown_fields)]
 pub struct WebClientConfig {
-    /// Where this deployment's web client is served, such as `https://chat.example.org`: the
-    /// address that links and QR codes for invites and signing in name (`GET /deployment` gives
-    /// it to clients), so they open on any device that scans or follows them. Left out, the web
-    /// client names the address it is served from, and the desktop and mobile apps name `aspen:`
-    /// links, which open only where Aspen is installed.
-    pub url: Option<String>,
-}
-
-impl WebClientConfig {
-    /// Refuses a `url` that is not an absolute `http` or `https` address, or that carries a
-    /// query, fragment, or credentials, which the links built on it would garble; trims a
-    /// trailing slash.
-    fn validate(&mut self) -> Result<(), config::ConfigError> {
-        let Some(given) = &self.url else {
-            return Ok(());
-        };
-        let invalid = || {
-            config::ConfigError::Message(format!(
-                "web_client.url {given:?} must be an http or https address with no query,                  fragment, or credentials"
-            ))
-        };
-        let parsed = url::Url::parse(given).map_err(|_| invalid())?;
-        if !matches!(parsed.scheme(), "http" | "https")
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-        {
-            return Err(invalid());
-        }
-        self.url = Some(parsed.as_str().trim_end_matches('/').to_string());
-        Ok(())
-    }
+    /// The built web client (`pnpm build` in `client/` writes `client/packages/app/dist`, the
+    /// default, relative to where the server runs). The server will not start without it. Its
+    /// files are read as they are asked for, so a new release is served once it is in place.
+    #[default(PathBuf::from("client/packages/app/dist"))]
+    pub dir: PathBuf,
 }
 
 /// Sending mail (`app::email`): verification and password reset codes, the daily digest, and the
@@ -407,10 +366,6 @@ pub struct EmailConfig {
     pub max_per_second: Option<u32>,
     /// Who mail comes from, such as `Aspen <noreply@chat.example.org>`.
     pub from: String,
-    /// The address of this API server as mail readers reach it, such as
-    /// `https://chat.example.org`, which the unsubscribe links in mail name. Left out, it is
-    /// `https://` and `[federation] domain`; one of the two is required.
-    pub public_url: Option<String>,
 }
 
 impl EmailConfig {
@@ -418,9 +373,8 @@ impl EmailConfig {
         true
     }
 
-    /// Checks `from`, `smtp_url`, `max_per_second`, and `public_url`, resolving `public_url`
-    /// from `federation` when it is left out and trimming a trailing slash.
-    fn validate(&mut self, federation: &FederationConfig) -> Result<(), config::ConfigError> {
+    /// Checks `from`, `smtp_url`, and `max_per_second`.
+    fn validate(&self) -> Result<(), config::ConfigError> {
         let message = |text: String| config::ConfigError::Message(text);
         if self.send && self.smtp_url.is_none() {
             return Err(message(
@@ -440,54 +394,8 @@ impl EmailConfig {
                 self.from
             ))
         })?;
-        let public_url = match (&self.public_url, &federation.domain) {
-            (Some(url), _) => url.clone(),
-            (None, Some(domain)) => format!("https://{domain}"),
-            (None, None) => {
-                return Err(message(
-                    "[email] needs public_url, the address mail readers reach this server at, \
-                     since [federation] domain is not set either"
-                        .to_string(),
-                ));
-            }
-        };
-        let parsed = url::Url::parse(&public_url)
-            .ok()
-            .filter(|parsed| {
-                matches!(parsed.scheme(), "http" | "https")
-                    && parsed.query().is_none()
-                    && parsed.fragment().is_none()
-                    && parsed.username().is_empty()
-            })
-            .ok_or_else(|| {
-                message(format!(
-                    "email.public_url {public_url:?} must be an http or https address with no \
-                     query, fragment, or credentials"
-                ))
-            })?;
-        self.public_url = Some(parsed.as_str().trim_end_matches('/').to_string());
         Ok(())
     }
-
-    /// The address unsubscribe links are built on, once [`EmailConfig::validate`] has run.
-    pub fn public_url(&self) -> &str {
-        self.public_url.as_deref().unwrap_or_default()
-    }
-}
-
-/// Cross-Origin Resource Sharing.
-///
-/// Browsers (including the Electron and Capacitor shells, which are browsers) refuse to read a
-/// response from an origin other than the page's own unless the server opts in with CORS
-/// headers. `allowed_origins` lists the page origins permitted to call the API, such as
-/// `https://chat.example.org` or the Vite dev server's `http://localhost:5173`. The single entry
-/// `"*"` allows every origin, which is acceptable only because Aspen authenticates with a bearer
-/// header rather than cookies. An empty list (the default) sends no CORS headers at all, which
-/// is correct when the API and the web client are served from the same origin.
-#[derive(Clone, Debug, Deserialize, Default)]
-#[serde(default)]
-pub struct CorsConfig {
-    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -565,38 +473,127 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     // `aspen.toml` into the built-in one field by field.
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
-    loaded.federation.validate()?;
-    loaded.web_client.validate()?;
-    if let Some(email) = &mut loaded.email {
-        email.validate(&loaded.federation)?;
+    loaded.derive_from_public_url()?;
+    if let Some(email) = &loaded.email {
+        email.validate()?;
     }
     Ok(loaded)
+}
+
+impl AspenConfig {
+    /// Checks `public_url`, an `http` or `https` origin alone, and fills in what follows from it:
+    /// the federation domain and the passkeys' domain. It is kept as its origin, with no
+    /// trailing slash.
+    fn derive_from_public_url(&mut self) -> Result<(), config::ConfigError> {
+        let given = &self.public_url;
+        let invalid =
+            |why: &str| config::ConfigError::Message(format!("public_url {given:?} {why}"));
+        let parsed = url::Url::parse(given)
+            .map_err(|_| invalid("is not an address such as https://chat.example.org"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(invalid("must be an http or https address"));
+        }
+        if parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(invalid(
+                "must be an origin alone, such as https://chat.example.org: the web client is \
+                 served at its root",
+            ));
+        }
+        let https = parsed.scheme() == "https";
+        self.federation.domain = match (https, parsed.host_str()) {
+            (true, Some(host)) => {
+                let authority = match parsed.port() {
+                    Some(port) => format!("{host}:{port}"),
+                    None => host.to_string(),
+                };
+                let domain = crate::app::federation::Domain::parse(&authority).map_err(|_| {
+                    invalid(
+                        "names no domain, which an https deployment needs as its federation \
+                         domain",
+                    )
+                })?;
+                Some(String::from(domain))
+            }
+            _ => None,
+        };
+        self.auth.rp_id = match parsed.host() {
+            Some(url::Host::Domain(host))
+                if https || host == "localhost" || host.ends_with(".localhost") =>
+            {
+                Some(host.to_string())
+            }
+            _ => None,
+        };
+        self.public_url = parsed.origin().ascii_serialization();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    type Derived = (String, Option<String>, Option<String>);
+
+    fn derived(public_url: &str) -> Result<Derived, String> {
+        let mut config: AspenConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                &format!(
+                    "public_url = {public_url:?}\ndatabase_url = \"postgres://x\"\n\
+                     nats_url = \"nats://x\"\nnats_auth_token = \"t\"\nvalkey_url = \"redis://x\""
+                ),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        config.derive_from_public_url().map_err(|e| e.to_string())?;
+        Ok((
+            config.public_url,
+            config.federation.domain,
+            config.auth.rp_id,
+        ))
+    }
+
+    /// Everything that names the deployment follows from its one address.
     #[test]
-    fn a_web_client_url_is_an_http_address_without_a_trailing_slash() {
-        let check = |url: &str| {
-            let mut config = WebClientConfig {
-                url: Some(url.to_string()),
-            };
-            config.validate().map(|()| config.url.unwrap())
-        };
+    fn the_public_url_names_the_deployment_everywhere() {
+        let some = |s: &str| Some(s.to_string());
         assert_eq!(
-            check("https://chat.example.org/").unwrap(),
-            "https://chat.example.org"
+            derived("https://Chat.Example.org/").unwrap(),
+            (
+                "https://chat.example.org".into(),
+                some("chat.example.org"),
+                some("chat.example.org")
+            )
         );
         assert_eq!(
-            check("https://example.org/aspen/").unwrap(),
-            "https://example.org/aspen"
+            derived("https://alpha.localhost:8443").unwrap(),
+            (
+                "https://alpha.localhost:8443".into(),
+                some("alpha.localhost:8443"),
+                some("alpha.localhost")
+            )
         );
-        assert!(check("aspen://invite").is_err());
-        assert!(check("https://example.org/?x=1").is_err());
-        assert!(check("https://example.org/#x").is_err());
-        assert!(check("chat.example.org").is_err());
+        assert_eq!(
+            derived("http://localhost:5173").unwrap(),
+            ("http://localhost:5173".into(), None, some("localhost"))
+        );
+        assert_eq!(
+            derived("http://192.168.2.220:8000").unwrap(),
+            ("http://192.168.2.220:8000".into(), None, None)
+        );
+        assert!(derived("https://example.org/aspen").is_err());
+        assert!(derived("https://example.org/?x=1").is_err());
+        assert!(derived("https://user@example.org").is_err());
+        assert!(derived("aspen://app").is_err());
+        assert!(derived("chat.example.org").is_err());
     }
 
     /// A section given in part keeps the defaults of what it leaves out, and a section left out
@@ -606,6 +603,7 @@ mod tests {
         let config: AspenConfig = config::Config::builder()
             .add_source(config::File::from_str(
                 r#"
+                public_url = "https://chat.example.org"
                 database_url = "postgres://x"
                 nats_url = "nats://x"
                 nats_auth_token = "t"
@@ -635,54 +633,16 @@ mod tests {
         );
     }
 
-    fn email(public_url: Option<&str>, domain: Option<&str>) -> Result<String, String> {
-        let mut config = EmailConfig {
-            smtp_url: Some("smtp://localhost:1025".to_string()),
-            send: true,
-            max_per_second: None,
-            from: "Aspen <noreply@example.org>".to_string(),
-            public_url: public_url.map(str::to_string),
-        };
-        let federation = FederationConfig {
-            domain: domain.map(str::to_string),
-            ..FederationConfig::default()
-        };
-        config
-            .validate(&federation)
-            .map(|()| config.public_url().to_string())
-            .map_err(|e| e.to_string())
-    }
-
-    /// Unsubscribe links need an address, given or taken from the federation domain.
-    #[test]
-    fn email_needs_a_public_address() {
-        assert_eq!(
-            email(Some("https://chat.example.org/"), None).unwrap(),
-            "https://chat.example.org"
-        );
-        assert_eq!(
-            email(None, Some("chat.example.org:8443")).unwrap(),
-            "https://chat.example.org:8443"
-        );
-        assert!(email(None, None).is_err());
-        assert!(email(Some("chat.example.org"), None).is_err());
-    }
-
     /// A server that sends needs an SMTP server; one that only queues does not.
     #[test]
     fn only_a_sending_server_needs_smtp() {
         let config = |toml: &str| -> Result<EmailConfig, String> {
-            let mut config: EmailConfig = config::Config::builder()
+            let config: EmailConfig = config::Config::builder()
                 .add_source(config::File::from_str(toml, config::FileFormat::Toml))
                 .build()
                 .and_then(|built| built.try_deserialize())
                 .map_err(|e| e.to_string())?;
-            config
-                .validate(&FederationConfig {
-                    domain: Some("chat.example.org".to_string()),
-                    ..FederationConfig::default()
-                })
-                .map_err(|e| e.to_string())?;
+            config.validate().map_err(|e| e.to_string())?;
             Ok(config)
         };
         assert!(config("from = \"a@example.org\"").is_err());
@@ -696,20 +656,17 @@ mod tests {
         );
     }
 
-    fn federation(toml: &str) -> Result<(), config::ConfigError> {
-        config::Config::builder()
-            .add_source(config::File::from_str(toml, config::FileFormat::Toml))
-            .build()?
-            .try_deserialize::<FederationConfig>()?
-            .validate()
-    }
-
-    /// The domain must be a domain, and the gates are not set here.
+    /// The domain is the public URL's, and the gates are not set here.
     #[test]
     fn federation_settings_are_checked() {
-        assert!(federation("domain = \"chat.example.org\"").is_ok());
-        assert!(federation("domain = \"a.example:8443\"").is_ok());
-        assert!(federation("domain = \"https://chat.example.org\"").is_err());
+        let federation = |toml: &str| {
+            config::Config::builder()
+                .add_source(config::File::from_str(toml, config::FileFormat::Toml))
+                .build()
+                .and_then(|built| built.try_deserialize::<FederationConfig>())
+        };
+        assert!(federation("standing_interval_seconds = 60").is_ok());
+        assert!(federation("domain = \"chat.example.org\"").is_err());
         assert!(federation("[users]\nemigration = \"open\"").is_err());
     }
 }

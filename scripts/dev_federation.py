@@ -39,6 +39,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from web_client import built_or_stand_in
+
 REPO = Path(__file__).resolve().parent.parent
 WORK = REPO / "target" / "dev-federation"
 BIN = REPO / "target" / "debug"
@@ -169,7 +171,11 @@ def start_services(deployment: Deployment) -> None:
 
 def write_config(deployment: Deployment) -> None:
     deployment.dir.mkdir(parents=True, exist_ok=True)
+    web_client, built = built_or_stand_in(WORK / "web-client")
+    if not built:
+        say(f"{deployment.name} serves a stand-in web client; `pnpm build` in client/ for the real one")
     (deployment.dir / "aspen.toml").write_text(
+        f'public_url = "https://{deployment.domain}"\n'
         f'database_url = "postgres://postgres:aspen_test@127.0.0.1:5432/{deployment.database}"\n'
         f'nats_url = "nats://127.0.0.1:{deployment.nats_port}"\n'
         'nats_auth_token = "aspen_test"\n'
@@ -183,13 +189,11 @@ def write_config(deployment: Deployment) -> None:
         'public_base_url = "http://127.0.0.1:8888/buckets/aspen-media"\n'
         "[metrics]\n"
         f'listen_addr = "127.0.0.1:{deployment.metrics_port}"\n'
-        "[cors]\n"
-        'allowed_origins = ["*"]\n'
+        "[web_client]\n"
+        f"dir = {json.dumps(str(web_client))}\n"
         # Checks run back to back, registering and contacting more often than a person would.
         "[rate_limits]\n"
         "enabled = false\n"
-        "[federation]\n"
-        f'domain = "{deployment.domain}"\n'
         "[federation.development]\n"
         f"extra_root_certificates = [{json.dumps(str(CA))}]\n"
         "allow_private_addresses = true\n"

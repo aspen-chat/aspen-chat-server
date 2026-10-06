@@ -1,7 +1,8 @@
+use crate::api::error::{ApiError, ProblemCode};
 use crate::app;
-use crate::app::context::GlobalServerContext;
+use crate::app::context::{GlobalServerContext, Role};
+use axum::http::Method;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
-use axum::http::{HeaderValue, Method};
 use axum::routing::any;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -48,9 +49,8 @@ mod schema;
 pub(crate) mod security;
 pub(crate) mod user;
 pub mod voice;
+pub(crate) mod web_client;
 
-use crate::app::deployment_settings::SettingsCache;
-use crate::aspen_config::CorsConfig;
 use std::time::Duration;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
@@ -158,27 +158,14 @@ impl Modify for SecurityAddon {
     }
 }
 
-/// The CORS layer for `config`. While a deployment admits accounts from elsewhere it allows
-/// every origin, whatever the list says: those accounts use it from their own deployment's web
-/// client, wherever that is served, and every request is authenticated by a bearer token rather
-/// than a cookie, so no origin gains anything a page could not already do with the token it
-/// holds. The gates change while the server runs, so whether they admit anyone is read from
-/// `settings` as each request arrives. An origin allowed neither way is sent no CORS headers.
-fn cors_layer(config: &CorsConfig, settings: SettingsCache) -> CorsLayer {
-    let origin = if config.allowed_origins.iter().any(|o| o == "*") {
-        AllowOrigin::any()
-    } else {
-        let listed: Vec<HeaderValue> = config
-            .allowed_origins
-            .iter()
-            .filter_map(|o| HeaderValue::from_str(o).ok())
-            .collect();
-        AllowOrigin::predicate(move |origin, _| {
-            listed.contains(origin) || settings.current().federation.admits_anyone()
-        })
-    };
+/// The CORS layer, which lets a page of any origin call the API. The web client is served at
+/// the API's own origin, but the desktop app's pages (`file:`), the mobile apps' (an app-local
+/// origin), and other deployments' web clients, whose users this deployment may admit, are each
+/// elsewhere. Every request is authenticated by a bearer token rather than a cookie, so no
+/// origin gains anything a page could not already do with the token it holds.
+fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .allow_origin(origin)
+        .allow_origin(AllowOrigin::any())
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -544,11 +531,29 @@ async fn settle_after_request(
     response
 }
 
-pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app::Error> {
+/// Starts the server's work: connects to the services, starts the metrics listener and the
+/// background tasks, and, for a [`Role::Public`] server, which refuses to start without the web
+/// client, returns the router that serves the deployment.
+pub(crate) async fn start(
+    write_schema: bool,
+    role: Role,
+) -> Result<Option<axum::Router>, app::Error> {
     if write_schema {
         schema::write_schemas_and_exit()?;
     }
-    let context = GlobalServerContext::new(&rate_limit::routes()).await?;
+    let context = GlobalServerContext::new(&rate_limit::routes(), role).await?;
+    if role == Role::Public {
+        web_client::check(&context.config)?;
+    }
+    if context.config.metrics.enabled {
+        aspen_metrics::install(context.config.metrics.listen_addr)
+            .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
+        metrics::spawn_samplers(context.clone());
+    }
+    app::context::start_background_tasks(&context).await?;
+    if role == Role::PrivateWorker {
+        return Ok(None);
+    }
     // A route layer runs only for matched routes, after routing, so it knows the route's
     // template.
     // Layers run outermost last-added first: metrics see every request, refused ones too.
@@ -597,19 +602,30 @@ pub(crate) async fn make_router(write_schema: bool) -> Result<axum::Router, app:
             rate_limit::limit_requests,
         ))
         .route_layer(axum::middleware::from_fn(metrics::observe));
+    // An invite's page, which checks its own limits (`api::web_client`). A path under `/api/`
+    // that no route has, such as a newer version's, is not found rather than a page.
+    let web = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::WEB_CLIENT_INVITE.1,
+            axum::routing::get(web_client::invite_page),
+        )
+        .route_layer(axum::middleware::from_fn(metrics::observe))
+        .route(
+            "/api/{*rest}",
+            any(|| async { ApiError::new(ProblemCode::NotFound) }),
+        );
     let router = OpenApiRouter::<GlobalServerContext>::new()
         .nest(API_PREFIX, v1)
         .merge(page)
         .merge(unsubscribe)
-        .merge(well_known);
-    if context.config.metrics.enabled {
-        aspen_metrics::install(context.config.metrics.listen_addr)
-            .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
-        metrics::spawn_samplers(context.clone());
-    }
-    app::context::start_background_tasks(&context).await?;
-    let cors = cors_layer(&context.config.cors, context.settings.clone());
-    Ok(axum::Router::from(router.with_state(context))
-        .layer(axum::middleware::from_fn(app::locale::layer))
-        .layer(cors))
+        .merge(well_known)
+        .merge(web);
+    // Every other path is the web client's: a file of it, or its page.
+    let files = web_client::files(context.clone());
+    Ok(Some(
+        axum::Router::from(router.with_state(context))
+            .fallback_service(files)
+            .layer(axum::middleware::from_fn(app::locale::layer))
+            .layer(cors_layer()),
+    ))
 }

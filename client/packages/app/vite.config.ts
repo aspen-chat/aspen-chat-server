@@ -5,12 +5,16 @@ import { defineConfig, loadEnv } from "vite";
 import { fallbackFonts } from "./fallbackFonts";
 
 /**
- * Development proxy target. When `VITE_ASPEN_SERVER_URL` is unset the app talks to its own
- * origin, and in `vite dev` that origin proxies `/api` to the server below, so the browser
- * needs neither CORS nor a trusted certificate. Point it at a `--no-https` server, or set
- * `VITE_DEV_PROXY_TARGET` to something else.
+ * Development proxy target. A deployment is one origin, its API and web client together, so in
+ * `vite dev` this origin stands in for it: every path the server owns besides the web client is
+ * proxied to the server below, whose `public_url` names this origin
+ * (`http://localhost:5173`), so links, passkeys, and the pages the apps open all agree. Point it
+ * at a `--no-https` server, or set `VITE_DEV_PROXY_TARGET` to something else.
  */
 const defaultDevProxyTarget = "http://127.0.0.1:8000";
+
+/** The paths the server answers itself rather than with the web client (`api::start`). */
+const serverPaths = ["/api", "/auth/passkey", "/.well-known/aspen", "/email/unsubscribe"];
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -34,15 +38,18 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
-      proxy: {
-        "/api": {
-          target: proxyTarget,
-          changeOrigin: true,
-          // Development servers use a self-signed certificate.
-          secure: false,
-          ws: true,
-        },
-      },
+      proxy: Object.fromEntries(
+        serverPaths.map((path) => [
+          path,
+          {
+            target: proxyTarget,
+            changeOrigin: true,
+            // Development servers use a self-signed certificate.
+            secure: false,
+            ws: path === "/api",
+          },
+        ]),
+      ),
     },
     test: {
       environment: "jsdom",

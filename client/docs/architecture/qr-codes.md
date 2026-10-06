@@ -19,9 +19,9 @@
   its registration link's.
 - The links codes hold, and every invite link copied, are made by `shareUrl`
   (`src/features/qr/shareLinks.ts`) under the home deployment's web client, which `GET
-/deployment` names (`webClientUrl`, its `[web_client] url`), so they open on any device;
-  where it names none, under the web client serving the page, and in the desktop and mobile apps
-  as `aspen://app/…`, which only an installed app opens. `useShareUrl` is `null` until the
+/deployment` names (`webClientUrl`, its `public_url`), so they open on any device;
+  where that cannot be read, under the web client serving the page, and in the desktop and mobile
+  apps as `aspen://app/…`, which only an installed app opens. `useShareUrl` is `null` until the
   deployment has said, so no link or code shows an address that is about to change.
 - Phones scan with `QrScannerDialog` (`QrScanner.tsx`): the back camera through `getUserMedia`,
   frames scaled to 640 pixels across read five times a second by `zxing-wasm`'s reader, whose

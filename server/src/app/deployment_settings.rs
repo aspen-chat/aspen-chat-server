@@ -63,7 +63,7 @@ pub struct DeploymentSettings {
     pub display_name: Option<String>,
     pub icon: Option<IconId>,
     /// The domain this deployment is known by among deployments, pinned the first time a
-    /// server starts with `[federation] domain` ([`pin_domain`]).
+    /// server starts with an `https` `public_url` ([`pin_domain`]).
     pub federation_domain: Option<Domain>,
     /// Whether creating an account takes a registration invite (`app::registration_invite`).
     pub registration_invite_required: bool,
@@ -350,13 +350,14 @@ pub async fn pin_domain(conn: &mut AsyncPgConnection, domain: Option<&Domain>) -
             Ok(())
         }
         (Some(pinned), Some(domain)) => refuse(format!(
-            "aspen.toml names federation.domain {domain}, but this deployment is known to other \
-             deployments as {pinned}, where they pinned its key. Set federation.domain back to \
-             {pinned}: a deployment's domain cannot change."
+            "aspen.toml's public_url names the federation domain {domain}, but this deployment \
+             is known to other deployments as {pinned}, where they pinned its key. Set \
+             public_url back to https://{pinned}: a deployment's domain cannot change."
         )),
         (Some(pinned), None) => refuse(format!(
-            "aspen.toml leaves out federation.domain, but this deployment is known to other \
-             deployments as {pinned}. Set federation.domain = \"{pinned}\"."
+            "aspen.toml's public_url is not https, so it names no federation domain, but this \
+             deployment is known to other deployments as {pinned}. Set public_url = \
+             \"https://{pinned}\"."
         )),
     }
 }

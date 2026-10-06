@@ -31,7 +31,8 @@ where the platform needs a solid one (the iPhone's home screen, Android's adapti
 splash, macOS's Dock) the mark sits on charcoal, since a pale tile swallows the pale trunk. It
 writes the brand art (`brand/`: the mark, the icon tile, and the wordmark side by
 side and stacked, each for light and dark grounds), the web client's `favicon.svg`,
-`favicon.ico`, and `apple-touch-icon.png` (`packages/app/public/`), the desktop app's icons
+`favicon.ico`, `apple-touch-icon.png`, and `open-graph.png` (the link preview picture of a
+deployment without an icon; `packages/app/public/`), the desktop app's icons
 (`packages/desktop/build/`: sized PNGs for Linux, which also give the window its icon there, an
 `.ico` for Windows, and a 1024 PNG on macOS's icon grid, from which electron-builder makes the
 `.icns`), the Android launcher icons (legacy, round, and adaptive, with a monochrome layer for

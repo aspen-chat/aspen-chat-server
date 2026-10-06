@@ -412,7 +412,7 @@ pub async fn build(
     .load(conn)
     .await?;
     let names = Names::load(conn, user_id, &told, &messages).await?;
-    let web_client = state.config.web_client.url.as_deref();
+    let web_client = state.config.public_url.as_str();
     let mut by_place: HashMap<ChannelId, Vec<&UnreadMessage>> = HashMap::new();
     for message in &messages {
         by_place.entry(message.channel).or_default().push(message);
@@ -449,13 +449,14 @@ pub async fn build(
     }))
 }
 
-/// Where a place opens: in the deployment's web client, or in the apps by an `aspen:` link
-/// where it names none.
-fn link(web_client: Option<&str>, community: Option<CommunityId>, channel: ChannelId) -> String {
-    let base = web_client.unwrap_or("aspen://app");
+/// Where a place opens in the deployment's web client.
+fn link(web_client: &str, community: Option<CommunityId>, channel: ChannelId) -> String {
     match community {
-        Some(community) => format!("{base}/communities/{}/channels/{}", community.0, channel.0),
-        None => format!("{base}/dms/{}", channel.0),
+        Some(community) => format!(
+            "{web_client}/communities/{}/channels/{}",
+            community.0, channel.0
+        ),
+        None => format!("{web_client}/dms/{}", channel.0),
     }
 }
 
@@ -775,19 +776,19 @@ mod tests {
     }
 
     #[test]
-    fn links_open_in_the_web_client_or_the_apps() {
+    fn links_open_in_the_web_client() {
         let community = CommunityId(uuid::Uuid::from_u128(1));
         let channel = ChannelId(uuid::Uuid::from_u128(2));
         assert_eq!(
-            link(Some("https://chat.example.org"), Some(community), channel),
+            link("https://chat.example.org", Some(community), channel),
             format!(
                 "https://chat.example.org/communities/{}/channels/{}",
                 community.0, channel.0
             )
         );
         assert_eq!(
-            link(None, None, channel),
-            format!("aspen://app/dms/{}", channel.0)
+            link("https://chat.example.org", None, channel),
+            format!("https://chat.example.org/dms/{}", channel.0)
         );
     }
 }

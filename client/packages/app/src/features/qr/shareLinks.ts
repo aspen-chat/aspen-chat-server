@@ -4,14 +4,14 @@ import { useHomeClient } from "@/api/context";
 import { detectShell, type Shell } from "@/config";
 import { router } from "@/router";
 
-/** The scheme the desktop and mobile apps open, for links when no web client is known. */
+/** The scheme the desktop and mobile apps open, for links when the web client's address is unknown. */
 export const APP_LINK_BASE = "aspen://app";
 
 /**
  * The address a link to share names for `path` (a route, with its query and fragment): under the
- * deployment's web client (`webClientUrl`, its `[web_client] url`), which opens on any device; or,
- * where the deployment names none, the web client serving this page; or, in the desktop and
- * mobile apps, an `aspen:` link, which opens only where Aspen is installed.
+ * deployment's web client (`webClientUrl`, its `public_url`), which opens on any device; or, where
+ * the deployment's profile could not be read, the web client serving this page; or, in the
+ * desktop and mobile apps, an `aspen:` link, which opens only where Aspen is installed.
  */
 export function shareUrl(
   path: string,
@@ -34,7 +34,7 @@ function webClientUrlOf(client: AspenClient): Promise<string | null> {
   let known = webClientUrls.get(client);
   if (known === undefined) {
     known = client.deploymentProfile().then(
-      (profile) => profile.webClientUrl ?? null,
+      (profile) => profile.webClientUrl,
       () => null,
     );
     webClientUrls.set(client, known);

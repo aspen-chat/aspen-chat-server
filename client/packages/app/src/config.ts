@@ -1,4 +1,3 @@
-import { normalizeServerUrl } from "@aspen/protocol";
 import { Capacitor } from "@capacitor/core";
 
 const SERVER_URL_KEY = "aspen.serverUrl";
@@ -26,17 +25,12 @@ export function detectShell(): Shell {
 
 /**
  * The server origin the app should use. The web client is served by the deployment it signs in
- * to, so it uses the page's own origin, or the build-time `VITE_ASPEN_SERVER_URL` when one is
- * set (a development build pointed elsewhere); it never asks. Electron and Capacitor have no
- * server of their own and bake none in: they use the one the user entered, and until there is
- * one, `null`, which asks (`ServerForm`).
+ * to, at the deployment's one origin, so it uses the page's own origin and never asks. Electron
+ * and Capacitor have no server of their own and bake none in: they use the one the user entered,
+ * and until there is one, `null`, which asks (`ServerForm`).
  */
 export function defaultServerUrl(shell: Shell = detectShell()): string | null {
   if (shell === "web") {
-    const fromEnv = import.meta.env.VITE_ASPEN_SERVER_URL;
-    if (fromEnv !== undefined && fromEnv.length > 0) {
-      return normalizeServerUrl(fromEnv);
-    }
     return window.location.protocol.startsWith("http") ? window.location.origin : null;
   }
   try {
