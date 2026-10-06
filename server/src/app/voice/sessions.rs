@@ -542,6 +542,9 @@ pub(super) async fn apply_report(
             .first(conn.as_mut())
             .await
             .optional_not_found()?;
+        if let Some(server) = server {
+            super::servers::note_joined(state, server, user).await;
+        }
         let file_transfers = state.settings().file_transfers;
         if let Some(server) = server
             && let Err(e) = recheck_seat(

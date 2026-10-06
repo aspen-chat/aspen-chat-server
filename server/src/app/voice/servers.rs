@@ -1,5 +1,5 @@
 //! The registry of voice servers, the join offers that choose among them, the failure reports
-//! that take one out, and the reaping of calls on servers that stopped reporting.
+//! that suspend one, and the reaping of calls on servers that stopped reporting.
 
 use super::sessions::end_session;
 use super::{OptionalNotFound, VoiceServer, VoiceServerChangeset, VoiceSession};
@@ -10,6 +10,7 @@ use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
 use crate::app::permissions::{ChannelAccess, Permissions, channel_access};
+use crate::app::user::UserPg;
 use crate::app::{ChannelId, UserId, VoiceServerId};
 use crate::database::schema::{channel, voice_server, voice_server_failure, voice_session};
 use crate::t;
@@ -83,6 +84,7 @@ pub async fn create_server_in(
         created_at: Utc::now(),
         last_report_at: None,
         reported_participants: 0,
+        suspended_until: None,
     };
     diesel::insert_into(voice_server::table)
         .values(&row)
@@ -99,17 +101,41 @@ pub async fn update_server(
     update_server_in(state.connection_pool.get().await?.as_mut(), id, changes).await
 }
 
+/// Changes a server. Enabling or disabling it is an operator's decision, which lifts any
+/// suspension for failures, and enabling it also forgets the failures that led to one.
 pub async fn update_server_in(
     conn: &mut AsyncPgConnection,
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> app::Result<VoiceServer> {
-    Ok(diesel::update(voice_server::table)
-        .filter(voice_server::id.eq(id))
-        .set(changes)
-        .returning(VoiceServer::as_select())
-        .get_result(conn)
-        .await?)
+    let enabled = changes.enabled;
+    conn.transaction(|conn| {
+        async move {
+            let mut updated: VoiceServer = diesel::update(voice_server::table)
+                .filter(voice_server::id.eq(id))
+                .set(changes)
+                .returning(VoiceServer::as_select())
+                .get_result(conn)
+                .await?;
+            if let Some(enabled) = enabled {
+                updated = diesel::update(voice_server::table)
+                    .filter(voice_server::id.eq(id))
+                    .set(voice_server::suspended_until.eq(None::<DateTime<Utc>>))
+                    .returning(VoiceServer::as_select())
+                    .get_result(conn)
+                    .await?;
+                if enabled {
+                    diesel::delete(voice_server_failure::table)
+                        .filter(voice_server_failure::voice_server.eq(id))
+                        .execute(conn)
+                        .await?;
+                }
+            }
+            Ok(updated)
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Removes a server. Its sessions go with it, so their participants are told to leave.
@@ -205,13 +231,19 @@ pub struct JoinOffer {
     pub camera: bool,
 }
 
-/// Whether a server is offered to a joiner: enabled, with room, and heard from within the
-/// silence limit. A server that has never reported is one that has not started, so it is not
-/// offered; a voice server reports its load the moment it starts.
+/// Whether a server is offered to a joiner: enabled, not suspended, with room, and heard from
+/// within the silence limit. A server that has never reported is one that has not started, so
+/// it is not offered; a voice server reports its load the moment it starts.
 fn accepts_sessions(server: &VoiceServer, now: DateTime<Utc>, offer_silence: Duration) -> bool {
     server.enabled
+        && !suspended(server, now)
         && server.reported_participants < server.capacity
         && reporting(server, now, offer_silence)
+}
+
+/// Whether a server is suspended for failures at `now`.
+fn suspended(server: &VoiceServer, now: DateTime<Utc>) -> bool {
+    server.suspended_until.is_some_and(|until| until > now)
 }
 
 /// Whether a server has reported within `offer_silence`: one that has not is probably down.
@@ -409,48 +441,105 @@ async fn was_offered(state: &GlobalServerContext, user: UserId, server: VoiceSer
     }
 }
 
+/// The Valkey key saying `user` joined a call on `server` recently.
+fn joined_key(server: VoiceServerId, user: UserId) -> String {
+    format!("voice_joined:{}:{}", server.0, user.0)
+}
+
+/// Notes that `user` joined a call on `server`, as its report of the join is applied, so that for
+/// `failure_window_seconds` their failure reports about it count for nothing: they reached it.
+/// A Valkey outage is logged and leaves it unnoted.
+pub(super) async fn note_joined(state: &GlobalServerContext, server: VoiceServerId, user: UserId) {
+    let ttl = i64::try_from(state.config.voice.failure_window_seconds).unwrap_or(i64::MAX);
+    let noted: Result<(), fred::error::Error> = state
+        .valkey
+        .set(
+            joined_key(server, user),
+            1,
+            Some(Expiration::EX(ttl)),
+            None,
+            false,
+        )
+        .await;
+    if let Err(e) = noted {
+        warn!(error = %e, "could not note that someone joined a call on a voice server");
+    }
+}
+
+/// Whether `user` joined a call on `server` within the failure window. A Valkey outage counts
+/// as joined, so that reports then count for nothing rather than for anyone.
+async fn joined_there(state: &GlobalServerContext, user: UserId, server: VoiceServerId) -> bool {
+    match state
+        .valkey
+        .exists::<i64, _>(joined_key(server, user))
+        .await
+    {
+        Ok(found) => found > 0,
+        Err(e) => {
+            warn!(error = %e, "could not read whether a reporter joined a call on a voice server");
+            true
+        }
+    }
+}
+
 /// The outcome of a failure report.
 pub struct FailureOutcome {
     /// Distinct users whose reports about this server count within the window, this one
     /// included when it counted.
     pub failures: u32,
-    /// Whether the server is now disabled.
+    /// Whether the server is now out of join offers: disabled by an operator, or suspended for
+    /// failures.
     pub disabled: bool,
     /// Whether this report counted against the server.
     pub counted: bool,
 }
 
-/// Whether `failures` distinct users within the window is enough to take a server out.
-fn should_disable(failures: u32, threshold: u32) -> bool {
+/// Whether `failures` distinct users within the window is enough to suspend a server.
+fn should_suspend(failures: u32, threshold: u32) -> bool {
     threshold > 0 && failures >= threshold
 }
 
-/// Records that `user` could not start a session on the server. A report counts only from a
-/// person (not a bot, whose owner may have many) who was offered the server in a join offer
-/// within the token's lifetime and `OFFER_REPORT_GRACE_SECONDS`, so no one can take out a
-/// server they were never sent to; any other report is answered with the server's standing
-/// and changes nothing. A report counts once per user within the window, at their latest
-/// attempt; once the configured number of distinct users have reported, the server is
-/// disabled until an operator enables it again.
+/// Records that `reporter` could not start a session on the server. A report counts only from
+/// one of this deployment's own people (not a bot, whose owner may have many, nor a foreign
+/// user, whom another deployment vouches for) who was offered the server in a join offer within
+/// the token's lifetime and `OFFER_REPORT_GRACE_SECONDS` and has not joined a call on it within
+/// the failure window, so no one can take out a server they were never sent to or reached; any
+/// other report is answered with the server's standing and changes nothing. A report counts
+/// once per user within the window, at their latest attempt. Once the configured number of
+/// distinct users have reported, the server is suspended for `failure_window_seconds`, after
+/// which it takes calls again with its failures forgotten (they are all older than the window
+/// by then), unless that would leave no other server taking calls: throwaway accounts can then
+/// suspend every server but one, never the last.
 pub async fn report_failure(
     state: &GlobalServerContext,
-    user: UserId,
-    bot: bool,
+    reporter: &UserPg,
     server: VoiceServerId,
 ) -> app::Result<FailureOutcome> {
     let voice = &state.config.voice;
+    let user = reporter.id;
     let now = Utc::now();
-    let counted = !bot && was_offered(state, user, server).await;
-    let window_start =
-        now - Duration::seconds(i64::try_from(voice.failure_window_seconds).unwrap_or(3600));
+    let counted = !reporter.bot
+        && !reporter.system
+        && reporter.home_domain.is_none()
+        && was_offered(state, user, server).await
+        && !joined_there(state, user, server).await;
+    let window = Duration::seconds(i64::try_from(voice.failure_window_seconds).unwrap_or(3600));
+    let window_start = now - window;
+    let silence = offer_silence(state);
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let enabled: bool = voice_server::table
-                .select(voice_server::enabled)
-                .filter(voice_server::id.eq(server))
-                .first(conn.as_mut())
+            // Every server, locked, so two suspensions at once cannot leave none taking calls.
+            let servers: Vec<VoiceServer> = voice_server::table
+                .select(VoiceServer::as_select())
+                .order(voice_server::id)
+                .for_update()
+                .load(conn.as_mut())
                 .await?;
+            let target = servers
+                .iter()
+                .find(|candidate| candidate.id == server)
+                .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
             if counted {
                 diesel::insert_into(voice_server_failure::table)
                     .values(&VoiceServerFailure {
@@ -477,24 +566,30 @@ pub async fn report_failure(
                 .get_result(conn.as_mut())
                 .await?;
             let failures = u32::try_from(failures).unwrap_or(u32::MAX);
-            let mut disabled = !enabled;
-            if counted && should_disable(failures, voice.failure_threshold) {
-                let changed = diesel::update(voice_server::table)
-                    .filter(
-                        voice_server::id
-                            .eq(server)
-                            .and(voice_server::enabled.eq(true)),
-                    )
-                    .set(voice_server::enabled.eq(false))
-                    .execute(conn.as_mut())
-                    .await?;
-                if changed > 0 {
+            let mut disabled = !target.enabled || suspended(target, now);
+            if counted && !disabled && should_suspend(failures, voice.failure_threshold) {
+                let others = servers
+                    .iter()
+                    .filter(|other| other.id != server && accepts_sessions(other, now, silence))
+                    .count();
+                if others == 0 {
                     warn!(
                         server = server.0.to_string(),
-                        failures, "voice server disabled after failures from distinct users"
+                        failures,
+                        "voice server left taking calls despite failures from distinct users: no other server takes calls"
                     );
+                } else {
+                    diesel::update(voice_server::table)
+                        .filter(voice_server::id.eq(server))
+                        .set(voice_server::suspended_until.eq(now + window))
+                        .execute(conn.as_mut())
+                        .await?;
+                    warn!(
+                        server = server.0.to_string(),
+                        failures, "voice server suspended after failures from distinct users"
+                    );
+                    disabled = true;
                 }
-                disabled = true;
             }
             Ok(FailureOutcome {
                 failures,
@@ -569,6 +664,7 @@ mod tests {
             created_at: Utc::now(),
             last_report_at: reported,
             reported_participants: load,
+            suspended_until: None,
         }
     }
 
@@ -598,6 +694,15 @@ mod tests {
             now,
             timeout
         ));
+        // suspended for failures until a minute from now, and then taking calls again
+        let mut held = server(true, 0, 10, Some(now));
+        held.suspended_until = Some(now + Duration::seconds(60));
+        assert!(!accepts_sessions(&held, now, timeout));
+        assert!(accepts_sessions(
+            &held,
+            now + Duration::seconds(60),
+            timeout
+        ));
     }
 
     #[test]
@@ -607,8 +712,8 @@ mod tests {
         assert_eq!(picked.len(), 10);
         assert!(picked.iter().all(|p| servers.iter().any(|s| s.id == p.id)));
         assert_eq!(pick_candidates(servers[..3].to_vec(), 10).len(), 3);
-        assert!(!should_disable(4, 5));
-        assert!(should_disable(5, 5));
-        assert!(!should_disable(100, 0));
+        assert!(!should_suspend(4, 5));
+        assert!(should_suspend(5, 5));
+        assert!(!should_suspend(100, 0));
     }
 }

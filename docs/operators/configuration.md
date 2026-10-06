@@ -136,8 +136,8 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 | Setting | Default | |
 | --- | --- | --- |
 | `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
-| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, disable it until an administrator enables it again. Only people a join offer sent to that server within the token's lifetime and a minute count, and bots never do. |
-| `failure_window_seconds` | `3600` | |
+| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it for `failure_window_seconds`, after which it takes calls again on its own (an administrator enabling it ends the suspension sooner). Only this deployment's people whom a join offer sent to that server within the token's lifetime and a minute count, and not those who joined a call there within the window; bots and people from other deployments never do. The last server taking calls is never suspended. |
+| `failure_window_seconds` | `3600` | How long failures are counted, and how long a suspension lasts. |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
 | `candidate_limit` | `10` | The most voice servers one person is offered to choose the nearest from. |
 | `offer_silence_seconds` | `60` | A voice server that has not reported for this long is not offered to people joining. |

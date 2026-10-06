@@ -383,6 +383,12 @@ def calls(world: World, check: Checks) -> None:
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
+    # The join is noted just after its record is made; the failure reports are limited, so wait
+    # once rather than asking over and over.
+    time.sleep(1)
+    joined = stack.api("POST", f"/voice-servers/{server}/failures", None, world.member["token"])
+    check("a failure report from someone who joined a call there counts for nothing",
+          joined.get("counted") is False, joined)
     stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": True},
               world.owner["token"], expect=(202,))
     muted = frame_of(call, "participantState")

@@ -883,6 +883,7 @@ diesel::table! {
         created_at -> Timestamptz,
         last_report_at -> Nullable<Timestamptz>,
         reported_participants -> Int4,
+        suspended_until -> Nullable<Timestamptz>,
     }
 }
 

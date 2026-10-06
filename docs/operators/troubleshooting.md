@@ -133,10 +133,15 @@ month than its tier with that relay allows, and pushes resume next month or when
 raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
 channel, or by someone they blocked.
 
-**A voice server was disabled.** `failure_threshold` people failed to start a call on it within
-`failure_window_seconds`, each of them sent to it by a join offer moments before (a report from
-anyone else, or from a bot, does not count). Fix the cause (usually its TLS proxy or its ports), then enable it
-again in the dashboard.
+**A voice server was suspended** (the log says `voice server suspended after failures from
+distinct users`, and the dashboard shows it suspended). `failure_threshold` of this deployment's
+people failed to start a call on it within `failure_window_seconds`, each of them sent to it by a
+join offer moments before and none of them having joined a call there lately (a report from
+anyone else, a bot, or someone from another deployment does not count). It takes calls again
+on its own after `failure_window_seconds`; fix the cause (usually its TLS proxy or its ports)
+meanwhile, and enabling it in the dashboard (or `voice-servers set <name> --enabled true`) ends
+the suspension at once. The last server taking calls is never suspended: the log says `voice
+server left taking calls despite failures` instead.
 
 **The server will not start.** It says why on standard error: a setting it cannot read, no
 built web client in `[web_client] dir`, a rate limit naming an endpoint that does not exist, a

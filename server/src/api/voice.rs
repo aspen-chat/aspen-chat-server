@@ -55,8 +55,13 @@ pub struct VoiceServer {
     pub url: String,
     /// The most participants the server carries at once.
     pub capacity: i32,
-    /// Cleared automatically once enough distinct users report failures; set again by hand.
+    /// Whether an operator lets it take calls. Changing it lifts any suspension.
     pub enabled: bool,
+    /// Until when it takes no new calls because enough distinct people failed to reach it;
+    /// absent when it is not suspended. It takes calls again on its own after that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub suspended_until: Option<DateTime<Utc>>,
     /// Participants the server carried at its last report.
     pub participants: i32,
     /// When the server last reported its load; absent until it has reported once.
@@ -73,6 +78,7 @@ impl From<app::voice::VoiceServer> for VoiceServer {
             url: row.url,
             capacity: row.capacity,
             enabled: row.enabled,
+            suspended_until: row.suspended_until.filter(|until| *until > Utc::now()),
             participants: row.reported_participants,
             last_report_at: row.last_report_at,
         }
@@ -159,10 +165,10 @@ pub struct VoiceChannelState {
 pub struct VoiceServerFailureOutcome {
     /// Distinct users whose reports about the server count within the failure window.
     pub failures: u32,
-    /// Whether the server is now disabled.
+    /// Whether the server is now out of join offers: disabled, or suspended for failures.
     pub disabled: bool,
-    /// Whether this report counted: only one from a person offered the server in a recent
-    /// join offer does.
+    /// Whether this report counted: only one from one of this deployment's people offered the
+    /// server in a recent join offer, who has not joined a call on it lately, does.
     pub counted: bool,
 }
 
@@ -375,10 +381,12 @@ pub async fn delete_voice_server(
     Ok(NoContent)
 }
 
-/// Reports that the server failed to start the caller's session. A report counts only from a
-/// person (not a bot) whom a recent join offer named the server to; each counts once per
-/// window, and at the configured number of distinct users the server is disabled. A report
-/// that does not count is answered the same way, with `counted` false, and changes nothing.
+/// Reports that the server failed to start the caller's session. A report counts only from one
+/// of this deployment's people (not a bot, nor a foreign user) whom a recent join offer named
+/// the server to and who has not joined a call on it within the failure window; each counts
+/// once per window, and at the configured number of distinct users the server is suspended for
+/// the window, unless no other server would be left taking calls. A report that does not count
+/// is answered the same way, with `counted` false, and changes nothing.
 #[utoipa::path(
     post,
     path = "/voice-servers/{server}/failures",
@@ -398,7 +406,7 @@ pub async fn report_voice_server_failure(
     SessionUser { user, .. }: SessionUser,
     Path(server): Path<VoiceServerId>,
 ) -> ApiResult<Json<VoiceServerFailureOutcome>> {
-    let outcome = app::voice::report_failure(&state, user.id, user.bot, server).await?;
+    let outcome = app::voice::report_failure(&state, &user, server).await?;
     Ok(Json(VoiceServerFailureOutcome {
         failures: outcome.failures,
         disabled: outcome.disabled,

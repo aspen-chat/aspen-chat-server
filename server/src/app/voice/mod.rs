@@ -2,7 +2,7 @@
 //!
 //! The media itself flows through voice servers, which are separate processes registered in
 //! the `voice_server` table. This module hands out join offers (a short-lived token plus the
-//! servers worth trying), keeps the registry, disables servers that keep failing, and turns
+//! servers worth trying), keeps the registry, suspends servers that keep failing, and turns
 //! the voice servers' reports, read from the report stream (`reports`), into rows and client
 //! events. A session binds a channel to
 //! one server while anyone is in the call; it is created by the first report of a participant
@@ -54,6 +54,9 @@ pub struct VoiceServer {
     pub created_at: DateTime<Utc>,
     pub last_report_at: Option<DateTime<Utc>>,
     pub reported_participants: i32,
+    /// Until when it is left out of join offers because people kept failing to reach it
+    /// (`report_failure`); it then takes calls again on its own.
+    pub suspended_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, AsChangeset)]

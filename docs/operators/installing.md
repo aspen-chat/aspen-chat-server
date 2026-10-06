@@ -285,8 +285,8 @@ Clients reach a voice server in two ways, and both must be open to them:
   transfers at all.
 
 A voice server that stops reporting for a minute is no longer offered to people joining calls;
-one that people fail to reach is disabled after `failure_threshold` of them try in
-`failure_window_seconds`, until an administrator enables it again in the dashboard.
+one that people fail to reach is suspended for `failure_window_seconds` after `failure_threshold`
+of them try in that time, unless it is the last one taking calls.
 
 ## 7. The first administrator
 
