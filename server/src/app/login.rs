@@ -94,6 +94,18 @@ struct Ticket {
 }
 
 const TICKET_PREFIX: &str = "auth:ticket";
+
+/// Names a waiting sign-in without being usable as its ticket: the Valkey key it waits under,
+/// which holds a digest of the ticket. What waits on a ticket elsewhere in Valkey (a passkey
+/// ceremony that is its second factor) keeps this rather than the ticket.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketKey(String);
+
+impl TicketKey {
+    pub fn of(ticket: &str) -> Self {
+        Self(ephemeral_token::token_key(TICKET_PREFIX, ticket))
+    }
+}
 /// Long enough to find a phone and open an authenticator app.
 const TICKET_LIFETIME_SECONDS: i64 = 5 * 60;
 
@@ -329,15 +341,14 @@ pub async fn complete_second_factor(
     ticket: &str,
     factor: &SecondFactor,
 ) -> app::Result<SecondFactorOutcome> {
-    let Some(waiting) =
-        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false).await?
-    else {
+    let ticket = TicketKey::of(ticket);
+    let Some(user) = ticket_user(state, &ticket).await? else {
         return Ok(SecondFactorOutcome::InvalidTicket);
     };
-    if !two_factor::verify(state, waiting.user, factor).await? {
+    if !two_factor::verify(state, user, factor).await? {
         return Ok(SecondFactorOutcome::Rejected);
     }
-    finish_ticket(state, ticket, Some(waiting.user))
+    finish_ticket(state, &ticket, Some(user))
         .await
         .map(|session| {
             session.map_or(
@@ -348,9 +359,12 @@ pub async fn complete_second_factor(
 }
 
 /// The user a waiting sign-in belongs to, without using it up.
-pub async fn ticket_user(state: &GlobalServerContext, ticket: &str) -> app::Result<Option<UserId>> {
+pub async fn ticket_user(
+    state: &GlobalServerContext,
+    ticket: &TicketKey,
+) -> app::Result<Option<UserId>> {
     Ok(
-        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, false)
+        ephemeral_token::get_at::<Ticket>(state, ticket.0.clone(), false)
             .await?
             .map(|waiting| waiting.user),
     )
@@ -361,11 +375,10 @@ pub async fn ticket_user(state: &GlobalServerContext, ticket: &str) -> app::Resu
 /// `expected_user`.
 pub async fn finish_ticket(
     state: &GlobalServerContext,
-    ticket: &str,
+    ticket: &TicketKey,
     expected_user: Option<UserId>,
 ) -> app::Result<Option<Session>> {
-    let Some(waiting) =
-        ephemeral_token::get_token::<Ticket>(state, TICKET_PREFIX, ticket, true).await?
+    let Some(waiting) = ephemeral_token::get_at::<Ticket>(state, ticket.0.clone(), true).await?
     else {
         return Ok(None);
     };

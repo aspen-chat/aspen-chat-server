@@ -123,7 +123,8 @@ pub struct Started {
 enum Pending {
     SignIn {
         state: DiscoverableAuthentication,
-        ticket: Option<String>,
+        /// For a second factor: the waiting sign-in, by its key rather than its ticket.
+        ticket: Option<login::TicketKey>,
     },
     Register {
         user: UserId,
@@ -158,7 +159,7 @@ impl Pending {
 enum Verified {
     SignedIn {
         user: UserId,
-        ticket: Option<String>,
+        ticket: Option<login::TicketKey>,
     },
     Registered {
         user: UserId,
@@ -296,7 +297,8 @@ pub async fn start(
     let mut conn = state.connection_pool.get().await?;
     let (options, pending) = match request.purpose {
         Purpose::SignIn => {
-            if let Some(ticket) = &request.ticket
+            let ticket = request.ticket.as_deref().map(login::TicketKey::of);
+            if let Some(ticket) = &ticket
                 && login::ticket_user(state, ticket).await?.is_none()
             {
                 return Err(app::Error::InvalidTicket);
@@ -309,7 +311,7 @@ pub async fn start(
                 serde_json::to_value(&challenge)?,
                 Pending::SignIn {
                     state: auth_state,
-                    ticket: request.ticket,
+                    ticket,
                 },
             )
         }
