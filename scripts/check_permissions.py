@@ -894,6 +894,33 @@ def review_powers(world: World, check: Checks) -> None:
     stop_review_powers(world, reviewer)
 
 
+def ban_ranks(world: World, check: Checks) -> None:
+    say("lifting and replacing a deployment ban ranks as banning does")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "banUsers")
+    # Each role is made below the others, so Senior outranks Banners.
+    senior_role = world.as_owner("POST", "/admin/roles", {"name": f"Senior{world.run}", "permissions": []})["id"]
+    banners = world.as_owner("POST", "/admin/roles", {"name": f"Banners{world.run}", "permissions": ["banUsers"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{banners}")
+    senior, plain = world.account("senior"), world.account("plain")
+    world.as_owner("PUT", f"/admin/users/{senior['id']}/roles/{senior_role}")
+    world.as_owner("PUT", f"/admin/users/{senior['id']}/ban", {"reason": "checking ranks"})
+    world.as_owner("PUT", f"/admin/users/{plain['id']}/ban", {"reason": "checking ranks"})
+    check("Ban users does not lift the ban of someone who outranks its holder",
+          stack.status("DELETE", f"/admin/users/{senior['id']}/ban", token=member["token"]) == 403)
+    check("nor replace it", stack.status("PUT", f"/admin/users/{senior['id']}/ban", {}, member["token"]) == 403)
+    check("whose ban stands", stack.status("POST", "/auth/login",
+                                           {"username": senior["name"], "password": PASSWORD}) == 403)
+    check("but lifts one of someone ranked below",
+          stack.status("DELETE", f"/admin/users/{plain['id']}/ban", token=member["token"]) == 204)
+    world.as_owner("DELETE", f"/admin/users/{senior['id']}/ban")
+    world.as_owner("DELETE", f"/admin/roles/{banners}")
+    world.as_owner("DELETE", f"/admin/roles/{senior_role}")
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
 def stop_review_powers(world: World, reviewer: dict) -> None:
     for permission in MODERATION:
         world.stack.command("admin", "deny", permission)
@@ -1163,7 +1190,7 @@ def invite_previews(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
              thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, review_powers, plugins, calendar_channels, email, invite_previews, previews]
+             nicknames, review_powers, ban_ranks, plugins, calendar_channels, email, invite_previews, previews]
 
 
 def main() -> None:

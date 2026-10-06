@@ -236,8 +236,9 @@ async fn ban_one(
     Ok(bot_owner)
 }
 
-/// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users; written
-/// to the moderation log when it lifted something.
+/// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users and, as
+/// banning does, ranking above the person banned; written to the moderation log when it lifted
+/// something.
 pub async fn lift_ban(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -247,6 +248,20 @@ pub async fn lift_ban(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            // Their row is locked as `ban_one` locks it, so a ban and a lift of one person take
+            // turns.
+            let exists = user::table
+                .select(user::id)
+                .filter(user::id.eq(target))
+                .for_update()
+                .first::<UserId>(conn.as_mut())
+                .await
+                .optional()?
+                .is_some();
+            if !exists {
+                return Ok(false);
+            }
+            access.require_above(deployment_access(conn.as_mut(), target).await?.rank())?;
             let lifted = diesel::update(user::table.find(target))
                 .filter(user::banned_at.is_not_null())
                 .set((
