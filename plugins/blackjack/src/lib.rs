@@ -14,8 +14,9 @@
 //!   on the hand whose turn it is, refused when the table has changed since `version`, so a tap
 //!   that arrives twice counts once.
 //!
-//! Each answers `{table, chips}`, and each change is published to the channel as the event
-//! `table`, carrying the table as everyone there sees it.
+//! Each answers only for a channel that is a table (`kind-of`), with `{table, chips}`, and each
+//! change is published to the channel as the event `table`, carrying the table as everyone there
+//! sees it.
 //!
 //! The table is kept in storage scoped to its channel, so who may view the channel decides who
 //! may watch, and deleting the channel deletes the table. It is written only with
@@ -309,9 +310,15 @@ fn publish(channel: &str, table: &Table) {
     let _ = host::publish(&Audience::Channel(channel.to_string()), "table", &payload);
 }
 
+/// The kind of channel a table is, as the manifest names it beneath the plugin's id.
+const TABLE_KIND: &str = "org.aspenchat.blackjack:table";
+
 /// The community of the table in `channel`, which the caller may view, and, when they are to
-/// play, may send messages in.
+/// play, may send messages in. A channel of any other kind has no table.
 fn community_of(channel: &str, playing: bool) -> Result<String, Failure> {
+    if host::kind_of(channel)?.plugin_type.as_deref() != Some(TABLE_KIND) {
+        return Err(Failure::NotFound);
+    }
     let place = host::place_of(channel)?;
     let community = place.community.ok_or(Failure::NotFound)?;
     if playing && !host::caller_may(channel, "sendMessages")? {

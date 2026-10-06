@@ -1230,6 +1230,9 @@ def calendar_channels(world: World, check: Checks) -> None:
     events = f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/events"
     check("a member reads the plugin's channel through its routes",
           stack.status("GET", events, token=world.member["token"]) == 200)
+    check("but a channel of another kind holds no calendar",
+          stack.status("GET", f"/plugins/{CALENDAR_ID}/routes/calendars/{announce}/events",
+                       token=world.member["token"]) == 404)
     feed = stack.api("POST", f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/feed", None,
                      world.member["token"])["path"]
     check("and follows their private URL without signing in",
@@ -1397,6 +1400,9 @@ def blackjack_tables(world: World, check: Checks) -> None:
     base = f"/plugins/{BLACKJACK_ID}/routes/tables/{table}"
     seen = stack.api("GET", base, token=member["token"])
     check("a member sits down to a table with 1,000 chips", seen.get("chips") == 1000, seen)
+    elsewhere = world.channel("not-a-table")
+    check("a channel of another kind has no table",
+          stack.status("GET", f"/plugins/{BLACKJACK_ID}/routes/tables/{elsewhere}", token=member["token"]) == 404)
 
     # The member's bet sent eight times at once, and the owner's beside them: each write to the
     # table reads it first, so without storage-swap one would overwrite another.

@@ -151,7 +151,11 @@ or memory, or traps, has failed (below), and is logged with the plugin's id.
 
 Every call is told its context: the community it runs for (if any) and that community's settings,
 and the locale of the person it serves, when there is one. The deployment settings are read with
-`settings`. `log` writes to the server's log under the plugin's id.
+`settings`. `log` writes to the server's log under the plugin's id. Of a channel where it runs
+(in a route, one the caller may view), `place-of` says where it is (its community, the channel a
+thread is in, whether it is direct) and `kind-of` what kind it is (`text`, `voice`, `plugin`, and
+so on, and for a plugin's kind its name), so a plugin keeps and answers for only the channels it
+serves: a forum's posts on its boards and nowhere else.
 
 **Counters** are what a plugin counts across calls and across the deployment's servers, in
 Valkey: `counter-add(key, window-seconds, amount)` adds to the key's count in the current window

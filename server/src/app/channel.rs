@@ -683,6 +683,8 @@ pub enum ChannelType {
     Plugin,
 }
 
+app::wire_name_traits!(ChannelType);
+
 impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
         out.write_all(match self {
