@@ -5,26 +5,84 @@
 //! services only it can see.
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-/// Whether `ip` is on the public internet, as far as the address alone says.
-pub fn is_public_address(ip: IpAddr) -> bool {
-    let ip = ip.to_canonical();
-    if ip.is_loopback() || ip.is_multicast() || ip.is_unspecified() {
-        return false;
-    }
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            !(v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_link_local()
-                || v4.is_private()
-                // Shared address space, which carriers use behind their NAT (RFC 6598).
-                || (a == 100 && (64..128).contains(&b))
-                || a == 0)
+/// The IPv4 networks that are not on the public internet (IANA's special-purpose registry).
+const INSIDE_V4: [(Ipv4Addr, u32); 15] = [
+    // "This network", which reaches this host.
+    (Ipv4Addr::new(0, 0, 0, 0), 8),
+    (Ipv4Addr::new(10, 0, 0, 0), 8),
+    // Shared address space, which carriers use behind their NAT (RFC 6598).
+    (Ipv4Addr::new(100, 64, 0, 0), 10),
+    (Ipv4Addr::new(127, 0, 0, 0), 8),
+    (Ipv4Addr::new(169, 254, 0, 0), 16),
+    (Ipv4Addr::new(172, 16, 0, 0), 12),
+    // IETF protocol assignments.
+    (Ipv4Addr::new(192, 0, 0, 0), 24),
+    (Ipv4Addr::new(192, 0, 2, 0), 24),
+    // The 6to4 relays' anycast.
+    (Ipv4Addr::new(192, 88, 99, 0), 24),
+    (Ipv4Addr::new(192, 168, 0, 0), 16),
+    // Benchmarking.
+    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (Ipv4Addr::new(198, 51, 100, 0), 24),
+    (Ipv4Addr::new(203, 0, 113, 0), 24),
+    // Multicast.
+    (Ipv4Addr::new(224, 0, 0, 0), 4),
+    // Reserved, and the broadcast address.
+    (Ipv4Addr::new(240, 0, 0, 0), 4),
+];
+
+/// The IPv6 global unicast space, outside which nothing is on the public internet.
+const GLOBAL_V6: (Ipv6Addr, u32) = (Ipv6Addr::new(0x2000, 0, 0, 0, 0, 0, 0, 0), 3);
+
+/// The networks within the global unicast space that are not on the public internet. The forms
+/// that carry an IPv4 address (6to4 here; mapped, compatible, and NAT64 outside it) are judged
+/// by that address instead.
+const INSIDE_V6: [(Ipv6Addr, u32); 3] = [
+    // IETF protocol assignments: Teredo (2001::/32), benchmarking, ORCHID, and the like.
+    (Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 23),
+    (Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20),
+];
+
+fn within_v4(ip: Ipv4Addr, (network, length): (Ipv4Addr, u32)) -> bool {
+    let mask = u32::MAX.checked_shl(32 - length).unwrap_or(0);
+    ip.to_bits() & mask == network.to_bits() & mask
+}
+
+fn within_v6(ip: Ipv6Addr, (network, length): (Ipv6Addr, u32)) -> bool {
+    let mask = u128::MAX.checked_shl(128 - length).unwrap_or(0);
+    ip.to_bits() & mask == network.to_bits() & mask
+}
+
+/// The IPv4 address an IPv6 address carries, in the forms that reach it: IPv4-mapped
+/// (`::ffff:0:0/96`), IPv4-compatible (`::/96`, which holds `::` and `::1` too), NAT64
+/// (`64:ff9b::/96`), and 6to4 (`2002::/16`).
+fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let [.., a, b, c, d] = ip.octets();
+    match ip.segments() {
+        [0, 0, 0, 0, 0, 0xffff | 0, _, _] | [0x64, 0xff9b, 0, 0, 0, 0, _, _] => {
+            Some(Ipv4Addr::new(a, b, c, d))
         }
-        IpAddr::V6(v6) => !(v6.is_unicast_link_local() || v6.is_unique_local()),
+        [0x2002, high, low, ..] => Some(Ipv4Addr::from_bits(
+            (u32::from(high) << 16) | u32::from(low),
+        )),
+        _ => None,
+    }
+}
+
+/// Whether `ip` is on the public internet, as far as the address alone says. An IPv6 address
+/// that carries an IPv4 one is judged by that.
+pub fn is_public_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => !INSIDE_V4.iter().any(|&network| within_v4(v4, network)),
+        IpAddr::V6(v6) => match embedded_v4(v6) {
+            Some(v4) => is_public_address(IpAddr::V4(v4)),
+            None => {
+                within_v6(v6, GLOBAL_V6) && !INSIDE_V6.iter().any(|&network| within_v6(v6, network))
+            }
+        },
     }
 }
 
@@ -77,24 +135,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inside_addresses_are_not_public() {
-        for inside in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.64.0.1",
-            "0.0.0.0",
-            "::1",
-            "fd00::1",
-            "fe80::1",
-            "::ffff:127.0.0.1",
+    fn only_public_addresses_are_public() {
+        for (address, public) in [
+            // IPv4
+            ("1.1.1.1", true),
+            ("8.8.8.8", true),
+            ("100.63.255.255", true),
+            ("100.128.0.1", true),
+            ("172.32.0.1", true),
+            ("192.0.1.1", true),
+            ("198.17.255.255", true),
+            ("198.20.0.1", true),
+            ("223.255.255.255", true),
+            ("0.0.0.0", false),
+            ("0.1.2.3", false),
+            ("10.1.2.3", false),
+            ("100.64.0.1", false),
+            ("100.127.255.255", false),
+            ("127.0.0.1", false),
+            ("127.255.255.254", false),
+            ("169.254.169.254", false),
+            ("172.16.0.1", false),
+            ("172.31.255.255", false),
+            ("192.0.0.1", false),
+            ("192.0.0.170", false),
+            ("192.0.2.1", false),
+            ("192.88.99.1", false),
+            ("192.168.1.1", false),
+            ("198.18.0.1", false),
+            ("198.19.255.255", false),
+            ("198.51.100.1", false),
+            ("203.0.113.1", false),
+            ("224.0.0.1", false),
+            ("239.255.255.250", false),
+            ("240.0.0.1", false),
+            ("255.255.255.255", false),
+            // IPv6
+            ("2606:4700::1111", true),
+            ("2a00:1450:4001::200e", true),
+            ("2001:4860:4860::8888", true),
+            ("::", false),
+            ("::1", false),
+            ("fd00::1", false),
+            ("fc00::1", false),
+            ("fe80::1", false),
+            ("fec0::1", false),
+            ("ff02::1", false),
+            ("ff0e::1", false),
+            ("100::1", false),
+            ("5f00::1", false),
+            ("2001::1", false),
+            ("2001:0:4136:e378:8000:63bf:3fff:fdd2", false),
+            ("2001:2::1", false),
+            ("2001:db8::1", false),
+            ("3fff::1", false),
+            ("64:ff9b:1::1", false),
+            // IPv6 carrying IPv4, judged by the IPv4 address
+            ("::ffff:127.0.0.1", false),
+            ("::ffff:10.0.0.1", false),
+            ("::ffff:1.1.1.1", true),
+            ("::127.0.0.1", false),
+            ("::169.254.169.254", false),
+            ("::8.8.8.8", true),
+            ("64:ff9b::127.0.0.1", false),
+            ("64:ff9b::a9fe:a9fe", false),
+            ("64:ff9b::1.1.1.1", true),
+            ("2002:7f00:1::1", false),
+            ("2002:a9fe:a9fe::1", false),
+            ("2002:c0a8:101::1", false),
+            ("2002:0101:0101::1", true),
         ] {
-            assert!(!is_public_address(inside.parse().unwrap()), "{inside}");
-        }
-        for outside in ["1.1.1.1", "100.128.0.1", "2606:4700::1111"] {
-            assert!(is_public_address(outside.parse().unwrap()), "{outside}");
+            assert_eq!(
+                is_public_address(address.parse().unwrap()),
+                public,
+                "{address}"
+            );
         }
     }
 }
