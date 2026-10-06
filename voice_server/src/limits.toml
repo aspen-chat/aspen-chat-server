@@ -25,6 +25,10 @@ max_suspension_seconds = 86400
 max_message_bytes = 262144
 # Sockets one address may hold open before they identify.
 max_pending_sockets_per_ip = 8
+# Connections the HTTP listener holds at once, signalling sockets included; past it, new ones
+# wait to be accepted. Each is a file descriptor, so the process's limit (`ulimit -n`) must
+# allow this many and mediasoup's own besides.
+max_connections = 10000
 # Calls one user may be in at once on this server, each holding transports and so ports from
 # the media range: a second leaves room for a device joining one call while another leaves.
 # Joining the same call again from another socket replaces the first and takes no more.

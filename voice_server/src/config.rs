@@ -96,6 +96,8 @@ pub struct LimitSettings {
     pub max_suspension_seconds: u64,
     pub max_message_bytes: usize,
     pub max_pending_sockets_per_ip: u32,
+    /// Connections the HTTP listener holds at once, signalling sockets included.
+    pub max_connections: usize,
     /// Calls one user may be in at once on this server (`rooms::Rooms::join`).
     pub max_seats_per_user: usize,
     /// People one call on this server may hold at once.
@@ -119,6 +121,7 @@ pub struct LimitOverrides {
     pub max_suspension_seconds: Option<u64>,
     pub max_message_bytes: Option<usize>,
     pub max_pending_sockets_per_ip: Option<u32>,
+    pub max_connections: Option<usize>,
     pub max_seats_per_user: Option<usize>,
     pub max_participants_per_call: Option<usize>,
     #[serde(default)]
@@ -158,6 +161,9 @@ impl LimitSettings {
         }
         if let Some(sockets) = overrides.max_pending_sockets_per_ip {
             self.max_pending_sockets_per_ip = sockets;
+        }
+        if let Some(connections) = overrides.max_connections {
+            self.max_connections = connections;
         }
         if let Some(seats) = overrides.max_seats_per_user {
             self.max_seats_per_user = seats;

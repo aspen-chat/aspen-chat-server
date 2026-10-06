@@ -16,7 +16,6 @@ use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
-use axum::serve::ListenerExt as _;
 use clap::Parser;
 use mediasoup::prelude::*;
 use mediasoup::worker::{WorkerLogLevel, WorkerLogTag};
@@ -212,30 +211,74 @@ async fn main() -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .expose_headers([axum::http::header::RETRY_AFTER]),
         );
-    // Signalling frames are small and each is sent as it is written; with Nagle's algorithm on,
-    // one written while the previous is unacknowledged waits for the client's delayed ACK.
-    let listener = tokio::net::TcpListener::bind(config.listen_addr)
-        .await?
-        .tap_io(|stream| {
-            if let Err(e) = stream.set_nodelay(true) {
-                tracing::warn!("could not turn off Nagle's algorithm: {e}");
-            }
-        });
+    let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     info!(
         addr = config.listen_addr.to_string(),
         server = config.id.to_string(),
         "voice server listening"
     );
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-        info!("shutting down");
-    })
-    .await?;
+    serve(listener, app, config.rate_limits.max_connections).await;
     rooms.shutdown().await;
     relay.shutdown().await;
     Ok(())
+}
+
+/// How long a connection has to send a request's headers, from when it opens or its last
+/// response was sent, before it is closed: a client that trickles them in, or opens connections
+/// and sends nothing, cannot hold them.
+const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Serves `app` on `listener` until the process is told to stop: at most `max_connections` at
+/// once (past that, new ones wait in the listen backlog), each given `HEADER_READ_TIMEOUT` for
+/// every request's headers, with WebSocket upgrades. Each request carries its peer's address as
+/// axum's `ConnectInfo`.
+async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: usize) {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    use tower::ServiceExt as _;
+    let permits = Arc::new(tokio::sync::Semaphore::new(max_connections.max(1)));
+    let mut stopping = std::pin::pin!(tokio::signal::ctrl_c());
+    loop {
+        let permit = tokio::select! {
+            permit = Arc::clone(&permits).acquire_owned() => permit.expect("never closed"),
+            _ = &mut stopping => break,
+        };
+        let (stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    // Out of file descriptors, most likely; accepting again at once would spin.
+                    tracing::warn!("could not accept a connection: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
+            },
+            _ = &mut stopping => break,
+        };
+        // Signalling frames are small and each is sent as it is written; with Nagle's algorithm
+        // on, one written while the previous is unacknowledged waits for the client's delayed
+        // ACK.
+        if let Err(e) = stream.set_nodelay(true) {
+            tracing::warn!("could not turn off Nagle's algorithm: {e}");
+        }
+        let app = app.clone();
+        tokio::spawn(async move {
+            let service = hyper::service::service_fn(move |mut request: hyper::Request<_>| {
+                request
+                    .extensions_mut()
+                    .insert(axum::extract::ConnectInfo(peer));
+                app.clone().oneshot(request)
+            });
+            let served = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(HEADER_READ_TIMEOUT)
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades()
+                .await;
+            if let Err(e) = served {
+                tracing::debug!("a connection ended with an error: {e}");
+            }
+            drop(permit);
+        });
+    }
+    info!("shutting down");
 }

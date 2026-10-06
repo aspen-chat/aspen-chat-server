@@ -323,6 +323,7 @@ media port range one account can hold:
 
 | Setting | Default | |
 | --- | --- | --- |
+| `max_connections` | `10000` | Connections the listener holds at once; more wait to be accepted. Raise the process's file limit (`ulimit -n`, `LimitNOFILE=`) above it. Every connection must send each request's headers within ten seconds. |
 | `max_seats_per_user` | `2` | Calls one account may be in at once on this server. Joining the same call again from another device replaces the first and takes no more. |
 | `max_participants_per_call` | `500` | People one call on this server may hold at once. |
 
