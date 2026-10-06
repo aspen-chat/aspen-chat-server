@@ -267,9 +267,9 @@ async fn post(
     let mut conn = state.connection_pool.get().await?;
     // Plugins decide text before the transaction that saves it opens, so a slow one holds no
     // lock; what the author may not post, and attachments that are not theirs to post, never
-    // reach them. Commands and warnings are not
-    // theirs to decide, nor the system account's notices.
-    let (content, altered_by) = if command.is_none() && warning.is_none() {
+    // reach them. A command is decided as the text it shows, with the files it takes. Warnings
+    // are not theirs to decide, nor the system account's notices.
+    let (content, altered_by) = if warning.is_none() {
         let running = intercept::wanted(
             state,
             conn.as_mut(),
@@ -291,25 +291,63 @@ async fn post(
                 echo_to_parent,
             )
             .await?;
+            let shown = match &command {
+                Some(invocation) => {
+                    let (checked, arguments) = bot_command::check(
+                        state,
+                        conn.as_mut(),
+                        author,
+                        &access,
+                        channel_id,
+                        invocation,
+                    )
+                    .await?;
+                    Some(bot_command::invocation_text(&checked, &arguments))
+                }
+                None => None,
+            };
             // The plugins' host calls take connections of their own, so this one goes back to
             // the pool while they run: a task holding one while it waits for another can leave
             // every connection waiting.
             drop(conn);
-            let decided = intercept::decide(
-                state,
-                InterceptHook::MessageCreate,
-                running,
-                intercept::Draft {
-                    author,
-                    access: &access,
-                    content,
-                    attachments: &attachments,
-                    editing: None,
-                },
-            )
-            .await?;
+            let decided = match shown {
+                // A command's arguments are what its bot receives, so its text is never
+                // rewritten: a plugin that would change it refuses it.
+                Some(shown) => {
+                    intercept::decide_unchanged(
+                        state,
+                        InterceptHook::MessageCreate,
+                        running,
+                        intercept::Draft {
+                            author,
+                            access: &access,
+                            content: shown,
+                            attachments: &attachments,
+                            editing: None,
+                        },
+                    )
+                    .await?;
+                    (content, Vec::new())
+                }
+                None => {
+                    let decided = intercept::decide(
+                        state,
+                        InterceptHook::MessageCreate,
+                        running,
+                        intercept::Draft {
+                            author,
+                            access: &access,
+                            content,
+                            attachments: &attachments,
+                            editing: None,
+                        },
+                    )
+                    .await?;
+                    (decided.content, decided.altered_by)
+                }
+            };
             conn = state.connection_pool.get().await?;
-            (decided.content, decided.altered_by)
+            decided
         }
     } else {
         (content, Vec::new())

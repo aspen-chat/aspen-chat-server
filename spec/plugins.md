@@ -177,8 +177,10 @@ as the refusal's detail (`pluginRefused`). Plugins that intercept the same hook 
 operator's order, each seeing what the one before left; a refusal ends it. A rewrite never adds
 tags: tags are read from the text as saved, and a rewrite that would tag someone or something
 the author's text did not is refused (`pluginRewriteTagged`, failing the plugin as below).
-Commands and moderators' warnings are not intercepted, and a principal's own messages are not
-intercepted by its own plugin.
+A command is intercepted by `message.create` as the text it shows (`/name` and its arguments)
+with the files it takes; its arguments are what its bot receives, so a rewrite that would change
+the text refuses the command instead (`pluginRefused`). Moderators' warnings are not intercepted,
+and a principal's own messages and commands are not intercepted by its own plugin.
 
 A rewritten message is marked: its record carries `alteredBy`, the ids of the plugins that
 changed it, so every client, this deployment's or another's, can say so beside it, and its
