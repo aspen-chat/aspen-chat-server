@@ -38,8 +38,10 @@ deployments use too, are described by those two.
     statement), about hourly. A home answers for at most the first 128 a request names, and an
     asker takes a user the answer leaves out as no news of them.
   - `aspen-standing+jwt`: the home's answer, `{"standing": "…"}`, saying of each user `good`
-    (the account exists and may still use the asker), `gone` (there is no such account), or
-    `refused` (it may no longer use the asker). An asker ends the sessions of a user it hears
+    (the account exists and may still use the asker), `gone` (the account was deleted), or
+    `refused` (it may no longer use the asker). A home answers only for users who signed in at
+    the asker, and says `refused` of anyone else, whether or not they have an account, so an
+    answer tells the asker nothing about accounts it was never given. An asker ends the sessions of a user it hears
     `refused`, or a standing it does not know, of; retires one it hears `gone` of; and ends the
     sessions of users whose home it has not reached for a day.
 
