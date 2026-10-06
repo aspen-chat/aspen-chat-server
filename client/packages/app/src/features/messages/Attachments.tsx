@@ -1,6 +1,6 @@
 import type { Attachment } from "@aspen/protocol";
 import { PaperclipIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
-import { useLayoutEffect, useState, type CSSProperties } from "react";
+import { useLayoutEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
@@ -10,6 +10,7 @@ import {
   inlinePreview,
   isImageType,
   isVideoType,
+  keptRoom,
   pictureAlt,
   splitInline,
   type InlinePreview,
@@ -193,23 +194,6 @@ export function MessageMedia({
     </ul>
   );
 }
-
-/**
- * The room a picture of known size takes before and after it loads: as wide as it is, or as
- * the 320px it may be tall (`max-h-80`) allows, and no wider than its column (`max-w-full`),
- * at its own proportions. Width and proportions are set outright, because an image's room is
- * otherwise worked out from the image itself, which is nothing until it arrives.
- */
-function keptRoom(width: number, height: number): CSSProperties {
-  return {
-    // Wider than its column, `max-w-full` narrows it, and its proportions keep its height.
-    width: `${String(Math.min(width, (MAX_PICTURE_HEIGHT * width) / height))}px`,
-    aspectRatio: `${String(width)} / ${String(height)}`,
-  };
-}
-
-/** The tallest a picture is drawn inline, as `max-h-80`. */
-const MAX_PICTURE_HEIGHT = 320;
 
 /**
  * A picture in the message; pressing it opens the message's gallery on that picture. It shows

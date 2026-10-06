@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { linkify } from "@/features/messages/linkify";
 
 /** A picture a message shows: where its bytes are and what to call it. */
@@ -111,3 +112,20 @@ export function onlyImageLinks(content: string, isPicture: (url: string) => bool
     links.every((run) => isPicture(run.url))
   );
 }
+
+/**
+ * The room a picture of known size takes before and after it loads: as wide as it is, or as
+ * the 320px it may be tall (`max-h-80`) allows, and no wider than its column (`max-w-full`),
+ * at its own proportions. Width and proportions are set outright, because an image's room is
+ * otherwise worked out from the image itself, which is nothing until it arrives.
+ */
+export function keptRoom(width: number, height: number): CSSProperties {
+  return {
+    // Wider than its column, `max-w-full` narrows it, and its proportions keep its height.
+    width: `${String(Math.min(width, (MAX_PICTURE_HEIGHT * width) / height))}px`,
+    aspectRatio: `${String(width)} / ${String(height)}`,
+  };
+}
+
+/** The tallest a picture is drawn inline, as `max-h-80`. */
+const MAX_PICTURE_HEIGHT = 320;

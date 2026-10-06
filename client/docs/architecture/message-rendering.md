@@ -60,8 +60,9 @@
   embedding hostname as `parent`, which `playerSrc` adds. The player iframe is sandboxed and
   only created after the reader presses play.
 - Other links get a card (`LinkPreviewCard` in `src/features/messages/MessageBody.tsx`): the
-  picture, the title, the site name beneath it as a video card has it, and two lines of
-  description, with the page's theme colour down its edge. The server writes each field as it
+  title, the site name beneath it as a video card has it, two lines of description, and the
+  picture beneath them, as wide as the picture or the card, whichever is narrower, and at most
+  320px tall as a message's pictures are, with the page's theme colour down its edge. The server writes each field as it
   is shown; a Reddit post's site name is `r/{subreddit} · u/{author}`
   (`server/src/app/link_preview/reddit.rs`).
 - What the deployment's plugins say about a message shows beneath it as chips

@@ -1,6 +1,9 @@
 import type { LinkPreview, Message } from "@aspen/protocol";
+import { useLayoutEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { MessageMedia } from "@/features/messages/Attachments";
-import { imageUrls, isImageUrl, onlyImageLinks } from "@/features/messages/images";
+import { imageUrls, isImageUrl, keptRoom, onlyImageLinks } from "@/features/messages/images";
+import { useKeepStill } from "@/features/messages/keepStill";
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
@@ -126,16 +129,13 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
       href={preview.url}
       target="_blank"
       rel="noreferrer"
-      className="mt-1 flex max-w-lg gap-3 rounded-md border border-line bg-surface-raised p-2 text-sm hover:bg-surface-hover"
+      className="mt-1 flex max-w-lg flex-col gap-2 rounded-md border border-line bg-surface-raised p-2 text-sm hover:bg-surface-hover"
       style={
         preview.themeColor != null
           ? { borderLeftColor: preview.themeColor, borderLeftWidth: 3 }
           : undefined
       }
     >
-      {preview.imageUrl != null && (
-        <img src={preview.imageUrl} alt="" className="h-16 w-16 shrink-0 rounded object-cover" />
-      )}
       <span className="min-w-0">
         <span className="block font-medium wrap-anywhere text-accent">{title}</span>
         {preview.title != null && preview.siteName != null && (
@@ -145,6 +145,68 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
           <span className="mt-0.5 line-clamp-2 block text-ink-muted">{preview.description}</span>
         )}
       </span>
+      {preview.imageUrl != null && (
+        <CardPicture
+          src={preview.imageUrl}
+          width={preview.imageWidth}
+          height={preview.imageHeight}
+        />
+      )}
     </a>
+  );
+}
+
+/**
+ * A link card's picture, beneath its text: as wide as the picture is or as the card is,
+ * whichever is narrower, and no taller than a message's pictures (`max-h-80`), at its own
+ * proportions. One whose size is known keeps exactly its room while it loads (`keptRoom`); one
+ * whose size is not takes none until it has arrived, and then tells the list in the same task
+ * (`useKeepStill`), so the view stays still as the row grows. One that fails to load is left
+ * out.
+ */
+function CardPicture({
+  src,
+  width,
+  height,
+}: {
+  src: string;
+  width: number | null | undefined;
+  height: number | null | undefined;
+}) {
+  const keepStill = useKeepStill();
+  const [state, setState] = useState<"waiting" | "arrived" | "failed">("waiting");
+  useLayoutEffect(() => {
+    keepStill();
+  }, [state, keepStill]);
+  if (state === "failed") {
+    return null;
+  }
+  const size = width != null && height != null ? { width, height } : undefined;
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      referrerPolicy="no-referrer"
+      {...(size ?? {})}
+      style={size === undefined ? undefined : keptRoom(size.width, size.height)}
+      onLoad={() => {
+        flushSync(() => {
+          setState("arrived");
+        });
+      }}
+      onError={() => {
+        flushSync(() => {
+          setState("failed");
+        });
+      }}
+      className={
+        "block h-auto max-h-80 max-w-full self-start rounded object-contain" +
+        (state === "waiting"
+          ? " animate-pulse bg-surface-hover motion-reduce:animate-none"
+          : " bg-surface-sunken")
+      }
+    />
   );
 }
