@@ -573,7 +573,11 @@ pub async fn home_avatar(
         .first(&mut conn)
         .await?;
     drop(conn);
-    let (bytes, _) = state.media_store.get_bytes(&row.storage_key).await?;
+    let bytes = state
+        .media_store
+        .get_bytes(&row.storage_key, app::icon::MAX_BYTES)
+        .await?
+        .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
     Ok((bytes, row.mime_type))
 }
 

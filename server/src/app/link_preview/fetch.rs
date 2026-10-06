@@ -40,9 +40,17 @@ const USER_AGENT: &str = concat!(
 /// The most redirects one fetch follows.
 const MAX_REDIRECTS: usize = 10;
 
+/// Whether a preview may fetch `url`: a public address as [`outbound::may_fetch`] allows, and
+/// only at the web's ports, 80 and 443 (a URL naming none takes its scheme's). A host's public
+/// address can reach more of it than its web server, this server's own included (its NATS, its
+/// database, its metrics), so a message may not name another port.
+pub(super) fn may_fetch(url: &Url) -> bool {
+    outbound::may_fetch(url) && matches!(url.port_or_known_default(), Some(80 | 443))
+}
+
 /// The client every preview fetch is made with: public addresses only, as names resolve and as
-/// URLs and redirects name them (`app::outbound`); a request for a URL that names an address
-/// must still be checked with [`outbound::may_fetch`] before it is made.
+/// URLs and redirects name them (`app::outbound`), at the web's ports; a request for a URL must
+/// still be checked with [`may_fetch`] before it is made.
 pub(super) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -52,7 +60,7 @@ pub(super) fn http_client() -> &'static reqwest::Client {
             .dns_resolver(Arc::new(PublicResolver {
                 allow_private: false,
             }))
-            .redirect(outbound::checked_redirects(MAX_REDIRECTS))
+            .redirect(outbound::checked_redirects(MAX_REDIRECTS, may_fetch))
             .user_agent(USER_AGENT)
             .timeout(FETCH_TIMEOUT)
             .connect_timeout(Duration::from_secs(5))
@@ -114,6 +122,10 @@ impl Lookup {
 /// The intermediate byte buffer is capped at [`MAX_METADATA_BYTES`] and we
 /// only decode bodies whose `Content-Type` starts with `text/`.
 pub(super) async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
+    if !may_fetch(url) {
+        info!(url = url.as_str(), "preview generation: URL refused");
+        return None;
+    }
     let cache_key = url.as_str().to_owned();
     if let Some(cached) = cache_get(&cache_key) {
         return cached;
@@ -153,8 +165,8 @@ async fn fetch_metadata_uncached(url: &Url) -> Option<ParsedMetadata> {
 }
 
 async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
-    // Refuse addresses inside a network (`app::outbound`).
-    if !outbound::may_fetch(url) {
+    // Refuse addresses inside a network (`app::outbound`), and ports but the web's.
+    if !may_fetch(url) {
         info!(url = url.as_str(), "preview generation: URL refused");
         return None;
     }
@@ -232,6 +244,28 @@ pub(super) async fn read_capped(response: reqwest::Response, cap: usize) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_webs_ports_are_fetched() {
+        for allowed in [
+            "https://example.com/",
+            "http://example.com/",
+            "https://example.com:443/",
+            "http://example.com:80/",
+            "http://example.com:443/",
+        ] {
+            assert!(may_fetch(&Url::parse(allowed).unwrap()), "{allowed}");
+        }
+        for refused in [
+            "https://example.com:4222/",
+            "http://example.com:5432/",
+            "https://example.com:9464/metrics",
+            "http://127.0.0.1/",
+            "ftp://example.com/",
+        ] {
+            assert!(!may_fetch(&Url::parse(refused).unwrap()), "{refused}");
+        }
+    }
 
     #[test]
     fn relative_og_image_resolves_against_final_url() {

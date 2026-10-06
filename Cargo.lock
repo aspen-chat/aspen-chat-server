@@ -441,6 +441,7 @@ dependencies = [
  "image",
  "imagesize",
  "lettre",
+ "libc",
  "log",
  "lru 0.17.0",
  "message_gen",

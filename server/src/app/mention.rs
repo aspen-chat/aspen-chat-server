@@ -135,16 +135,22 @@ enum Found {
     Role(Uuid),
 }
 
-/// The tag `<@id>` or `<@&id>` at the start of `text`, and its length in bytes.
+/// The length of the id in a tag: a UUID's hyphenated form, as clients write and render it.
+const TAG_ID_LEN: usize = 36;
+
+/// The tag `<@id>` or `<@&id>` at the start of `text`, and its length in bytes. Only the bytes
+/// a tag can hold are read, so text with many `<@` and no tag is read once.
 fn tag_at(text: &str) -> Option<(Found, usize)> {
     let (role, body) = if let Some(body) = text.strip_prefix("<@&") {
         (true, body)
     } else {
         (false, text.strip_prefix("<@")?)
     };
-    let end = body.find('>')?;
-    let id = Uuid::parse_str(body.get(..end)?).ok()?;
-    let len = text.len() - body.len() + end + 1;
+    if body.as_bytes().get(TAG_ID_LEN) != Some(&b'>') {
+        return None;
+    }
+    let id = Uuid::parse_str(body.get(..TAG_ID_LEN)?).ok()?;
+    let len = text.len() - body.len() + TAG_ID_LEN + 1;
     Some((
         if role {
             Found::Role(id)
@@ -335,6 +341,23 @@ mod tests {
     fn a_malformed_tag_is_text() {
         let found = parse("<@not-a-uuid> <@&> <@");
         assert_eq!(found, Requested::default());
+    }
+
+    #[test]
+    fn a_tag_holds_a_hyphenated_id_and_nothing_else() {
+        let simple = Uuid::parse_str(A).unwrap().simple().to_string();
+        let found = parse(&format!("<@{simple}> <@{{{A}}}> <@{A} > <@{A}x>"));
+        assert_eq!(found, Requested::default());
+        assert_eq!(
+            tag_at(&format!("<@&{A}>tail")).map(|(_, len)| len),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn many_openings_and_no_tag_are_read_once() {
+        let content = format!("{}>", "<@".repeat(200_000));
+        assert_eq!(parse(&content), Requested::default());
     }
 
     #[test]

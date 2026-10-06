@@ -68,6 +68,26 @@ impl Loadable for Community {
     }
 }
 
+/// The longest name a community, channel, or category may have, in characters.
+pub const MAX_NAME_CHARS: usize = 100;
+
+/// `name` with the space around it taken off, when that leaves from 1 to [`MAX_NAME_CHARS`]
+/// characters, of any script; otherwise the refusal `refusal` gives, told the limit.
+pub(crate) fn trimmed_name(
+    name: &str,
+    refusal: impl FnOnce(usize) -> std::borrow::Cow<'static, str>,
+) -> app::Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
+        return Err(app::Error::Validation(refusal(MAX_NAME_CHARS)));
+    }
+    Ok(name.to_owned())
+}
+
+fn community_name(name: &str) -> app::Result<String> {
+    trimmed_name(name, |max| t!("communityNameLength", max = max))
+}
+
 /// Makes a community owned by `user`, with the default roles (the creator holding Admin too, so
 /// they keep it should they hand the community on) and a first text and voice channel.
 pub(crate) async fn create_community(
@@ -75,6 +95,7 @@ pub(crate) async fn create_community(
     user: UserId,
     command: &CommunityCreateRequest,
 ) -> Result<Community, app::Error> {
+    let name = community_name(&command.name)?;
     let mut conn = state.connection_pool.get().await?;
     let state = &state;
     conn.transaction(|conn| {
@@ -85,7 +106,7 @@ pub(crate) async fn create_community(
             let community = Community {
                 id: CommunityId::new(),
                 icon: command.icon.map(MaybeLoaded::NotLoaded),
-                name: command.name.clone(),
+                name,
                 deleted_at: None,
                 owner: Some(user),
             };
@@ -129,8 +150,9 @@ pub(crate) async fn update_community(
     state: &GlobalServerContext,
     caller: UserId,
     id: CommunityId,
-    command: CommunityUpdateRequest,
+    mut command: CommunityUpdateRequest,
 ) -> app::error::Result<Community> {
+    command.name = command.name.as_deref().map(community_name).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

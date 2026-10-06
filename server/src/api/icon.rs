@@ -35,10 +35,11 @@ pub(crate) fn icon_to_api(state: &GlobalServerContext, row: app::icon::Icon) -> 
 pub struct IconUploadInitRequest {
     /// `image/png`, `image/jpeg`, `image/webp`, or `image/gif`.
     pub mime_type: String,
-    /// The picture's size in bytes, at most 8 MiB (`app::icon::MAX_BYTES`). Given, the upload
-    /// URL accepts exactly this many bytes; without it, an upload of more is refused when
-    /// confirmed.
+    /// The picture's size in bytes, at most 8 MiB (`app::icon::MAX_BYTES`); the upload URL
+    /// accepts exactly this many bytes. Required: a request without it is refused with
+    /// `validation`.
     #[serde(default)]
+    #[schema(required = true, nullable = false, value_type = u64)]
     pub byte_size: Option<u64>,
 }
 
@@ -64,7 +65,7 @@ pub struct IconUploadHandle {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = IconUploadHandle, headers(("Location" = String, description = "URL of the icon once confirmed"))),
-        (status = BAD_REQUEST, description = "`validation`: `mimeType` is not PNG, JPEG, WebP, or GIF, or `byteSize` is over 8 MiB", body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: `mimeType` is not PNG, JPEG, WebP, or GIF, or `byteSize` is missing or over 8 MiB", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

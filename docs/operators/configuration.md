@@ -51,19 +51,41 @@ by each API server, at the same origin.
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
 
+## `[connections]`
+
+What the server's listener admits, so clients that open connections and then send nothing, or
+send it a byte at a time, cannot hold every socket the server has. A connection over a limit is
+closed as soon as it is accepted, and the server logs that it is closing new connections at
+most once a minute. An event stream's connection counts for as long as it is open.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max` | `100000` | The most connections the server holds open at once. Keep it below the process's open file limit (`LimitNOFILE` under systemd, `--ulimit nofile` in Docker), with room for its connections to PostgreSQL, NATS, Valkey, and storage. |
+| `max_per_ip` | `512` | The most one address holds open at once; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network. A browser holds one or two, so this suits a few hundred people behind one address; raise it if a school's or an office's network sends many more. Reverse proxies listed in `[rate_limits] trusted_proxies` count only toward `max`, so when every client arrives through one, limit connections per client there. |
+| `handshake_seconds` | `10` | How long a client has to finish its TLS handshake. |
+| `header_read_seconds` | `30` | How long an HTTP/1.1 client has to send a request's headers, which is also how long a kept-alive connection may sit idle. An idle HTTP/2 connection is pinged every 30 seconds and closed when a ping goes 20 seconds unanswered. |
+
 ## `[media]`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `max_attachment_bytes` | `268435456` (256 MiB) | The largest file anyone may attach. Apps declare a file's size when they ask to upload it, and the upload URL is signed for exactly that size, so storage refuses more; an upload that declared none and holds more is deleted when it is confirmed. Icons are held to 8 MiB and custom emoji to 256 KiB whatever this says. |
+| `max_attachment_bytes` | `268435456` (256 MiB) | The largest file anyone may attach. Apps must declare a file's size when they ask to upload it, and the upload URL is signed for exactly that size, so storage refuses more. Storage must give uploads an `ETag` and honour `x-amz-copy-source-if-match` when copying, as SeaweedFS and S3 do. Icons are held to 8 MiB and custom emoji to 256 KiB whatever this says. |
 
 Attachments are served from `public_base_url` as what they are only when they are pictures,
-video, or sound in the formats browsers play, plain text, or PDF. Anything else (an HTML page, an
+video, or sound in the formats browsers play, plain text, or PDF, and then as that type alone,
+with none of the parameters the sender's app added but a plain text's `charset`. Anything else (an HTML page, an
 SVG, XML, a script, an archive) is uploaded and stored as `application/octet-stream`, with
 `Content-Disposition: attachment` where the store keeps it, so a browser saves it rather than
 running what it holds at your media address; apps still show the type its sender's system gave
 it. Icons may only be PNG, JPEG, WebP, or GIF, and the pictures of link previews are kept only
 when they are one of those (a page whose picture is an SVG is previewed without it).
+
+The server fetches the pages messages link to, and their pictures, to show previews of them.
+It reaches only public addresses, and only their ports 80 and 443, so a link to another port of
+a public host (your own server's NATS, PostgreSQL, or metrics, at its public address) is shown
+without a preview; keep those services off public interfaces all the same. Each server fetches
+at most 64 messages' previews at once and two of one author's; a message past that, or one that
+waits more than 30 seconds for its turn, is shown without previews.
 
 ## `[media.s3]`
 
@@ -107,6 +129,16 @@ so point that at a disk with room for `max_video_bytes` times `concurrency` (not
 | `max_picture_pixels` | `100000000` | The most pixels a picture may have for a preview to be made of it. |
 | `ffmpeg`, `ffprobe` | `"ffmpeg"`, `"ffprobe"` | The programs that take videos' posters, by path or by name on `PATH`. An empty `ffmpeg` takes none. |
 | `max_video_bytes` | `2147483648` (2 GiB) | The largest video a poster is taken of. |
+| `ffmpeg_memory_mib` | `3072` (3 GiB) | The most memory `ffmpeg` or `ffprobe` may map while taking one poster. A frame of 8K video needs about 2 GiB. |
+
+`ffmpeg` and `ffprobe` run with none of the server's environment, may read only the video they
+are given, decode only the codecs phones, cameras, and screen recorders write and frames of at
+most `max_picture_pixels`, on one thread, for at most a minute of CPU time, and may write no
+file; a frame larger than `max_picture_bytes` is not read. A decoder is still a large body of C
+reading files anyone can send, so run the server as a user that cannot read anything it does
+not need (not `aspen.toml`'s secrets beyond what the server reads at startup, nor other
+services' files), or in a container or sandbox of its own, so a flaw in `ffmpeg` reaches as
+little as possible. Leaving `ffmpeg` empty takes no posters at all.
 
 The metrics `aspen_attachment_previews_made_total`, `aspen_attachment_previews_failed_total`,
 and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`, `video`).

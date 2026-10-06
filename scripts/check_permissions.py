@@ -460,13 +460,14 @@ def calls(world: World, check: Checks) -> None:
 def attachments(world: World, check: Checks) -> None:
     say("an attachment, before it is sent and after")
     stack = world.stack
-    handle = world.as_owner("POST", "/attachments", {"fileName": "notes.txt", "mimeType": "text/plain"})
+    handle = world.as_owner("POST", "/attachments", {"fileName": "notes.txt", "mimeType": "text/plain",
+                                                     "byteSize": len(b"secret notes")})
     put = urllib.request.Request(handle["uploadUrl"], data=b"secret notes", method="PUT",
                                  headers={"content-type": "text/plain"})
     urllib.request.urlopen(put, timeout=15).close()
     confirmed = world.as_owner("POST", f"/attachments/{handle['id']}/confirm")
     path = f"/attachments/{handle['id']}"
-    again = urllib.request.Request(handle["uploadUrl"], data=b"swapped notes", method="PUT",
+    again = urllib.request.Request(handle["uploadUrl"], data=b"swapped note", method="PUT",
                                    headers={"content-type": "text/plain"})
     urllib.request.urlopen(again, timeout=15).close()
     with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as read:
@@ -516,6 +517,13 @@ def uploads(world: World, check: Checks) -> None:
     with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as read:
         check("and it is served as a file, not a page",
               read.headers.get_content_type() == "application/octet-stream")
+    check("a type that would read as a page too is refused",
+          stack.status("POST", "/attachments", {"fileName": "a.txt", "mimeType": "text/plain;x=,text/html",
+                                                "byteSize": 1}, world.owner["token"]) == 400)
+    text = world.as_owner("POST", "/attachments", {"fileName": "a.txt", "byteSize": 1,
+                                                   "mimeType": "text/plain; charset=utf-8; name=a.html"})
+    check("and plain text is sent as plain text alone",
+          text.get("contentType") == "text/plain; charset=utf-8", text)
     check("a file over the deployment's limit is refused before it is sent",
           stack.status("POST", "/attachments", {"fileName": "huge.bin", "mimeType": "application/zip",
                                                 "byteSize": 1 << 40}, world.owner["token"]) == 400)
@@ -540,7 +548,8 @@ def picture(width: int = 1600, height: int = 1200) -> bytes:
 
 
 def upload_picture(world: World, token: str, png: bytes) -> str:
-    handle = world.stack.api("POST", "/attachments", {"fileName": "photo.png", "mimeType": "image/png"}, token)
+    handle = world.stack.api("POST", "/attachments",
+                             {"fileName": "photo.png", "mimeType": "image/png", "byteSize": len(png)}, token)
     put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
     urllib.request.urlopen(put, timeout=15).close()
     world.stack.api("POST", f"/attachments/{handle['id']}/confirm", token=token)
@@ -599,7 +608,7 @@ def previews(world: World, check: Checks) -> None:
 
 
 def upload_icon(world: World, token: str, png: bytes) -> str:
-    handle = world.stack.api("POST", "/icons", {"mimeType": "image/png"}, token)
+    handle = world.stack.api("POST", "/icons", {"mimeType": "image/png", "byteSize": len(png)}, token)
     put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
     urllib.request.urlopen(put, timeout=15).close()
     world.stack.api("POST", f"/icons/{handle['id']}/confirm", token=token)
@@ -611,9 +620,13 @@ def icons(world: World, check: Checks) -> None:
     stack = world.stack
     png = picture(16, 16)
     check("an icon that is not a picture every browser shows safely is refused",
-          stack.status("POST", "/icons", {"mimeType": "image/svg+xml"}, world.owner["token"]) == 400
-          and stack.status("POST", "/icons", {"mimeType": "text/html"}, world.owner["token"]) == 400)
-    handle = world.as_owner("POST", "/icons", {"mimeType": "image/png"})
+          stack.status("POST", "/icons", {"mimeType": "image/svg+xml", "byteSize": 1}, world.owner["token"]) == 400
+          and stack.status("POST", "/icons", {"mimeType": "text/html", "byteSize": 1}, world.owner["token"]) == 400)
+    check("an upload whose size is not given is refused",
+          stack.status("POST", "/icons", {"mimeType": "image/png"}, world.owner["token"]) == 400
+          and stack.status("POST", "/attachments", {"fileName": "a.png", "mimeType": "image/png"},
+                           world.owner["token"]) == 400)
+    handle = world.as_owner("POST", "/icons", {"mimeType": "image/png", "byteSize": len(png)})
     put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
     urllib.request.urlopen(put, timeout=15).close()
     check("nobody else confirms another's upload",

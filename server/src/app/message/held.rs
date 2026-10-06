@@ -90,6 +90,7 @@ pub async fn post(
     echo_to_parent: bool,
     may_hold: bool,
 ) -> app::Result<Posted> {
+    super::check_content(&content)?;
     if may_hold && !attachments.is_empty() {
         let mut conn = state.connection_pool.get().await?;
         if held_back(conn.as_mut(), &attachments).await? {

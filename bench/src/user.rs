@@ -734,9 +734,11 @@ impl User {
                 "POST /attachments",
                 reqwest::Method::POST,
                 "/attachments",
-                Some(
-                    json!({ "fileName": "benchmark.bin", "mimeType": "application/octet-stream" }),
-                ),
+                Some(json!({
+                    "fileName": "benchmark.bin",
+                    "mimeType": "application/octet-stream",
+                    "byteSize": self.behaviour.attachment_bytes,
+                })),
                 due,
             )
             .await

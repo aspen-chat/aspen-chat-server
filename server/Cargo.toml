@@ -98,6 +98,8 @@ fast_image_resize = { version = "6.1.0", features = ["image"] }
 webp = { version = "0.3.1", default-features = false }
 moxcms = "0.8.1"
 tempfile = "3.27.0"
+# Resource limits set on `ffmpeg` and `ffprobe` as they start (`app::attachment::preview::video`).
+libc = "0.2.190"
 
 [dev-dependencies]
 serde_urlencoded = "0.7.1"

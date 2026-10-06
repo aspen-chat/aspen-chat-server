@@ -207,6 +207,23 @@ async fn check_posting(
     Ok((target, access))
 }
 
+/// The longest a message's text may be, in characters (Unicode scalar values, as Rust counts
+/// `char`s, not bytes): what anyone writes, a plugin rewrites, or a command's text comes to.
+/// Clients hold their composer to it too.
+pub const MAX_CONTENT_CHARS: usize = 10_000;
+
+/// Refuses text longer than [`MAX_CONTENT_CHARS`].
+pub fn check_content(content: &str) -> app::Result<()> {
+    // No character is shorter than a byte, so text no longer in bytes needs no counting.
+    if content.len() > MAX_CONTENT_CHARS && content.chars().count() > MAX_CONTENT_CHARS {
+        return Err(app::Error::Validation(t!(
+            "messageContentLength",
+            max = MAX_CONTENT_CHARS
+        )));
+    }
+    Ok(())
+}
+
 /// What `create_message` posts besides its text.
 pub enum Posting {
     /// Text written by its author.
@@ -264,6 +281,7 @@ async fn post(
         Posting::Warning(warning) => (None, Some(*warning), None),
         Posting::Card(card) => (None, None, Some(card)),
     };
+    check_content(&content)?;
     let mut conn = state.connection_pool.get().await?;
     // Plugins decide text before the transaction that saves it opens, so a slow one holds no
     // lock; what the author may not post, and attachments that are not theirs to post, never
@@ -343,6 +361,7 @@ async fn post(
                         },
                     )
                     .await?;
+                    check_content(&decided.content)?;
                     (decided.content, decided.altered_by)
                 }
             };
@@ -385,10 +404,11 @@ async fn post(
                     None => None,
                 };
                 let (content, mentions) = match &invoked {
-                    Some((command, arguments)) => (
-                        bot_command::invocation_text(command, arguments),
-                        mention::Mentions::default(),
-                    ),
+                    Some((command, arguments)) => {
+                        let text = bot_command::invocation_text(command, arguments);
+                        check_content(&text)?;
+                        (text, mention::Mentions::default())
+                    }
                     None => {
                         let mentions = mention::resolve(
                             state,
@@ -500,7 +520,7 @@ async fn post(
         })
         .await?;
     if message.kind == MessageKind::Standard {
-        spawn_preview_fetch(state.clone(), message.id, message.content.clone());
+        spawn_preview_fetch(state.clone(), author, message.id, &message.content);
     }
     Ok(message)
 }
@@ -676,6 +696,9 @@ pub async fn update_message(
     // attachments, or both, shown the text as it will stand; the edit records who rewrote it.
     let mut command = command;
     let mut altered_by = None;
+    if let Some(content) = &command.content {
+        check_content(content)?;
+    }
     if command.content.is_some() || command.attachments.is_some() {
         let running =
             intercept::wanted(state, conn.as_mut(), InterceptHook::MessageEdit, channel_id).await?;
@@ -718,6 +741,7 @@ pub async fn update_message(
                 },
             )
             .await?;
+            check_content(&decided.content)?;
             conn = state.connection_pool.get().await?;
             match kept_text {
                 Some((before, _)) if decided.content == before => {}
@@ -850,7 +874,7 @@ pub async fn update_message(
         .await?;
 
     if previews_cleared && let Some(content) = new_content_for_refetch {
-        spawn_preview_fetch(state.clone(), id, content);
+        spawn_preview_fetch(state.clone(), caller, id, &content);
     }
 
     // Re-load the current preview set for the REST response. On a content

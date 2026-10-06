@@ -501,7 +501,7 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
         (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later", body = HeldMessage),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),

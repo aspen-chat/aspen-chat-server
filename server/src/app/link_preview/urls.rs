@@ -127,13 +127,18 @@ fn scan_bare_domains(text: &str) -> Vec<String> {
 fn bare_domain_url(token: &str) -> Option<String> {
     let token = token.trim_start_matches(BARE_DOMAIN_LEADING);
     let mut end = token.len();
+    // The parentheses left in the token, counted once and kept as its end is trimmed, so a
+    // token ending in many of them is read in one pass.
+    let opening = token.matches('(').count();
+    let mut closing = token.matches(')').count();
     loop {
-        let slice = &token[..end];
-        let last = slice.chars().next_back()?;
-        let unbalanced_paren =
-            last == ')' && slice.matches('(').count() < slice.matches(')').count();
+        let last = token[..end].chars().next_back()?;
+        let unbalanced_paren = last == ')' && opening < closing;
         if BARE_URL_TRAILING.contains(&last) && (last != ')' || unbalanced_paren) {
             end -= last.len_utf8();
+            if last == ')' {
+                closing -= 1;
+            }
         } else {
             break;
         }
@@ -245,6 +250,19 @@ fn scan_bare_urls(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trailing_parentheses_are_trimmed_in_one_pass() {
+        assert_eq!(
+            bare_domain_url("example.com/a_(b))").as_deref(),
+            Some("https://example.com/a_(b)")
+        );
+        let many = format!("example.com/{}", ")".repeat(200_000));
+        assert_eq!(
+            bare_domain_url(&many).as_deref(),
+            Some("https://example.com/")
+        );
+    }
 
     fn urls_from(content: &str) -> Vec<String> {
         extract_preview_urls(content)

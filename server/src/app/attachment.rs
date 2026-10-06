@@ -128,6 +128,13 @@ pub fn description(raw: Option<String>) -> app::Result<Option<String>> {
     Ok(Some(text.to_owned()))
 }
 
+/// The longest name a file may be sent with, in characters.
+pub const MAX_FILE_NAME_CHARS: usize = 255;
+
+/// The longest type a file may be declared as, in bytes; a media type is ASCII (RFC 6838
+/// allows 127 characters for each half).
+pub const MAX_MIME_TYPE_BYTES: usize = 255;
+
 /// The kinds of file served as what they are, for apps and browsers to show in place: pictures,
 /// video, and sound in the formats browsers play, plain text, and PDF, none of which runs script
 /// in a page that opens it. Any other kind (an HTML page, an SVG, XML, a script, an archive, or
@@ -160,18 +167,49 @@ pub const INLINE_TYPES: &[&str] = &[
 /// The type of anything not among [`INLINE_TYPES`], which browsers save rather than show.
 const SAVED_TYPE: &str = "application/octet-stream";
 
+/// Whether `mime_type` may be declared for an attachment: at most [`MAX_MIME_TYPE_BYTES`] of
+/// printable ASCII, without the commas and quotes that would let one header value read as
+/// several types, or as parameters a browser reads differently from this server.
+pub fn declarable(mime_type: &str) -> bool {
+    mime_type.len() <= MAX_MIME_TYPE_BYTES
+        && mime_type
+            .bytes()
+            .all(|b| matches!(b, b' '..=b'~') && b != b',' && b != b'"')
+}
+
+/// The longest `charset` parameter served with plain text.
+const MAX_CHARSET_BYTES: usize = 40;
+
+/// The `charset` parameter among a type's `parameters` (what follows its essence), when it
+/// names a character set in the letters, digits, and punctuation the registered names use.
+fn charset<'a>(parameters: impl Iterator<Item = &'a str>) -> Option<String> {
+    parameters
+        .filter_map(|parameter| parameter.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .map(|(_, value)| value.trim())
+        .filter(|value| {
+            (1..=MAX_CHARSET_BYTES).contains(&value.len())
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+        })
+        .map(str::to_ascii_lowercase)
+}
+
 /// How an attachment of the declared `mime_type` named `file_name` is uploaded and served: as
-/// declared when that is among [`INLINE_TYPES`], shown in place, and otherwise as
-/// [`SAVED_TYPE`], to be saved; either way under its own name.
+/// its essence (the type without parameters) when that is among [`INLINE_TYPES`], shown in
+/// place, with plain text keeping a `charset` it names; and otherwise as [`SAVED_TYPE`], to be
+/// saved; either way under its own name. Nothing else the uploader wrote reaches the header, so
+/// what a browser reads as the type is always the type checked here.
 pub fn served(mime_type: &str, file_name: &str) -> Served {
-    let essence = mime_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
+    let mut parts = mime_type.split(';');
+    let essence = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
     let (content_type, disposition) = if INLINE_TYPES.contains(&essence.as_str()) {
-        (mime_type.to_owned(), "inline")
+        let content_type = match charset(parts).filter(|_| essence == "text/plain") {
+            Some(charset) => format!("{essence}; charset={charset}"),
+            None => essence,
+        };
+        (content_type, "inline")
     } else {
         (SAVED_TYPE.to_owned(), "attachment")
     };
@@ -266,9 +304,15 @@ pub fn storage_key(id: AttachmentId) -> String {
     format!("attachments/{}", id.0)
 }
 
+/// An upload's size as its client declares it, which every upload URL is signed for, so storage
+/// takes no more; a client that does not say is refused.
+pub fn declared_size(byte_size: Option<u64>) -> app::Result<u64> {
+    byte_size.ok_or_else(|| app::Error::Validation(t!("uploadSizeRequired")))
+}
+
 /// Reserve a row and mint a presigned `PUT` URL, for the type the file is served as
-/// ([`served`]) and, when the client declares it, for exactly `byte_size` bytes, which may be at
-/// most `[media] max_attachment_bytes`.
+/// ([`served`]) and for exactly `byte_size` bytes, which the client must declare and which may
+/// be at most `[media] max_attachment_bytes`.
 ///
 /// On any failure after the row insert (presign error, etc.), the
 /// freshly-inserted row is rolled back so a client retry doesn't leak
@@ -283,8 +327,21 @@ pub async fn init_upload(
     description: Option<String>,
 ) -> app::Result<AttachmentUpload> {
     let max_bytes = state.config.media.max_attachment_bytes;
-    if byte_size.is_some_and(|bytes| bytes > max_bytes) {
+    let byte_size = declared_size(byte_size)?;
+    if byte_size > max_bytes {
         return Err(too_large(max_bytes));
+    }
+    if file_name.chars().count() > MAX_FILE_NAME_CHARS {
+        return Err(app::Error::Validation(t!(
+            "attachmentFileNameLength",
+            max = MAX_FILE_NAME_CHARS
+        )));
+    }
+    if !declarable(&mime_type) {
+        return Err(app::Error::Validation(t!(
+            "attachmentMimeType",
+            max = MAX_MIME_TYPE_BYTES
+        )));
     }
     let served = served(&mime_type, &file_name);
     let id = AttachmentId::new();
@@ -615,6 +672,34 @@ mod served_tests {
             assert_eq!(served.content_type, declared);
             assert!(served.disposition.unwrap().starts_with("inline; "));
         }
+    }
+
+    #[test]
+    fn only_the_checked_type_reaches_the_header() {
+        for (declared, sent) in [
+            ("text/plain;x=,text/html", "text/plain"),
+            ("Image/PNG; name=a.html", "image/png"),
+            (
+                "text/plain; Charset=UTF-8; x=y",
+                "text/plain; charset=utf-8",
+            ),
+            ("text/plain; charset=utf-8\r\nX-Evil: 1", "text/plain"),
+            ("video/mp4; charset=utf-8", "video/mp4"),
+        ] {
+            assert_eq!(served(declared, "a").content_type, sent, "{declared}");
+        }
+    }
+
+    #[test]
+    fn a_type_that_could_read_as_several_is_refused() {
+        assert!(declarable("text/plain; charset=utf-8"));
+        assert!(declarable(""));
+        assert!(!declarable("text/plain;x=,text/html"));
+        assert!(!declarable("text/plain; charset=\"utf-8\""));
+        assert!(!declarable("text/plain\r\nX: y"));
+        assert!(!declarable("text/plain\u{7f}"));
+        assert!(!declarable("text/pläin"));
+        assert!(!declarable(&"a".repeat(MAX_MIME_TYPE_BYTES + 1)));
     }
 
     #[test]

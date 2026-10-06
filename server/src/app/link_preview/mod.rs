@@ -31,8 +31,16 @@
 //!    itself go away, so we don't leak image blobs.
 //!
 //! Every fetch, of a page, its picture, or a redirect either leads to, reaches only public
-//! addresses (`app::outbound`), so a message cannot make the server reach a service inside its
-//! own network.
+//! addresses (`app::outbound`), and only their ports 80 and 443 (`fetch::may_fetch`), so a
+//! message cannot make the server reach a service inside its own network, nor another service
+//! at a public address, its own among them.
+//!
+//! Fetching is bounded on each server: at most [`MAX_FETCHING`] messages' previews at once,
+//! a message waiting at most [`FETCH_WAIT`] for its turn, and at most
+//! [`MAX_FETCHING_PER_AUTHOR`] of one author's messages at once. A message past either goes
+//! without previews rather than waiting longer: previews are a nicety, and a queue that grew
+//! with every message sent would hold their text and the work of fetching for as long as
+//! sending outpaced it.
 //! A picture is stored only when it is a PNG, JPEG, WebP, or GIF (`app::icon::IMAGE_TYPES`),
 //! with exactly that type, so nothing stored for a preview runs script when opened from storage;
 //! a page whose picture is of another kind (an SVG) is previewed without one.
@@ -59,16 +67,19 @@ use crate::api::link_preview::{LinkPreview, VideoEmbed, image_storage_key};
 use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::MediaStore;
-use crate::app::{self, LinkPreviewImageId, MessageId};
+use crate::app::{self, LinkPreviewImageId, MessageId, UserId};
 use crate::database::schema::message_link_preview;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable};
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use fetch::{fetch_metadata, http_client};
+use fetch::{fetch_metadata, http_client, may_fetch};
 use futures_util::stream::StreamExt;
 use html_meta::ParsedMetadata;
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{info, warn};
 use url::Url;
 
@@ -84,6 +95,51 @@ pub const MAX_LINK_PREVIEWS_PER_MESSAGE: usize = 3;
 
 /// Maximum number of image bytes we'll read from any single preview image.
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+/// The most messages whose previews one server fetches at once. Each holds up to
+/// [`MAX_LINK_PREVIEWS_PER_MESSAGE`] pages of `fetch::MAX_METADATA_BYTES` and pictures of
+/// [`MAX_IMAGE_BYTES`], so this bounds the memory previews take to about a gigabyte.
+const MAX_FETCHING: usize = 64;
+
+/// How long a message waits for one of [`MAX_FETCHING`] places before going without previews.
+const FETCH_WAIT: Duration = Duration::from_secs(30);
+
+/// The most of one author's messages whose previews one server fetches at once; their further
+/// messages go without previews until one is done.
+const MAX_FETCHING_PER_AUTHOR: usize = 2;
+
+static FETCHING: Semaphore = Semaphore::const_new(MAX_FETCHING);
+
+/// How many of each author's messages are having their previews fetched on this server.
+static FETCHING_BY_AUTHOR: LazyLock<Mutex<HashMap<UserId, usize>>> =
+    LazyLock::new(Default::default);
+
+/// One of an author's [`MAX_FETCHING_PER_AUTHOR`] places, given back when dropped.
+struct AuthorPlace(UserId);
+
+impl AuthorPlace {
+    fn take(author: UserId) -> Option<Self> {
+        let mut fetching = FETCHING_BY_AUTHOR.lock().unwrap_or_else(|e| e.into_inner());
+        let count = fetching.entry(author).or_default();
+        if *count >= MAX_FETCHING_PER_AUTHOR {
+            return None;
+        }
+        *count += 1;
+        Some(Self(author))
+    }
+}
+
+impl Drop for AuthorPlace {
+    fn drop(&mut self) {
+        let mut fetching = FETCHING_BY_AUTHOR.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = fetching.get_mut(&self.0) {
+            *count -= 1;
+            if *count == 0 {
+                fetching.remove(&self.0);
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DB row types
@@ -191,8 +247,9 @@ async fn fetch_and_store_image(
     state: &GlobalServerContext,
     image_url: &str,
 ) -> Option<PreviewImage> {
-    // A page names its picture, which may be at an address inside a network (`app::outbound`).
-    if !url::Url::parse(image_url).is_ok_and(|url| crate::app::outbound::may_fetch(&url)) {
+    // A page names its picture, which may be at an address inside a network (`app::outbound`)
+    // or another port.
+    if !url::Url::parse(image_url).is_ok_and(|url| may_fetch(&url)) {
         info!(url = image_url, "preview image URL refused");
         return None;
     }
@@ -273,10 +330,38 @@ async fn fetch_and_store_image(
 /// `link_previews` list and immediately return to the client. When the task
 /// finishes it (atomically) replaces the existing preview rows and publishes
 /// a message `Update` carrying the new `link_previews` so subscribers can
-/// update their rendered messages in place.
-pub fn spawn_preview_fetch(state: GlobalServerContext, message_id: MessageId, content: String) {
+/// update their rendered messages in place. Past the limits on fetching (see the module docs),
+/// the message goes without previews.
+pub fn spawn_preview_fetch(
+    state: GlobalServerContext,
+    author: UserId,
+    message_id: MessageId,
+    content: &str,
+) {
+    let urls = extract_preview_urls(content);
+    if urls.is_empty() {
+        // Nothing to do; any previously-attached previews (e.g. from a prior version of this
+        // message) have already been cleared by the edit path, and the caller has already
+        // published the "empty previews" event on the transition that got us here.
+        return;
+    }
+    let Some(place) = AuthorPlace::take(author) else {
+        info!(
+            message_id = message_id.0.to_string(),
+            "link previews skipped: its author's other messages are still being previewed"
+        );
+        return;
+    };
     tokio::spawn(async move {
-        if let Err(e) = run_preview_fetch(&state, message_id, &content).await {
+        let _place = place;
+        let Ok(Ok(_fetching)) = tokio::time::timeout(FETCH_WAIT, FETCHING.acquire()).await else {
+            info!(
+                message_id = message_id.0.to_string(),
+                "link previews skipped: this server is fetching as many as it may"
+            );
+            return;
+        };
+        if let Err(e) = run_preview_fetch(&state, message_id, urls).await {
             warn!(
                 message_id = message_id.0.to_string(),
                 error = e.to_string(),
@@ -289,17 +374,8 @@ pub fn spawn_preview_fetch(state: GlobalServerContext, message_id: MessageId, co
 async fn run_preview_fetch(
     state: &GlobalServerContext,
     message_id: MessageId,
-    content: &str,
+    urls: Vec<Url>,
 ) -> app::Result<()> {
-    let urls = extract_preview_urls(content);
-    if urls.is_empty() {
-        // Nothing to do; any previously-attached previews (e.g. from a prior
-        // version of this message) have already been cleared by the edit
-        // path, and the caller has already published the "empty previews"
-        // event on the transition that got us here.
-        return Ok(());
-    }
-
     // Fetch metadata for each URL concurrently.
     let metadata_results: Vec<(Url, Option<ParsedMetadata>)> =
         futures_util::future::join_all(urls.into_iter().map(|url| async move {

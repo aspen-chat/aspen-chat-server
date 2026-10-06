@@ -90,7 +90,7 @@ fn served(mime_type: &str) -> Served {
 }
 
 /// Reserves an icon of `mime_type`, one of [`IMAGE_TYPES`], and mints a presigned `PUT` URL for
-/// it, for exactly `byte_size` bytes when the client declares them, at most [`MAX_BYTES`].
+/// it, for exactly `byte_size` bytes, which the client must declare, at most [`MAX_BYTES`].
 pub async fn init_upload(
     state: &GlobalServerContext,
     uploader: UserId,
@@ -100,7 +100,8 @@ pub async fn init_upload(
     if !IMAGE_TYPES.contains(&mime_type.as_str()) {
         return Err(app::Error::Validation(t!("iconImageType")));
     }
-    if byte_size.is_some_and(|bytes| bytes > MAX_BYTES) {
+    let byte_size = app::attachment::declared_size(byte_size)?;
+    if byte_size > MAX_BYTES {
         return Err(too_large());
     }
     let id = IconId::new();

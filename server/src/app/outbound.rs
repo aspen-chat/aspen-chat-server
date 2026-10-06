@@ -108,13 +108,13 @@ pub fn may_fetch(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https") && url.has_host() && !names_inside_address(url)
 }
 
-/// Follows at most `hops` redirects, each only to a URL [`may_fetch`] allows, so a public page
-/// cannot send the request on to an address inside a network.
-pub fn checked_redirects(hops: usize) -> reqwest::redirect::Policy {
+/// Follows at most `hops` redirects, each only to a URL `allowed` allows (at least as strict as
+/// [`may_fetch`]), so a public page cannot send the request on to an address inside a network.
+pub fn checked_redirects(hops: usize, allowed: fn(&Url) -> bool) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= hops {
             attempt.error(format!("more than {hops} redirects"))
-        } else if may_fetch(attempt.url()) {
+        } else if allowed(attempt.url()) {
             attempt.follow()
         } else {
             let refused = format!("a redirect to {}, which may not be fetched", attempt.url());
