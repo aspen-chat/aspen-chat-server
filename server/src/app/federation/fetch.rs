@@ -153,19 +153,15 @@ pub async fn document(
             status = status.as_u16()
         )));
     }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| failure(domain, &error))?;
-        if body.len() + chunk.len() > MAX_DOCUMENT_BYTES {
-            return Err(unreachable(t!(
+    let body = read_capped(domain, response, MAX_DOCUMENT_BYTES)
+        .await?
+        .ok_or_else(|| {
+            unreachable(t!(
                 "federationDocumentTooLarge",
                 domain = domain.as_str(),
                 max = MAX_DOCUMENT_BYTES / 1024
-            )));
-        }
-        body.extend_from_slice(&chunk);
-    }
+            ))
+        })?;
     serde_json::from_slice(&body).map_err(|error| {
         tracing::info!(%domain, %error, "a deployment's document did not parse");
         // What did not parse is quoted as the parser put it, as a path or a name would be.
@@ -175,6 +171,25 @@ pub async fn document(
             detail = error.to_string()
         ))
     })
+}
+
+/// The body of `domain`'s `response`, or `None` once it runs past `max` bytes, which stops the
+/// read there.
+pub async fn read_capped(
+    domain: &Domain,
+    response: reqwest::Response,
+    max: usize,
+) -> app::Result<Option<Vec<u8>>> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| failure(domain, &error))?;
+        if body.len() + chunk.len() > max {
+            return Ok(None);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Some(body))
 }
 
 /// An error and its causes on one line, which is where a TLS or DNS failure's reason is.
