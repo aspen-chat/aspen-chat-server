@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mediaUrlOnPage, messageLinkUrl, webPageUrl } from "@/features/layout/safeUrl";
+import { mailtoUrl, mediaUrlOnPage, messageLinkUrl, webPageUrl } from "@/features/layout/safeUrl";
 
 const UNSAFE = [
   "javascript:alert(1)",
@@ -56,5 +56,13 @@ describe("safe URLs", () => {
     ]) {
       expect(mediaUrlOnPage(url, "https:"), url).toBe(url);
     }
+  });
+
+  it("write a mail address alone into a mailto link", () => {
+    expect(mailtoUrl("kate@example.org")).toBe("mailto:kate@example.org");
+    expect(mailtoUrl("kate@example.org?bcc=eve@evil.example&body=hi")).toBe(
+      "mailto:kate@example.org%3Fbcc%3Deve@evil.example%26body%3Dhi",
+    );
+    expect(mailtoUrl("a@example.org,b@example.org")).toBe("mailto:a@example.org%2Cb@example.org");
   });
 });

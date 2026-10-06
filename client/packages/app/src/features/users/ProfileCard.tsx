@@ -53,6 +53,7 @@ import { ReportModal } from "@/features/reports/ReportDialog";
 import { PluginAccount, UserAnnotations } from "@/features/plugins/Annotations";
 import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/features/users/Nickname";
 import { useNameIn } from "@/features/users/nameIn";
+import { mailtoUrl } from "@/features/layout/safeUrl";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, the
@@ -122,7 +123,7 @@ export function ProfileCard({ user }: { user: User }) {
         )}
         {user.publicEmail != null && (
           <a
-            href={`mailto:${user.publicEmail}`}
+            href={mailtoUrl(user.publicEmail)}
             aria-label={`${m.profile.emailLabel}: ${user.publicEmail}`}
             className="flex min-w-0 items-center gap-1.5 self-start text-sm break-all text-accent underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
           >

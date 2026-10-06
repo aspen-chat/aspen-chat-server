@@ -75,3 +75,12 @@ function isLoopback(hostname: string): boolean {
     hostname === "[::1]"
   );
 }
+
+/**
+ * A `mailto:` link to `address` alone: everything but its `@` is percent-encoded, so an address
+ * a deployment sent cannot add a subject, a body, or more recipients (`?`, `&`, `,`) to the mail
+ * it opens.
+ */
+export function mailtoUrl(address: string): string {
+  return `mailto:${encodeURIComponent(address).replaceAll("%40", "@")}`;
+}
