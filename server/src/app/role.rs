@@ -20,7 +20,7 @@ use crate::app::{
 };
 use crate::database::schema::{
     category, category_override, channel, channel_override, community, community_member_role,
-    community_role,
+    community_role, community_user,
 };
 use crate::t;
 use diesel::prelude::*;
@@ -632,7 +632,9 @@ pub async fn reorder_roles(
     .await
 }
 
-/// Announces a member's roles as they now stand, as an update of their membership.
+/// Announces a member's roles as they now stand, as an update of their membership. The caller
+/// holds the lock on the member's `community_user` row, so no other change to their roles is
+/// read half made.
 async fn announce_member_roles(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -709,6 +711,19 @@ pub async fn set_member_role(
             if held {
                 access.require_holds(role.permissions)?;
             }
+            // The member's row is locked first, so that changes to their roles are made, read
+            // whole, and announced one at a time: each announcement then carries the list as it
+            // stands after every change committed before it, in the order they commit.
+            community_user::table
+                .select(community_user::user)
+                .filter(
+                    community_user::community
+                        .eq(community_id)
+                        .and(community_user::user.eq(member)),
+                )
+                .for_no_key_update()
+                .first::<UserId>(conn.as_mut())
+                .await?;
             member_below(conn.as_mut(), &access, member).await?;
             let changed = if held {
                 diesel::insert_into(community_member_role::table)
