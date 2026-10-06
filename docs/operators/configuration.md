@@ -61,7 +61,8 @@ video, or sound in the formats browsers play, plain text, or PDF. Anything else 
 SVG, XML, a script, an archive) is uploaded and stored as `application/octet-stream`, with
 `Content-Disposition: attachment` where the store keeps it, so a browser saves it rather than
 running what it holds at your media address; apps still show the type its sender's system gave
-it. Icons may only be PNG, JPEG, WebP, or GIF.
+it. Icons may only be PNG, JPEG, WebP, or GIF, and the pictures of link previews are kept only
+when they are one of those (a page whose picture is an SVG is previewed without it).
 
 ## `[media.s3]`
 

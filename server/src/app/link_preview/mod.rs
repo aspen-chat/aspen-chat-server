@@ -33,6 +33,9 @@
 //! Every fetch, of a page, its picture, or a redirect either leads to, reaches only public
 //! addresses (`app::outbound`), so a message cannot make the server reach a service inside its
 //! own network.
+//! A picture is stored only when it is a PNG, JPEG, WebP, or GIF (`app::icon::IMAGE_TYPES`),
+//! with exactly that type, so nothing stored for a preview runs script when opened from storage;
+//! a page whose picture is of another kind (an SVG) is previewed without one.
 //!
 //! Preview thumbnails are downloaded by clients directly from the
 //! anonymous-read endpoint behind [`crate::app::media_store::MediaStore::public_url`];
@@ -213,16 +216,14 @@ async fn fetch_and_store_image(
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !mime_type.starts_with("image/") {
-        return None;
-    }
-    // Store just the `image/foo` portion — strip any `; charset=...` tail.
-    let mime_type = mime_type
-        .split(';')
-        .next()
-        .unwrap_or(&mime_type)
-        .trim()
-        .to_owned();
+    // Only the kinds an icon may be (`app::icon::IMAGE_TYPES`), stored as exactly that type:
+    // an SVG, or any other kind, served from storage could run what it holds. The card keeps
+    // its text without a picture.
+    let essence = mime_type.split(';').next().unwrap_or_default().trim();
+    let mime_type = app::icon::IMAGE_TYPES
+        .iter()
+        .find(|allowed| **allowed == essence)
+        .map(|allowed| (*allowed).to_owned())?;
     let mut bytes: Vec<u8> = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
