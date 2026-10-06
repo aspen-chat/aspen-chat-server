@@ -68,7 +68,7 @@ together with a manifest, a JSON file beside it:
   are installed with it and served as its views' files, with `views`.
 - `channelTypes`: the kinds of channel it adds, with `channelTypes`, by name: each one's name (a
   key of its `messages`), its `view` (a page among its assets), and its `glyph` (`board`,
-  `calendar`, `list`, or `chat`), which clients draw it with.
+  `calendar`, `list`, `chat`, or `game`), which clients draw it with.
 - `retention`: a key of its `messages` saying what it keeps of what it sees and for how long,
   which the operator reads before installing, since deleting a message cannot reach a copy a
   plugin keeps.

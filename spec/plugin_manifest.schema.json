@@ -253,7 +253,8 @@
         "board",
         "calendar",
         "list",
-        "chat"
+        "chat",
+        "game"
       ]
     },
     "Hooks": {

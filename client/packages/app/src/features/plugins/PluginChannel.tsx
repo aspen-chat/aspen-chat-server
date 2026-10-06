@@ -2,6 +2,7 @@ import type { Channel, PluginInfo } from "@aspen/protocol";
 import {
   CalendarBlankIcon,
   ChatsCircleIcon,
+  GameControllerIcon,
   ListBulletsIcon,
   NotebookIcon,
   PuzzlePieceIcon,
@@ -35,7 +36,9 @@ export function PluginGlyph({
           ? ListBulletsIcon
           : glyph === "chat"
             ? ChatsCircleIcon
-            : PuzzlePieceIcon;
+            : glyph === "game"
+              ? GameControllerIcon
+              : PuzzlePieceIcon;
   return <Icon size={size} aria-hidden="true" className={className} />;
 }
 
@@ -120,14 +123,34 @@ function readTheme(): BridgeTheme {
   const scheme = getComputedStyle(probe).color === "rgb(255, 255, 255)" ? "dark" : "light";
   probe.remove();
   const root = getComputedStyle(document.documentElement);
+  const emoji = root.getPropertyValue("--font-emoji");
   return {
     colors,
     fonts: {
-      sans: root.getPropertyValue("--font-sans").trim(),
-      mono: root.getPropertyValue("--font-mono").trim(),
+      sans: withoutFamilies(root.getPropertyValue("--font-sans"), emoji),
+      mono: withoutFamilies(root.getPropertyValue("--font-mono"), emoji),
     },
     scheme,
   };
+}
+
+/**
+ * A font stack for a view, without the families of `drop`. A view cannot load the app's own
+ * faces (its origin is opaque), so each family it is handed is whatever the system installs by
+ * that name, and the system's Noto Color Emoji has glyphs for the digits and the space, which it
+ * would draw every number and gap in. The system draws emoji in its emoji font without being
+ * asked, so the emoji family is left out of a view's stacks.
+ */
+function withoutFamilies(stack: string, drop: string): string {
+  const families = (list: string) =>
+    list
+      .split(",")
+      .map((family) => family.trim())
+      .filter((family) => family !== "");
+  const dropped = new Set(families(drop));
+  return families(stack)
+    .filter((family) => !dropped.has(family))
+    .join(", ");
 }
 
 /** The theme, read again whenever the palette, mode, fonts, or the system's preference change. */
