@@ -81,7 +81,7 @@ fn print_deployment(
     ]
     .into_iter()
     .filter(|(subject, direction, _)| {
-        federation::admits(policy, *subject, *direction, &listed.lists)
+        federation::admits(policy, *subject, *direction, &listed.deciding)
     })
     .map(|(_, _, name)| name)
     .collect();
@@ -119,6 +119,18 @@ fn print_deployment(
     if !listed.lists.is_empty() {
         let lists: Vec<String> = listed.lists.iter().map(ToString::to_string).collect();
         println!("  on {}", lists.join(", "));
+    }
+    let inherited: Vec<String> = listed
+        .deciding
+        .iter()
+        .filter(|list| !listed.lists.contains(list))
+        .map(ToString::to_string)
+        .collect();
+    if !inherited.is_empty() {
+        println!(
+            "  blocked through a parent domain or another port on {}",
+            inherited.join(", ")
+        );
     }
     println!(
         "  admits: {}",

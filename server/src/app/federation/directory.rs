@@ -1,6 +1,7 @@
 //! The directory of deployments: every other deployment this one knows, as rows of
 //! `federated_deployment`, and the lists each is on, as rows of `federation_list_entry`.
 
+use super::policy::ListKind;
 use super::{Domain, FederationList, MAX_NOTE_CHARS, own_domain, protocol};
 use crate::app::{self, UserId};
 use crate::aspen_config::FederationConfig;
@@ -72,7 +73,11 @@ impl FederatedDeployment {
 #[derive(Debug, Clone)]
 pub struct Listed {
     pub deployment: FederatedDeployment,
+    /// The lists it is on itself.
     pub lists: Vec<FederationList>,
+    /// The lists that decide whether it is admitted ([`lists_of`]): its own, and the block
+    /// lists of every deployment whose host is its host or a parent of it.
+    pub deciding: Vec<FederationList>,
 }
 
 fn clean_note(note: Option<String>) -> app::Result<Option<String>> {
@@ -89,7 +94,13 @@ fn clean_note(note: Option<String>) -> app::Result<Option<String>> {
     Ok(note)
 }
 
-pub(crate) async fn lists_of(
+diesel::define_sql_function! {
+    /// PostgreSQL's `split_part`, which takes a domain's host from before its port.
+    fn split_part(text: diesel::sql_types::Text, delimiter: diesel::sql_types::Text, field: diesel::sql_types::Integer) -> diesel::sql_types::Text;
+}
+
+/// The lists each of `domains` is on itself, as the directory shows and edits them.
+pub(crate) async fn entries_of(
     conn: &mut AsyncPgConnection,
     domains: &[Domain],
 ) -> app::Result<HashMap<Domain, Vec<FederationList>>> {
@@ -107,6 +118,65 @@ pub(crate) async fn lists_of(
         found.sort();
     }
     Ok(lists)
+}
+
+/// The lists that decide whether each of `domains` is admitted, which is what [`admits`]
+/// (`super::admits`) reads: the lists it is on itself, and every block list a deployment is on
+/// whose host is its host or a parent of it, on any port ([`Domain::blocked_by`]), so blocking
+/// `evil.org` blocks `a.evil.org` and `evil.org:8443` too. An allow list admits only the
+/// deployments on it.
+pub(crate) async fn lists_of(
+    conn: &mut AsyncPgConnection,
+    domains: &[Domain],
+) -> app::Result<HashMap<Domain, Vec<FederationList>>> {
+    let mut lists = entries_of(conn, domains).await?;
+    let hosts: Vec<&str> = domains
+        .iter()
+        .flat_map(Domain::covering_hosts)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let blocks: Vec<FederationList> = FederationList::ALL
+        .iter()
+        .copied()
+        .filter(|list| list.parts().2 == ListKind::Block)
+        .collect();
+    let covering: Vec<(Domain, FederationList)> = federation_list_entry::table
+        .select((federation_list_entry::domain, federation_list_entry::list))
+        .filter(federation_list_entry::list.eq_any(&blocks))
+        .filter(split_part(federation_list_entry::domain, ":", 1).eq_any(&hosts))
+        .load(conn)
+        .await?;
+    for domain in domains {
+        for (entry, list) in &covering {
+            if domain.blocked_by(entry) {
+                lists.entry(domain.clone()).or_default().push(*list);
+            }
+        }
+    }
+    for found in lists.values_mut() {
+        found.sort();
+        found.dedup();
+    }
+    Ok(lists)
+}
+
+/// `deployments` with the lists each is on and the lists that decide it.
+async fn listed(
+    conn: &mut AsyncPgConnection,
+    deployments: Vec<FederatedDeployment>,
+) -> app::Result<Vec<Listed>> {
+    let domains: Vec<Domain> = deployments.iter().map(|d| d.domain.clone()).collect();
+    let mut lists = entries_of(conn, &domains).await?;
+    let mut deciding = lists_of(conn, &domains).await?;
+    Ok(deployments
+        .into_iter()
+        .map(|deployment| Listed {
+            lists: lists.remove(&deployment.domain).unwrap_or_default(),
+            deciding: deciding.remove(&deployment.domain).unwrap_or_default(),
+            deployment,
+        })
+        .collect())
 }
 
 /// One page of the deployments whose domain contains `search`, alphabetically: `limit` of them
@@ -127,15 +197,7 @@ pub async fn list(
         query = query.filter(federated_deployment::domain.like(pattern));
     }
     let deployments: Vec<FederatedDeployment> = query.load(conn).await?;
-    let domains: Vec<Domain> = deployments.iter().map(|d| d.domain.clone()).collect();
-    let mut lists = lists_of(conn, &domains).await?;
-    Ok(deployments
-        .into_iter()
-        .map(|deployment| Listed {
-            lists: lists.remove(&deployment.domain).unwrap_or_default(),
-            deployment,
-        })
-        .collect())
+    listed(conn, deployments).await
 }
 
 /// Every deployment known, with its lists, for the terminal.
@@ -145,15 +207,7 @@ pub async fn list_all(conn: &mut AsyncPgConnection) -> app::Result<Vec<Listed>> 
         .order(federated_deployment::domain)
         .load(conn)
         .await?;
-    let domains: Vec<Domain> = deployments.iter().map(|d| d.domain.clone()).collect();
-    let mut lists = lists_of(conn, &domains).await?;
-    Ok(deployments
-        .into_iter()
-        .map(|deployment| Listed {
-            lists: lists.remove(&deployment.domain).unwrap_or_default(),
-            deployment,
-        })
-        .collect())
+    listed(conn, deployments).await
 }
 
 pub async fn get(conn: &mut AsyncPgConnection, domain: &Domain) -> app::Result<Listed> {
@@ -162,11 +216,10 @@ pub async fn get(conn: &mut AsyncPgConnection, domain: &Domain) -> app::Result<L
         .find(domain)
         .first(conn)
         .await?;
-    let lists = lists_of(conn, std::slice::from_ref(domain))
+    Ok(listed(conn, vec![deployment])
         .await?
-        .remove(domain)
-        .unwrap_or_default();
-    Ok(Listed { deployment, lists })
+        .pop()
+        .expect("one deployment is listed as one"))
 }
 
 /// Adds a deployment to the directory, not yet contacted. A deployment already known is a
@@ -196,10 +249,10 @@ pub async fn add(
         .await
         .optional()?;
     match inserted {
-        Some(deployment) => Ok(Listed {
-            deployment,
-            lists: Vec::new(),
-        }),
+        Some(deployment) => Ok(listed(conn, vec![deployment])
+            .await?
+            .pop()
+            .expect("one deployment is listed as one")),
         None => Err(app::Error::Conflict(t!("federationAlreadyKnown"))),
     }
 }

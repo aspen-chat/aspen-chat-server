@@ -221,6 +221,8 @@ pub struct FederatedDeployment {
     pub offered_key_at: Option<DateTime<Utc>>,
     /// Every list it is on, those not in force included.
     pub lists: Vec<FederationList>,
+    /// Whether the gates admit it, as its own lists decide and the block lists of every
+    /// deployment whose host is its host or a parent of it, on any port.
     pub admission: Admission,
     /// The protocol it said it speaks when last contacted; `null` before any contact.
     pub protocol: Option<Protocol>,
@@ -235,7 +237,7 @@ impl FederatedDeployment {
     fn new(state: &GlobalServerContext, listed: federation::Listed) -> Self {
         let policy = state.settings().federation;
         let admits =
-            |subject, direction| federation::admits(&policy, subject, direction, &listed.lists);
+            |subject, direction| federation::admits(&policy, subject, direction, &listed.deciding);
         let admission = Admission {
             users_emigration: admits(Subject::Users, Direction::Emigration),
             users_immigration: admits(Subject::Users, Direction::Immigration),

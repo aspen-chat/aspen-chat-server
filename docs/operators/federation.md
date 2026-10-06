@@ -62,6 +62,11 @@ standing_interval_seconds`).
 Lists keep their entries whichever gate reads them, so switching a gate from an allow list to a
 block list never turns the allowed into the blocked.
 
+A deployment on a block list is blocked with every name under it and on every port: blocking
+`evil.org` blocks `chat.evil.org` and `evil.org:8443` too, and `federation list` says when a
+deployment is blocked that way. An allow list admits exactly the deployments on it, with the
+port each is listed with, and nothing under them.
+
 ## The directory
 
 Every deployment this one knows is in the dashboard's Federation tab, with its key's

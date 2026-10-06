@@ -86,6 +86,39 @@ impl Domain {
         &self.0
     }
 
+    /// Its host: the name without the port.
+    pub fn host(&self) -> &str {
+        self.0
+            .split_once(':')
+            .map_or(self.0.as_str(), |(host, _)| host)
+    }
+
+    /// Its host and every parent name of two labels or more, from the host up: those a block
+    /// list entry may name to block it ([`Domain::blocked_by`]).
+    pub fn covering_hosts(&self) -> Vec<&str> {
+        let host = self.host();
+        let mut hosts = vec![host];
+        let mut rest = host;
+        while let Some((_, parent)) = rest.split_once('.')
+            && parent.contains('.')
+        {
+            hosts.push(parent);
+            rest = parent;
+        }
+        hosts
+    }
+
+    /// Whether a block list entry naming `entry` blocks this deployment: it names this host or
+    /// a parent of it, on any port, so a block cannot be walked around by a subdomain or
+    /// another port. An allow list entry admits only the deployment it names.
+    pub fn blocked_by(&self, entry: &Domain) -> bool {
+        let (host, blocked) = (self.host(), entry.host());
+        host == blocked
+            || host
+                .strip_suffix(blocked)
+                .is_some_and(|sub| sub.ends_with('.'))
+    }
+
     /// Where the deployment publishes its document.
     pub fn document_url(&self) -> String {
         format!("https://{}{WELL_KNOWN_PATH}", self.0)
@@ -143,6 +176,24 @@ pub fn own_domain(config: &FederationConfig) -> Option<Domain> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_entries_cover_subdomains_and_ports() {
+        let d = |text: &str| Domain::parse(text).unwrap();
+        let evil = d("evil.org");
+        for blocked in ["evil.org", "evil.org:8443", "a.evil.org", "b.a.evil.org:9"] {
+            assert!(d(blocked).blocked_by(&evil), "{blocked}");
+        }
+        assert!(d("evil.org").blocked_by(&d("evil.org:8443")));
+        for free in ["notevil.org", "evil.org.example", "org.evil", "vil.org"] {
+            assert!(!d(free).blocked_by(&evil), "{free}");
+        }
+        assert_eq!(
+            d("b.a.evil.org:9").covering_hosts(),
+            vec!["b.a.evil.org", "a.evil.org", "evil.org"]
+        );
+        assert_eq!(d("evil.org").covering_hosts(), vec!["evil.org"]);
+    }
 
     #[test]
     fn domains_are_read_as_people_write_them() {
