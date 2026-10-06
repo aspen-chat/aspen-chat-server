@@ -320,7 +320,8 @@ interface host {
     /// The keys after `after` that begin with `prefix`, in order, at most `limit` (100 at most).
     storage-list: func(scope: scope, prefix: string, after: option<string>, limit: u32) -> result<list<tuple<string, list<u8>>>, error>;
 
-    /// Publishes a `pluginEvent` with this kind and JSON payload (`events`).
+    /// Publishes a `pluginEvent` with this kind and JSON payload (`events`). While answering a
+    /// route, only to a channel the caller may view, a community they belong to, or themself.
     publish: func(audience: audience, kind: string, payload: string) -> result<_, error>;
 
     /// Whether whoever the call serves holds `permission` (a community permission's wire name,
@@ -334,7 +335,8 @@ interface host {
 
     /// Tells `user` of something in `channel`, about `message` if given, as Aspen tells them of
     /// a message that tags them (`notify`). Answers whether they were told: not when they may
-    /// not view the channel, or their settings would not tell them.
+    /// not view the channel, or their settings would not tell them. While answering a route,
+    /// only in a channel the caller may view.
     notify: func(user: id, channel: id, text: text, message: option<id>) -> result<bool, error>;
 
     /// While answering a route, the caller's private path to the plugin's route

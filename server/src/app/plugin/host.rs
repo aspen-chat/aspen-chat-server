@@ -544,6 +544,21 @@ impl Call {
         }
     }
 
+    /// While answering a route, that the caller may view `channel`; not found otherwise, as if
+    /// it were not. Outside a route there is no caller to ask about.
+    async fn caller_views(
+        &self,
+        conn: &mut AsyncPgConnection,
+        channel_id: ChannelId,
+    ) -> Result<(), wit::Error> {
+        if let Phase::Route { caller } = self.phase {
+            channel_access(&self.server, conn, caller, channel_id)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        Ok(())
+    }
+
     /// Whether the plugin runs in `community`.
     async fn running_in(
         &self,
@@ -964,14 +979,21 @@ impl Call {
             .map_err(|_| wit::Error::Invalid("an event's payload is JSON".into()))?;
         let mut conn = self.conn().await?;
         let target = match audience {
+            // While answering a route, only where the caller may look, as its reads are.
             wit::Audience::Channel(id) => {
                 let channel_id = ChannelId(parse_id(&id)?);
                 self.running_at(conn.as_mut(), channel_id).await?;
+                self.caller_views(conn.as_mut(), channel_id).await?;
                 super::Target::Channel(channel_id)
             }
             wit::Audience::Community(id) => {
                 let community = CommunityId(parse_id(&id)?);
                 self.running_in(conn.as_mut(), community).await?;
+                if let Phase::Route { caller } = self.phase {
+                    app::permissions::require_member(conn.as_mut(), caller, community)
+                        .await
+                        .map_err(|_| wit::Error::NotFound)?;
+                }
                 super::Target::Community(community)
             }
             wit::Audience::User(id) => {
@@ -1149,6 +1171,7 @@ impl Call {
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel_id).await?;
+            self.caller_views(conn.as_mut(), channel_id).await?;
         }
         super::notice::notify(
             &self.server,

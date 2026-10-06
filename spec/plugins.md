@@ -260,7 +260,8 @@ body (at most 64 KiB), the caller, and their locale, and answers with a status, 
 and a body. While it answers a route, every read it makes through the host is made as the caller:
 a message the caller may not read is not found, and storage in a channel's or community's scope
 is readable only by those who may view the channel or belong to the community, and in a user's
-scope only by that user.
+scope only by that user. So it is with what it sends: an event published, or a notice sent, while
+answering goes only to a channel the caller may view, a community they belong to, or themself.
 
 ### Events
 
