@@ -647,7 +647,7 @@ pub async fn user_for_token(
         ))
         .filter(
             session::dsl::token
-                .eq(&token)
+                .eq(app::login::token_digest(token))
                 .and(session::dsl::expires.ge(now))
                 .and(refresh_token::dsl::expires.ge(now))
                 .and(schema::user::deleted_at.is_null())
@@ -664,11 +664,11 @@ pub async fn user_for_token(
         .await
         .optional()?;
     Ok(found.map(
-        |(user, refresh_token, verified_at, method, has_second_factor, email_unverified)| {
+        |(user, refresh_digest, verified_at, method, has_second_factor, email_unverified)| {
             let caller = app::two_factor::Caller {
                 user: user.id,
-                session_token: token.to_string(),
-                refresh_token,
+                session_digest: app::login::token_digest(token),
+                refresh_digest,
                 verified_at,
                 has_second_factor,
                 // A bot holds a session only abroad, from its home's assertion.

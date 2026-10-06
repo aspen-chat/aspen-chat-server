@@ -53,9 +53,10 @@ const RECOVERY_CODE_LENGTH: usize = 10;
 #[derive(Clone, Debug)]
 pub struct Caller {
     pub user: UserId,
-    pub session_token: String,
-    /// The refresh token the session was issued from; it stands for the sign-in.
-    pub refresh_token: String,
+    /// The digest of the session's token (`login::token_digest`).
+    pub session_digest: String,
+    /// The digest of the refresh token the session was issued from; it stands for the sign-in.
+    pub refresh_digest: String,
     /// When the sign-in last proved who its user is.
     pub verified_at: DateTime<Utc>,
     pub has_second_factor: bool,
@@ -72,6 +73,11 @@ pub struct Caller {
 }
 
 impl Caller {
+    /// The sign-in the session belongs to (`login::sign_in_id`).
+    pub fn sign_in(&self) -> String {
+        app::login::sign_in_id(&self.refresh_digest)
+    }
+
     /// Until when the session counts as recently verified.
     pub fn verified_until(&self, config: &AuthConfig) -> DateTime<Utc> {
         self.verified_at + reverify_window(config)
@@ -400,7 +406,7 @@ pub async fn confirm_totp(
         return Err(app::Error::VerificationFailed);
     };
     let mut conn = state.connection_pool.get().await?;
-    let sign_in = app::login::sign_in_id(&caller.refresh_token);
+    let sign_in = caller.sign_in();
     conn.transaction(|conn| {
         async move {
             let first = !methods(conn, user_id).await?.any_factor();
@@ -731,13 +737,7 @@ pub async fn reauthenticate(
         return Err(app::Error::VerificationFailed);
     }
     let mut conn = state.connection_pool.get().await?;
-    mark_verified(
-        &mut conn,
-        user_id,
-        &app::login::sign_in_id(&caller.refresh_token),
-        &state.config.auth,
-    )
-    .await
+    mark_verified(&mut conn, user_id, &caller.sign_in(), &state.config.auth).await
 }
 
 /// A passkey as its owner sees it.

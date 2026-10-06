@@ -152,7 +152,7 @@ fn giver(caller: &Caller) -> app::Result<Giver> {
     }
     Ok(Giver {
         user: caller.user,
-        sign_in: login::sign_in_id(&caller.refresh_token),
+        sign_in: caller.sign_in(),
         method: caller.method,
         verified_at: caller.verified_at,
     })
@@ -287,12 +287,7 @@ pub async fn scan(
 /// Refuses anyone but the link's giver, while they hold the same sign-in that gave it.
 fn ensure_giver(link: &Link, caller: &Caller) -> app::Result<()> {
     match &link.giver {
-        Some(giver)
-            if giver.user == caller.user
-                && giver.sign_in == login::sign_in_id(&caller.refresh_token) =>
-        {
-            Ok(())
-        }
+        Some(giver) if giver.user == caller.user && giver.sign_in == caller.sign_in() => Ok(()),
         // Someone else's link reads as gone, as an unknown one does.
         _ => Err(app::Error::DeviceLinkExpired),
     }

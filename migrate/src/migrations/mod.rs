@@ -91,3 +91,4 @@ pub mod m20261004_214820_attachment_descriptions;
 pub mod m20261004_224404_email;
 pub mod m20261005_140058_attachment_previews;
 pub mod m20261005_165400_reply_echo;
+pub mod m20261006_150944_token_digests;

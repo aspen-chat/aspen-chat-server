@@ -347,7 +347,7 @@ async fn identify(
     app::user_status::mark_user_online(state, &user);
     Ok(Identified {
         user,
-        sign_in: app::login::sign_in_id(&caller.refresh_token),
+        sign_in: caller.sign_in(),
         caller,
         resume_after,
     })

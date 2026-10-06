@@ -68,8 +68,8 @@ pub async fn user_for_token(
     Ok(found.map(|bot| {
         let caller = app::two_factor::Caller {
             user: bot.id,
-            session_token: token.to_string(),
-            refresh_token: String::new(),
+            session_digest: String::new(),
+            refresh_digest: String::new(),
             verified_at: chrono::DateTime::<Utc>::MIN_UTC,
             has_second_factor: false,
             bot: true,
