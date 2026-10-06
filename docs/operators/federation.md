@@ -128,7 +128,9 @@ good standing there.
 About every `standing_interval_seconds` this deployment asks each visitor's home whether they
 are still in good standing. A visitor whose account was deleted, who left, or whose home closed
 its gate to you is signed out; so are the visitors of a home unreached for
-`standing_grace_seconds`.
+`standing_grace_seconds`. Homes are asked sixteen at a time, each given twenty seconds, and one
+that keeps failing is asked less often, up to once an interval, so slow homes hold up no one
+else.
 
 ## Protocol versions
 
