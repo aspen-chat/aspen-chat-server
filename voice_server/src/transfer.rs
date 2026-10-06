@@ -6,6 +6,10 @@
 //! The relay is for transfers between participants of calls here and nothing else:
 //! - It authenticates a transfer's credentials only while that transfer is live, and deletes
 //!   its allocations the moment it ends, so a cancelled transfer stops at the relay too.
+//! - One side of one transfer holds at most `ADDRESSES_PER_CREDENTIAL` allocations: its
+//!   credentials are accepted from that many client addresses and no more, and an allocation is
+//!   bound to the address that asked for it, so no one can take the relay's ports with a
+//!   credential handed out for one transfer.
 //! - It forwards only between allocations of its own. Every transfer through it is relayed at
 //!   both ends (a relay candidate pairs only with the other side's relay candidate), so it is
 //!   never an open relay to the rest of the internet. Traffic between two allocations is looped
@@ -29,7 +33,7 @@ use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
 use rand::RngExt as _;
 use sha2::Sha256;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,6 +51,11 @@ use webrtc_util::Conn;
 
 /// The realm TURN credentials are for.
 const REALM: &str = "aspen";
+/// The client addresses one side of one transfer may use the relay from, and so the most
+/// allocations it holds (the relay listens on one socket, so each allocation is one client
+/// address). A browser allocates from each network interface it gathers on; two leave room for
+/// a second interface or one change of address on the way.
+const ADDRESSES_PER_CREDENTIAL: usize = 2;
 /// How much the relay holds waiting to be sent, in seconds of its rate.
 const QUEUE_SECONDS: f64 = 0.2;
 /// The least it holds, so that a slow rate still queues a window's worth.
@@ -67,9 +76,13 @@ pub struct Relay {
     host: String,
     port: u16,
     secret: [u8; 32],
-    live: Arc<Mutex<HashSet<String>>>,
+    live: Arc<Mutex<LiveCredentials>>,
     server: Server,
 }
+
+/// The credentials of live transfers, by username, with the client addresses each has been
+/// accepted from.
+type LiveCredentials = HashMap<String, HashSet<SocketAddr>>;
 
 impl Relay {
     /// Starts STUN and TURN on `config.port` of `bind`, announced as `announced` (the media
@@ -89,7 +102,7 @@ impl Relay {
             .find(IpAddr::is_ipv4)
             .ok_or_else(|| anyhow::anyhow!("{announced} has no IPv4 address to relay on"))?;
         let listener = UdpSocket::bind(SocketAddr::new(bind, config.port)).await?;
-        let live: Arc<Mutex<HashSet<String>>> = Arc::default();
+        let live: Arc<Mutex<LiveCredentials>> = Arc::default();
         let secret = rand::rng().random::<[u8; 32]>();
         let relaying = config.relay_mbps > 0;
         let pacer = Pacer::start(config.relay_mbps);
@@ -161,7 +174,8 @@ impl Relay {
             self.live
                 .lock()
                 .expect("live transfers")
-                .insert(username.clone());
+                .entry(username.clone())
+                .or_default();
             servers.push(IceServer {
                 urls: vec![format!("turn:{}:{}?transport=udp", self.host, self.port)],
                 username: Some(username),
@@ -175,7 +189,12 @@ impl Relay {
     /// stop working and its allocations close.
     pub async fn close(&self, offer: Uuid, receiver: Uuid, role: TransferRole) {
         let username = username(offer, receiver, role);
-        let was_live = self.live.lock().expect("live transfers").remove(&username);
+        let was_live = self
+            .live
+            .lock()
+            .expect("live transfers")
+            .remove(&username)
+            .is_some();
         if was_live && let Err(e) = self.server.delete_allocations_by_username(username).await {
             warn!(
                 error = e.to_string(),
@@ -206,11 +225,12 @@ fn password(secret: &[u8], username: &str) -> String {
     STANDARD.encode(mac.finalize().into_bytes())
 }
 
-/// Accepts the credentials of live transfers, and only while the server relays.
+/// Accepts the credentials of live transfers, only while the server relays, and from at most
+/// `ADDRESSES_PER_CREDENTIAL` client addresses each.
 struct Credentials {
     relaying: bool,
     secret: [u8; 32],
-    live: Arc<Mutex<HashSet<String>>>,
+    live: Arc<Mutex<LiveCredentials>>,
 }
 
 impl AuthHandler for Credentials {
@@ -218,13 +238,26 @@ impl AuthHandler for Credentials {
         &self,
         username: &str,
         realm: &str,
-        _src_addr: SocketAddr,
+        src_addr: SocketAddr,
     ) -> Result<Vec<u8>, turn::Error> {
         if !self.relaying {
             return Err(turn::Error::Other("this server does not relay".to_string()));
         }
-        if !self.live.lock().expect("live transfers").contains(username) {
-            return Err(turn::Error::Other("no such transfer".to_string()));
+        {
+            let mut live = self.live.lock().expect("live transfers");
+            let Some(addresses) = live.get_mut(username) else {
+                return Err(turn::Error::Other("no such transfer".to_string()));
+            };
+            // Every request of an allocation comes from the address that made it, so counting
+            // addresses counts allocations, and an allocation already made keeps working.
+            if !addresses.contains(&src_addr) {
+                if addresses.len() >= ADDRESSES_PER_CREDENTIAL {
+                    return Err(turn::Error::Other(
+                        "this transfer already relays from as many addresses as it may".to_string(),
+                    ));
+                }
+                addresses.insert(src_addr);
+            }
         }
         Ok(generate_auth_key(
             username,
@@ -492,11 +525,21 @@ mod tests {
         };
         let from = SocketAddr::from(([192, 0, 2, 1], 5000));
         assert!(credentials.auth_handle(&sender_side, REALM, from).is_err());
-        credentials.live.lock().unwrap().insert(sender_side.clone());
+        credentials
+            .live
+            .lock()
+            .unwrap()
+            .insert(sender_side.clone(), HashSet::new());
         assert_eq!(
             credentials.auth_handle(&sender_side, REALM, from).unwrap(),
             generate_auth_key(&sender_side, REALM, &password(&secret, &sender_side))
         );
+        // A second address is taken, a third refused, and the first still works.
+        let second = SocketAddr::from(([192, 0, 2, 1], 5001));
+        let third = SocketAddr::from(([192, 0, 2, 2], 5000));
+        assert!(credentials.auth_handle(&sender_side, REALM, second).is_ok());
+        assert!(credentials.auth_handle(&sender_side, REALM, third).is_err());
+        assert!(credentials.auth_handle(&sender_side, REALM, from).is_ok());
         let off = Credentials {
             relaying: false,
             ..credentials
