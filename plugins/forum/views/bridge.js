@@ -1,6 +1,8 @@
-// The view's side of Aspen's plugin bridge (`spec/plugins.md`, Views): it hears `hello` and
-// `theme` from the app, asks the app to call the plugin's routes and to name people, and hears
-// the plugin's events. The page has an opaque origin and no session; the app is its only way out.
+// The view's side of Aspen's plugin bridge (`spec/plugins.md`, Views): it hears `hello` from the
+// app, which hands it a port, and over that port alone it hears `theme`, asks the app to call the
+// plugin's routes and to name people, and hears the plugin's events. The page has an opaque
+// origin and no session; the app is its only way out, and the port ties that way to this page:
+// a page the frame goes to after it never holds it.
 "use strict";
 
 const aspen = (() => {
@@ -8,9 +10,14 @@ const aspen = (() => {
   const listeners = { hello: [], theme: [], event: [] };
   let next = 0;
   let context = null;
+  /** The port `hello` handed over, and what was asked before it came. */
+  let port = null;
+  const waiting = [];
 
   function send(message) {
-    window.parent.postMessage({ aspen: 1, ...message }, "*");
+    const framed = { aspen: 1, ...message };
+    if (port === null) waiting.push(framed);
+    else port.postMessage(framed);
   }
 
   /** Lays the app's theme over the page as CSS custom properties, `--aspen-<token>`. */
@@ -24,18 +31,10 @@ const aspen = (() => {
     root.style.colorScheme = theme.scheme;
   }
 
-  window.addEventListener("message", (event) => {
-    if (event.source !== window.parent) return;
+  function onPortMessage(event) {
     const message = event.data;
     if (message === null || typeof message !== "object" || message.aspen !== 1) return;
     switch (message.type) {
-      case "hello":
-        context = message.context;
-        document.documentElement.lang = context.locale;
-        document.documentElement.dir = context.dir;
-        applyTheme(context.theme);
-        for (const listener of listeners.hello) listener(context);
-        break;
       case "theme":
         if (context !== null) context.theme = message.theme;
         applyTheme(message.theme);
@@ -52,6 +51,22 @@ const aspen = (() => {
         for (const listener of listeners.event) listener(message);
         break;
     }
+  }
+
+  // The app says `hello` once, as the page loads, with the port everything else goes over.
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent || port !== null) return;
+    const message = event.data;
+    if (message === null || typeof message !== "object" || message.aspen !== 1) return;
+    if (message.type !== "hello" || event.ports.length !== 1) return;
+    port = event.ports[0];
+    port.onmessage = onPortMessage;
+    context = message.context;
+    document.documentElement.lang = context.locale;
+    document.documentElement.dir = context.dir;
+    applyTheme(context.theme);
+    for (const framed of waiting.splice(0)) port.postMessage(framed);
+    for (const listener of listeners.hello) listener(context);
   });
 
   function ask(message) {
@@ -110,5 +125,3 @@ const aspen = (() => {
     },
   };
 })();
-
-window.parent.postMessage({ aspen: 1, type: "ready" }, "*");

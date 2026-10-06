@@ -278,15 +278,19 @@ A plugin's user interface: a page among its `assets`, served by the deployment a
 `/api/v1/plugins/{id}/assets/{path}`, with `Content-Security-Policy: sandbox allow-scripts
 allow-forms allow-popups` (and no `allow-same-origin`), which gives it an origin of its own, opaque
 and shared with nothing, however it is opened; it may load only its own assets and inline
-scripts and styles, and may connect nowhere. A client shows it in a frame sandboxed the same way,
-and answers only the page it loaded there: once the frame loads anything else (the view followed
-a link or was redirected), the client stops answering and sending until it loads the view again.
+scripts and styles, and may connect nowhere. A client shows it in a frame sandboxed the same way.
 The frame never holds the person's session token; it talks to the app only through a bridge of
-`postMessage` messages, each an object with `"aspen": 1`:
+messages, each an object with `"aspen": 1`, over a `MessagePort` the app hands the page with
+`hello`. The port belongs to the page it was handed to, so a page the frame goes to after (the
+view followed a link, or was redirected) cannot use it, and the app answers nothing posted to its
+window: once the frame loads anything else, the client closes the port and says nothing more until
+it loads the view again, in a new frame, with a new port.
 
-- The app says `hello` when the frame loads and again whenever the frame says `ready`: its
-  `context` is the plugin, the view, the channel (and its name) and community it shows, the
-  person (`id`, `name`, `displayName`), their `locale` and text direction (`dir`), the plugin's
+- The app says `hello` once, posted to the frame's window when its page has loaded, with the
+  port as the message's one transferred port (`event.ports[0]`); everything after goes over the
+  port, both ways, so a page's bridge listens for `hello` from the start (a script in the page
+  does). Its `context` is the plugin, the view, the channel (and its name) and community it
+  shows, the person (`id`, `name`, `displayName`), their `locale` and text direction (`dir`), the plugin's
   `messages` in that language, `apiBase` (where the deployment's API is, for the capability URLs
   it hands out), and the app's `theme`: its colours by token name
   (`surface`, `ink`, `accent`, and the rest), its two font stacks, and whether it is light or

@@ -64,7 +64,8 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   (`apiBase` and the kind's `view`) in an `iframe` sandboxed as the server serves it
   (`allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox`, no same origin), so
   it holds no session and reads nothing of the app's. It speaks `spec/plugins.md`'s bridge over
-  `postMessage`, hearing only its own frame: `hello` on load and on `ready` (the plugin, view,
+  a `MessagePort`: `hello`, posted to the frame once its page has loaded, hands the page one end
+  of a `MessageChannel` (the plugin, view,
   channel and its name, community, the person, locale and direction, the plugin's catalogue,
   `apiBase`, and the theme), `theme` when the palette, mode, fonts, or the system's scheme
   change (`readTheme` resolves each colour token through a probe element, so `light-dark()`
@@ -76,12 +77,12 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   `403` flags no enrollment, and its `429` is not waited out), `users` from the store or
   read (`AspenSync.loadUsers`, at most 100), the plugin's `pluginEvent`s for the channel, its
   community, or the person (`AspenSync.onPluginEvent`), and `open` for a channel the store
-  holds. The bridge speaks only to the page the app loaded: a frame's window outlives its
-  page, so the first load of each frame the app makes arms the bridge, and any later load (the
-  page followed a link or was redirected) silences it in both directions and puts "Load the
-  view again" in the frame's place, which makes a new frame. A page the frame went to can still
-  be answered for what it sends before its own load event, which only a bridge whose `hello`
-  hands the page something a later page lacks (a `MessagePort`, say) would close.
+  holds. The bridge speaks only to the page the app loaded: the port belongs to the page
+  it was handed to, so a page the frame goes to after (a link, a redirect) cannot use it, and
+  nothing posted to the frame's window is answered; an answer goes back over the port it was
+  asked on, and only while that port is still the frame's. A later load of the same frame
+  closes the port and puts "Load the view again" in the frame's place, which makes a new frame
+  with a new port.
 - **Cards.** `PluginCard` (`src/features/plugins/PluginCard.tsx`), drawn by `MessageBody`, shows
   a message's `card` from its plugin's catalogue: a title, fields (a time in the reader's zone
   and language, a count, a person by `PersonName`, a link), and buttons styled as the plugin
@@ -100,7 +101,7 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
 `e2e/plugins.spec.ts` checks an annotation arriving and its popover, a changed message's mark,
 the DM notice, turning a plugin on with its account's permissions, a channel of a plugin's kind
 showing a stand-in page that talks over the bridge (its hello, a route, a path beyond the routes
-refused, a person named, and only its own events) and passes axe, the bridge falling silent
-when the view goes to another page until it is loaded again, a kind no plugin declares, a
-card's fields and button, and a notice's system notification; the world answers `GET /plugins`
+refused, a person named, and only its own events) and passes axe, nothing asked on the frame's
+window answered, the bridge falling silent when the view goes to another page (which asks at
+once, before its own load) until it is loaded again, a kind no plugin declares, a card's fields and button, and a notice's system notification; the world answers `GET /plugins`
 and people's annotations with nothing.

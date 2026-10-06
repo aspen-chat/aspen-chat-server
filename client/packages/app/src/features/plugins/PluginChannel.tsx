@@ -169,12 +169,12 @@ const isString = (value: unknown): value is string => typeof value === "string";
  * (beneath them and nowhere else), names people, passes on the plugin's events for the channel,
  * its community, and the person, and opens what the person may open.
  *
- * The bridge speaks only to the plugin's own page, loaded by the app. A frame's window stays
- * the same when its page navigates, so the app counts the frame's loads: the first load of the
- * frame the app made arms the bridge, and any later one means the page went elsewhere (a link,
- * a redirect), where whatever was loaded could otherwise act as the person. The bridge then
- * falls silent, in both directions, and the view offers to load the plugin's page again, in a
- * new frame, which arms it afresh.
+ * The bridge speaks only to the plugin's own page, loaded by the app. When the frame the app
+ * made first loads, the app says `hello` to it, handing over one end of a `MessageChannel`, and
+ * speaks over that port alone from then on, in both directions; a page the frame goes to after
+ * (a link, a redirect) never holds it, since the port belongs to the page it was handed to, and
+ * nothing heard on the frame's window is answered. A later load of the same frame closes the
+ * port and offers to load the plugin's page again, in a new frame, which gets a new port.
  */
 function PluginView({
   plugin,
@@ -199,13 +199,15 @@ function PluginView({
   // Each frame the app makes, by its key: a new one for another page or a reload.
   const [generation, setGeneration] = useState(0);
   const frameKey = `${String(generation)} ${src}`;
-  // The frame whose first load has been seen, and whether the bridge answers it.
+  // The frame whose first load has been seen, and the app's end of the port handed to it.
   const loaded = useRef<string | null>(null);
-  const armed = useRef(false);
+  const port = useRef<MessagePort | null>(null);
   const [left, setLeft] = useState(false);
-  useLayoutEffect(() => {
-    armed.current = false;
-  }, [frameKey]);
+  const closePort = useCallback(() => {
+    port.current?.close();
+    port.current = null;
+  }, []);
+  useLayoutEffect(() => closePort, [frameKey, closePort]);
 
   // What `hello` says, kept current for the listener, which outlives renders.
   const context = useMemo(
@@ -229,30 +231,26 @@ function PluginView({
     latest.current = context;
   }, [context]);
 
+  /** Says `message` over the current port, if there is one. */
   const post = useCallback((message: object) => {
-    if (armed.current) {
-      frame.current?.contentWindow?.postMessage({ aspen: 1, ...message }, "*");
-    }
+    port.current?.postMessage({ aspen: 1, ...message });
   }, []);
 
+  // What the page asks over its port, kept current for the port's listener. An answer goes back
+  // over the port it was asked on, and only while that port is still the frame's.
+  const handle = useRef<(data: unknown, from: MessagePort) => void>(() => undefined);
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      if (
-        !armed.current ||
-        event.source === null ||
-        event.source !== frame.current?.contentWindow
-      ) {
-        return;
-      }
-      const data: unknown = event.data;
+    handle.current = (data, from) => {
       if (data === null || typeof data !== "object" || (data as { aspen?: unknown }).aspen !== 1) {
         return;
       }
+      const reply = (answer: object) => {
+        if (port.current === from) {
+          from.postMessage({ aspen: 1, ...answer });
+        }
+      };
       const message = data as Record<string, unknown>;
       switch (message.type) {
-        case "ready":
-          post({ type: "hello", context: latest.current });
-          break;
         case "request": {
           const { id, method, path, query, body } = message;
           if (!isString(method) || !isString(path)) {
@@ -267,11 +265,11 @@ function PluginView({
             })
             .then(
               (answer) => {
-                post({ type: "response", id, ...answer });
+                reply({ type: "response", id, ...answer });
               },
               () => {
                 // The deployment could not be reached.
-                post({ type: "response", id, status: 0, contentType: null, body: "" });
+                reply({ type: "response", id, status: 0, contentType: null, body: "" });
               },
             );
           break;
@@ -282,7 +280,7 @@ function PluginView({
             return;
           }
           void sync.loadUsers(ids.slice(0, MAX_USERS_ASKED)).then((users) => {
-            post({
+            reply({
               type: "users",
               id,
               users: users.flatMap((user) =>
@@ -311,11 +309,7 @@ function PluginView({
         }
       }
     };
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("message", onMessage);
-    };
-  }, [sync, plugin.id, domain, navigate, post]);
+  }, [sync, plugin.id, domain, navigate]);
 
   // The plugin's events for what this view shows, and for the person.
   useEffect(
@@ -369,14 +363,23 @@ function PluginView({
       sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
       onLoad={() => {
-        if (loaded.current !== frameKey) {
-          loaded.current = frameKey;
-          armed.current = true;
-          post({ type: "hello", context: latest.current });
-        } else {
-          armed.current = false;
+        closePort();
+        if (loaded.current === frameKey) {
           setLeft(true);
+          return;
         }
+        loaded.current = frameKey;
+        const pipe = new MessageChannel();
+        const ours = pipe.port1;
+        ours.onmessage = (event) => {
+          handle.current(event.data, ours);
+        };
+        port.current = ours;
+        frame.current?.contentWindow?.postMessage(
+          { aspen: 1, type: "hello", context: latest.current },
+          "*",
+          [pipe.port2],
+        );
       }}
       className="min-h-0 w-full flex-1 border-0 bg-surface"
     />

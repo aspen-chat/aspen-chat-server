@@ -200,29 +200,36 @@ const PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Board</title></head>
 <body>
 <p id="hello"></p><p id="answer"></p><p id="escape"></p><p id="people"></p><p id="events"></p>
+<p id="window"></p>
 <script>
 const out = (id, text) => { document.getElementById(id).textContent = text; };
 let next = 0;
+let port = null;
 const pending = new Map();
 const ask = (message) => new Promise((resolve) => {
   next += 1;
   pending.set(next, resolve);
-  parent.postMessage({ aspen: 1, ...message, id: next }, "*");
+  port.postMessage({ aspen: 1, ...message, id: next });
 });
-let greeted = false;
 addEventListener("message", async (event) => {
   const message = event.data;
   if (!message || message.aspen !== 1) return;
-  if (message.type === "response" || message.type === "users") {
-    pending.get(message.id)?.(message);
-  } else if (message.type === "goTo") {
+  if (message.type === "goTo") {
     location.href = "https://elsewhere.test/page";
-  } else if (message.type === "event") {
-    out("events", message.kind + " " + JSON.stringify(message.payload));
-  } else if (message.type === "hello" && !greeted) {
-    greeted = true;
+  } else if (message.type === "hello" && port === null && event.ports.length === 1) {
+    port = event.ports[0];
+    port.onmessage = (portEvent) => {
+      const reply = portEvent.data;
+      if (reply.type === "response" || reply.type === "users") {
+        pending.get(reply.id)?.(reply);
+      } else if (reply.type === "event") {
+        out("events", reply.kind + " " + JSON.stringify(reply.payload));
+      }
+    };
     const context = message.context;
     out("hello", context.channelName + " for " + context.user.name + ", " + context.dir);
+    // The frame's window is not the bridge: a request there goes unanswered.
+    parent.postMessage({ aspen: 1, type: "request", id: 99, method: "GET", path: "window" }, "*");
     const answer = await ask({ type: "request", method: "GET", path: "boards/" + context.channel + "/posts" });
     out("answer", answer.status + " " + answer.body);
     const escape = await ask({ type: "request", method: "DELETE", path: "../../users/@me" });
@@ -231,7 +238,6 @@ addEventListener("message", async (event) => {
     out("people", people.users.map((user) => user.displayName).join(", "));
   }
 });
-parent.postMessage({ aspen: 1, type: "ready" }, "*");
 </script></body></html>`;
 
 /** The policy the deployment serves a view's files with. */
@@ -314,6 +320,8 @@ test("a channel of a plugin's kind shows its page, which reaches the app only by
   await expect(view.locator("#people")).toHaveText("Kate");
   expect(asked).toContain(`GET /api/v1/plugins/${BOARDS}/routes/boards/${BOARD}/posts`);
   expect(asked.every((call) => call.includes(`/plugins/${BOARDS}/routes/`))).toBe(true);
+  // Asked on the frame's window rather than the port, nothing is answered.
+  expect(asked).not.toContain(`GET /api/v1/plugins/${BOARDS}/routes/window`);
 
   // The plugin's events for the channel reach the page; another channel's and another
   // plugin's do not.
@@ -345,17 +353,20 @@ test("a channel of a plugin's kind shows its page, which reaches the app only by
   expect(audit.violations.map((v) => v.id)).toEqual([]);
 });
 
-/** A page elsewhere that a view's link leads to, which asks the bridge once it has loaded. */
+/**
+ * A page elsewhere that a view's link leads to, which asks the bridge on the frame's window at
+ * once, before its own load, and again after it.
+ */
 const ELSEWHERE = "https://elsewhere.test/page";
 const ELSEWHERE_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Elsewhere</title></head>
 <body><p id="here">elsewhere</p>
 <script>
-addEventListener("load", () => {
-  setTimeout(() => {
-    parent.postMessage({ aspen: 1, type: "request", id: 1, method: "DELETE", path: "boards/all" }, "*");
-  }, 100);
-});
+const attempt = () =>
+  parent.postMessage({ aspen: 1, type: "request", id: 1, method: "DELETE", path: "boards/all" }, "*");
+parent.postMessage({ aspen: 1, type: "ready" }, "*");
+attempt();
+addEventListener("load", () => setTimeout(attempt, 100));
 </script></body></html>`;
 
 test("a view that goes to another page loses the bridge until it is loaded again", async ({
