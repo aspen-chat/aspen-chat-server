@@ -53,12 +53,9 @@ fn describe(record: &Suspension, max: Duration) -> String {
 }
 
 pub async fn limits(config: &AspenConfig, command: LimitsCommand) -> Result<()> {
-    let client = async_nats::connect_with_options(
-        &config.nats_url,
-        async_nats::ConnectOptions::new().token(config.nats_auth_token.clone()),
-    )
-    .await
-    .context("could not connect to NATS")?;
+    let client = async_nats::connect_with_options(&config.nats_url, config.nats_options())
+        .await
+        .context("could not connect to NATS")?;
     let store = suspension::bucket(client).await.map_err(|e| anyhow!(e))?;
     let max = Duration::from_secs(config.rate_limits.max_suspension_seconds);
     match command {

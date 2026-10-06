@@ -2,6 +2,7 @@
 //! made, each on its subject (`VoiceReport::subject`), and commands for this server come in on
 //! its own subject.
 
+use crate::config::{NatsAuth, NatsUser};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,11 +26,23 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    pub async fn connect(url: &str, token: &str, server: Uuid) -> anyhow::Result<Self> {
+    /// What the subjects of this server's replies start with, rather than NATS's shared
+    /// `_INBOX`, so a NATS user for the server may be allowed its own replies and no one else's.
+    pub fn inbox_prefix(server: Uuid) -> String {
+        format!("_INBOX_voice.{server}")
+    }
+
+    pub async fn connect(url: &str, auth: NatsAuth, server: Uuid) -> anyhow::Result<Self> {
         let reconnected = Arc::new(Notify::new());
         let connected_before = Arc::new(AtomicBool::new(false));
-        let options = async_nats::ConnectOptions::new()
-            .token(token.to_string())
+        let options = match auth {
+            NatsAuth::User(NatsUser { user, password }) => {
+                async_nats::ConnectOptions::with_user_and_password(user, password)
+            }
+            NatsAuth::Token(token) => async_nats::ConnectOptions::with_token(token),
+        };
+        let options = options
+            .custom_inbox_prefix(Self::inbox_prefix(server))
             .event_callback({
                 let reconnected = Arc::clone(&reconnected);
                 move |event| {

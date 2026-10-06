@@ -16,7 +16,13 @@ pub struct VoiceServerConfig {
     /// Shared with the API server; verifies join tokens.
     pub token_secret: String,
     pub nats_url: String,
-    pub nats_auth_token: String,
+    /// How this server signs in to NATS: a user of its own (`[nats]`), allowed only this
+    /// server's subjects, or the deployment's token, which lets it do anything the API servers
+    /// can. Exactly one is given.
+    #[serde(default)]
+    pub nats: Option<NatsUser>,
+    #[serde(default)]
+    pub nats_auth_token: Option<String>,
     /// Where the HTTP server, health check, and signalling socket listen.
     #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
@@ -36,6 +42,37 @@ pub struct VoiceServerConfig {
     /// The limits in force: the built-in ones (`limits.toml`) with the overrides laid over them.
     #[serde(skip)]
     pub rate_limits: LimitSettings,
+}
+
+/// A NATS user for this voice server alone. `docs/operators/installing.md` gives the
+/// permissions it needs: publishing this server's reports, reading its commands and the rate
+/// limit suspension, and replies to its own inbox (`Reporter::inbox_prefix`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct NatsUser {
+    pub user: String,
+    pub password: String,
+}
+
+/// How a voice server signs in to NATS.
+pub enum NatsAuth {
+    User(NatsUser),
+    Token(String),
+}
+
+impl VoiceServerConfig {
+    /// The one way of signing in to NATS the settings give.
+    pub fn nats_auth(&self) -> anyhow::Result<NatsAuth> {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(user), None) => Ok(NatsAuth::User(user.clone())),
+            (None, Some(token)) => Ok(NatsAuth::Token(token.clone())),
+            (None, None) => anyhow::bail!(
+                "give [nats] user and password (a NATS user for voice servers), or nats_auth_token"
+            ),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("give either [nats] user and password or nats_auth_token, not both")
+            }
+        }
+    }
 }
 
 /// Prometheus metrics (`aspen_metrics::voice`), served on a listener of their own.

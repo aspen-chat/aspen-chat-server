@@ -28,6 +28,7 @@ use tokio::sync::Semaphore;
 use tracing::{error, warn};
 use voice_protocol::control::{
     REPORT_PARTITIONS, REPORT_STREAM, REPORT_SUBJECT_ROOT, SPEAKING_SUBJECT_ROOT, VoiceReport,
+    subject_server,
 };
 
 /// How long a report waits in the stream for an API server before it is let go. Long enough
@@ -210,7 +211,23 @@ async fn handle(state: &GlobalServerContext, message: &jetstream::Message) {
         }
         Ok(report) => {
             let kind: &'static str = (&report).into();
-            match apply_report(state, report, published).await {
+            // Where it came from is the subject's server, which a voice server's NATS user is
+            // limited to, and the report must be on the subject that server would send it on.
+            let from = subject_server(&message.subject)
+                .filter(|server| report.subject(*server) == message.subject.as_str());
+            let applied = match from {
+                Some(from) => {
+                    apply_report(state, report, VoiceServerId::from(from), published).await
+                }
+                None => {
+                    warn!(
+                        subject = message.subject.as_str(),
+                        "a voice report on a subject it does not belong on was dropped"
+                    );
+                    Ok(())
+                }
+            };
+            match applied {
                 Ok(()) => {
                     metrics::counter!(aspen_metrics::api::VOICE_REPORTS_APPLIED, "report" => kind)
                         .increment(1);

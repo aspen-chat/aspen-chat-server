@@ -309,11 +309,20 @@ async fn recheck_seat(
 pub(super) async fn apply_report(
     state: &GlobalServerContext,
     report: VoiceReport,
+    from: VoiceServerId,
     published: DateTime<Utc>,
 ) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
+    if !reported_by(conn.as_mut(), &report, from).await? {
+        warn!(
+            server = %from.0,
+            report = <&'static str>::from(&report),
+            "a voice report about what is not that server's was dropped"
+        );
+        return Ok(());
+    }
     // A speaking change is only passed on: it writes nothing, so it needs no transaction, and
-    // it names its channel, so it needs no lookup either.
+    // the lookup of its session (`reported_by`) is all it reads.
     if let VoiceReport::Speaking {
         channel,
         user,
@@ -553,6 +562,58 @@ pub(super) async fn apply_report(
         }
     }
     Ok(())
+}
+
+/// Whether `report`, which came from voice server `from`, is about what that server holds: a
+/// report naming a server must name `from`; one about a recorded session must be about one on
+/// `from`, in the channel it names, a speaking change needing the session recorded; and one
+/// about a file must be about a channel whose call, if one is recorded, is on `from`, an offer
+/// needing one there. So a voice server, limited by its NATS user to its own subjects, cannot
+/// report on another's calls or channels.
+async fn reported_by(
+    conn: &mut AsyncPgConnection,
+    report: &VoiceReport,
+    from: VoiceServerId,
+) -> app::Result<bool> {
+    let (session, channel) = match report {
+        VoiceReport::Load { server, .. }
+        | VoiceReport::SessionStarted { server, .. }
+        | VoiceReport::SessionSnapshot { server, .. }
+        | VoiceReport::SessionsHeld { server, .. } => {
+            return Ok(VoiceServerId::from(*server) == from);
+        }
+        VoiceReport::ParticipantJoined {
+            session, channel, ..
+        }
+        | VoiceReport::ParticipantLeft {
+            session, channel, ..
+        }
+        | VoiceReport::ParticipantState {
+            session, channel, ..
+        }
+        | VoiceReport::Speaking {
+            session, channel, ..
+        }
+        | VoiceReport::SessionEnded { session, channel } => (Some(*session), *channel),
+        VoiceReport::FileOffered { channel, .. }
+        | VoiceReport::TransferStarted { channel, .. }
+        | VoiceReport::TransferEnded { channel, .. } => (None, *channel),
+    };
+    let channel = ChannelId::from(channel);
+    match session {
+        // A session not recorded (ended, or never recorded) is ignored by the report's own
+        // handling, except a speaking change, which is passed on without a lookup of its own.
+        Some(session) => Ok(
+            match find_session(conn, VoiceSessionId::from(session)).await? {
+                Some(recorded) => recorded.voice_server == from && recorded.channel == channel,
+                None => !matches!(report, VoiceReport::Speaking { .. }),
+            },
+        ),
+        None => Ok(match session_on_channel(conn, channel).await? {
+            Some(recorded) => recorded.voice_server == from,
+            None => !matches!(report, VoiceReport::FileOffered { .. }),
+        }),
+    }
 }
 
 /// Whether a session a voice server reports replaces the one recorded for its channel, on

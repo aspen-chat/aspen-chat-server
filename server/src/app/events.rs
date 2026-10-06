@@ -281,11 +281,8 @@ pub struct Publisher {
 impl Publisher {
     /// Connects to the event stream `config` names.
     pub async fn connect(config: &crate::aspen_config::AspenConfig) -> app::Result<Self> {
-        let client = async_nats::connect_with_options(
-            &config.nats_url,
-            async_nats::ConnectOptions::new().token(config.nats_auth_token.clone()),
-        )
-        .await?;
+        let client =
+            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
         Ok(Publisher {
             nats: async_nats::jetstream::new(client),
             channel_homes: Mutex::default(),

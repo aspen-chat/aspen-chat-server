@@ -49,6 +49,13 @@ pub fn speaking_subject(partition: u8, server: Uuid) -> String {
     format!("{SPEAKING_SUBJECT_ROOT}.{partition}.{server}")
 }
 
+/// The voice server a report's subject names, its last token. A voice server's NATS user may
+/// publish only on subjects naming it, so the API server takes this, not anything the report
+/// says, as where the report came from.
+pub fn subject_server(subject: &str) -> Option<Uuid> {
+    subject.rsplit('.').next()?.parse().ok()
+}
+
 /// The subject one voice server listens on for commands.
 pub fn command_subject(server: Uuid) -> String {
     format!("aspen.voice.command.{server}")
@@ -309,6 +316,14 @@ mod tests {
             load.subject(server),
             report_subject(partition(server), server)
         );
+    }
+
+    #[test]
+    fn a_subject_names_its_server_last() {
+        let server = Uuid::now_v7();
+        assert_eq!(subject_server(&report_subject(3, server)), Some(server));
+        assert_eq!(subject_server(&speaking_subject(63, server)), Some(server));
+        assert_eq!(subject_server("aspen.voice.report.3.nonsense"), None);
     }
 
     #[test]

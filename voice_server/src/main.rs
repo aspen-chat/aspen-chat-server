@@ -113,10 +113,15 @@ async fn main() -> anyhow::Result<()> {
     }
     info!(workers = workers.len(), "mediasoup workers started");
 
-    let reporter =
-        reporter::Reporter::connect(&config.nats_url, &config.nats_auth_token, config.id)
-            .await
-            .context("failed to connect to NATS")?;
+    if matches!(config.nats_auth()?, config::NatsAuth::Token(_)) {
+        tracing::warn!(
+            "signing in to NATS with the deployment's token, which lets this server do anything \
+             the API servers can; give it a NATS user of its own ([nats])"
+        );
+    }
+    let reporter = reporter::Reporter::connect(&config.nats_url, config.nats_auth()?, config.id)
+        .await
+        .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
     let announced_address = config.rtc.resolved_announced_address()?;
     if let Some(address) = &announced_address {

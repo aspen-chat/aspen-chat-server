@@ -29,7 +29,14 @@ pub struct AspenConfig {
     #[serde(default = "default_database_pool_wait_seconds")]
     pub database_pool_wait_seconds: u64,
     pub nats_url: String,
-    pub nats_auth_token: String,
+    /// The token NATS was started with, when it signs everyone in by one token. Exactly one of
+    /// this and `[nats]` is given (`AspenConfig::nats_options`).
+    #[serde(default)]
+    pub nats_auth_token: Option<String>,
+    /// A NATS user for the API servers, when NATS has users: so that each voice server signs
+    /// in as a user allowed only its own subjects (`docs/operators/installing.md`).
+    #[serde(default)]
+    pub nats: Option<NatsUser>,
     pub valkey_url: String,
     #[serde(default)]
     pub media: MediaConfig,
@@ -339,6 +346,41 @@ pub struct VoiceConfig {
     pub idle_session_seconds: u64,
 }
 
+/// A NATS user and its password.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatsUser {
+    pub user: String,
+    pub password: String,
+}
+
+impl AspenConfig {
+    /// How to sign in to NATS: as the `[nats]` user or with `nats_auth_token`, whichever is
+    /// given (`load_config` refuses both or neither).
+    pub fn nats_options(&self) -> async_nats::ConnectOptions {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(NatsUser { user, password }), _) => {
+                async_nats::ConnectOptions::with_user_and_password(user.clone(), password.clone())
+            }
+            (None, token) => {
+                async_nats::ConnectOptions::with_token(token.clone().unwrap_or_default())
+            }
+        }
+    }
+
+    fn check_nats(&self) -> Result<(), config::ConfigError> {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (None, None) => Err(config::ConfigError::Message(
+                "give nats_auth_token, or [nats] user and password".to_string(),
+            )),
+            (Some(_), Some(_)) => Err(config::ConfigError::Message(
+                "give either nats_auth_token or [nats] user and password, not both".to_string(),
+            )),
+        }
+    }
+}
+
 /// The `[voice] token_secret` a development server takes when none is given. It is in the
 /// source, so anyone could sign join tokens with it.
 const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
@@ -557,6 +599,7 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.derive_from_public_url()?;
+    loaded.check_nats()?;
     loaded
         .voice
         .check_secret(loaded.public_url.starts_with("https:"))?;
@@ -731,6 +774,34 @@ mod tests {
         assert!(VoiceConfig::default().check_secret(true).is_err());
         assert!(voice("short").check_secret(true).is_err());
         assert!(voice(&"x".repeat(32)).check_secret(true).is_ok());
+    }
+
+    /// NATS signs the server in by token or as a user, and the settings give exactly one.
+    #[test]
+    fn nats_takes_a_token_or_a_user() {
+        let config = |auth: &str| -> AspenConfig {
+            config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = \"http://localhost\"\ndatabase_url = \"postgres://x\"\n\
+                         nats_url = \"nats://x\"\nvalkey_url = \"redis://x\"\n{auth}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap()
+        };
+        let user = "[nats]\nuser = \"aspen\"\npassword = \"p\"";
+        assert!(config("nats_auth_token = \"t\"").check_nats().is_ok());
+        assert!(config(user).check_nats().is_ok());
+        assert!(config("").check_nats().is_err());
+        assert!(
+            config(&format!("nats_auth_token = \"t\"\n{user}"))
+                .check_nats()
+                .is_err()
+        );
     }
 
     /// A server that sends needs an SMTP server; one that only queues does not.

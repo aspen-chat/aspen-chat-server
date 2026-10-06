@@ -107,7 +107,11 @@ make` is off everywhere, or every maker is stuck), so each message waits out its
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
 enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet
 tab shows each voice server's last report. Check that the voice server is running, reaches
-NATS with the same token, and has the `id` the registry gave it.
+NATS (with the token, or as its own user with the permissions [Installing](installing.md#6-voice-servers)
+lists; NATS logs a `Permissions Violation` for anything else), and has the `id` the registry gave
+it. An API server logs `a voice report on a subject it does not belong on was dropped`, or `a
+voice report about what is not that server's was dropped`, for a report from a voice server
+configured with another's `id`.
 
 **The log warns that a voice server's snapshot repaired the record of a call**, or that a voice
 server no longer holds a call recorded on it. Some of that voice server's reports never reached

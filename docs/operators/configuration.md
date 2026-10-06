@@ -40,7 +40,8 @@ by each API server, at the same origin.
 | `database_pool_size` | two per logical CPU | The most PostgreSQL connections this server holds at once. Every write holds one until NATS acknowledges its event, so a busy server may run out of connections before PostgreSQL runs out of CPU; the database connections metric shows requests waiting. Keep the total over every API server below PostgreSQL's `max_connections`. |
 | `database_pool_wait_seconds` | `10` | How long a request or background task waits for one of those connections before it is refused with `serverBusy`. A pool that runs dry, because NATS is slow to acknowledge or the server has more work than connections, then refuses work rather than holding it until it frees. |
 | `nats_url` | required | NATS with JetStream, as `host:4222`. |
-| `nats_auth_token` | required | The token NATS was started with. |
+| `nats_auth_token` | | The token NATS was started with, when NATS takes one token from everyone. |
+| `[nats] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |
 
 ## Event delivery
@@ -285,7 +286,9 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
 | `token_secret` | required | The API servers' `[voice] token_secret`. The server warns at startup when it is the development value or shorter than 32 bytes. |
-| `nats_url`, `nats_auth_token` | required | The same NATS as the API servers. |
+| `nats_url` | required | The same NATS as the API servers. |
+| `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
+| `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |
 | `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front. |
 | `workers` | one per CPU | Media worker processes, each using at most one core. |
 
