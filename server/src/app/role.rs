@@ -12,7 +12,7 @@ use crate::api::message_enum::{self, server_event::*};
 use crate::app::context::GlobalServerContext;
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{
-    CommunityAccess, Permission, Permissions, from_names, missing, require_actual_member,
+    CommunityAccess, Permission, Permissions, channel_access, from_names, require_actual_member,
     require_member, to_names,
 };
 use crate::app::{
@@ -1021,8 +1021,9 @@ pub struct OverrideOutcome {
 }
 
 /// Sets, or with `None` clears, `role`'s override of a channel or category. It takes Manage
-/// channels for a channel and Manage categories for a category, the role ranking below the
-/// caller, and permissions the caller holds. Only channel permissions may be overridden, and
+/// channels for a channel the caller may view and Manage categories for a category whose own
+/// overrides let them view it, the role ranking below the caller, and permissions the caller
+/// holds. Only channel permissions may be overridden, and
 /// none may be both allowed and denied.
 pub async fn set_override(
     state: &GlobalServerContext,
@@ -1037,33 +1038,25 @@ pub async fn set_override(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let (community_id, needed) = match target {
+            // Only someone who may view the channel (`channel_access`), or what the category's
+            // overrides leave them (`managed_category`), may change what hides it from them.
+            let (community_id, access) = match target {
                 OverrideTarget::Channel(id) => {
-                    let (community, parent): (Option<CommunityId>, Option<ChannelId>) =
-                        channel::table
-                            .select((channel::community, channel::parent_channel))
-                            .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
-                            .first(conn.as_mut())
-                            .await?;
+                    let access = channel_access(state, conn.as_mut(), caller, id).await?;
                     // Threads follow their parent; DMs have no roles.
-                    match (community, parent) {
-                        (Some(community), None) => (community, Permissions::MANAGE_CHANNELS),
-                        _ => return Err(app::Error::Validation(t!("overrideTarget"))),
-                    }
+                    let (Some(access), false) = (access.community, access.thread) else {
+                        return Err(app::Error::Validation(t!("overrideTarget")));
+                    };
+                    // A community permission, which no override changes.
+                    access.require(Permissions::MANAGE_CHANNELS)?;
+                    (access.community, access)
                 }
                 OverrideTarget::Category(id) => {
-                    let community: CommunityId = category::table
-                        .select(category::community)
-                        .filter(category::id.eq(id).and(category::deleted_at.is_null()))
-                        .first(conn.as_mut())
-                        .await?;
-                    (community, Permissions::MANAGE_CATEGORIES)
+                    let (category, access) =
+                        app::category::managed_category(conn.as_mut(), caller, id).await?;
+                    (*category.community.id(), access)
                 }
             };
-            let access = require_member(conn.as_mut(), caller, community_id).await?;
-            if !access.has(needed) {
-                return Err(missing(needed));
-            }
             let role = load_role(conn.as_mut(), role_id).await?;
             if role.community != community_id {
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));

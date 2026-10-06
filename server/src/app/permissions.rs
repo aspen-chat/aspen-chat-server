@@ -689,6 +689,17 @@ async fn overrides_of_category(
         .await?)
 }
 
+/// What `access`'s holder may do across `category`, a category of their community: their
+/// permissions after the category's overrides alone, as in a channel of it with none of its own.
+pub async fn in_category(
+    conn: &AsyncPgConnection,
+    access: &CommunityAccess,
+    category: CategoryId,
+) -> app::Result<Permissions> {
+    let overrides = overrides_of_category(conn, category).await?;
+    Ok(access.in_channel(&overrides, &[]))
+}
+
 /// What `user` may do in `channel_id`. A channel they may not view, in a community they are
 /// not in, or a DM they are not a recipient of is answered as not found.
 /// What stands between `user` and the other person of `dm`, when it is a one-to-one DM: a

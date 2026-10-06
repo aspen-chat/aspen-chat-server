@@ -199,6 +199,37 @@ def moves_and_categories(world: World, check: Checks) -> None:
           any(e.get("parentCategory", "unset") is None for e in of(got, "channel", id=lounge)) and world.member_sees(lounge))
 
 
+def hidden_managers(world: World, check: Checks) -> None:
+    say("managing channels and categories hidden from the manager")
+    member = world.member["token"]
+    world.give(world.role("Managers", ["manageChannels", "manageCategories"]))
+    secret = world.channel("not-for-managers", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    world.stream.gather(0.8)
+    unhide = {"allow": ["viewChannel"], "deny": []}
+    check("Manage channels does not reach an override of a channel its holder may not view",
+          world.stack.status("PUT", f"/channels/{secret}/overrides/{world.everyone}", unhide, member) == 404)
+    check("nor clear one",
+          world.stack.status("DELETE", f"/channels/{secret}/overrides/{world.everyone}", token=member) == 404)
+    check("nor rename, move, or delete the channel",
+          world.stack.status("PATCH", f"/channels/{secret}", {"name": "found"}, member) == 404
+          and world.stack.status("PATCH", f"/channels/{secret}", {"parentCategory": None}, member) == 404
+          and world.stack.status("DELETE", f"/channels/{secret}", token=member) == 404)
+    check("which stays hidden from them", not world.member_sees(secret))
+    hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Hidden", "sortIndex": 9})["id"]
+    world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    inside = world.channel("inside-hidden", category=hidden)
+    world.stream.gather(0.8)
+    check("Manage categories does not reach the overrides of a category that hides its channels from its holder",
+          world.stack.status("PUT", f"/categories/{hidden}/overrides/{world.everyone}", unhide, member) == 403
+          and world.stack.status("DELETE", f"/categories/{hidden}/overrides/{world.everyone}", token=member) == 403)
+    check("nor delete that category, which would move its channels into view",
+          world.stack.status("DELETE", f"/categories/{hidden}", token=member) == 403)
+    check("whose channels stay hidden from them", not world.member_sees(inside))
+    open_channel = world.channel("for-managers")
+    check("while a channel they may view is theirs to manage",
+          world.stack.status("PATCH", f"/channels/{open_channel}", {"name": "managed"}, member) == 200)
+
+
 def thread_echoes(world: World, check: Checks) -> None:
     say("a thread reply echoed to its channel after it was posted")
     member = world.member["token"]
@@ -1099,7 +1130,7 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, thread_echoes, calls, attachments,
+SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, plugins, calendar_channels, email, invite_previews, previews]
 

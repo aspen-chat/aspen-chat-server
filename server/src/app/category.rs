@@ -7,7 +7,7 @@ use crate::app;
 use crate::app::channel::Channel;
 use crate::app::community::Community;
 use crate::app::context::GlobalServerContext;
-use crate::app::permissions::{Permissions, require_member};
+use crate::app::permissions::{CommunityAccess, Permissions, in_category, missing, require_member};
 use crate::app::{
     CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, RoleId, UserId,
     publish_event,
@@ -99,13 +99,32 @@ async fn member_category(
     conn: &mut AsyncPgConnection,
     caller: UserId,
     id: CategoryId,
-) -> app::Result<(Category, crate::app::permissions::CommunityAccess)> {
+) -> app::Result<(Category, CommunityAccess)> {
     let category: Category = category::table
         .select(Category::as_select())
         .filter(category::id.eq(id).and(category::deleted_at.is_null()))
         .first(conn)
         .await?;
     let access = require_member(conn, caller, *category.community.id()).await?;
+    Ok((category, access))
+}
+
+/// A live category for `caller` to manage, which takes Manage categories and viewing what the
+/// category's own overrides let them view: nobody changes or removes the overrides that hide its
+/// channels from them. Not found for anyone who is not a member.
+pub(crate) async fn managed_category(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    id: CategoryId,
+) -> app::Result<(Category, CommunityAccess)> {
+    let (category, access) = member_category(conn, caller, id).await?;
+    access.require(Permissions::MANAGE_CATEGORIES)?;
+    if !in_category(conn, &access, id)
+        .await?
+        .contains(Permissions::VIEW_CHANNEL)
+    {
+        return Err(missing(Permissions::VIEW_CHANNEL));
+    }
     Ok((category, access))
 }
 
@@ -193,7 +212,8 @@ pub struct CategoryChangeset {
     pub sort_index: Option<i32>,
 }
 
-/// Renames or moves a category, which takes Manage categories.
+/// Renames or moves a category, which takes Manage categories and viewing it
+/// (`managed_category`).
 pub(crate) async fn update_category(
     state: &GlobalServerContext,
     caller: UserId,
@@ -203,10 +223,7 @@ pub(crate) async fn update_category(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            member_category(conn.as_mut(), caller, id)
-                .await?
-                .1
-                .require(Permissions::MANAGE_CATEGORIES)?;
+            managed_category(conn.as_mut(), caller, id).await?;
             let Some(category) = diesel::update(category::table)
                 .set(CategoryChangeset {
                     name: command.name.clone(),
@@ -239,8 +256,8 @@ pub(crate) async fn update_category(
     .await
 }
 
-/// Deletes a category, which takes Manage categories. Its channels are left in no category
-/// and its overrides are cleared.
+/// Deletes a category, which takes Manage categories and viewing it (`managed_category`). Its
+/// channels are left in no category and its overrides are cleared.
 pub(crate) async fn delete_category(
     state: &GlobalServerContext,
     caller: UserId,
@@ -249,10 +266,7 @@ pub(crate) async fn delete_category(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            member_category(conn.as_mut(), caller, id)
-                .await?
-                .1
-                .require(Permissions::MANAGE_CATEGORIES)?;
+            managed_category(conn.as_mut(), caller, id).await?;
             let deleted = diesel::update(category::table)
                 .set(category::deleted_at.eq(diesel::dsl::now))
                 .filter(category::id.eq(id).and(category::deleted_at.is_null()))

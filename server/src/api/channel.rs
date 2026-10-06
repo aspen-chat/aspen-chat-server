@@ -145,7 +145,7 @@ pub async fn list_channel_pins(
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or the caller may not view it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -170,7 +170,7 @@ pub async fn update_channel(
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or the caller may not view it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

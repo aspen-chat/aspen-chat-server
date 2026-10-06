@@ -145,7 +145,7 @@ pub async fn list_category_channels(
         (status = OK, body = message_enum::Category),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: Manage categories is missing, or the category's overrides keep the caller from viewing it", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -170,7 +170,7 @@ pub async fn update_category(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: Manage categories is missing, or the category's overrides keep the caller from viewing it", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

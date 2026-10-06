@@ -513,27 +513,27 @@ pub struct ChannelChangeset {
     pub sort_index: Option<i32>,
 }
 
-/// The community of the community channel `id` and what the caller may do across it. DMs and
-/// threads are not managed this way.
-async fn managed_channel(
+/// The community of the community channel `id` and what the caller may do across it, for
+/// managing the channel: a channel they may not view is not found to them (`channel_access`), so
+/// nobody renames, moves, or deletes a channel, or edits its overrides, from outside it, which
+/// would let a holder of Manage channels undo the overrides that hide it from them. Manage
+/// channels is a community permission, which no override changes, so the access across the
+/// community says what they may do to it. DMs and threads are not managed this way.
+pub(crate) async fn managed_channel(
+    state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     caller: UserId,
     id: ChannelId,
 ) -> app::Result<(CommunityId, crate::app::permissions::CommunityAccess)> {
-    let (community, parent): (Option<CommunityId>, Option<ChannelId>) = channel::table
-        .select((channel::community, channel::parent_channel))
-        .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
-        .first(conn)
-        .await?;
-    let (Some(community), None) = (community, parent) else {
-        return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-    };
-    let access = require_member(conn, caller, community).await?;
-    Ok((community, access))
+    let access = crate::app::permissions::channel_access(state, conn, caller, id).await?;
+    match access.community {
+        Some(community) if !access.thread => Ok((community.community, community)),
+        _ => Err(app::Error::Diesel(diesel::result::Error::NotFound)),
+    }
 }
 
-/// Renames or moves a community channel, which takes Manage channels; a deployment moderator
-/// may rename one. A channel stays in its community, and a category it moves into must be one
+/// Renames or moves a community channel the caller may view, which takes Manage channels; a
+/// deployment moderator may rename one. A channel stays in its community, and a category it moves into must be one
 /// of that community's.
 pub(crate) async fn update_channel(
     state: &GlobalServerContext,
@@ -544,7 +544,7 @@ pub(crate) async fn update_channel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let (community, access) = managed_channel(conn.as_mut(), caller, id).await?;
+            let (community, access) = managed_channel(state, conn.as_mut(), caller, id).await?;
             // A deployment moderator may rename a channel, and do nothing else to it here.
             let rename_only = command.parent_category.is_none()
                 && command.community.is_none()
@@ -609,7 +609,8 @@ pub(crate) async fn update_channel(
     .await
 }
 
-/// Deletes a community channel, which takes Manage channels or moderating the deployment.
+/// Deletes a community channel the caller may view, which takes Manage channels or moderating the
+/// deployment.
 pub(crate) async fn delete_channel(
     state: &GlobalServerContext,
     caller: UserId,
@@ -618,7 +619,7 @@ pub(crate) async fn delete_channel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let (community, access) = managed_channel(conn.as_mut(), caller, id).await?;
+            let (community, access) = managed_channel(state, conn.as_mut(), caller, id).await?;
             if !access.has(Permissions::MANAGE_CHANNELS) {
                 if !access.moderator {
                     return Err(missing(Permissions::MANAGE_CHANNELS));
