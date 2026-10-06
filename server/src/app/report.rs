@@ -37,8 +37,8 @@ use crate::app::{
     ReportId, UserId, publish_event,
 };
 use crate::database::schema::{
-    community, community_user, deployment_role, message, moderation_log, report, report_case,
-    report_category, user, user_deployment_role,
+    community, community_user, deployment_role, message, report, report_case, report_category,
+    user, user_deployment_role,
 };
 use crate::t;
 use chrono::{DateTime, Utc};
@@ -65,6 +65,9 @@ pub const CATEGORY_NAME_MAX_CHARS: usize = 64;
 pub const CATEGORY_DESCRIPTION_MAX_CHARS: usize = 200;
 /// How many messages either side of a reported one its context shows at a time.
 pub const CONTEXT_MESSAGES: i64 = 25;
+/// How far a case's context reaches from the reported message either way, however it is
+/// paged: four pages of [`CONTEXT_MESSAGES`].
+pub const CONTEXT_REACH: i64 = 4 * CONTEXT_MESSAGES;
 /// The most cases one page lists.
 pub const MAX_PAGE: i64 = 100;
 
@@ -1070,17 +1073,18 @@ pub async fn report_nickname(
 // ---------------------------------------------------------------------------------------------
 // Review
 
-/// Tells each holder of Review reports that what awaits review changed, with how many cases
-/// are open now, inside the caller's transaction.
+/// Tells each holder of Review reports who may see the case (`may_act`) that what awaits review
+/// changed, with how many of the cases they may see are open now, inside the caller's
+/// transaction.
 async fn announce(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     case: ReportCaseId,
 ) -> app::Result<()> {
-    let open: i64 = report_case::table
-        .filter(report_case::status.eq(ReportStatus::Open))
-        .count()
-        .get_result(conn)
+    let subject: UserId = report_case::table
+        .select(report_case::subject)
+        .find(case)
+        .first(conn)
         .await?;
     let reviewers: Vec<UserId> = user_deployment_role::table
         .inner_join(deployment_role::table)
@@ -1092,7 +1096,21 @@ async fn announce(
         .distinct()
         .load(conn)
         .await?;
+    let mut people = reviewers.clone();
+    people.push(subject);
+    let ranks = ranks(conn, &people).await?;
+    let rank_of = |user: &UserId| ranks.get(user).copied().unwrap_or(0);
     for reviewer in reviewers {
+        let rank = rank_of(&reviewer);
+        if !reviewable(reviewer, rank, subject, rank_of(&subject)) {
+            continue;
+        }
+        let open: i64 = report_case::table
+            .filter(report_case::status.eq(ReportStatus::Open))
+            .filter(reviewable_cases(reviewer, rank))
+            .count()
+            .get_result(conn)
+            .await?;
         publish_event(
             state,
             conn,
@@ -1104,7 +1122,7 @@ async fn announce(
     Ok(())
 }
 
-/// How many cases are open and dismissed. Takes Review reports.
+/// How many of the cases the reviewer may see are open and dismissed. Takes Review reports.
 pub async fn counts(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -1115,6 +1133,7 @@ pub async fn counts(
         .group_by(report_case::status)
         .select((report_case::status, diesel::dsl::count_star()))
         .filter(report_case::status.ne(ReportStatus::Resolved))
+        .filter(reviewable_cases(access.user, access.rank()))
         .load(conn.as_mut())
         .await?;
     let count = |status| {
@@ -1147,9 +1166,37 @@ async fn ranks(
     Ok(ranks)
 }
 
-/// Whether `access` may act on a case about `subject` of rank `subject_rank`.
+/// Whether `access` may act on a case about `subject` of rank `subject_rank`, and so see it at
+/// all: nobody reviews a case about themselves, or about someone whose highest deployment role
+/// is not below theirs.
 fn may_act(access: &DeploymentAccess, subject: UserId, subject_rank: i32) -> bool {
-    subject != access.user && subject_rank < access.rank()
+    reviewable(access.user, access.rank(), subject, subject_rank)
+}
+
+/// Whether `reviewer`, of rank `rank`, may see and act on a case about `subject`.
+fn reviewable(reviewer: UserId, rank: i32, subject: UserId, subject_rank: i32) -> bool {
+    subject != reviewer && subject_rank < rank
+}
+
+/// The cases `reviewer`, of rank `rank`, may see: `reviewable` as a filter on `report_case`.
+fn reviewable_cases(
+    reviewer: UserId,
+    rank: i32,
+) -> Box<dyn BoxableExpression<report_case::table, diesel::pg::Pg, SqlType = diesel::sql_types::Bool>>
+{
+    use diesel::sql_types::{Bool, Integer};
+    Box::new(
+        report_case::subject.ne(reviewer).and(
+            diesel::dsl::sql::<Bool>(
+                "NOT EXISTS (SELECT 1 FROM user_deployment_role subject_role \
+                 JOIN deployment_role ON deployment_role.id = subject_role.role \
+                 WHERE subject_role.\"user\" = report_case.subject AND deployment_role.position >= ",
+            )
+            .bind::<Integer, _>(rank)
+            .sql(") AND 0 < ")
+            .bind::<Integer, _>(rank),
+        ),
+    )
 }
 
 /// The cases among `rows` with their reports, messages, and categories.
@@ -1263,6 +1310,7 @@ pub async fn list_cases(
     let mut query = report_case::table
         .select(CaseRow::as_select())
         .filter(report_case::status.eq(status))
+        .filter(reviewable_cases(access.user, access.rank()))
         .into_boxed();
     query = if status == ReportStatus::Resolved {
         query.order((report_case::closed_at.desc(), report_case::id.desc()))
@@ -1277,7 +1325,7 @@ pub async fn list_cases(
     page_of(state, conn.as_mut(), access, rows).await
 }
 
-/// One case. Takes Review reports.
+/// One case. Takes Review reports; a case the reviewer may not see (`may_act`) is not found.
 pub async fn read_case(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -1287,7 +1335,8 @@ pub async fn read_case(
     let mut conn = state.connection_pool.get().await?;
     let row: CaseRow = report_case::table
         .select(CaseRow::as_select())
-        .find(id)
+        .filter(report_case::id.eq(id))
+        .filter(reviewable_cases(access.user, access.rank()))
         .first(conn.as_mut())
         .await?;
     page_of(state, conn.as_mut(), access, vec![row]).await
@@ -1313,9 +1362,9 @@ pub struct ContextWindow {
     pub more_after: bool,
 }
 
-/// The messages of a reported message's channel or thread around it, read for its review.
-/// Reading those of a DM is written to the moderation log, once for each reviewer and message.
-/// Takes Review reports.
+/// The messages of a reported message's channel or thread around it, read for its review, no
+/// further than [`CONTEXT_REACH`] from it either way. Each page read of a DM's is written to the
+/// moderation log. Takes Review reports; a case the reviewer may not see is not found.
 pub async fn case_context(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -1326,7 +1375,8 @@ pub async fn case_context(
     let mut conn = state.connection_pool.get().await?;
     let reported: Option<MessageId> = report_case::table
         .select(report_case::message)
-        .find(id)
+        .filter(report_case::id.eq(id))
+        .filter(reviewable_cases(access.user, access.rank()))
         .first(conn.as_mut())
         .await?;
     let Some(reported) = reported else {
@@ -1342,28 +1392,15 @@ pub async fn case_context(
             .await?
             .contains(&access.user)
     {
-        let action: &'static str = ModerationAction::ReadReportContext.into();
-        let logged: bool = diesel::select(diesel::dsl::exists(
-            moderation_log::table.filter(
-                moderation_log::actor
-                    .eq(access.user)
-                    .and(moderation_log::action.eq(action))
-                    .and(moderation_log::subject.eq(reported.0.to_string())),
-            ),
-        ))
-        .get_result(conn.as_mut())
+        log_moderation(
+            conn.as_mut(),
+            access.user,
+            ModerationAction::ReadReportContext,
+            None,
+            Some(channel),
+            Some(reported.0.to_string()),
+        )
         .await?;
-        if !logged {
-            log_moderation(
-                conn.as_mut(),
-                access.user,
-                ModerationAction::ReadReportContext,
-                None,
-                Some(channel),
-                Some(reported.0.to_string()),
-            )
-            .await?;
-        }
     }
     // Echoes show replies the thread's own context holds; they are left out.
     let in_channel = || {
@@ -1371,6 +1408,30 @@ pub async fn case_context(
             .eq(channel)
             .and(message::kind.ne(MessageKind::ThreadEcho))
     };
+    // The furthest message either way the context reaches, when there are more than that.
+    let reach = async |conn: &mut AsyncPgConnection, earlier: bool| {
+        let mut query = message::table
+            .select(message::id)
+            .filter(in_channel())
+            .into_boxed();
+        query = if earlier {
+            query
+                .filter(message::id.lt(reported))
+                .order(message::id.desc())
+        } else {
+            query
+                .filter(message::id.gt(reported))
+                .order(message::id.asc())
+        };
+        query
+            .offset(CONTEXT_REACH - 1)
+            .limit(1)
+            .first::<MessageId>(conn)
+            .await
+            .optional()
+    };
+    let earliest = reach(conn.as_mut(), true).await?;
+    let latest = reach(conn.as_mut(), false).await?;
     let side = async |conn: &mut AsyncPgConnection,
                       before: Option<MessageId>,
                       after: Option<MessageId>| {
@@ -1378,6 +1439,12 @@ pub async fn case_context(
             .select(message::id)
             .filter(in_channel())
             .into_boxed();
+        if let Some(earliest) = earliest {
+            query = query.filter(message::id.ge(earliest));
+        }
+        if let Some(latest) = latest {
+            query = query.filter(message::id.le(latest));
+        }
         if let Some(before) = before {
             query = query
                 .filter(message::id.lt(before))

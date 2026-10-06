@@ -1032,6 +1032,11 @@ def review_powers(world: World, check: Checks) -> None:
     except Failed:
         refused = True
     check("the terminal refuses to deny what an allowed permission includes", refused)
+    stack.api("POST", f"/users/{reviewer['id']}/reports", {"category": category, "aspects": ["username"]},
+              world.member["token"])
+    cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
+    check("a case about the reviewer is not among those they read",
+          not any(c["subject"] == reviewer["id"] for c in cases), cases)
     stop_review_powers(world, reviewer)
 
 
