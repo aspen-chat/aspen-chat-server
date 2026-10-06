@@ -1567,11 +1567,11 @@ def main() -> None:
         say("starting a database and a NATS of its own, the chat server, and the voice server")
         with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS) as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
-            for scenario in SCENARIOS:
-                # Each starts from a community of its own, so one that fails, or stops on a
-                # request refused, leaves the rest fair.
+            for index, scenario in enumerate(SCENARIOS):
+                # Each starts from a community and accounts of its own, so one that fails, or stops
+                # on a request refused, leaves the rest fair.
                 try:
-                    scenario(World(stack, f"{run}{scenario.__name__[:4]}"), check)
+                    scenario(World(stack, f"{run}s{index:02d}"), check)
                 except Failed as stopped:
                     check(f"{scenario.__name__} ran to its end", False, stopped)
             if check.failed:
