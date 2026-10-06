@@ -19,6 +19,9 @@ extraResources:
     filter:
       - aspen-obs-capture
       - aspen-obs-capture.exe
+  # Chromium's notices, which the Open Source Attributions page opens (`chromiumNotices.ts`).
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: LICENSES.chromium.html
   # The window's icon on Linux, where a window names its own; `build/` holds every platform's
   # icons, drawn by `client/scripts/export_icons.py`.
   - from: build/icons/512x512.png

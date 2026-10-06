@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useSignOut } from "@/api/deploymentsContext";
+import { AboutSection } from "@/features/about/AboutSection";
 import { OtherServersSection } from "@/features/deployments/OtherServersSection";
 import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import {
@@ -70,8 +71,8 @@ import { ZoomSlider } from "@/features/settings/ZoomSlider";
  * names take their roles' colours, kept with this install, and the message text size, line spacing,
  * and animation speed, kept with the account; whether new messages are read out, and the fonts text
  * and code are drawn in, kept with this install; the language, kept with the account; the
- * people the user has blocked; developer mode, with the user's bots; and the way out of the
- * account. Sections for account-wide preferences slot in beside them.
+ * people the user has blocked; developer mode, with the user's bots; About Aspen, with the
+ * versions and the way to the Open Source Attributions page; and the way out of the account. Sections for account-wide preferences slot in beside them.
  */
 export function SettingsDialog({ triggerClassName }: { triggerClassName: string }) {
   const m = useMessages();
@@ -116,6 +117,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   <BlockedUsersSection />
                   <OtherServersSection />
                   <DeveloperSection />
+                  <AboutSection onNavigate={close} />
                 </PlaneColumns>
                 <div className="flex items-center justify-between gap-2">
                   <Button

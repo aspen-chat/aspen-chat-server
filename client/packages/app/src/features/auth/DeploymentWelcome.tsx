@@ -1,10 +1,9 @@
-import type { DeploymentProfile } from "@aspen/protocol";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "react-aria-components";
-import { useAspenClient } from "@/api/context";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { AspenIcon, ICON_PX, iconSizeClass } from "./AspenIcon";
+import { useDeploymentProfile } from "./deploymentProfile";
 import { linkButtonClass } from "./styles";
 
 /**
@@ -62,26 +61,4 @@ export function DeploymentWelcome({
       </p>
     </div>
   );
-}
-
-/** The deployment's profile; `undefined` until it is read, and empty when the read fails. */
-function useDeploymentProfile(): DeploymentProfile | undefined {
-  const client = useAspenClient();
-  const [read, setRead] = useState<{ server: string; profile: DeploymentProfile } | undefined>();
-  useEffect(() => {
-    let current = true;
-    const settle = (profile: DeploymentProfile) => {
-      if (current) {
-        setRead({ server: client.baseUrl, profile });
-      }
-    };
-    client.deploymentProfile().then(settle, () => {
-      // A deployment's web client is at its API's origin.
-      settle({ displayName: null, icon: null, webClientUrl: client.baseUrl });
-    });
-    return () => {
-      current = false;
-    };
-  }, [client]);
-  return read?.server === client.baseUrl ? read.profile : undefined;
 }

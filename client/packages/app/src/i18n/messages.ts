@@ -1,3 +1,4 @@
+import { about } from "./en/about";
 import { access } from "./en/access";
 import { addOptions } from "./en/addOptions";
 import { admin } from "./en/admin";
@@ -121,6 +122,7 @@ export const en = {
   mentions: "{count} mentions",
   withMentions: "{name}, {mentions}",
   mutedLabel: "{name}, muted",
+  about,
   admin,
   mute,
   channelsLabel: "Channels",

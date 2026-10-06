@@ -58,6 +58,7 @@ How each client feature works is written up in `docs/architecture/`, one file pe
 file for a feature before working on it, and keep it describing the code as it stands in the same
 commit, as with comments.
 
+- [`about.md`](docs/architecture/about.md): About Aspen in Settings (the deployment and every version), and the Open Source Attributions page and the build-time list of every package each part ships.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions each needs, directories, moderation log, growth charts, registration invites, and foreign users' bans.
 - [`blocking.md`](docs/architecture/blocking.md): blocks as store state, collapsed runs of blocked messages, blocked DMs, and blocks in calls.
 - [`bots.md`](docs/architecture/bots.md): bot badges, developer mode and the ID wizard, the bots dialog, adding a bot, and slash commands in the message box.

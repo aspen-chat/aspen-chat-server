@@ -1,5 +1,19 @@
 /// <reference types="vite/client" />
 
+/** Every package Aspen ships, with its licenses (`attributions/plugin.ts`). */
+declare module "virtual:attributions" {
+  import type { Attributions } from "@/features/about/attributionTypes";
+  const attributions: Attributions;
+  export default attributions;
+}
+
+/** This build of the app: its version and commit (`attributions/plugin.ts`). */
+declare module "virtual:build-info" {
+  import type { BuildInfo } from "@/features/about/attributionTypes";
+  const build: BuildInfo;
+  export default build;
+}
+
 interface ImportMetaEnv {
   /**
    * `1` builds the message list with its scroll diagnostics
@@ -65,6 +79,10 @@ interface AspenDesktopBridge {
     get(): Promise<number>;
     set(factor: number): Promise<void>;
     onStep(listener: (step: 1 | -1 | 0) => void): () => void;
+  };
+  /** Chromium's notices (`packages/desktop/src/main/chromiumNotices.ts`); whether they opened. */
+  readonly chromiumNotices: {
+    open(): Promise<boolean>;
   };
   /** Game capture through libobs; the shape is `GameCaptureBridge` in `features/voice/gameCapture.ts`. */
   readonly gameCapture: {

@@ -1,0 +1,53 @@
+export const about = {
+  heading: "About Aspen",
+  onDeployment: "You're on {name}.",
+  versions: "Versions",
+  app: "Aspen app",
+  appVersion: "{version}, built from {commit}",
+  appVersionModified: "{version}, built from {commit} with changes",
+  desktop: "Desktop app",
+  desktopVersion: "Electron {electron}, Chromium {chrome}",
+  phone: "Phone app",
+  phoneVersion: "{platform} app {version} (build {build})",
+  android: "Android",
+  ios: "iOS",
+  server: "Server",
+  serverUnknown: "Couldn't be asked. Close this and try again.",
+  protocol: "Protocol",
+  protocolVersions: "This app {app}, server {server}",
+  protocolRange: "{minimum} to {version}",
+  attributions: "Open source attributions",
+  yourRights: "Your rights",
+  yourRightsSummary:
+    "Aspen is free software under the GNU General Public License, version 3 or later. You may run it for any purpose, study and change how it works, and share copies of it, changed or not. Whoever gives you a copy of Aspen must also offer you its source code under the same license, and anyone who shares a changed copy must share their changes under it too. Aspen comes with no warranty, as far as the law allows.",
+  readLicense: "Read the license",
+  sourceCode: "Source code",
+  attributionsIntro:
+    "Aspen is free software under the GNU General Public License, version 3 or later. It's made with the work of the projects below, each listed with its license.",
+  attributionsLoading: "Loading attributions…",
+  attributionsLoadFailed: "The attributions couldn't be loaded. Reload the page to try again.",
+  attributionsIncomplete:
+    "This development build couldn't list every package. The development server's log says which are missing.",
+  component: {
+    app: "The app",
+    desktop: "The desktop app",
+    mobile: "The phone apps",
+    server: "The servers",
+  },
+  packageCount: "{count} packages",
+  find: "Find a package",
+  noMatches: "No package matches that.",
+  license: "License",
+  licenseUndeclared: "See its license text",
+  website: "Website",
+  showLicense: "License text",
+  standardText:
+    "This package publishes no license file, so this is its license's standard wording.",
+  bundledIn: "As shipped in {release}",
+  chromiumNotices:
+    "Chromium's notices are too long to show here. They ship with the desktop app as LICENSES.chromium.html.",
+  openChromiumNotices: "Open Chromium's notices",
+  chromiumNoticesMissing:
+    "Chromium's notices aren't where this copy of the desktop app should have them. Reinstall the app to restore them.",
+  backToSignIn: "Back to sign in",
+};

@@ -277,29 +277,8 @@ function write(name: string, css: string): void {
 }
 
 /**
- * The licence of every font the app bundles, each `@fontsource` dependency's and the emoji
- * fonts', which the SIL Open Font License asks to travel with the fonts.
- */
-function licenses(): string {
-  const manifest = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as {
-    dependencies: Record<string, string>;
-  };
-  const fontsource = Object.keys(manifest.dependencies)
-    .filter((name) => name.startsWith("@fontsource"))
-    .sort()
-    .map((name) => ({ name, file: join(dirname(require.resolve(name)), "LICENSE") }));
-  const emoji = { name: EMOJI_FAMILY, file: join(emojiDirectory, "LICENSE") };
-  return [...fontsource, emoji]
-    .map(({ name, file }) => {
-      const license = readFileSync(file, "utf8");
-      return `${name}\n${"=".repeat(name.length)}\n\n${license.trim()}\n`;
-    })
-    .join("\n\n");
-}
-
-/**
- * Writes the fallback faces' stylesheets before anything imports them, and puts the fonts'
- * licences in every build at `licenses/fonts.txt`.
+ * Writes the fallback faces' stylesheets before anything imports them. The fonts' licences
+ * travel with the build among every package's (`attributions/plugin.ts`).
  */
 export function fallbackFonts(): Plugin {
   return {
@@ -309,9 +288,6 @@ export function fallbackFonts(): Plugin {
       mkdirSync(generated, { recursive: true });
       write("fontFaces.css", faces);
       write("fontStacks.css", stacks);
-    },
-    generateBundle() {
-      this.emitFile({ type: "asset", fileName: "licenses/fonts.txt", source: licenses() });
     },
   };
 }
