@@ -363,8 +363,7 @@ pub struct PasskeyHandoff {
     pub code_challenge: String,
     /// Where the page sends the browser when done, with `ceremony` and `outcome` (`done` or
     /// `cancelled`) added to the query, and, when done, the `code` the claim presents: a
-    /// loopback `http` address with a port, an `aspen:` URI, or a page of this deployment's web
-    /// client.
+    /// loopback `http` address with a port, or an `aspen:` URI.
     pub return_to: String,
 }
 

@@ -16,10 +16,10 @@
 //! and that code, and only then does the ceremony take effect. Both are needed because the
 //! page's link can be sent to someone else: whoever starts a ceremony knows the secret, but the
 //! return code reaches only the return address, which is on the device whose browser ran the
-//! ceremony (a loopback port, the `aspen:` scheme, or this deployment's own web client), so a
-//! ceremony started by one person and run by another is never claimed. Adding a passkey and
-//! re-verifying act on the sign-in that started them, and are completed (in the page that runs
-//! them) or claimed (after a handoff) by that sign-in alone.
+//! ceremony (a loopback port or the `aspen:` scheme), so a ceremony started by one person and
+//! run by another is never claimed. Adding a passkey and re-verifying act on the sign-in that
+//! started them, and are completed (in the page that runs them) or claimed (after a handoff) by
+//! that sign-in alone.
 
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
@@ -232,9 +232,11 @@ fn rejected(e: impl std::fmt::Display) -> app::Error {
 }
 
 /// Checks where a handoff may send the browser back to: a loopback address with a port (the
-/// desktop app's one-shot listener, RFC 8252 §7.3), the `aspen:` scheme (the mobile apps), or a
-/// page of this deployment's web client, at `public_url`.
-pub fn validate_return_to(return_to: &str, public_url: &str) -> app::Result<Url> {
+/// desktop app's one-shot listener, RFC 8252 §7.3) or the `aspen:` scheme (the mobile apps).
+/// Both reach only the device whose browser ran the ceremony, which the return code relies on.
+/// No web page is accepted: the web client runs ceremonies in its own page, and a page that
+/// forwarded its query anywhere would hand the code on.
+pub fn validate_return_to(return_to: &str) -> app::Result<Url> {
     let invalid = || app::Error::Validation(t!("invalidReturnTo"));
     let url = Url::parse(return_to).map_err(|_| invalid())?;
     if url.fragment().is_some() || !url.username().is_empty() || url.password().is_some() {
@@ -248,9 +250,7 @@ pub fn validate_return_to(return_to: &str, public_url: &str) -> app::Result<Url>
     };
     let loopback = url.scheme() == "http" && url.port().is_some() && loopback_host;
     let app_scheme = url.scheme() == "aspen";
-    let web_client = matches!(url.scheme(), "http" | "https")
-        && url.origin().ascii_serialization() == public_url;
-    if loopback || app_scheme || web_client {
+    if loopback || app_scheme {
         Ok(url)
     } else {
         Err(invalid())
@@ -290,7 +290,7 @@ pub async fn start(
 ) -> app::Result<Started> {
     let webauthn = relying_party_of(state)?;
     if let Some(handoff) = &request.handoff {
-        validate_return_to(&handoff.return_to, &state.config.public_url)?;
+        validate_return_to(&handoff.return_to)?;
         validate_code_challenge(&handoff.code_challenge)?;
     }
     let mut conn = state.connection_pool.get().await?;
@@ -795,15 +795,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn return_to_accepts_loopback_listeners_and_the_app_scheme() {
-        let none = "https://chat.example.org";
+    fn return_to_accepts_loopback_listeners_and_the_app_scheme_alone() {
         for ok in [
             "http://127.0.0.1:53817/passkey",
             "http://[::1]:53817/passkey",
             "http://localhost:53817/",
             "aspen://auth/passkey",
         ] {
-            assert!(validate_return_to(ok, none).is_ok(), "{ok}");
+            assert!(validate_return_to(ok).is_ok(), "{ok}");
         }
         for bad in [
             "http://127.0.0.1/passkey",
@@ -814,18 +813,11 @@ mod tests {
             "http://user@127.0.0.1:53817/",
             "aspen://auth/passkey#x",
             "not a url",
+            "https://chat.example.org/login",
+            "http://chat.example.org/login",
         ] {
-            assert!(validate_return_to(bad, none).is_err(), "{bad}");
+            assert!(validate_return_to(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn return_to_accepts_the_web_client() {
-        let own = "https://chat.example.org";
-        assert!(validate_return_to("https://chat.example.org/login", own).is_ok());
-        assert!(validate_return_to("https://other.example.org/login", own).is_err());
-        assert!(validate_return_to("http://chat.example.org/login", own).is_err());
-        assert!(validate_return_to("ftp://chat.example.org/", own).is_err());
     }
 
     #[test]
