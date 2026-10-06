@@ -4,12 +4,13 @@
 use super::html_meta::{ParsedMetadata, parse_html_metadata};
 use super::reddit;
 use super::video::{fetch_video_embed, video_provider_for};
+use crate::app::outbound::{self, PublicResolver};
 use futures_util::stream::StreamExt;
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::net::lookup_host;
 use tracing::{info, warn};
 use url::Url;
 
@@ -36,10 +37,20 @@ const USER_AGENT: &str = concat!(
     " (+link-preview)"
 );
 
+/// The most redirects one fetch follows.
+const MAX_REDIRECTS: usize = 10;
+
+/// The client every preview fetch is made with: public addresses only, as names resolve and as
+/// URLs and redirects name them (`app::outbound`); a request for a URL that names an address
+/// must still be checked with [`outbound::may_fetch`] before it is made.
 pub(super) fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            .dns_resolver(Arc::new(PublicResolver {
+                allow_private: false,
+            }))
+            .redirect(outbound::checked_redirects(MAX_REDIRECTS))
             .user_agent(USER_AGENT)
             .timeout(FETCH_TIMEOUT)
             .connect_timeout(Duration::from_secs(5))
@@ -140,26 +151,10 @@ async fn fetch_metadata_uncached(url: &Url) -> Option<ParsedMetadata> {
 }
 
 async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
-    // Refuse hosts inside a network (`app::outbound`).
-    let domain = url.domain()?;
-    let port = url.port().or_else(|| match url.scheme() {
-        "https" => Some(443),
-        "http" => Some(80),
-        _ => None,
-    })?;
-    let socket_addrs = match lookup_host(format!("{domain}:{port}")).await {
-        Ok(iter) => iter,
-        Err(e) => {
-            info!("preview generation: lookup domain {domain} failed {e}");
-            return None;
-        }
-    };
-    for socket_addr in socket_addrs {
-        let ip = socket_addr.ip();
-        if !crate::app::outbound::is_public_address(ip) {
-            info!("preview generation: IP address {ip} blocked");
-            return None;
-        }
+    // Refuse addresses inside a network (`app::outbound`).
+    if !outbound::may_fetch(url) {
+        info!(url = url.as_str(), "preview generation: URL refused");
+        return None;
     }
     let response = match http_client().get(url.as_str()).send().await {
         Ok(r) => r,

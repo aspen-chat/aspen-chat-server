@@ -210,7 +210,9 @@ fetch.
 - `DELETE /api/v1/users/@me/push-subscriptions/{subscription}`.
 
 The deployment POSTs only to HTTPS endpoints at public addresses (`app::outbound`, as for calls
-to other deployments), since an endpoint is a URL a client chose. It drops a subscription whose
+to other deployments), since an endpoint is a URL a client chose: a name must resolve to one,
+and an endpoint naming an address inside a network is refused when registered and dropped
+before a push. It drops a subscription whose
 endpoint answers `403`, `404`, or `410`, and one made for a push key since replaced.
 
 ## The app

@@ -50,6 +50,20 @@ by each API server, at the same origin.
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
 
+## `[media]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max_attachment_bytes` | `268435456` (256 MiB) | The largest file anyone may attach. Apps declare a file's size when they ask to upload it, and the upload URL is signed for exactly that size, so storage refuses more; an upload that declared none and holds more is deleted when it is confirmed. Icons are held to 8 MiB and custom emoji to 256 KiB whatever this says. |
+
+Attachments are served from `public_base_url` as what they are only when they are pictures,
+video, or sound in the formats browsers play, plain text, or PDF. Anything else (an HTML page, an
+SVG, XML, a script, an archive) is uploaded and stored as `application/octet-stream`, with
+`Content-Disposition: attachment` where the store keeps it, so a browser saves it rather than
+running what it holds at your media address; apps still show the type its sender's system gave
+it. Icons may only be PNG, JPEG, WebP, or GIF, and the pictures of link previews are kept only
+when they are one of those (a page whose picture is an SVG is previewed without it).
+
 ## `[media.s3]`
 
 Where attachments, icons, avatars, and link preview images are kept. Clients upload straight to
@@ -121,7 +135,7 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 | Setting | Default | |
 | --- | --- | --- |
 | `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string.** |
-| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, disable it until an administrator enables it again. |
+| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, disable it until an administrator enables it again. Only people a join offer sent to that server within the token's lifetime and a minute count, and bots never do. |
 | `failure_window_seconds` | `3600` | |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
 | `candidate_limit` | `10` | The most voice servers one person is offered to choose the nearest from. |

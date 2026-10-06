@@ -363,7 +363,8 @@ pub async fn pin_domain(conn: &mut AsyncPgConnection, domain: Option<&Domain>) -
 }
 
 /// Changes the settings for someone with the permissions the change needs: Manage federation
-/// for the gates, Manage deployment settings for everything else.
+/// for the gates, Manage deployment settings for everything else. A new icon must be one they
+/// uploaded.
 pub async fn update_as(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -376,6 +377,22 @@ pub async fn update_as(
         access.require(DeploymentPermission::ManageDeploymentSettings)?;
     }
     let mut conn = state.connection_pool.get().await?;
+    // From the dashboard, a new icon must be one the caller uploaded; the one it has may stay.
+    if let Some(Some(icon)) = change.icon {
+        let current: Option<IconId> = deployment_settings::table
+            .select(deployment_settings::icon)
+            .first(conn.as_mut())
+            .await?;
+        if current != Some(icon) {
+            app::icon::require_own(
+                conn.as_mut(),
+                access.user,
+                icon,
+                t!("deploymentIconMissing"),
+            )
+            .await?;
+        }
+    }
     let changed = update(state, conn.as_mut(), app::email::available(state), change).await?;
     state.settings.offer(changed.clone());
     drop(conn);

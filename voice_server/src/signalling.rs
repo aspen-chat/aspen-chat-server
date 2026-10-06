@@ -1,8 +1,11 @@
 //! One client's WebSocket: frames in are dispatched to the rooms, frames out come from the
 //! participant's outbox. The first frame must be `identify` with a valid join token. Every
-//! route and frame is limited (`limits`).
+//! route and frame is limited (`limits`). The server pings every `PING_INTERVAL` and closes a
+//! socket it has heard nothing from, pongs included, for `IDLE_TIMEOUT`, and one whose outbox
+//! overflows (`outbox`), so a client that stops reading is let go.
 
 use crate::limits::{Caller, HEALTH, Limits, PendingSocket, SIGNALLING};
+use crate::outbox::{OUTBOX_BYTES, Outbox};
 use crate::rooms::{RoomError, Rooms};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
@@ -14,7 +17,6 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
 use tracing::{info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
@@ -22,6 +24,13 @@ use voice_protocol::token::{TokenError, verify};
 
 /// How long a client has to identify before the socket is closed.
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often the server pings a socket. Browsers answer on their own.
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// How long a socket may go without the server hearing anything, a pong included, before it is
+/// closed: two pings missed.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a closing socket is given to write what is queued for it before it is dropped.
+const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -116,15 +125,35 @@ fn now() -> i64 {
     .unwrap_or(i64::MAX)
 }
 
+/// Closes the socket: once every sender of `outbox` is gone the writer finishes what is queued
+/// and closes, given `CLOSE_GRACE` to, after which it is dropped with whatever it holds.
+async fn close(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>) {
+    drop(outbox);
+    if tokio::time::timeout(CLOSE_GRACE, &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+    }
+}
+
 async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
     let (mut sink, mut stream) = socket.split();
-    let (outbox, mut inbox) = mpsc::unbounded_channel::<ServerMessage>();
+    let (outbox, mut inbox) = Outbox::new(OUTBOX_BYTES);
     // Frames for the client are written by their own task so room work never waits on a
-    // slow socket.
+    // slow socket. It pings between them.
     let writer = tokio::spawn(async move {
-        while let Some(message) = inbox.recv().await {
-            let text = serde_json::to_string(&message).expect("frames serialize");
-            if sink.send(Message::Text(text.into())).await.is_err() {
+        let mut ping =
+            tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
+        loop {
+            let message = tokio::select! {
+                text = inbox.recv() => match text {
+                    Some(text) => Message::Text(text),
+                    None => break,
+                },
+                _ = ping.tick() => Message::Ping(Default::default()),
+            };
+            if sink.send(message).await.is_err() {
                 break;
             }
         }
@@ -145,25 +174,23 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ) {
                 Ok(claims) => claims,
                 Err(e) => {
-                    let _ = outbox.send(ServerMessage::Error {
+                    outbox.send(&ServerMessage::Error {
                         detail: e.to_string(),
                         fatal: true,
                         retry_after_seconds: None,
                     });
-                    drop(outbox);
-                    let _ = writer.await;
+                    close(outbox, writer).await;
                     return;
                 }
             }
         }
         _ => {
-            let _ = outbox.send(ServerMessage::Error {
+            outbox.send(&ServerMessage::Error {
                 detail: "the first frame must be identify".to_string(),
                 fatal: true,
                 retry_after_seconds: None,
             });
-            drop(outbox);
-            let _ = writer.await;
+            close(outbox, writer).await;
             return;
         }
     };
@@ -176,7 +203,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         channel: Some(channel),
     };
     if let Err(wait) = state.limits.check_frame("identify", &caller) {
-        let _ = outbox.send(ServerMessage::Error {
+        outbox.send(&ServerMessage::Error {
             detail: format!(
                 "too many identify frames; try again in {}s",
                 wait.as_secs().max(1)
@@ -184,35 +211,40 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             fatal: true,
             retry_after_seconds: Some(wait.as_secs().max(1)),
         });
-        drop(outbox);
-        let _ = writer.await;
+        close(outbox, writer).await;
         return;
     }
-    let connection = match state
+    let seat = match state
         .rooms
         .join(channel, user, outbox.clone(), claims.grants())
         .await
     {
-        Ok(connection) => connection,
+        Ok(seat) => seat,
         Err(e) => {
             warn!(error = e.to_string(), "join failed");
-            let _ = outbox.send(ServerMessage::Error {
+            outbox.send(&ServerMessage::Error {
                 detail: e.to_string(),
                 fatal: true,
                 retry_after_seconds: None,
             });
-            drop(outbox);
-            let _ = writer.await;
+            close(outbox, writer).await;
             return;
         }
     };
 
-    while let Some(frame) = next_frame(&mut stream).await {
+    loop {
+        let frame = tokio::select! {
+            frame = next_frame(&mut stream) => frame,
+            () = outbox.hung_up() => None,
+        };
+        let Some(frame) = frame else {
+            break;
+        };
         let kind = frame.kind();
         crate::metrics::frame(kind);
         if let Err(wait) = state.limits.check_frame(kind, &caller) {
             crate::metrics::frame_refused(kind);
-            let _ = outbox.send(ServerMessage::Error {
+            outbox.send(&ServerMessage::Error {
                 detail: format!(
                     "too many {kind} frames; try again in {}s",
                     wait.as_secs().max(1)
@@ -227,13 +259,10 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 Err(RoomError::BadParameters("already identified".to_string()))
             }
             ClientMessage::SetCapabilities { rtp_capabilities } => {
-                state
-                    .rooms
-                    .set_capabilities(channel, user, rtp_capabilities)
-                    .await
+                state.rooms.set_capabilities(seat, rtp_capabilities).await
             }
             ClientMessage::CreateTransport { direction } => {
-                state.rooms.create_transport(channel, user, direction).await
+                state.rooms.create_transport(seat, direction).await
             }
             ClientMessage::ConnectTransport {
                 transport_id,
@@ -241,11 +270,11 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .connect_transport(channel, user, &transport_id, dtls_parameters)
+                    .connect_transport(seat, &transport_id, dtls_parameters)
                     .await
             }
             ClientMessage::Produce { source, .. } | ClientMessage::ProduceRtp { source }
-                if !state.rooms.grants(channel, user).may_produce(source) =>
+                if !state.rooms.grants(seat).may_produce(source) =>
             {
                 Err(RoomError::NotPermitted(source))
             }
@@ -257,31 +286,21 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .produce(channel, user, &transport_id, kind, source, rtp_parameters)
+                    .produce(seat, &transport_id, kind, source, rtp_parameters)
                     .await
             }
-            ClientMessage::ProduceRtp { source } => {
-                state.rooms.produce_rtp(channel, user, source).await
-            }
-            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(channel, user).await,
+            ClientMessage::ProduceRtp { source } => state.rooms.produce_rtp(seat, source).await,
+            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(seat).await,
             ClientMessage::CloseProducer { producer_id } => {
-                state
-                    .rooms
-                    .close_producer(channel, user, &producer_id)
-                    .await
+                state.rooms.close_producer(seat, &producer_id).await
             }
             ClientMessage::ResumeConsumer { consumer_id } => {
-                state
-                    .rooms
-                    .resume_consumer(channel, user, &consumer_id)
-                    .await
+                state.rooms.resume_consumer(seat, &consumer_id).await
             }
             ClientMessage::SetState { muted, deafened } => {
-                state.rooms.set_state(channel, user, muted, deafened).await
+                state.rooms.set_state(seat, muted, deafened).await
             }
-            ClientMessage::OfferFile { .. }
-                if !state.rooms.grants(channel, user).transfer_files =>
-            {
+            ClientMessage::OfferFile { .. } if !state.rooms.grants(seat).transfer_files => {
                 Err(RoomError::TransferNotPermitted)
             }
             ClientMessage::OfferFile {
@@ -293,44 +312,27 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             } => {
                 state
                     .rooms
-                    .offer_file(
-                        channel,
-                        user,
-                        offer,
-                        name,
-                        size,
-                        allow_direct,
-                        valid_for_seconds,
-                    )
+                    .offer_file(seat, offer, name, size, allow_direct, valid_for_seconds)
                     .await
             }
-            ClientMessage::WithdrawFile { offer } => {
-                state.rooms.withdraw_file(channel, user, offer)
-            }
+            ClientMessage::WithdrawFile { offer } => state.rooms.withdraw_file(seat, offer),
             ClientMessage::AcceptFile { offer, mode } => {
-                state.rooms.accept_file(channel, user, offer, mode).await
+                state.rooms.accept_file(seat, offer, mode).await
             }
             ClientMessage::TransferSignal {
                 offer,
                 peer,
                 signal,
-            } => state
-                .rooms
-                .transfer_signal(channel, user, offer, peer, signal),
+            } => state.rooms.transfer_signal(seat, offer, peer, signal),
             ClientMessage::EndTransfer {
                 offer,
                 peer,
                 reason,
-            } => {
-                state
-                    .rooms
-                    .end_transfer(channel, user, offer, peer, reason)
-                    .await
-            }
+            } => state.rooms.end_transfer(seat, offer, peer, reason).await,
             ClientMessage::Leave => break,
         };
         if let Err(e) = result {
-            let _ = outbox.send(ServerMessage::Error {
+            outbox.send(&ServerMessage::Error {
                 detail: e.to_string(),
                 fatal: false,
                 retry_after_seconds: None,
@@ -338,20 +340,21 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         }
     }
     info!(user = user.to_string(), "socket closed");
-    state
-        .rooms
-        .leave(channel, user, Some(connection), None)
-        .await;
-    drop(outbox);
-    let _ = writer.await;
+    state.rooms.leave_seat(seat).await;
+    close(outbox, writer).await;
 }
 
-/// The next client frame, or `None` once the socket is closed or sends something unreadable.
+/// The next client frame, or `None` once the socket is closed, sends something unreadable, or
+/// goes `IDLE_TIMEOUT` without sending anything.
 async fn next_frame(
     stream: &mut futures_util::stream::SplitStream<WebSocket>,
 ) -> Option<ClientMessage> {
     loop {
-        match stream.next().await? {
+        let Ok(next) = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await else {
+            info!("a signalling socket went silent");
+            return None;
+        };
+        match next? {
             Ok(Message::Text(text)) => match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(frame) => return Some(frame),
                 Err(e) => {

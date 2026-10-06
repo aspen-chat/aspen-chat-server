@@ -11,7 +11,10 @@ use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_p
 use crate::app::mention::{self, Mentions};
 use crate::app::message_link::{self, MessageLinks};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
-use crate::app::permissions::{ChannelAccess, Permissions, channel_access, missing};
+use crate::app::permissions::{
+    ChannelAccess, Permissions, channel_access, channel_access_moderating, channel_access_reading,
+    missing,
+};
 use crate::app::plugin::card::Card;
 use crate::app::plugin::intercept;
 use crate::app::plugin::manifest::InterceptHook;
@@ -471,17 +474,14 @@ pub async fn read_message(
         )
         .first(conn.as_mut())
         .await?;
-    let access = channel_access(state, conn.as_mut(), caller, *msg.channel.id()).await?;
-    if access.dm_moderator {
-        note_moderation(
-            conn.as_mut(),
-            caller,
-            &access,
-            ModerationAction::ReadDm,
-            Some(id.0.to_string()),
-        )
-        .await?;
-    }
+    channel_access_reading(
+        state,
+        conn.as_mut(),
+        caller,
+        *msg.channel.id(),
+        Some(id.0.to_string()),
+    )
+    .await?;
     let attachments: Vec<AttachmentId> = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.eq(id))
@@ -523,7 +523,8 @@ pub async fn read_messages(
         let may_see = match allowed.get(&channel) {
             Some(may_see) => *may_see,
             None => {
-                let may_see = channel_access(state, conn.as_mut(), caller, channel)
+                // A DM read by a deployment moderator is logged once, here.
+                let may_see = channel_access_reading(state, conn.as_mut(), caller, channel, None)
                     .await
                     .is_ok();
                 allowed.insert(channel, may_see);
@@ -798,7 +799,7 @@ pub async fn delete_message(
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    let access = channel_access_moderating(state, conn.as_mut(), caller, channel_id).await?;
     if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
         return Err(missing(Permissions::MANAGE_MESSAGES));
     }
@@ -1030,7 +1031,7 @@ pub async fn remove_attachment(
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
+    let access = channel_access_moderating(state, conn.as_mut(), caller, channel_id).await?;
     if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
         return Err(missing(Permissions::MANAGE_MESSAGES));
     }

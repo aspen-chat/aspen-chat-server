@@ -384,8 +384,8 @@ pub async fn reorder_roles(
     .await
 }
 
-/// Gives `user` a role below the caller's highest, or takes it away. Returns whether anything
-/// changed.
+/// Gives `user` a role below the caller's highest, or takes it away; giving it takes holding every
+/// permission it allows. Returns whether anything changed.
 pub async fn set_user_role(
     state: &GlobalServerContext,
     caller: UserId,
@@ -398,12 +398,17 @@ pub async fn set_user_role(
         async move {
             let access = deployment_access(conn.as_mut(), caller).await?;
             access.require(DeploymentPermission::ManageDeploymentRoles)?;
-            let position: i32 = deployment_role::table
-                .select(deployment_role::position)
+            let (position, permissions): (i32, DeploymentPermissions) = deployment_role::table
+                .select((deployment_role::position, deployment_role::permissions))
                 .filter(deployment_role::id.eq(role_id))
                 .first(conn.as_mut())
                 .await?;
             access.require_above(position)?;
+            // Giving a role gives what it allows, which must be the caller's to give, as for
+            // making or editing one; taking it away takes rank alone.
+            if held {
+                access.require_holds(permissions)?;
+            }
             if target != caller {
                 let theirs = deployment_access(conn.as_mut(), target).await?;
                 access.require_above(theirs.rank())?;

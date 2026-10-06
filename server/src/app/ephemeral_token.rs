@@ -8,7 +8,9 @@ use fred::types::Expiration;
 use sha2::{Digest, Sha256};
 
 /// Shared by every short-lived secret kept in Valkey: its key holds a digest of the token, so a
-/// dump of the store does not hand out usable tokens.
+/// dump of the store does not hand out usable tokens. For the same reason a value that acts on a
+/// sign-in names it by `login::sign_in_id`, never by its refresh or session token, and one that
+/// waits on another secret here names it by its key (`login::TicketKey`).
 pub fn token_key(prefix: &str, token: &str) -> String {
     format!(
         "{prefix}:{}",
@@ -44,7 +46,16 @@ pub async fn get_token<V: serde::de::DeserializeOwned>(
     token: &str,
     take: bool,
 ) -> app::Result<Option<V>> {
-    let key = token_key(prefix, token);
+    get_at(state, token_key(prefix, token), take).await
+}
+
+/// Reads a value stored with `put_token` by its key (`token_key`), for what keeps the key in
+/// place of the token, removing it when `take` is set.
+pub async fn get_at<V: serde::de::DeserializeOwned>(
+    state: &GlobalServerContext,
+    key: String,
+    take: bool,
+) -> app::Result<Option<V>> {
     let raw: Option<String> = if take {
         state.valkey.getdel(key).await?
     } else {

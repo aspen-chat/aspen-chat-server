@@ -8,7 +8,7 @@
 //! offer, and each transfer's start and end, is reported to the API server, which keeps the
 //! deployment's record of them: names and sizes, never contents.
 
-use super::{Room, RoomError, Rooms};
+use super::{Room, RoomError, Rooms, Seat, seated};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -109,13 +109,6 @@ impl Room {
         }
     }
 
-    fn is_here(&self, user: Uuid) -> bool {
-        self.participants
-            .lock()
-            .expect("room lock")
-            .contains_key(&user)
-    }
-
     /// How many transfers `user` is part of.
     fn transfers_of(&self, user: Uuid) -> usize {
         self.transfers
@@ -157,14 +150,14 @@ impl Rooms {
     #[allow(clippy::too_many_arguments)]
     pub async fn offer_file(
         self: &Arc<Self>,
-        channel: Uuid,
-        user: Uuid,
+        seat: Seat,
         id: Uuid,
         name: String,
         size: u64,
         allow_direct: bool,
         valid_for_seconds: u32,
     ) -> Result<(), RoomError> {
+        let Seat { channel, user, .. } = seat;
         let room = self.room(channel)?;
         let name = name.trim().to_string();
         if name.is_empty()
@@ -196,6 +189,10 @@ impl Rooms {
             expires: Instant::now() + Duration::from_secs(u64::from(valid_for_seconds)),
         };
         let wire = {
+            // Under the room's lock, so the offer is either made before its sender leaves, and
+            // withdrawn as they do, or refused.
+            let participants = room.participants.lock().expect("room lock");
+            seated(&participants, seat)?;
             let mut offers = room.offers.lock().expect("offers lock");
             if offers.contains_key(&id) {
                 return Err(RoomError::BadParameters(
@@ -236,9 +233,11 @@ impl Rooms {
         Ok(())
     }
 
-    /// Takes back one of `user`'s offers.
-    pub fn withdraw_file(&self, channel: Uuid, user: Uuid, offer: Uuid) -> Result<(), RoomError> {
+    /// Takes back one of the participant's offers.
+    pub fn withdraw_file(&self, seat: Seat, offer: Uuid) -> Result<(), RoomError> {
+        let Seat { channel, user, .. } = seat;
         let room = self.room(channel)?;
+        room.require(seat)?;
         let own = room
             .offers
             .lock()
@@ -287,14 +286,14 @@ impl Rooms {
         }
     }
 
-    /// Starts a transfer of `offer` to `user`, in `mode`.
+    /// Starts a transfer of `offer` to the participant, in `mode`.
     pub async fn accept_file(
         &self,
-        channel: Uuid,
-        user: Uuid,
+        seat: Seat,
         offer: Uuid,
         mode: TransferMode,
     ) -> Result<(), RoomError> {
+        let Seat { channel, user, .. } = seat;
         let room = self.room(channel)?;
         let (sender, allow_direct, name, size, record) = {
             let offers = room.offers.lock().expect("offers lock");
@@ -328,15 +327,19 @@ impl Rooms {
             }
             _ => {}
         }
-        if !room.is_here(sender) {
-            return Err(RoomError::UnknownOffer);
-        }
         if room.transfers_of(user) >= MAX_TRANSFERS || room.transfers_of(sender) >= MAX_TRANSFERS {
             return Err(RoomError::BadParameters(format!(
                 "a participant may be part of at most {MAX_TRANSFERS} transfers at once"
             )));
         }
         {
+            // Both sides are checked, and the transfer made, under the room's lock, so it is
+            // made before either leaves, and ended as they do, or refused.
+            let participants = room.participants.lock().expect("room lock");
+            seated(&participants, seat)?;
+            if !participants.contains_key(&sender) {
+                return Err(RoomError::UnknownOffer);
+            }
             let mut transfers = room.transfers.lock().expect("transfers lock");
             if transfers.contains_key(&(offer, user)) {
                 return Err(RoomError::BadParameters(
@@ -392,16 +395,17 @@ impl Rooms {
         Ok(())
     }
 
-    /// Passes part of a transfer's peer connection from `user` to `peer`.
+    /// Passes part of a transfer's peer connection from the participant to `peer`.
     pub fn transfer_signal(
         &self,
-        channel: Uuid,
-        user: Uuid,
+        seat: Seat,
         offer: Uuid,
         peer: Uuid,
         signal: Value,
     ) -> Result<(), RoomError> {
-        let room = self.room(channel)?;
+        let user = seat.user;
+        let room = self.room(seat.channel)?;
+        room.require(seat)?;
         if room.transfer_between(offer, user, peer).is_none() {
             return Err(RoomError::UnknownTransfer);
         }
@@ -416,11 +420,10 @@ impl Rooms {
         Ok(())
     }
 
-    /// Ends the transfer of `offer` between `user` and `peer`, at once, for `reason`.
+    /// Ends the transfer of `offer` between the participant and `peer`, at once, for `reason`.
     pub async fn end_transfer(
         &self,
-        channel: Uuid,
-        user: Uuid,
+        seat: Seat,
         offer: Uuid,
         peer: Uuid,
         reason: TransferEnd,
@@ -430,7 +433,9 @@ impl Rooms {
                 "only the server ends a transfer for someone leaving".to_string(),
             ));
         }
-        let room = self.room(channel)?;
+        let user = seat.user;
+        let room = self.room(seat.channel)?;
+        room.require(seat)?;
         let (key, _) = room
             .transfer_between(offer, user, peer)
             .ok_or(RoomError::UnknownTransfer)?;

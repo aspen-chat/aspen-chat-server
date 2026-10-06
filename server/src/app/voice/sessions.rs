@@ -2,7 +2,8 @@
 //! server, and the ending of calls that sat alone too long.
 
 use super::ring::{end_ring, record_call, start_call};
-use super::{OptionalNotFound, VoiceParticipant, VoiceSession, participant_record};
+use super::servers::{offer_silence, reporting};
+use super::{OptionalNotFound, VoiceParticipant, VoiceServer, VoiceSession, participant_record};
 use crate::api::message_enum;
 use crate::api::message_enum::server_event::{
     ServerEvent, VoiceParticipantEvent, VoiceSessionEvent,
@@ -535,8 +536,40 @@ pub(super) async fn apply_report(
     Ok(())
 }
 
+/// Whether a session a voice server reports replaces the one recorded for its channel, on
+/// `recorded_server`: it does when that is the reporting server itself (whose room for it is
+/// gone, lost to a restart, since a server holds one room per channel) or a server that has
+/// stopped reporting (which the joiner could not reach, and which offers no longer name). A
+/// recorded call on another server that still reports goes on, and the reported room is a
+/// second call in the channel, made on a join token that named several servers, by two people
+/// starting the call at once or by one using the token twice.
+fn replaces(
+    recorded_server: VoiceServerId,
+    reporting_server: VoiceServerId,
+    recorded_server_reporting: bool,
+) -> bool {
+    recorded_server == reporting_server || !recorded_server_reporting
+}
+
+/// Tells `server` to close the room of `session`, a second call in a channel whose call goes
+/// on elsewhere. Its people are told the call is closing and rejoin where it is recorded.
+async fn close_room(
+    state: &GlobalServerContext,
+    server: VoiceServerId,
+    session: VoiceSessionId,
+) -> app::Result<()> {
+    let payload = serde_json::to_vec(&VoiceCommand::Close { session: session.0 })?;
+    state
+        .nats_context
+        .client()
+        .publish(command_subject(server.0), payload.into())
+        .await
+        .map_err(app::Error::VoiceCommand)
+}
+
 /// Records the session a voice server started, or returns the one already recorded under its
-/// id. `None` when the channel's call could not be recorded as this one.
+/// id. `None` when the channel's call could not be recorded as this one: then the room is a
+/// second call in the channel, and its server is told to close it.
 async fn record_session(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -555,14 +588,34 @@ async fn record_session(
         had_company: false,
     };
     // A voice server reports a session only once it holds the room, and it holds the room
-    // because a client with a valid join token arrived, so the call it announces is the one the
-    // channel now has. A session already recorded for the channel is therefore a room that no
-    // longer exists: the same server's, lost to a restart, or another server's that the joiner
-    // could not reach. It is ended as lost, which sends its participants to rejoin, and their
-    // offers now name this server.
+    // because a client with a valid join token arrived. A session already recorded for the
+    // channel on the same server, or on one that has stopped reporting, is a room that no
+    // longer exists or cannot be reached: it is ended as lost, which sends its participants to
+    // rejoin, and their offers now name this server. One recorded on another server that still
+    // reports is the channel's call, and stays so: this room is closed, sending its people to
+    // rejoin there, and every later report of it (a snapshot, a join) finds it unrecorded and
+    // comes here or is ignored, so it never displaces the call it duplicates.
     if let Some(stale) = session_on_channel(conn, row.channel).await? {
         if stale.id == row.id {
             return Ok(Some(stale));
+        }
+        let recorded_server: VoiceServer = voice_server::table
+            .select(VoiceServer::as_select())
+            .filter(voice_server::id.eq(stale.voice_server))
+            .first(conn)
+            .await?;
+        let recorded_reporting = reporting(&recorded_server, now, offer_silence(state));
+        if !replaces(stale.voice_server, row.voice_server, recorded_reporting) {
+            warn!(
+                channel = channel.to_string(),
+                server = server.to_string(),
+                session = session.to_string(),
+                recorded = stale.id.0.to_string(),
+                "a voice server reported a second call in a channel whose call goes on on another \
+                 server; closing it"
+            );
+            close_room(state, row.voice_server, row.id).await?;
+            return Ok(None);
         }
         // The call goes on on this server: its people rejoin, so it keeps its start and its
         // starter, and rings no one again.
@@ -785,8 +838,7 @@ async fn end_sessions_not_held(
     Ok(())
 }
 
-/// The call on `channel` whose server has not reported within `silence`, if that is the
-/// call there.
+/// The call recorded on `channel`, if any.
 pub(super) async fn session_on_channel(
     conn: &mut AsyncPgConnection,
     channel: ChannelId,
@@ -977,6 +1029,18 @@ pub(super) async fn reap_idle_sessions(state: &GlobalServerContext) -> app::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reported_call_replaces_a_recorded_one_only_where_that_one_is_lost() {
+        let (a, b) = (VoiceServerId::new(), VoiceServerId::new());
+        // The same server's room, lost to a restart, whether or not it reports.
+        assert!(replaces(a, a, true));
+        assert!(replaces(a, a, false));
+        // Another server that stopped reporting.
+        assert!(replaces(a, b, false));
+        // Another server that still reports: the reported room is the second call.
+        assert!(!replaces(a, b, true));
+    }
 
     #[test]
     fn a_call_is_alone_from_its_first_lonely_moment_until_someone_else_arrives() {

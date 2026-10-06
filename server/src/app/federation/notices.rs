@@ -15,7 +15,7 @@
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::received::{Received, Statement, receive};
+use crate::app::federation::received::{Received, Senders, Statement, receive};
 use crate::app::federation::{Direction, Domain, FederationList, Subject, admits, jws, own_domain};
 use crate::app::{self, ChannelId, EventScope, UserId, publish_event};
 use crate::database::schema::{user, user_foreign_deployment};
@@ -256,17 +256,27 @@ async fn deliver(state: &GlobalServerContext, to: &Domain, notice: String) {
 
 /// Takes a notice from another deployment: about one of this deployment's users, from a
 /// deployment they use, or about one of that deployment's users signed in here, from their home.
+/// A notice is taken from a deployment a gate admits, and an `accountDeleted` notice, which only
+/// takes away, also from any whose key is pinned here, so a home closed off since its users
+/// arrived may still retire them.
 pub async fn receive_notice(state: &GlobalServerContext, token: &str) -> app::Result<()> {
+    const DIRECTIONS: &[Direction] = &[Direction::Emigration, Direction::Immigration];
+    // The kind read before the signature is checked only chooses which senders to hear; the
+    // claims acted on are those that verify, which are the same claims.
+    let only_takes_away = jws::parse(token)
+        .ok()
+        .and_then(|unverified| unverified.peek::<Notice>().ok())
+        .is_some_and(|notice| matches!(notice.about, About::AccountDeleted));
+    let senders = if only_takes_away {
+        Senders::AdmittedOrPinned(DIRECTIONS)
+    } else {
+        Senders::Admitted(DIRECTIONS)
+    };
     let Received {
         claims,
         from,
         lists,
-    } = receive::<Notice>(
-        state,
-        token,
-        &[Direction::Emigration, Direction::Immigration],
-    )
-    .await?;
+    } = receive::<Notice>(state, token, senders).await?;
     match claims.about {
         About::DmJoined { channel, by } => {
             dm_joined(state, &from, &lists, claims.sub, channel, by).await
@@ -330,8 +340,9 @@ async fn dm_joined(
     .await
 }
 
-/// A user from `from` deleted their account there: their user here is retired. Any home may
-/// say so of its own users, whatever the gates now say, since it only takes away.
+/// A user from `from` deleted their account there: their user here is retired. Any home whose
+/// key is pinned here may say so of its own users, whatever the gates now say, since it only
+/// takes away.
 async fn account_deleted(state: &GlobalServerContext, from: &Domain, sub: Uuid) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     let found: Option<UserId> = user::table

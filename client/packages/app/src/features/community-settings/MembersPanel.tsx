@@ -142,14 +142,15 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
           ))}
         </span>
         <span className="ms-auto flex items-center gap-2">
-          {assignable.length > 0 && (
+          {assignable.take.length > 0 && (
             <RolePicker
               communityId={communityId}
               userId={member.id}
               name={name}
               roles={roles.filter((r) => !r.everyone && r.bot == null)}
               held={held ?? []}
-              canGive={(role) => assignable.includes(role)}
+              canGive={(role) => assignable.give.includes(role)}
+              canTake={(role) => assignable.take.includes(role)}
               onError={setError}
             />
           )}
@@ -222,6 +223,7 @@ function RolePicker({
   roles,
   held,
   canGive,
+  canTake,
   onError,
 }: {
   communityId: string;
@@ -229,7 +231,10 @@ function RolePicker({
   name: string;
   roles: readonly Role[];
   held: readonly string[];
+  /** Whether the caller may give `role`, which takes holding its permissions. */
   canGive: (role: Role) => boolean;
+  /** Whether the caller may take `role` away, which takes rank alone. */
+  canTake: (role: Role) => boolean;
   onError: (message: string | null) => void;
 }) {
   const m = useMessages();
@@ -250,7 +255,7 @@ function RolePicker({
             <CheckboxField
               key={role.id}
               isSelected={held.includes(role.id)}
-              isDisabled={!canGive(role)}
+              isDisabled={held.includes(role.id) ? !canTake(role) : !canGive(role)}
               onChange={(selected) => {
                 onError(null);
                 sync.setMemberRole(communityId, userId, role.id, selected).catch((e: unknown) => {

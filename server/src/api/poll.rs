@@ -234,7 +234,8 @@ pub async fn add_vote(
     Ok((status, Json(record)))
 }
 
-/// Withdraws a vote. Succeeds whether or not the caller had voted for the option.
+/// Withdraws a vote. Succeeds whether or not the caller had voted for the option, in a channel
+/// they may view, as voting does.
 #[utoipa::path(
     delete,
     path = "/polls/{poll}/votes/{option}/@me",
@@ -248,7 +249,8 @@ pub async fn add_vote(
         (status = NO_CONTENT),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = FORBIDDEN, description = "`blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = NOT_FOUND, description = "No such poll, or one in a channel the caller may not view", body = Problem),
         (status = CONFLICT, description = "`pollClosed`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

@@ -7,8 +7,9 @@
  *
  * A page can run a ceremony itself only when its host is the relying party's domain or under
  * it (`canRunInPage`). The desktop and mobile shells cannot, so they hand the ceremony to that
- * page in the system browser through a `PasskeyHandoff`, which the shell implements, and prove
- * they started it with a PKCE secret (RFC 7636) when they claim the result.
+ * page in the system browser through a `PasskeyHandoff`, which the shell implements, and claim
+ * the result with a PKCE secret (RFC 7636), proving they started it, and the return code the
+ * browser brought back, proving the ceremony ran on this device.
  */
 
 import type { components } from "./generated/openapi";
@@ -22,6 +23,12 @@ export type Passkey = Schemas["Passkey"];
 export interface HandoffReturn {
   ceremony: string;
   outcome: "done" | "cancelled";
+  /**
+   * The return code a finished ceremony brought back, which the claim presents along with the
+   * PKCE secret; `null` when cancelled. It reaches only the return address, so a ceremony whose
+   * page was opened on someone else's device is never claimed.
+   */
+  code: string | null;
 }
 
 /** One handoff in progress: a return address listening for the browser. */
@@ -183,8 +190,8 @@ export function handoffPageUrl(baseUrl: string, ceremony: string): string {
 }
 
 /**
- * Reads the browser's return from a return address: the `ceremony` and `outcome` the handoff
- * page added to its query. `null` when the URL is not such a return.
+ * Reads the browser's return from a return address: the `ceremony`, `outcome`, and `code` the
+ * handoff page added to its query. `null` when the URL is not such a return.
  */
 export function parseHandoffReturn(url: string): HandoffReturn | null {
   let parsed: URL;
@@ -198,5 +205,5 @@ export function parseHandoffReturn(url: string): HandoffReturn | null {
   if (ceremony === null || (outcome !== "done" && outcome !== "cancelled")) {
     return null;
   }
-  return { ceremony, outcome };
+  return { ceremony, outcome, code: parsed.searchParams.get("code") };
 }

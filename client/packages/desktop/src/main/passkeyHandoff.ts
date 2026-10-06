@@ -10,7 +10,7 @@ import { createServer, type Server } from "node:http";
  * sending the tab back to the server's page to say it is done, and tells the renderer.
  *
  * Any local process can reach the listener, which is harmless: the renderer claims the result
- * with a PKCE secret that never leaves it.
+ * with a PKCE secret that never leaves it, along with the return code the browser brought here.
  */
 
 export const PASSKEY_PREPARE_CHANNEL = "passkey:prepare";
@@ -24,6 +24,7 @@ const RETURN_PATH = "/passkey";
 interface HandoffReturn {
   ceremony: string;
   outcome: "done" | "cancelled";
+  code: string | null;
 }
 
 interface Pending {
@@ -41,7 +42,9 @@ function parseReturn(url: URL): HandoffReturn | null {
   if (url.pathname !== RETURN_PATH || ceremony === null) {
     return null;
   }
-  return outcome === "done" || outcome === "cancelled" ? { ceremony, outcome } : null;
+  return outcome === "done" || outcome === "cancelled"
+    ? { ceremony, outcome, code: url.searchParams.get("code") }
+    : null;
 }
 
 async function prepare(): Promise<{ id: string; returnTo: string }> {
@@ -87,7 +90,7 @@ async function prepare(): Promise<{ id: string; returnTo: string }> {
   }
   pending.set(id, entry);
   setTimeout(() => {
-    settle({ ceremony: "", outcome: "cancelled" });
+    settle({ ceremony: "", outcome: "cancelled", code: null });
     dispose(id);
   }, HANDOFF_TIMEOUT_MS).unref();
   return { id, returnTo: `http://127.0.0.1:${String(address.port)}${RETURN_PATH}` };

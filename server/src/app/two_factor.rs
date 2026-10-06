@@ -24,8 +24,7 @@ use data_encoding::BASE32_NOPAD;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::interfaces::KeysInterface;
-use fred::types::ExpireOptions;
+use fred::interfaces::{KeysInterface, LuaInterface};
 use hmac::{Hmac, Mac};
 use rand::RngExt;
 use sha1::Sha1;
@@ -186,29 +185,25 @@ fn failures_key(user_id: UserId) -> String {
     format!("auth:failures:{}", user_id.0)
 }
 
-async fn ensure_attempts_left(state: &GlobalServerContext, user_id: UserId) -> app::Result<()> {
-    let failures: Option<i64> = state.valkey.get(failures_key(user_id)).await?;
-    if failures.unwrap_or(0) >= MAX_FAILURES {
-        return Err(app::Error::TooManyAttempts);
-    }
-    Ok(())
-}
+/// Counts one attempt and answers how many the window holds now, starting the window with the
+/// first. One script, so the count and its expiry are set together and a lost connection never
+/// leaves a count that does not expire.
+const COUNT_ATTEMPT: &str = "
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+";
 
-async fn record_failure(state: &GlobalServerContext, user_id: UserId) -> app::Result<()> {
-    let key = failures_key(user_id);
-    let _: i64 = state.valkey.incr(&key).await?;
-    // NX: the window runs from the first failure, not the latest.
-    let _: bool = state
-        .valkey
-        .expire(&key, FAILURE_WINDOW_SECONDS, Some(ExpireOptions::NX))
-        .await?;
-    Ok(())
-}
-
-async fn clear_failures(state: &GlobalServerContext, user_id: UserId) -> app::Result<()> {
-    let _: i64 = state.valkey.del(failures_key(user_id)).await?;
-    Ok(())
-}
+/// Takes back an attempt `COUNT_ATTEMPT` counted, unless its window has ended meanwhile (which
+/// would leave a count without an expiry).
+const UNCOUNT_ATTEMPT: &str = "
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('DECR', KEYS[1])
+end
+return 0
+";
 
 /// Runs `check`, which answers whether a presented secret was right, under the failure limit:
 /// refused outright once the limit is reached, a wrong answer counted, a right one clearing the
@@ -217,14 +212,36 @@ pub async fn limited<F>(state: &GlobalServerContext, user_id: UserId, check: F) 
 where
     F: AsyncFnOnce() -> app::Result<bool>,
 {
-    ensure_attempts_left(state, user_id).await?;
-    let ok = check().await?;
-    if ok {
-        clear_failures(state, user_id).await?;
-    } else {
-        record_failure(state, user_id).await?;
+    limited_in(&state.valkey, &failures_key(user_id), check).await
+}
+
+/// `limited` on the count at `key`. The attempt is counted before `check` runs, so however many
+/// arrive at once, no more than `MAX_FAILURES` are checked in a window without one succeeding.
+/// A right answer clears the count; an attempt that could not be checked (an error, not a wrong
+/// answer) is taken back off it.
+async fn limited_in<F>(valkey: &fred::clients::Client, key: &str, check: F) -> app::Result<bool>
+where
+    F: AsyncFnOnce() -> app::Result<bool>,
+{
+    let attempts: i64 = valkey
+        .eval(COUNT_ATTEMPT, key.to_string(), FAILURE_WINDOW_SECONDS)
+        .await?;
+    if attempts > MAX_FAILURES {
+        return Err(app::Error::TooManyAttempts);
     }
-    Ok(ok)
+    match check().await {
+        Ok(true) => {
+            let _: i64 = valkey.del(key).await?;
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
+        Err(e) => {
+            let _: i64 = valkey
+                .eval(UNCOUNT_ATTEMPT, key.to_string(), Vec::<String>::new())
+                .await?;
+            Err(e)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -383,7 +400,7 @@ pub async fn confirm_totp(
         return Err(app::Error::VerificationFailed);
     };
     let mut conn = state.connection_pool.get().await?;
-    let session_token = caller.session_token.clone();
+    let sign_in = app::login::sign_in_id(&caller.refresh_token);
     conn.transaction(|conn| {
         async move {
             let first = !methods(conn, user_id).await?.any_factor();
@@ -403,7 +420,7 @@ pub async fn confirm_totp(
                 // Replaced or confirmed by another request since it was read.
                 return Err(app::Error::Diesel(diesel::result::Error::NotFound));
             }
-            factor_added(state, conn, user_id, &session_token, first).await
+            factor_added(state, conn, user_id, &sign_in, first).await
         }
         .scope_boxed()
     })
@@ -569,21 +586,22 @@ pub async fn regenerate_recovery_codes(
 // Adding and removing factors
 // ---------------------------------------------------------------------------------------------
 
-/// Called in the transaction that added a factor. `first` says whether the account had none
-/// before it; if so, two-factor sign-in has just turned on, so the account gets recovery codes
-/// and every other session is signed out, as a password change does.
+/// Called in the transaction that added a factor, by the sign-in named `sign_in`
+/// (`login::sign_in_id`). `first` says whether the account had none before it; if so,
+/// two-factor sign-in has just turned on, so the account gets recovery codes and every other
+/// sign-in is signed out.
 pub async fn factor_added(
     state: &impl crate::app::events::Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    session_token: &str,
+    sign_in: &str,
     first: bool,
 ) -> app::Result<Option<Vec<String>>> {
     if !first {
         return Ok(None);
     }
     let codes = replace_recovery_codes(conn, user_id).await?;
-    app::login::revoke_other_sessions(state, conn, user_id, session_token).await?;
+    app::login::revoke_other_sign_ins(state, conn, user_id, sign_in).await?;
     Ok(Some(codes))
 }
 
@@ -641,18 +659,31 @@ pub async fn verify(
     .await
 }
 
-/// Records that the sign-in `refresh_token_value` has just proved who its user is. Returns
-/// until when the session counts as recently verified.
+/// Records that `user_id`'s live sign-in named `sign_in` (`login::sign_in_id`) has just proved
+/// who its user is. Returns until when the session counts as recently verified, or
+/// `Unauthenticated` when that sign-in has ended.
 pub async fn mark_verified(
     conn: &mut AsyncPgConnection,
-    refresh_token_value: &str,
+    user_id: UserId,
+    sign_in: &str,
     config: &AuthConfig,
 ) -> app::Result<DateTime<Utc>> {
     let now = Utc::now();
-    diesel::update(refresh_token::table.filter(refresh_token::token.eq(refresh_token_value)))
-        .set(refresh_token::verified_at.eq(now))
-        .execute(conn)
-        .await?;
+    let marked = diesel::update(
+        refresh_token::table
+            .filter(refresh_token::user.eq(user_id))
+            .filter(refresh_token::expires.gt(now.naive_utc()))
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(app::login::SIGN_IN_ID_IS_SQL)
+                    .bind::<diesel::sql_types::Text, _>(sign_in),
+            ),
+    )
+    .set(refresh_token::verified_at.eq(now))
+    .execute(conn)
+    .await?;
+    if marked == 0 {
+        return Err(app::Error::Unauthenticated);
+    }
     Ok(now + reverify_window(config))
 }
 
@@ -700,7 +731,13 @@ pub async fn reauthenticate(
         return Err(app::Error::VerificationFailed);
     }
     let mut conn = state.connection_pool.get().await?;
-    mark_verified(&mut conn, &caller.refresh_token, &state.config.auth).await
+    mark_verified(
+        &mut conn,
+        user_id,
+        &app::login::sign_in_id(&caller.refresh_token),
+        &state.config.auth,
+    )
+    .await
 }
 
 /// A passkey as its owner sees it.
@@ -747,6 +784,67 @@ pub async fn overview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses the Valkey of `docker-compose.yaml`, or `VALKEY_URL`.
+    async fn test_valkey() -> fred::clients::Client {
+        use fred::interfaces::ClientLike;
+        let url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+        let client = fred::clients::Client::new(
+            fred::prelude::Config::from_url(&url).unwrap(),
+            None,
+            None,
+            None,
+        );
+        client
+            .init()
+            .await
+            .expect("Valkey from docker-compose.yaml");
+        client
+    }
+
+    #[tokio::test]
+    async fn attempts_arriving_at_once_are_checked_no_more_than_the_limit_allows() {
+        let valkey = test_valkey().await;
+        let key = format!("auth:failures:test:{}", uuid::Uuid::now_v7());
+        let checked = std::sync::atomic::AtomicI64::new(0);
+        let attempts = (0..3 * MAX_FAILURES).map(|_| {
+            limited_in(&valkey, &key, async || {
+                checked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(false)
+            })
+        });
+        let results = futures_util::future::join_all(attempts).await;
+        let refused = results
+            .iter()
+            .filter(|r| matches!(r, Err(app::Error::TooManyAttempts)))
+            .count();
+        assert_eq!(
+            std::sync::atomic::AtomicI64::load(&checked, std::sync::atomic::Ordering::SeqCst),
+            MAX_FAILURES
+        );
+        assert_eq!(refused as i64, 2 * MAX_FAILURES);
+        let ttl: i64 = valkey.ttl(&key).await.unwrap();
+        assert!(ttl > 0 && ttl <= FAILURE_WINDOW_SECONDS);
+        let _: i64 = valkey.del(&key).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_right_answer_clears_the_count_and_an_error_is_not_counted() {
+        let valkey = test_valkey().await;
+        let key = format!("auth:failures:test:{}", uuid::Uuid::now_v7());
+        assert!(!limited_in(&valkey, &key, async || Ok(false)).await.unwrap());
+        assert!(
+            limited_in(&valkey, &key, async || Err(app::Error::Busy))
+                .await
+                .is_err()
+        );
+        let count: Option<i64> = valkey.get(&key).await.unwrap();
+        assert_eq!(count, Some(1));
+        assert!(limited_in(&valkey, &key, async || Ok(true)).await.unwrap());
+        let count: Option<i64> = valkey.get(&key).await.unwrap();
+        assert_eq!(count, None);
+    }
 
     /// RFC 6238 appendix B, SHA-1 rows, truncated to six digits.
     #[test]

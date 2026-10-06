@@ -18,7 +18,7 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::received::{Received, Statement, receive};
+use crate::app::federation::received::{Received, Senders, Statement, receive};
 use crate::app::federation::{
     Direction, Domain, FederationPolicy, Subject, admits, jws, lists_of, own_domain,
 };
@@ -39,8 +39,15 @@ const ANSWER_TYPE: &str = "aspen-standing+jwt";
 pub const STANDING_PATH: &str = "/federation/standing";
 /// How long a request or an answer is good for once signed.
 const LIFETIME: Duration = Duration::minutes(2);
-/// The most users one request asks about.
-pub const MAX_USERS: usize = 500;
+/// The most users one request asks about, and the most one answer answers for: as many as fit,
+/// request and answer alike, within the longest statement any version of Aspen reads
+/// (`jws::MAX_LENGTH`). A user takes 68 bytes of an answer (`{"sub":"…","standing":"refused"},`)
+/// and base64 makes that 91; the two domains, the other claims, the header, and the signature
+/// take at most about 1.3 KiB more. At 128 users an answer is at most about 12.4 KiB, which
+/// leaves room for standings a newer home names at greater length.
+pub const MAX_USERS: usize = 128;
+/// The largest answer read: its statement, and the JSON around it.
+const MAX_ANSWER_BYTES: usize = jws::MAX_LENGTH + 1024;
 /// Which advisory lock a pass holds, so one server does it at a time.
 const PASS_LOCK: i64 = 0x6173_7065_6e5f_7374;
 
@@ -134,9 +141,12 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
         claims,
         from,
         lists,
-    } = receive::<StandingRequest>(state, token, &[Direction::Emigration]).await?;
+    } = receive::<StandingRequest>(state, token, Senders::Admitted(&[Direction::Emigration]))
+        .await?;
     let here = own_domain(&state.config.federation)
         .ok_or_else(|| app::Error::FederationRefused(crate::t!("federationOff")))?;
+    // A request asking about more users is answered for the first of them, so the answer fits
+    // in a statement; the rest go unanswered, which the asker takes as no news of them.
     let asked: Vec<Uuid> = claims.users.into_iter().take(MAX_USERS).collect();
     let mut conn = state.connection_pool.get().await?;
     let found: Vec<(UserId, bool, bool)> = user::table
@@ -388,9 +398,16 @@ async fn ask(
     if !response.status().is_success() {
         return Err(unreachable());
     }
-    let Answer { standing } = response.json().await.map_err(|_| unreachable())?;
-    let Received { claims, from, .. } =
-        receive::<StandingAnswer>(state, &standing, &[Direction::Immigration]).await?;
+    let body = super::fetch::read_capped(home, response, MAX_ANSWER_BYTES)
+        .await?
+        .ok_or_else(unreachable)?;
+    let Answer { standing } = serde_json::from_slice(&body).map_err(|_| unreachable())?;
+    let Received { claims, from, .. } = receive::<StandingAnswer>(
+        state,
+        &standing,
+        Senders::Admitted(&[Direction::Immigration]),
+    )
+    .await?;
     if from != *home {
         return Err(unreachable());
     }
@@ -486,6 +503,70 @@ async fn end_stay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::FederationKeyId;
+    use ring::rand::SystemRandom;
+    use ring::signature::Ed25519KeyPair;
+
+    /// The longest domain there can be: a 253-byte name and a five-digit port.
+    fn longest_domain(first: char) -> Domain {
+        let label = |c: char, n: usize| std::iter::repeat_n(c, n).collect::<String>();
+        Domain::parse(&format!(
+            "{}.{}.{}.{}:65535",
+            label(first, 63),
+            label('b', 63),
+            label('c', 63),
+            label('d', 61)
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_largest_request_and_answer_fit_in_a_statement() {
+        let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let key = Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap();
+        let (asker, home) = (longest_domain('a'), longest_domain('e'));
+        assert_eq!(asker.as_str().len(), 259);
+        let users: Vec<Uuid> = (0..MAX_USERS).map(|_| Uuid::new_v4()).collect();
+        let now = Utc::now();
+        let request = jws::sign(
+            REQUEST_TYPE,
+            FederationKeyId::new(),
+            &key,
+            &StandingRequest {
+                iss: asker.clone(),
+                aud: home.clone(),
+                iat: now.timestamp(),
+                exp: (now + LIFETIME).timestamp(),
+                jti: Uuid::new_v4(),
+                users: users.clone(),
+            },
+        );
+        let answer = jws::sign(
+            ANSWER_TYPE,
+            FederationKeyId::new(),
+            &key,
+            &StandingAnswer {
+                iss: home,
+                aud: asker,
+                iat: now.timestamp(),
+                exp: (now + LIFETIME).timestamp(),
+                jti: Uuid::new_v4(),
+                users: users
+                    .into_iter()
+                    .map(|sub| UserStanding {
+                        sub,
+                        standing: Standing::Refused,
+                    })
+                    .collect(),
+            },
+        );
+        assert!(jws::parse(&request).is_ok(), "{} bytes", request.len());
+        assert!(jws::parse(&answer).is_ok(), "{} bytes", answer.len());
+        // Room to spare for standings with names up to 16 bytes longer.
+        assert!(answer.len() + MAX_USERS * 16 * 4 / 3 <= jws::MAX_LENGTH);
+        let body = serde_json::to_vec(&serde_json::json!({ "standing": answer })).unwrap();
+        assert!(body.len() <= MAX_ANSWER_BYTES);
+    }
 
     #[test]
     fn a_standing_from_a_newer_home_reads_as_unknown() {

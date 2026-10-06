@@ -79,6 +79,9 @@ pub(crate) async fn create_community(
     let state = &state;
     conn.transaction(|conn| {
         async move {
+            if let Some(icon) = command.icon {
+                app::icon::require_own(conn.as_mut(), user, icon, t!("iconMissing")).await?;
+            }
             let community = Community {
                 id: CommunityId::new(),
                 icon: command.icon.map(MaybeLoaded::NotLoaded),
@@ -146,6 +149,17 @@ pub(crate) async fn update_community(
                     command.name.clone(),
                 )
                 .await?;
+            }
+            // A new icon must be one the caller uploaded; the one it has may stay.
+            if let Some(Some(icon)) = command.icon {
+                let current: Option<IconId> = community::table
+                    .select(community::icon)
+                    .filter(community::id.eq(id))
+                    .first(conn.as_mut())
+                    .await?;
+                if current != Some(icon) {
+                    app::icon::require_own(conn.as_mut(), caller, icon, t!("iconMissing")).await?;
+                }
             }
             let Some(community) = diesel::update(community::table)
                 .set(CommunityChangeset {

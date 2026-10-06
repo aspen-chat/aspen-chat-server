@@ -222,8 +222,9 @@ pub async fn reorder_deployment_roles(
     ))
 }
 
-/// Gives someone a deployment role below the caller's highest: `201` when it is new to them,
-/// `200` when they held it. They must rank below the caller, unless they are the caller.
+/// Gives someone a deployment role below the caller's highest, allowing only permissions the
+/// caller holds: `201` when it is new to them, `200` when they held it. They must rank below the
+/// caller, unless they are the caller.
 #[utoipa::path(
     put,
     path = "/admin/users/{user}/roles/{role}",
@@ -253,7 +254,8 @@ pub async fn add_user_deployment_role(
     })
 }
 
-/// Takes a deployment role from someone, on the same terms as giving it.
+/// Takes a deployment role from someone below the caller, which, unlike giving it, takes none of
+/// its permissions.
 #[utoipa::path(
     delete,
     path = "/admin/users/{user}/roles/{role}",

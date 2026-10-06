@@ -22,7 +22,9 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceParticipantModerationRequest {
-    /// Server mute: their microphone is no longer forwarded to anyone until unmuted.
+    /// Server mute: their microphone is no longer forwarded to anyone, whatever they ask, until
+    /// a moderator unmutes them. Unmuting lifts only the server mute: someone who also muted
+    /// themself stays muted.
     pub muted: bool,
 }
 
@@ -155,10 +157,13 @@ pub struct VoiceChannelState {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceServerFailureOutcome {
-    /// Distinct users who reported the server within the failure window.
+    /// Distinct users whose reports about the server count within the failure window.
     pub failures: u32,
     /// Whether the server is now disabled.
     pub disabled: bool,
+    /// Whether this report counted: only one from a person offered the server in a recent
+    /// join offer does.
+    pub counted: bool,
 }
 
 /// Asks to join the channel's call. Returns a short-lived token and the servers to try; the
@@ -370,8 +375,10 @@ pub async fn delete_voice_server(
     Ok(NoContent)
 }
 
-/// Reports that the server failed to start the caller's session. Each user counts once per
-/// window; at the configured number of distinct users the server is disabled.
+/// Reports that the server failed to start the caller's session. A report counts only from a
+/// person (not a bot) whom a recent join offer named the server to; each counts once per
+/// window, and at the configured number of distinct users the server is disabled. A report
+/// that does not count is answered the same way, with `counted` false, and changes nothing.
 #[utoipa::path(
     post,
     path = "/voice-servers/{server}/failures",
@@ -391,10 +398,11 @@ pub async fn report_voice_server_failure(
     SessionUser { user, .. }: SessionUser,
     Path(server): Path<VoiceServerId>,
 ) -> ApiResult<Json<VoiceServerFailureOutcome>> {
-    let outcome = app::voice::report_failure(&state, user.id, server).await?;
+    let outcome = app::voice::report_failure(&state, user.id, user.bot, server).await?;
     Ok(Json(VoiceServerFailureOutcome {
         failures: outcome.failures,
         disabled: outcome.disabled,
+        counted: outcome.counted,
     }))
 }
 

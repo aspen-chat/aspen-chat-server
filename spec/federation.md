@@ -16,8 +16,9 @@ deployments use too, are described by those two.
   deployment's domain, its keys (the current one first, then those it replaced within the
   handover window, each with the handover that vouches for it), its gates, its `protocol`, and
   its `software`.
-- **Signed statements**: compact JWS (RFC 7515) with EdDSA over Ed25519 (RFC 8037). The header's
-  `typ` names the kind, and a verifier checks it, so no statement passes for another:
+- **Signed statements**: compact JWS (RFC 7515) with EdDSA over Ed25519 (RFC 8037), at most
+  16 KiB (16384 bytes) each, since a reader refuses a longer one. The header's `typ` names the
+  kind, and a verifier checks it, so no statement passes for another:
   - `aspen-assertion+jwt`: a home deployment says who one of its users is, how they signed in,
     and their profile, to one other deployment (`aud`), for at most five minutes, once (`jti`).
   - `aspen-key-handover+jwt`: a deployment's outgoing key vouches for its next.
@@ -29,10 +30,13 @@ deployments use too, are described by those two.
       with them added. The home passes it on to the user's devices only while the user still
       uses the sender.
     - `accountDeleted`: sent by a home to every deployment its user used; the account is gone,
-      and each retires its user.
+      and each retires its user. Since it only takes away, a deployment takes it from any home
+      whose key it has pinned, whatever its gates now say of that home.
   - `aspen-standing-request+jwt`: a deployment asks one home, POSTing `{"request": "…"}` to
     `https://{home}/api/v1/federation/standing`, about that home's users signed in to it (by
-    their ids at home, at most 500), about hourly.
+    their ids at home, at most 128, so that the request and its answer each fit in a
+    statement), about hourly. A home answers for at most the first 128 a request names, and an
+    asker takes a user the answer leaves out as no news of them.
   - `aspen-standing+jwt`: the home's answer, `{"standing": "…"}`, saying of each user `good`
     (the account exists and may still use the asker), `gone` (there is no such account), or
     `refused` (it may no longer use the asker). An asker ends the sessions of a user it hears

@@ -204,7 +204,8 @@ impl VoiceReport {
     rename_all_fields = "camelCase"
 )]
 pub enum VoiceCommand {
-    /// Stop or resume forwarding a user's audio to the others.
+    /// Server-mute or unmute a user. While server-muted their microphone is not forwarded,
+    /// whatever they ask; unmuting lifts only this mute, not one they set themself.
     Mute {
         session: Uuid,
         user: Uuid,
@@ -225,6 +226,11 @@ pub enum VoiceCommand {
         user: Uuid,
         grants: crate::token::Grants,
     },
+    /// Close the session's room, telling everyone in it the server is closing the call
+    /// (`KickReason::ServerStopping`), so their clients rejoin wherever the channel's call is
+    /// recorded. Sent for a room the API server will not record because the channel's call goes
+    /// on on another server that is still reporting.
+    Close { session: Uuid },
 }
 
 #[cfg(test)]

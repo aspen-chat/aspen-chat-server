@@ -165,8 +165,8 @@ pub async fn reorder_roles(
     ))
 }
 
-/// Gives a member a role. Takes Assign roles; the role, and the member unless it is the caller,
-/// must rank below the caller's highest. Returns the membership, `201` when the role was new to
+/// Gives a member a role. Takes Assign roles and every permission the role allows; the role, and
+/// the member unless it is the caller, must rank below the caller's highest. Returns the membership, `201` when the role was new to
 /// them and `200` when they held it already.
 #[utoipa::path(
     put,
@@ -203,7 +203,8 @@ pub async fn add_member_role(
     Ok((status, Json(membership)))
 }
 
-/// Takes a role from a member, on the same terms as giving it.
+/// Takes a role from a member, on the same terms as giving it but for its permissions, which the
+/// caller need not hold.
 #[utoipa::path(
     delete,
     path = "/communities/{community}/members/{user}/roles/{role}",
@@ -293,8 +294,9 @@ pub async fn transfer_ownership(
     Ok(Json(message_enum::Community::from(c)))
 }
 
-/// Sets a role's override in a channel, which takes Manage channels: channel permissions it
-/// allows or denies there over what the role grants across the community. The role must rank
+/// Sets a role's override in a channel, which takes Manage channels and viewing the channel
+/// (`404` for one the caller may not view): channel permissions it allows or denies there over
+/// what the role grants across the community. The role must rank
 /// below the caller's highest, and every permission named must be one the caller holds.
 /// Threads follow their parent channel and take no overrides of their own.
 #[utoipa::path(
@@ -370,8 +372,9 @@ pub async fn clear_channel_override(
     Ok(NoContent)
 }
 
-/// Sets a role's override for every channel of a category, which takes Manage categories. A
-/// channel's own override for the role applies after its category's.
+/// Sets a role's override for every channel of a category, which takes Manage categories and
+/// viewing what the category's overrides let the caller view (`403` naming View channel
+/// otherwise). A channel's own override for the role applies after its category's.
 #[utoipa::path(
     put,
     path = "/categories/{category}/overrides/{role}",

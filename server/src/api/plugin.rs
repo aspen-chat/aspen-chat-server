@@ -297,7 +297,8 @@ pub async fn disable_community_plugin(
     Ok(NoContent)
 }
 
-/// What plugins say about a person.
+/// What plugins say about a person, for whoever shares a community with them and for themself;
+/// anyone else is answered an empty list, as the events of them reach no one else either.
 #[utoipa::path(
     get,
     path = "/users/{user}/annotations",
@@ -312,10 +313,12 @@ pub async fn disable_community_plugin(
 )]
 pub async fn list_user_annotations(
     State(state): State<GlobalServerContext>,
-    _session: SessionUser,
+    SessionUser { user: viewer, .. }: SessionUser,
     Path(user): Path<UserId>,
 ) -> ApiResult<Json<Vec<UserAnnotation>>> {
-    Ok(Json(plugin::annotation::of_user(&state, user).await?))
+    Ok(Json(
+        plugin::annotation::of_user(&state, viewer.id, user).await?,
+    ))
 }
 
 /// An installed plugin as the dashboard shows it.

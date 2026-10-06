@@ -12,8 +12,8 @@ use crate::api::message_enum::server_event::{
 };
 use crate::api::message_enum::{MessageAnnotation, UserAnnotation};
 use crate::app::context::GlobalServerContext;
-use crate::app::{self, AnnotationId, EventScope, MessageId, UserId, publish_event};
-use crate::database::schema::{message_annotation, user, user_annotation};
+use crate::app::{self, AnnotationId, CommunityId, EventScope, MessageId, UserId, publish_event};
+use crate::database::schema::{community_user, message_annotation, user, user_annotation};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -448,12 +448,34 @@ pub async fn of_messages(
         .collect())
 }
 
-/// The annotations of `subject`'s profile.
+/// The annotations of `subject`'s profile as `viewer` may see them: all of them for the subject
+/// and for whoever shares a community with them, who are those their events reach
+/// (`EventScope::UserEverywhere`), and none for anyone else.
 pub async fn of_user(
     state: &GlobalServerContext,
+    viewer: UserId,
     subject: UserId,
 ) -> app::Result<Vec<UserAnnotation>> {
     let mut conn = state.connection_pool.get().await?;
+    if viewer != subject {
+        let viewers: Vec<CommunityId> = community_user::table
+            .select(community_user::community)
+            .filter(community_user::user.eq(viewer))
+            .load(conn.as_mut())
+            .await?;
+        let shared: bool = diesel::select(diesel::dsl::exists(
+            community_user::table.filter(
+                community_user::user
+                    .eq(subject)
+                    .and(community_user::community.eq_any(viewers)),
+            ),
+        ))
+        .get_result(conn.as_mut())
+        .await?;
+        if !shared {
+            return Ok(Vec::new());
+        }
+    }
     Ok(user_annotation::table
         .select(UserAnnotationRow::as_select())
         .filter(user_annotation::user.eq(subject))

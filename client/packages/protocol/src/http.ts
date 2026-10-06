@@ -362,7 +362,7 @@ export class AspenClient {
       const claimed = unwrap(
         await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/claim`, {
           params: { path: { ceremony: started.id } },
-          body: { codeVerifier: verifier },
+          body: { codeVerifier: verifier, code: returned.code },
         }),
       );
       return this.#passkeyOutcome(claimed);

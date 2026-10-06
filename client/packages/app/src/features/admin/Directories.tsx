@@ -269,7 +269,8 @@ function DeleteOwnerlessBot({ user }: { user: AdminUserEntry }) {
 
 /**
  * The deployment roles someone holds, and, for those who may manage deployment roles, a picker
- * of the roles below the caller's highest to give or take.
+ * of the roles below the caller's highest to give or take, giving only those whose permissions
+ * the caller holds.
  */
 function UserRoles({
   user,
@@ -286,6 +287,8 @@ function UserRoles({
   const [error, setError] = useState<string | null>(null);
   const all = roles?.roles ?? [];
   const rank = roles === undefined ? 0 : rankOf(roles);
+  // Giving a role takes holding every permission it allows; taking it away, rank alone.
+  const mayGive = new Set(roles?.mine.permissions ?? []);
   const theirRank = Math.max(0, ...all.filter((r) => held.includes(r.id)).map((r) => r.position));
   const me = useMe();
   // Anyone may change their own roles below their highest; others must rank below them.
@@ -316,7 +319,10 @@ function UserRoles({
                 <CheckboxField
                   key={role.id}
                   isSelected={held.includes(role.id)}
-                  isDisabled={role.position >= rank}
+                  isDisabled={
+                    role.position >= rank ||
+                    (!held.includes(role.id) && !role.permissions.every((p) => mayGive.has(p)))
+                  }
                   onChange={(selected) => {
                     setError(null);
                     sync.admin.setUserDeploymentRole(user.id, role.id, selected).then(

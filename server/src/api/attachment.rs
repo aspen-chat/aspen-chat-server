@@ -1,9 +1,10 @@
 //! REST surface for the two-phase attachment upload flow.
 //!
-//! - `POST /attachments` — caller sends `{fileName, mimeType}`, server reserves an id and
-//!   returns `{id, uploadUrl, expiresAt}`.
+//! - `POST /attachments` — caller sends `{fileName, mimeType, byteSize}`, server reserves an id
+//!   and returns `{id, uploadUrl, expiresAt, contentType}`.
 //! - `POST /attachments/{id}/confirm` — the uploader calls this after the direct-to-S3 PUT;
-//!   the server HEADs the object and flips the row to ready. Returns the final [`Attachment`]
+//!   the server moves the object into place, refusing one over the deployment's limit, and
+//!   flips the row to ready. Returns the final [`Attachment`]
 //!   with a public `downloadUrl`.
 //! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment, for its
 //!   uploader or anyone who may view a message it is in.
@@ -86,7 +87,14 @@ pub(crate) fn attachment_to_api(
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUploadInitRequest {
     pub file_name: String,
+    /// What the file is, as the uploader's system names it; any type. Kept on the record and
+    /// shown by apps; the file is uploaded and served as `contentType` on the handle.
     pub mime_type: String,
+    /// The file's size in bytes, at most the deployment's `[media] max_attachment_bytes`. Given,
+    /// the upload URL accepts exactly this many bytes; without it, an upload of more is refused
+    /// when confirmed.
+    #[serde(default)]
+    pub byte_size: Option<u64>,
     /// A picture's size in pixels, both or neither, each at most
     /// `app::attachment::MAX_PICTURE_SIDE`; a client that measures pictures before sending them
     /// gives it, so readers can make room for the picture before it loads.
@@ -111,14 +119,20 @@ pub struct AttachmentUpdateRequest {
     pub description: Option<Option<String>>,
 }
 
-/// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, then
-/// confirm the upload.
+/// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, with
+/// `Content-Type: {contentType}`, then confirm the upload.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUploadHandle {
     pub id: AttachmentId,
     pub upload_url: String,
     pub expires_at: DateTime<Utc>,
+    /// The `Content-Type` the upload must be sent with, which the URL is signed for: the
+    /// declared `mimeType` for a kind apps show in place (`app::attachment::INLINE_TYPES`),
+    /// otherwise `application/octet-stream`, for a file to be saved. Absent from a deployment
+    /// that predates it, whose URL is signed for the declared `mimeType`.
+    #[schema(required = false)]
+    pub content_type: String,
 }
 
 #[utoipa::path(
@@ -128,7 +142,7 @@ pub struct AttachmentUploadHandle {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = AttachmentUploadHandle, headers(("Location" = String, description = "URL of the attachment once confirmed"))),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`, as when `byteSize` is over the deployment's limit", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -145,6 +159,7 @@ pub async fn init_attachment_upload(
         user.id,
         request.file_name,
         request.mime_type,
+        request.byte_size,
         size,
         description,
     )
@@ -155,6 +170,7 @@ pub async fn init_attachment_upload(
             id: upload.id,
             upload_url: upload.upload_url,
             expires_at: upload.expires_at,
+            content_type: upload.content_type,
         },
     ))
 }
@@ -167,7 +183,7 @@ pub async fn init_attachment_upload(
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Attachment),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (object not found in storage)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (object not found in storage, or larger than the deployment allows, and deleted)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

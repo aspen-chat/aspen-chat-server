@@ -402,11 +402,16 @@ impl EmailConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct MediaConfig {
     pub s3: MediaS3Config,
     pub previews: PreviewConfig,
+    /// The largest attachment, in bytes, anyone may upload (256 MiB). Each upload URL is signed
+    /// for the size its client declares, which may be no more, and confirming an upload that
+    /// holds more deletes it.
+    #[default = 268_435_456]
+    pub max_attachment_bytes: u64,
 }
 
 /// Making what readers' apps show inline in place of pictures and videos

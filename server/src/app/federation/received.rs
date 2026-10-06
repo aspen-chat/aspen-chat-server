@@ -2,7 +2,8 @@
 //! they say, a notice about one of this deployment's users. Each is believed only once it
 //! verifies against the key pinned for its issuer, is addressed to this deployment, is within
 //! its lifetime, has not been seen before, and comes from a deployment this one federates with
-//! in the direction concerned and shares a protocol version with.
+//! in the direction concerned (or, for a statement that only takes away, one whose key is pinned
+//! here) and shares a protocol version with.
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
@@ -56,15 +57,26 @@ pub fn invalid(domain: Option<&Domain>, reason: std::borrow::Cow<'static, str>) 
     app::Error::AssertionInvalid(reason)
 }
 
-/// Verifies `token` as a statement of kind `T` from a deployment that a gate of one of
-/// `directions` admits, for users or for bots; the caller then checks the gate for what the
-/// statement is about. Nothing is fetched from, or recorded about, a deployment no such gate
-/// admits.
+/// Which deployments a statement is taken from.
+#[derive(Debug, Clone, Copy)]
+pub enum Senders<'a> {
+    /// Those a gate of one of these directions admits, for users or for bots.
+    Admitted(&'a [Direction]),
+    /// Those, and besides them any deployment whose key is pinned here, its statement verified
+    /// against that key alone: for statements that only take away what the sender's own users
+    /// have here, which a deployment may make whatever the gates now say.
+    AdmittedOrPinned(&'a [Direction]),
+}
+
+/// Verifies `token` as a statement of kind `T` from one of `senders`; the caller then checks the
+/// gate for what the statement is about. Nothing is fetched from, or recorded about, a
+/// deployment no gate of the directions named admits.
 pub async fn receive<T: Statement>(
     state: &GlobalServerContext,
     token: &str,
-    directions: &[Direction],
+    senders: Senders<'_>,
 ) -> app::Result<Received<T>> {
+    let (Senders::Admitted(directions) | Senders::AdmittedOrPinned(directions)) = senders;
     let config = &state.config.federation;
     let here = own_domain(config).ok_or(app::Error::FederationRefused(t!("federationOff")))?;
     let unverified = jws::parse(token).map_err(|_| invalid(None, t!("statementMalformed")))?;
@@ -90,14 +102,17 @@ pub async fn receive<T: Statement>(
         admits(&policy, Subject::Users, *direction, &lists)
             || admits(&policy, Subject::Bots, *direction, &lists)
     });
-    if !admitted {
-        return Err(refused(
+    let refusal = || {
+        refused(
             &from,
             directions
                 .first()
                 .copied()
                 .unwrap_or(Direction::Immigration),
-        ));
+        )
+    };
+    if !admitted && !matches!(senders, Senders::AdmittedOrPinned(_)) {
+        return Err(refusal());
     }
     let known: Option<FederatedDeployment> = federated_deployment::table
         .find(&from)
@@ -112,6 +127,8 @@ pub async fn receive<T: Statement>(
         .and_then(|key| unverified.verify::<T>(T::TYPE, key).ok());
     let (claims, sender) = match (verified, known) {
         (Some(claims), Some(known)) => (claims, known),
+        // A sender no gate admits is not contacted, so only the key already pinned will do.
+        _ if !admitted => return Err(refusal()),
         _ => {
             // A key never pinned, or one the sender has since handed over from: contacting it
             // pins or follows the handover, and a key that changed unannounced stays refused.

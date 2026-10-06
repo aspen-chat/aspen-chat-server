@@ -715,14 +715,17 @@ impl Call {
             .await
             .map_err(|_| wit::Error::NotFound)?;
         drop(conn);
-        let (bytes, _) = self
+        // Read no more than the plugin may take: an object storage says is larger is refused
+        // before any of it is read, and one that runs past the limit as it is read is dropped.
+        let limit = self.plugin.manifest.attachment_limit.unwrap_or(0);
+        let mut bytes = Vec::new();
+        let read = self
             .server
             .media_store
-            .get_bytes(&key)
+            .copy_object_to(&key, limit, &mut bytes)
             .await
             .map_err(|e| self.fail(e))?;
-        let limit = self.plugin.manifest.attachment_limit.unwrap_or(0);
-        if bytes.len() as u64 > limit {
+        if read.is_none() {
             return Err(wit::Error::Limit(format!(
                 "the attachment is larger than the plugin's attachmentLimit, {limit} bytes"
             )));
@@ -755,6 +758,13 @@ impl Call {
         if url.scheme() != "https" || !self.plugin.manifest.hosts.iter().any(|h| h == host) {
             return Err(wit::Error::Denied(format!(
                 "{host} is not among the plugin's hosts, or the URL is not https"
+            )));
+        }
+        // An address is connected to without the client's resolver, which refuses the inside
+        // of a network only for names.
+        if crate::app::outbound::names_inside_address(&url) {
+            return Err(wit::Error::Denied(format!(
+                "{host} is an address inside a network, which plugins do not call"
             )));
         }
         if request.body.len() > MAX_FETCH_BYTES {

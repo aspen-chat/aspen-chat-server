@@ -898,8 +898,8 @@ pub async fn ban_user(
     Ok((status, Json(outcome.into())))
 }
 
-/// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users; written
-/// to the moderation log.
+/// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users and
+/// ranking above the person banned, as banning does; written to the moderation log.
 #[utoipa::path(
     delete,
     path = "/admin/users/{user}/ban",
@@ -910,7 +910,7 @@ pub async fn ban_user(
         (status = NO_CONTENT, description = "Not banned"),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users", body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Ban users or when the person banned does not rank below the caller", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )

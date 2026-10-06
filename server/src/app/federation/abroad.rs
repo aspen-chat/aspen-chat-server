@@ -13,7 +13,7 @@ use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::received::{Received, Statement, invalid, receive, refused};
+use crate::app::federation::received::{Received, Senders, Statement, invalid, receive, refused};
 use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};
 use crate::app::login::{Session, SignInMethod, issue_session};
 use crate::app::two_factor::Caller;
@@ -38,7 +38,7 @@ const ASSERTION_LIFETIME: Duration = Duration::minutes(2);
 /// Where a home serves its users' avatars to the deployments they sign in to, under the API.
 pub const HOME_ICON_PATH: &str = "/federation/icons";
 /// The largest avatar copied from a home.
-const MAX_AVATAR_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AVATAR_BYTES: u64 = app::icon::MAX_BYTES;
 
 /// What a home says of one of its users to one other deployment.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -246,7 +246,7 @@ pub async fn sign_in(
         from: home,
         lists,
         ..
-    } = receive::<Assertion>(state, token, &[Direction::Immigration]).await?;
+    } = receive::<Assertion>(state, token, Senders::Admitted(&[Direction::Immigration])).await?;
     let subject = if claims.profile.bot {
         Subject::Bots
     } else {
@@ -550,7 +550,8 @@ async fn copy_avatar(
 }
 
 /// The avatar `icon` of one of this deployment's own users, with its type, for a deployment
-/// they sign in to: nothing else is served this way.
+/// they sign in to: nothing else is served this way, and only a picture of one of
+/// [`app::icon::IMAGE_TYPES`].
 pub async fn home_avatar(
     state: &GlobalServerContext,
     icon: IconId,
@@ -560,6 +561,7 @@ pub async fn home_avatar(
         .select(app::icon::Icon::as_select())
         .filter(icon::id.eq(icon))
         .filter(icon::ready_at.is_not_null())
+        .filter(icon::icon_mime_type.eq_any(app::icon::IMAGE_TYPES))
         .filter(diesel::dsl::exists(
             user::table.filter(
                 user::icon
@@ -575,7 +577,8 @@ pub async fn home_avatar(
     Ok((bytes, row.mime_type))
 }
 
-/// An avatar's bytes and type, as its home serves them.
+/// An avatar's bytes and type, as its home serves them; only a picture of one of
+/// [`app::icon::IMAGE_TYPES`] is taken.
 async fn fetch_avatar(
     state: &GlobalServerContext,
     home: &Domain,
@@ -598,14 +601,20 @@ async fn fetch_avatar(
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if !response.status().is_success() || !mime_type.starts_with("image/") {
+    let mime_type = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !response.status().is_success() || !app::icon::IMAGE_TYPES.contains(&mime_type.as_str()) {
         return Err(unreachable());
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| unreachable())?;
-        if bytes.len() + chunk.len() > MAX_AVATAR_BYTES {
+        if (bytes.len() + chunk.len()) as u64 > MAX_AVATAR_BYTES {
             return Err(unreachable());
         }
         bytes.extend_from_slice(&chunk);

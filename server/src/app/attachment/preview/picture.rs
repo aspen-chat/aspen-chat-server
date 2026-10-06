@@ -59,28 +59,33 @@ pub struct Picture {
 }
 
 /// Makes the preview of the picture in `bytes`, or says why none is made. The picture is
-/// anyone's, so it is refused before it is decoded when it has more than `max_pixels`, and
-/// decoding allocates no more than such a picture needs.
+/// anyone's, so it is refused when it has more than `max_pixels` before any of it is decoded,
+/// whatever its kind, and decoding allocates no more than such a picture needs.
 pub fn preview(bytes: &[u8], max_pixels: u64) -> Result<Picture, &'static str> {
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| "unreadable")?;
-    let format = reader.format().ok_or("not a picture this server reads")?;
-    if animated(bytes, format) {
-        return Err("animated");
-    }
-    let mut limits = Limits::default();
-    // Eight bytes a pixel holds the deepest colour a decoder makes (16-bit RGBA), and the rest
-    // is room for its working buffers.
-    limits.max_alloc = Some(max_pixels.saturating_mul(8).saturating_add(64 << 20));
-    reader.limits(limits);
-    let mut decoder = reader
-        .into_decoder()
+    let limits = limits(max_pixels);
+    let reader = || {
+        let mut reader = ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|_| "unreadable")?;
+        reader.limits(limits.clone());
+        Ok::<_, &'static str>(reader)
+    };
+    let format = reader()?
+        .format()
+        .ok_or("not a picture this server reads")?;
+    // Read from the header alone.
+    let (width, height) = reader()?
+        .into_dimensions()
         .map_err(|_| "not a picture this server reads")?;
-    let (width, height) = decoder.dimensions();
     if u64::from(width) * u64::from(height) > max_pixels {
         return Err("more pixels than max_picture_pixels");
     }
+    if animated(bytes, format, &limits) {
+        return Err("animated");
+    }
+    let mut decoder = reader()?
+        .into_decoder()
+        .map_err(|_| "not a picture this server reads")?;
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let icc = decoder.icc_profile().ok().flatten();
     let mut image = DynamicImage::from_decoder(decoder).map_err(|_| "could not be decoded")?;
@@ -142,18 +147,39 @@ pub fn preview(bytes: &[u8], max_pixels: u64) -> Result<Picture, &'static str> {
     })
 }
 
+/// What decoding a picture of at most `max_pixels` may allocate: eight bytes a pixel holds the
+/// deepest colour a decoder makes (16-bit RGBA), and the rest is room for its working buffers.
+fn limits(max_pixels: u64) -> Limits {
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(max_pixels.saturating_mul(8).saturating_add(64 << 20));
+    limits
+}
+
 /// Whether the picture moves. A preview would hold its first frame only, so a picture that
-/// moves keeps its original.
-fn animated(bytes: &[u8], format: ImageFormat) -> bool {
+/// moves keeps its original. Only a GIF's frames are decoded to tell, its first two at most,
+/// each the size of the whole picture, so its dimensions must already have been checked; the
+/// decoder holds to `limits` besides.
+fn animated(bytes: &[u8], format: ImageFormat, limits: &Limits) -> bool {
     match format {
-        ImageFormat::Png => PngDecoder::new(Cursor::new(bytes))
+        ImageFormat::Png => PngDecoder::with_limits(Cursor::new(bytes), limits.clone())
             .and_then(|decoder| decoder.is_apng())
             .unwrap_or(false),
         ImageFormat::WebP => WebPDecoder::new(Cursor::new(bytes))
             .map(|decoder| decoder.has_animation())
             .unwrap_or(false),
         ImageFormat::Gif => GifDecoder::new(Cursor::new(bytes))
-            .map(|decoder| decoder.into_frames().take(2).count() > 1)
+            .and_then(|mut decoder| {
+                decoder.set_limits(limits.clone())?;
+                Ok(decoder)
+            })
+            .map(|decoder| {
+                decoder
+                    .into_frames()
+                    .take(2)
+                    .take_while(Result::is_ok)
+                    .count()
+                    > 1
+            })
             .unwrap_or(false),
         _ => false,
     }
@@ -339,6 +365,41 @@ mod tests {
         );
         assert!(preview(b"<svg xmlns='http://www.w3.org/2000/svg'/>", MAX_PIXELS).is_err());
         assert!(preview(&bytes[..bytes.len() / 2], MAX_PIXELS).is_err());
+    }
+
+    /// A GIF of `frames` one-pixel frames on a logical screen of `width` by `height`, written
+    /// byte by byte, since an encoder would make the screen as large as the frames.
+    fn gif(width: u16, height: u16, frames: usize) -> Vec<u8> {
+        let mut bytes = b"GIF89a".to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        // No global colour table, background 0, square pixels.
+        bytes.extend_from_slice(&[0, 0, 0]);
+        for _ in 0..frames {
+            // An image descriptor at 0,0 of 1 by 1, with a local table of two colours.
+            bytes.push(0x2c);
+            bytes.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0, 0x80]);
+            bytes.extend_from_slice(&[0, 0, 0, 255, 255, 255]);
+            // LZW with a minimum code size of 2: clear (4), index 0, end (5), at 3 bits each.
+            bytes.extend_from_slice(&[2, 2, 0x44, 0x01, 0]);
+        }
+        bytes.push(0x3b);
+        bytes
+    }
+
+    #[test]
+    fn a_gif_on_a_vast_screen_is_refused_before_a_frame_is_decoded() {
+        // Each frame of this GIF decodes to its whole screen, 17 GB of pixels, which the server
+        // would fail to allocate or be killed for taking.
+        let vast = gif(u16::MAX, u16::MAX, 2);
+        assert_eq!(
+            preview(&vast, MAX_PIXELS).unwrap_err(),
+            "more pixels than max_picture_pixels"
+        );
+        // Asked whether it moves, the decoder refuses rather than allocate past its limits.
+        assert!(!animated(&vast, ImageFormat::Gif, &limits(MAX_PIXELS)));
+        // The same GIF on a small screen is read, and moves.
+        assert_eq!(preview(&gif(4, 4, 2), MAX_PIXELS).unwrap_err(), "animated");
     }
 
     /// `jpeg` with an EXIF segment giving `orientation`, put after its start marker.

@@ -37,7 +37,7 @@
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
-use crate::app::media_store::PresignedUpload;
+use crate::app::media_store::{PresignedUpload, Promotion, Served};
 use crate::app::{AttachmentId, Loadable, UserId};
 use crate::database::schema::{attachment, message, message_attachment};
 use crate::t;
@@ -128,6 +128,92 @@ pub fn description(raw: Option<String>) -> app::Result<Option<String>> {
     Ok(Some(text.to_owned()))
 }
 
+/// The kinds of file served as what they are, for apps and browsers to show in place: pictures,
+/// video, and sound in the formats browsers play, plain text, and PDF, none of which runs script
+/// in a page that opens it. Any other kind (an HTML page, an SVG, XML, a script, an archive, or
+/// one not given) is uploaded and served as `application/octet-stream`, to be saved, since a
+/// browser opening it from storage could run what it holds; its record keeps the kind its
+/// uploader declared, which apps show.
+pub const INLINE_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "image/bmp",
+    "video/mp4",
+    "video/webm",
+    "video/ogg",
+    "video/quicktime",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/webm",
+    "audio/flac",
+    "text/plain",
+    "application/pdf",
+];
+
+/// The type of anything not among [`INLINE_TYPES`], which browsers save rather than show.
+const SAVED_TYPE: &str = "application/octet-stream";
+
+/// How an attachment of the declared `mime_type` named `file_name` is uploaded and served: as
+/// declared when that is among [`INLINE_TYPES`], shown in place, and otherwise as
+/// [`SAVED_TYPE`], to be saved; either way under its own name.
+pub fn served(mime_type: &str, file_name: &str) -> Served {
+    let essence = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let (content_type, disposition) = if INLINE_TYPES.contains(&essence.as_str()) {
+        (mime_type.to_owned(), "inline")
+    } else {
+        (SAVED_TYPE.to_owned(), "attachment")
+    };
+    Served {
+        content_type,
+        disposition: Some(format!("{disposition}; {}", filename_parameters(file_name))),
+    }
+}
+
+/// `file_name` as `Content-Disposition` gives it (RFC 6266): in full as `filename*`, and as
+/// `filename` with anything beyond printable ASCII, and quotes and backslashes, made `_`, for
+/// the few that read only that.
+fn filename_parameters(file_name: &str) -> String {
+    let fallback: String = file_name
+        .chars()
+        .map(|c| match c {
+            ' '..='~' if c != '"' && c != '\\' => c,
+            _ => '_',
+        })
+        .collect();
+    let mut encoded = String::with_capacity(file_name.len());
+    for byte in file_name.bytes() {
+        if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+/// `bytes` as people read a file's size: in MiB, or KiB below one.
+pub fn size_text(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    if bytes >= MIB {
+        format!("{} MiB", bytes.div_ceil(MIB))
+    } else {
+        format!("{} KiB", bytes.div_ceil(KIB))
+    }
+}
+
 impl Loadable for Attachment {
     type Id = AttachmentId;
 
@@ -172,13 +258,17 @@ pub struct AttachmentUpload {
     pub id: AttachmentId,
     pub upload_url: String,
     pub expires_at: DateTime<Utc>,
+    /// The `Content-Type` the upload must be sent with ([`served`]).
+    pub content_type: String,
 }
 
 pub fn storage_key(id: AttachmentId) -> String {
     format!("attachments/{}", id.0)
 }
 
-/// Reserve a row and mint a presigned `PUT` URL.
+/// Reserve a row and mint a presigned `PUT` URL, for the type the file is served as
+/// ([`served`]) and, when the client declares it, for exactly `byte_size` bytes, which may be at
+/// most `[media] max_attachment_bytes`.
 ///
 /// On any failure after the row insert (presign error, etc.), the
 /// freshly-inserted row is rolled back so a client retry doesn't leak
@@ -188,9 +278,15 @@ pub async fn init_upload(
     caller: UserId,
     file_name: String,
     mime_type: String,
+    byte_size: Option<u64>,
     size: Option<(i32, i32)>,
     description: Option<String>,
 ) -> app::Result<AttachmentUpload> {
+    let max_bytes = state.config.media.max_attachment_bytes;
+    if byte_size.is_some_and(|bytes| bytes > max_bytes) {
+        return Err(too_large(max_bytes));
+    }
+    let served = served(&mime_type, &file_name);
     let id = AttachmentId::new();
     let key = storage_key(id);
     let row = Attachment {
@@ -214,11 +310,16 @@ pub async fn init_upload(
         .values(&row)
         .execute(conn.as_mut())
         .await?;
-    match state.media_store.presign_upload(&key, &mime_type).await {
+    match state
+        .media_store
+        .presign_upload(&key, &served.content_type, byte_size)
+        .await
+    {
         Ok(PresignedUpload { url, expires_at }) => Ok(AttachmentUpload {
             id,
             upload_url: url,
             expires_at,
+            content_type: served.content_type,
         }),
         Err(e) => {
             if let Err(rollback_err) = diesel::delete(attachment::table)
@@ -237,6 +338,10 @@ pub async fn init_upload(
     }
 }
 
+fn too_large(max_bytes: u64) -> app::Error {
+    app::Error::Validation(t!("attachmentTooLarge", max = size_text(max_bytes)))
+}
+
 /// Verify an in-flight upload of the caller's landed and flip the row to `ready`.
 ///
 /// Returns the DB row with a populated `ready_at`. The caller (the API
@@ -246,7 +351,8 @@ pub async fn init_upload(
 /// - `Diesel(NotFound)` — no row at all, or the row was already confirmed
 ///   and a subsequent client retry hit the row instead of a fresh one.
 /// - `Validation` — the row exists but no object is present in the bucket;
-///   the client most likely never completed the `PUT`.
+///   the client most likely never completed the `PUT`; or the object holds
+///   more than `[media] max_attachment_bytes`, and is deleted.
 pub async fn confirm_upload(
     state: &GlobalServerContext,
     caller: UserId,
@@ -263,8 +369,18 @@ pub async fn confirm_upload(
         )
         .first(conn.as_mut())
         .await?;
-    if state.media_store.promote(&row.storage_key).await?.is_none() {
-        return Err(app::Error::Validation(t!("attachmentUploadNotFound")));
+    let max_bytes = state.config.media.max_attachment_bytes;
+    let served = served(&row.mime_type, &row.file_name);
+    match state
+        .media_store
+        .promote(&row.storage_key, max_bytes, &served)
+        .await?
+    {
+        Promotion::Promoted(_) => {}
+        Promotion::NotUploaded => {
+            return Err(app::Error::Validation(t!("attachmentUploadNotFound")));
+        }
+        Promotion::TooLarge => return Err(too_large(max_bytes)),
     }
     let confirmed = Utc::now();
     let wants_preview = preview::wanted(&row.mime_type);
@@ -331,9 +447,15 @@ pub async fn read_attachment(
         .load(conn.as_mut())
         .await?;
     for channel in channels {
-        if app::permissions::channel_access(state, conn.as_mut(), caller, channel)
-            .await
-            .is_ok()
+        if app::permissions::channel_access_reading(
+            state,
+            conn.as_mut(),
+            caller,
+            channel,
+            Some(id.0.to_string()),
+        )
+        .await
+        .is_ok()
         {
             return Ok(row);
         }
@@ -460,5 +582,56 @@ mod picture_size_tests {
         assert!(picture_size(None, Some(480)).is_err());
         assert!(picture_size(Some(0), Some(480)).is_err());
         assert!(picture_size(Some(MAX_PICTURE_SIDE + 1), Some(480)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod served_tests {
+    use super::*;
+
+    #[test]
+    fn what_could_run_in_a_browser_is_saved_rather_than_shown() {
+        for declared in [
+            "text/html",
+            "application/xhtml+xml",
+            "image/svg+xml",
+            "text/xml",
+            "application/xml",
+            "text/javascript",
+            "application/zip",
+            "",
+            "TEXT/HTML",
+            "text/html; charset=utf-8",
+        ] {
+            let served = served(declared, "page.html");
+            assert_eq!(served.content_type, SAVED_TYPE, "{declared}");
+            assert!(
+                served.disposition.unwrap().starts_with("attachment; "),
+                "{declared}"
+            );
+        }
+        for declared in ["image/png", "video/mp4", "text/plain; charset=utf-8"] {
+            let served = served(declared, "a");
+            assert_eq!(served.content_type, declared);
+            assert!(served.disposition.unwrap().starts_with("inline; "));
+        }
+    }
+
+    #[test]
+    fn a_name_is_given_whole_and_safely() {
+        assert_eq!(
+            filename_parameters("naïve \"plan\".txt"),
+            "filename=\"na_ve _plan_.txt\"; filename*=UTF-8''na%C3%AFve%20%22plan%22.txt"
+        );
+        assert_eq!(
+            filename_parameters("a\r\nb;c"),
+            "filename=\"a__b;c\"; filename*=UTF-8''a%0D%0Ab%3Bc"
+        );
+    }
+
+    #[test]
+    fn sizes_read_as_people_read_them() {
+        assert_eq!(size_text(256 * 1024 * 1024), "256 MiB");
+        assert_eq!(size_text(256 * 1024), "256 KiB");
     }
 }

@@ -2,7 +2,7 @@
 //! game capture's helper and the benchmark's simulated participants (`produceRtp`,
 //! `consumeRtp`).
 
-use super::{ReceiveTransport, Room, RoomError, Rooms};
+use super::{ReceiveTransport, Room, RoomError, Rooms, Seat, seated, seated_mut};
 use crate::media::{h264_parameters, local_tuple};
 use mediasoup::prelude::*;
 use mediasoup::types::srtp_parameters::SrtpParameters;
@@ -51,11 +51,11 @@ impl Rooms {
     /// Moves the participant's consumers onto a plain SRTP transport (`consumeRtp`). Consumers
     /// already made on a WebRTC transport are left where they are; the participant, not being a
     /// browser, has none.
-    pub async fn consume_rtp(&self, channel: Uuid, user: Uuid) -> Result<(), RoomError> {
-        let room = self.room(channel)?;
+    pub async fn consume_rtp(&self, seat: Seat) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
         {
             let participants = room.participants.lock().expect("room lock");
-            let participant = participants.get(&user).ok_or(RoomError::NotInCall)?;
+            let participant = seated(&participants, seat)?;
             if participant.recv_transport.is_some() {
                 return Err(RoomError::BadParameters(
                     "the participant already has a receive transport".to_string(),
@@ -66,7 +66,7 @@ impl Rooms {
         let (local_address, local_port) = local_tuple(&transport);
         {
             let mut participants = room.participants.lock().expect("room lock");
-            let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
+            let participant = seated_mut(&mut participants, seat)?;
             participant.recv_transport = Some(ReceiveTransport::Plain(transport));
             participant.send(ServerMessage::RtpConsuming {
                 ip: local_address.to_string(),
@@ -75,27 +75,22 @@ impl Rooms {
                 srtp_key_base64: srtp.key_base64.clone(),
             });
         }
-        self.ensure_consumers(&room, user).await;
+        self.ensure_consumers(&room, seat.user).await;
         Ok(())
     }
 
     /// Makes a producer fed by SRTP the client sends itself, on a plain transport that learns
     /// the sender's address from its first packet, and tells the client where to send. The
     /// client consumes the producer too, as its own preview.
-    pub async fn produce_rtp(
-        &self,
-        channel: Uuid,
-        user: Uuid,
-        source: MediaSource,
-    ) -> Result<(), RoomError> {
-        let room = self.room(channel)?;
-        {
+    pub async fn produce_rtp(&self, seat: Seat, source: MediaSource) -> Result<(), RoomError> {
+        let user = seat.user;
+        let room = self.room(seat.channel)?;
+        let muted = {
             let participants = room.participants.lock().expect("room lock");
-            participants
-                .get(&user)
-                .ok_or(RoomError::NotInCall)?
-                .ensure_source_free(source)?;
-        }
+            let participant = seated(&participants, seat)?;
+            participant.ensure_source_free(source)?;
+            participant.silenced()
+        };
         let (transport, srtp) = self.plain_transport(&room).await?;
         let ssrc = (Uuid::now_v7().as_u128() as u32) | 1;
         // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
@@ -158,35 +153,52 @@ impl Rooms {
                 reduced_size: true,
             },
         };
-        let producer = transport
-            .produce(ProducerOptions::new(kind, rtp_parameters))
-            .await?;
+        let mut options = ProducerOptions::new(kind, rtp_parameters);
+        let paused = muted && source == MediaSource::Microphone;
+        options.paused = paused;
+        let producer = transport.produce(options).await?;
         Self::observe_audio(&room, &producer, user).await;
         let (local_address, local_port) = local_tuple(&transport);
         let producer_id = producer.id();
         let state = {
             let mut participants = room.participants.lock().expect("room lock");
-            let participant = participants.get_mut(&user).ok_or(RoomError::NotInCall)?;
-            participant
-                .producers
-                .insert(producer_id, (producer, source));
-            // Only video is previewed back to the sender; their own audio would be an echo.
-            if kind == MediaKind::Video {
-                participant.own_preview.insert(producer_id);
+            match seated_mut(&mut participants, seat).and_then(|participant| {
+                participant.admit(source)?;
+                Ok(participant)
+            }) {
+                Ok(participant) => {
+                    participant
+                        .producers
+                        .insert(producer_id, (producer.clone(), source));
+                    // Only video is previewed back to the sender; their own audio would be an
+                    // echo.
+                    if kind == MediaKind::Video {
+                        participant.own_preview.insert(producer_id);
+                    }
+                    participant.rtp_transports.insert(producer_id, transport);
+                    participant.send(ServerMessage::RtpProduced {
+                        producer_id: producer_id.to_string(),
+                        source,
+                        ip: local_address.to_string(),
+                        port: local_port,
+                        ssrc,
+                        payload_type,
+                        srtp_crypto_suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
+                        srtp_key_base64: srtp.key_base64.clone(),
+                    });
+                    (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
+                }
+                Err(e) => {
+                    drop(participants);
+                    Self::refuse_producer(&room, producer);
+                    return Err(e);
+                }
             }
-            participant.rtp_transports.insert(producer_id, transport);
-            participant.send(ServerMessage::RtpProduced {
-                producer_id: producer_id.to_string(),
-                source,
-                ip: local_address.to_string(),
-                port: local_port,
-                ssrc,
-                payload_type,
-                srtp_crypto_suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
-                srtp_key_base64: srtp.key_base64.clone(),
-            });
-            (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
         };
+        if source == MediaSource::Microphone {
+            Self::settle_microphone(&room, seat, &producer, paused).await;
+        }
+        drop(producer);
         if let Some(report) = state {
             self.reporter.report(report);
         }
