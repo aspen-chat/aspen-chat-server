@@ -3,7 +3,9 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    // The tests run under Node, which needs the extension in their imports.
+    "allowImportingTsExtensions": true
   },
   "include": ["src", "electron.vite.config.ts"]
 }
