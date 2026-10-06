@@ -25,7 +25,8 @@
 //!
 //! The server also reads objects back and writes what it makes of them: the
 //! previews of pictures and videos (`app::attachment::preview`) through
-//! [`copy_object_to`] and [`put_bytes`].
+//! [`copy_object_to`] and [`put_bytes`], and plugins read attachments, up to
+//! their limit, through [`copy_object_to`].
 //!
 //! Downloads do not pass through Aspen at all; clients hit the
 //! `public_base_url` (an anonymous-read endpoint operated alongside the S3

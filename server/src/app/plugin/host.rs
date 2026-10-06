@@ -715,14 +715,17 @@ impl Call {
             .await
             .map_err(|_| wit::Error::NotFound)?;
         drop(conn);
-        let (bytes, _) = self
+        // Read no more than the plugin may take: an object storage says is larger is refused
+        // before any of it is read, and one that runs past the limit as it is read is dropped.
+        let limit = self.plugin.manifest.attachment_limit.unwrap_or(0);
+        let mut bytes = Vec::new();
+        let read = self
             .server
             .media_store
-            .get_bytes(&key)
+            .copy_object_to(&key, limit, &mut bytes)
             .await
             .map_err(|e| self.fail(e))?;
-        let limit = self.plugin.manifest.attachment_limit.unwrap_or(0);
-        if bytes.len() as u64 > limit {
+        if read.is_none() {
             return Err(wit::Error::Limit(format!(
                 "the attachment is larger than the plugin's attachmentLimit, {limit} bytes"
             )));
