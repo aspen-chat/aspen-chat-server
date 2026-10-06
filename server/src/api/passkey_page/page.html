@@ -18,12 +18,13 @@
   .actions { display: flex; gap: 8px; }
   button { font: inherit; border-radius: 8px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--ink); }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-  button[hidden] { display: none; }
+  button[hidden], p[hidden] { display: none; }
 </style>
 </head>
 <body>
 <main>
   <h1 id="heading"></h1>
+  <p id="warning" data-text="passkeyPageOnlyYours" hidden></p>
   <p id="status" role="status"></p>
   <div class="actions">
     <button id="continue" class="primary" type="button" data-text="passkeyPageContinue" hidden></button>
@@ -43,6 +44,7 @@ const ceremony = fragment.get("ceremony") ?? "";
 const finished = fragment.get("finished");
 const endpoint = "/api/v1/auth/passkey-ceremonies/" + encodeURIComponent(ceremony);
 const heading = document.getElementById("heading");
+const warning = document.getElementById("warning");
 const status = document.getElementById("status");
 const continueButton = document.getElementById("continue");
 const cancelButton = document.getElementById("cancel");
@@ -134,6 +136,7 @@ async function run() {
       return;
     }
     cancelButton.hidden = true;
+    warning.hidden = true;
     show(T.passkeyPageReturning + " " + T.passkeyPageReturnHint, false);
     location.href = body.returnTo;
   } catch (error) {
@@ -169,6 +172,7 @@ async function start() {
   }[description.purpose] ?? "";
   cancelButton.hidden = !description.returnTo;
   continueButton.hidden = false;
+  warning.hidden = false;
   // Browsers that allow a prompt without a click get one straight away; the others wait for
   // Continue.
   void run();

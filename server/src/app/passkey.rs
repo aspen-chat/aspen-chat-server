@@ -11,8 +11,15 @@
 //! and mobile apps are not such pages. They hand the ceremony to the system browser instead:
 //! `start` is given a `Handoff` naming where to return and the SHA-256 of a secret only the app
 //! knows (PKCE, RFC 7636). The page this server serves at `/auth/passkey` completes the
-//! ceremony, the outcome waits in Valkey, the browser returns to the app, and the app `claim`s
-//! the outcome with its secret. Whoever sees the ceremony id in the browser cannot claim it.
+//! ceremony, which only checks the credential; the browser returns to the app with a one-time
+//! return code added to the return address, and the app `claim`s the outcome with its secret
+//! and that code, and only then does the ceremony take effect. Both are needed because the
+//! page's link can be sent to someone else: whoever starts a ceremony knows the secret, but the
+//! return code reaches only the return address, which is on the device whose browser ran the
+//! ceremony (a loopback port, the `aspen:` scheme, or this deployment's own web client), so a
+//! ceremony started by one person and run by another is never claimed. Adding a passkey and
+//! re-verifying act on the sign-in that started them, and are completed (in the page that runs
+//! them) or claimed (after a handoff) by that sign-in alone.
 
 use crate::CHACHA_RNG;
 use crate::app::context::GlobalServerContext;
@@ -120,31 +127,63 @@ enum Pending {
     },
     Register {
         user: UserId,
+        /// `login::sign_in_id` of the sign-in that started it, the only one that may finish it.
+        starter: String,
         session_token: String,
         name: String,
         state: PasskeyRegistration,
     },
     Reauthenticate {
         user: UserId,
+        /// As for `Register`.
+        starter: String,
         refresh_token: String,
         state: PasskeyAuthentication,
     },
 }
 
-/// The effect of a finished ceremony, kept until a handed-off one is claimed.
-#[derive(Clone, Serialize, Deserialize)]
-enum Outcome {
+impl Pending {
+    fn starter(&self) -> Option<&str> {
+        match self {
+            Pending::SignIn { .. } => None,
+            Pending::Register { starter, .. } | Pending::Reauthenticate { starter, .. } => {
+                Some(starter)
+            }
+        }
+    }
+}
+
+/// A ceremony whose credential verified, and the effect it is to have. A handed-off ceremony
+/// keeps it until it is claimed, so nothing happens for a ceremony that is never claimed.
+#[derive(Serialize, Deserialize)]
+enum Verified {
     SignedIn {
         user: UserId,
         ticket: Option<String>,
     },
-    PasskeyAdded {
-        passkey: PasskeySummary,
-        recovery_codes: Option<Vec<String>>,
+    Registered {
+        user: UserId,
+        starter: String,
+        session_token: String,
+        name: String,
+        key: Box<Passkey>,
     },
     Reauthenticated {
-        verified_until: DateTime<Utc>,
+        user: UserId,
+        starter: String,
+        refresh_token: String,
     },
+}
+
+impl Verified {
+    fn starter(&self) -> Option<&str> {
+        match self {
+            Verified::SignedIn { .. } => None,
+            Verified::Registered { starter, .. } | Verified::Reauthenticated { starter, .. } => {
+                Some(starter)
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -153,7 +192,10 @@ struct Ceremony {
     options: serde_json::Value,
     handoff: Option<Handoff>,
     pending: Option<Pending>,
-    outcome: Option<Outcome>,
+    outcome: Option<Verified>,
+    /// For a completed handoff: the SHA-256 of the return code added to the return address,
+    /// which the claim must present.
+    return_code: Option<String>,
 }
 
 /// A finished ceremony, as its starter receives it.
@@ -300,6 +342,7 @@ pub async fn start(
                 options,
                 Pending::Register {
                     user: caller.user,
+                    starter: login::sign_in_id(&caller.refresh_token),
                     session_token: caller.session_token.clone(),
                     name,
                     state: registration,
@@ -321,6 +364,7 @@ pub async fn start(
                 serde_json::to_value(&challenge)?,
                 Pending::Reauthenticate {
                     user: caller.user,
+                    starter: login::sign_in_id(&caller.refresh_token),
                     refresh_token: caller.refresh_token.clone(),
                     state: auth_state,
                 },
@@ -334,6 +378,7 @@ pub async fn start(
         handoff: request.handoff,
         pending: Some(pending),
         outcome: None,
+        return_code: None,
     };
     ephemeral_token::put_token(
         state,
@@ -363,24 +408,49 @@ fn require_discoverable(options: &mut serde_json::Value) {
     }
 }
 
-/// The options of a ceremony still waiting for its authenticator, for the handoff page.
+/// The options of a handed-off ceremony still waiting for its authenticator, for the handoff
+/// page. A ceremony that was not handed off is run by the page that started it, never by the
+/// handoff page, so it reads as unknown here.
 pub async fn describe(state: &GlobalServerContext, id: &str) -> app::Result<Description> {
     let ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, false)
         .await?
         .filter(|ceremony: &Ceremony| ceremony.pending.is_some())
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
+    let handoff = ceremony
+        .handoff
+        .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
     Ok(Description {
         purpose: ceremony.purpose,
         options: ceremony.options,
-        return_to: ceremony.handoff.map(|handoff| handoff.return_to),
+        return_to: Some(handoff.return_to),
     })
 }
 
-/// Checks what the authenticator returned and carries out the ceremony's effect. A ceremony is
-/// completed at most once: it is taken from Valkey before anything is checked.
+/// Refuses anyone but the sign-in that started a ceremony which acts on it.
+fn ensure_starter(starter: Option<&str>, caller: Option<&Caller>) -> app::Result<()> {
+    match starter {
+        None => Ok(()),
+        Some(starter)
+            if caller.is_some_and(|caller| login::sign_in_id(&caller.refresh_token) == starter) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(app::Error::Forbidden(t!("passkeyCeremonyNotYours"))),
+    }
+}
+
+fn digest(secret: &str) -> String {
+    BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(secret.as_bytes()))
+}
+
+/// Checks what the authenticator returned. A ceremony is completed at most once: it is taken
+/// from Valkey before anything is checked. One that was not handed off takes effect at once,
+/// for `caller`, who must be the sign-in that started it when it acts on one; a handed-off one
+/// waits for its claim.
 pub async fn complete(
     state: &GlobalServerContext,
     id: &str,
+    caller: Option<&Caller>,
     credential: serde_json::Value,
 ) -> app::Result<Completion> {
     let webauthn = relying_party_of(state)?;
@@ -391,8 +461,11 @@ pub async fn complete(
         .pending
         .take()
         .ok_or(app::Error::Diesel(diesel::result::Error::NotFound))?;
+    if ceremony.handoff.is_none() {
+        ensure_starter(pending.starter(), caller)?;
+    }
     let mut conn = state.connection_pool.get().await?;
-    let outcome = match pending {
+    let verified = match pending {
         Pending::SignIn {
             state: auth_state,
             ticket,
@@ -416,13 +489,14 @@ pub async fn complete(
                 .finish_discoverable_authentication(&credential, auth_state, &keys)
                 .map_err(rejected)?;
             record_use(&mut conn, stored, &result).await?;
-            Outcome::SignedIn {
+            Verified::SignedIn {
                 user: user_id,
                 ticket,
             }
         }
         Pending::Register {
-            user: user_id,
+            user,
+            starter,
             session_token,
             name,
             state: registration,
@@ -432,6 +506,126 @@ pub async fn complete(
             let key = webauthn
                 .finish_passkey_registration(&credential, &registration)
                 .map_err(rejected)?;
+            Verified::Registered {
+                user,
+                starter,
+                session_token,
+                name,
+                key: Box::new(key),
+            }
+        }
+        Pending::Reauthenticate {
+            user,
+            starter,
+            refresh_token,
+            state: auth_state,
+        } => {
+            let credential: PublicKeyCredential =
+                serde_json::from_value(credential).map_err(rejected)?;
+            let result = webauthn
+                .finish_passkey_authentication(&credential, &auth_state)
+                .map_err(rejected)?;
+            let stored = credentials(&mut conn, user).await?;
+            record_use(&mut conn, stored, &result).await?;
+            Verified::Reauthenticated {
+                user,
+                starter,
+                refresh_token,
+            }
+        }
+    };
+    drop(conn);
+    match ceremony.handoff.clone() {
+        Some(handoff) => {
+            let mut return_to = Url::parse(&handoff.return_to)
+                .map_err(|_| app::Error::Validation(t!("invalidReturnTo")))?;
+            let return_code = new_ceremony_id();
+            return_to
+                .query_pairs_mut()
+                .append_pair("ceremony", id)
+                .append_pair("outcome", "done")
+                .append_pair("code", &return_code);
+            ceremony.outcome = Some(verified);
+            ceremony.return_code = Some(digest(&return_code));
+            ephemeral_token::put_token(
+                state,
+                CEREMONY_PREFIX,
+                id,
+                &ceremony,
+                CLAIM_LIFETIME_SECONDS,
+            )
+            .await?;
+            Ok(Completion::HandedOff {
+                return_to: return_to.to_string(),
+            })
+        }
+        None => Ok(Completion::Done(take_effect(state, verified).await?)),
+    }
+}
+
+/// Takes the outcome of a handed-off ceremony and gives it effect. `code_verifier` must be the
+/// secret whose SHA-256 the app gave when it started the ceremony, `return_code` the code the
+/// browser brought back to the return address, and `caller` the sign-in that started it when
+/// the ceremony acts on one.
+pub async fn claim(
+    state: &GlobalServerContext,
+    id: &str,
+    caller: Option<&Caller>,
+    code_verifier: &str,
+    return_code: Option<&str>,
+) -> app::Result<CeremonyResult> {
+    let not_found = || app::Error::Diesel(diesel::result::Error::NotFound);
+    let return_code = return_code.ok_or(app::Error::Validation(t!("passkeyClaimNeedsCode")))?;
+    let ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, false)
+        .await?
+        .ok_or_else(not_found)?;
+    let (Some(handoff), Some(verified), Some(expected_code)) =
+        (&ceremony.handoff, &ceremony.outcome, &ceremony.return_code)
+    else {
+        return Err(not_found());
+    };
+    let verifier_matches = digest(code_verifier)
+        .as_bytes()
+        .ct_eq(handoff.code_challenge.as_bytes());
+    let code_matches = digest(return_code)
+        .as_bytes()
+        .ct_eq(expected_code.as_bytes());
+    if !bool::from(verifier_matches & code_matches) {
+        return Err(app::Error::VerificationFailed);
+    }
+    ensure_starter(verified.starter(), caller)?;
+    let taken: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, true)
+        .await?
+        .ok_or_else(not_found)?;
+    take_effect(state, taken.outcome.ok_or_else(not_found)?).await
+}
+
+/// Carries out what a verified ceremony was for.
+async fn take_effect(
+    state: &GlobalServerContext,
+    verified: Verified,
+) -> app::Result<CeremonyResult> {
+    let mut conn = state.connection_pool.get().await?;
+    Ok(match verified {
+        Verified::SignedIn { user, ticket } => CeremonyResult::SignedIn(match ticket {
+            Some(ticket) => {
+                drop(conn);
+                login::finish_ticket(state, &ticket, Some(user))
+                    .await?
+                    .ok_or(app::Error::InvalidTicket)?
+            }
+            None => {
+                login::issue_session(state, &mut conn, user, login::SignInMethod::Passkey, false)
+                    .await?
+            }
+        }),
+        Verified::Registered {
+            user: user_id,
+            starter: _,
+            session_token,
+            name,
+            key,
+        } => {
             let (passkey, recovery_codes) = conn
                 .transaction(|conn| {
                     async move {
@@ -461,100 +655,23 @@ pub async fn complete(
                     .scope_boxed()
                 })
                 .await?;
-            Outcome::PasskeyAdded {
+            CeremonyResult::PasskeyAdded {
                 passkey,
                 recovery_codes,
             }
         }
-        Pending::Reauthenticate {
-            user: user_id,
+        Verified::Reauthenticated {
+            user: _,
+            starter: _,
             refresh_token,
-            state: auth_state,
-        } => {
-            let credential: PublicKeyCredential =
-                serde_json::from_value(credential).map_err(rejected)?;
-            let result = webauthn
-                .finish_passkey_authentication(&credential, &auth_state)
-                .map_err(rejected)?;
-            let stored = credentials(&mut conn, user_id).await?;
-            record_use(&mut conn, stored, &result).await?;
-            let verified_until =
-                two_factor::mark_verified(&mut conn, &refresh_token, &state.config.auth).await?;
-            Outcome::Reauthenticated { verified_until }
-        }
-    };
-    drop(conn);
-    match ceremony.handoff.clone() {
-        Some(handoff) => {
-            let mut return_to = Url::parse(&handoff.return_to)
-                .map_err(|_| app::Error::Validation(t!("invalidReturnTo")))?;
-            return_to
-                .query_pairs_mut()
-                .append_pair("ceremony", id)
-                .append_pair("outcome", "done");
-            ceremony.outcome = Some(outcome);
-            ephemeral_token::put_token(
-                state,
-                CEREMONY_PREFIX,
-                id,
-                &ceremony,
-                CLAIM_LIFETIME_SECONDS,
+        } => CeremonyResult::Reauthenticated {
+            verified_until: two_factor::mark_verified(
+                &mut conn,
+                &refresh_token,
+                &state.config.auth,
             )
-            .await?;
-            Ok(Completion::HandedOff {
-                return_to: return_to.to_string(),
-            })
-        }
-        None => Ok(Completion::Done(resolve(state, outcome).await?)),
-    }
-}
-
-/// Takes the outcome of a handed-off ceremony. `code_verifier` must be the secret whose SHA-256
-/// the app gave when it started the ceremony.
-pub async fn claim(
-    state: &GlobalServerContext,
-    id: &str,
-    code_verifier: &str,
-) -> app::Result<CeremonyResult> {
-    let not_found = || app::Error::Diesel(diesel::result::Error::NotFound);
-    let ceremony: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, false)
-        .await?
-        .ok_or_else(not_found)?;
-    let (Some(handoff), Some(_)) = (&ceremony.handoff, &ceremony.outcome) else {
-        return Err(not_found());
-    };
-    let answered = BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
-    if !bool::from(answered.as_bytes().ct_eq(handoff.code_challenge.as_bytes())) {
-        return Err(app::Error::VerificationFailed);
-    }
-    let taken: Ceremony = ephemeral_token::get_token(state, CEREMONY_PREFIX, id, true)
-        .await?
-        .ok_or_else(not_found)?;
-    resolve(state, taken.outcome.ok_or_else(not_found)?).await
-}
-
-async fn resolve(state: &GlobalServerContext, outcome: Outcome) -> app::Result<CeremonyResult> {
-    Ok(match outcome {
-        Outcome::SignedIn { user, ticket } => CeremonyResult::SignedIn(match ticket {
-            Some(ticket) => login::finish_ticket(state, &ticket, Some(user))
-                .await?
-                .ok_or(app::Error::InvalidTicket)?,
-            None => {
-                let mut conn = state.connection_pool.get().await?;
-                login::issue_session(state, &mut conn, user, login::SignInMethod::Passkey, false)
-                    .await?
-            }
-        }),
-        Outcome::PasskeyAdded {
-            passkey,
-            recovery_codes,
-        } => CeremonyResult::PasskeyAdded {
-            passkey,
-            recovery_codes,
+            .await?,
         },
-        Outcome::Reauthenticated { verified_until } => {
-            CeremonyResult::Reauthenticated { verified_until }
-        }
     })
 }
 

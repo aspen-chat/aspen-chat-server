@@ -1,7 +1,10 @@
 //! The page at `/auth/passkey` that runs a passkey ceremony in the system browser for the
 //! desktop and mobile apps, which cannot run one in their own pages (see `app::passkey`). It is
-//! opened as `/auth/passkey#ceremony=<id>`, runs the ceremony through the public
-//! `/auth/passkey-ceremonies` endpoints, and sends the browser back to the app.
+//! opened as `/auth/passkey#ceremony=<id>`, runs a handed-off ceremony through the public
+//! `/auth/passkey-ceremonies` endpoints, and sends the browser back to the app with the return
+//! code the app's claim needs. Since its link can be sent to anyone, it tells whoever opens it to
+//! continue only for a request they made themselves, though a ceremony someone else started is
+//! never claimed by them.
 //!
 //! The page is static apart from its localized strings, which are inserted as a JSON object.
 //! The web client runs the same ceremonies in its own page when its origin is under the relying
@@ -22,7 +25,7 @@ const POLICY: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 
      connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 fn strings() -> serde_json::Map<String, serde_json::Value> {
-    let entries: [(&str, Cow<'static, str>); 14] = [
+    let entries: [(&str, Cow<'static, str>); 15] = [
         ("passkeyPageTitle", t!("passkeyPageTitle")),
         ("passkeyPageSignIn", t!("passkeyPageSignIn")),
         ("passkeyPageRegister", t!("passkeyPageRegister")),
@@ -32,6 +35,7 @@ fn strings() -> serde_json::Map<String, serde_json::Value> {
         ("passkeyPageCancel", t!("passkeyPageCancel")),
         ("passkeyPageReturning", t!("passkeyPageReturning")),
         ("passkeyPageReturnHint", t!("passkeyPageReturnHint")),
+        ("passkeyPageOnlyYours", t!("passkeyPageOnlyYours")),
         ("passkeyPageFailed", t!("passkeyPageFailed")),
         ("passkeyPageExpired", t!("passkeyPageExpired")),
         ("passkeyPageUnsupported", t!("passkeyPageUnsupported")),

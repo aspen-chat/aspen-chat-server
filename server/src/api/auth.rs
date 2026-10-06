@@ -362,8 +362,9 @@ pub struct PasskeyHandoff {
     /// the app keeps and later presents to `claim`.
     pub code_challenge: String,
     /// Where the page sends the browser when done, with `ceremony` and `outcome` (`done` or
-    /// `cancelled`) added to the query: a loopback `http` address with a port, an `aspen:` URI,
-    /// or a web origin the server allows through CORS.
+    /// `cancelled`) added to the query, and, when done, the `code` the claim presents: a
+    /// loopback `http` address with a port, an `aspen:` URI, or a page of this deployment's web
+    /// client.
     pub return_to: String,
 }
 
@@ -385,7 +386,9 @@ pub struct PasskeyCeremonyRequest {
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PasskeyCeremony {
-    /// Secret: whoever holds it can complete the ceremony.
+    /// Secret: whoever holds it can run the ceremony's authenticator. Its effect goes only to
+    /// its starter: the caller of a ceremony that was not handed off, and the claimer holding
+    /// the code verifier and the return code of one that was.
     pub id: String,
     pub purpose: PasskeyPurpose,
     /// `{"publicKey": …}` for `navigator.credentials.create` (`register`) or `.get`
@@ -452,7 +455,8 @@ pub struct PasskeyCeremonyDescription {
     pub return_to: Option<String>,
 }
 
-/// A ceremony still waiting for its authenticator. The ceremony id is the only credential.
+/// A handed-off ceremony still waiting for its authenticator, for the page at `/auth/passkey`.
+/// The ceremony id is the only credential. A ceremony that was not handed off reads as unknown.
 #[utoipa::path(
     get,
     path = "/auth/passkey-ceremonies/{ceremony}",
@@ -527,27 +531,33 @@ impl From<CeremonyResult> for PasskeyCeremonyOutcome {
 }
 
 /// Completes a ceremony with the authenticator's response. A ceremony completes at most once,
-/// whether or not the response verifies.
+/// whether or not the response verifies. A `register` or `reauthenticate` ceremony that was not
+/// handed off is completed by the session that started it; a handed-off one takes effect when
+/// it is claimed.
 #[utoipa::path(
     post,
     path = "/auth/passkey-ceremonies/{ceremony}/credential",
     tag = TAG_AUTH,
+    security((), ("bearerAuth" = [])),
     params(("ceremony" = String, Path, description = "The ceremony id")),
     responses(
         (status = OK, body = PasskeyCeremonyOutcome),
         (status = BAD_REQUEST, description = "`badRequest` or `passkeyRejected`", body = Problem),
         (status = UNAUTHORIZED, description = "`invalidToken`: the sign-in ticket expired meanwhile", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: another sign-in started this ceremony", body = Problem),
         (status = NOT_FOUND, description = "Unknown, expired, or completed", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn complete_passkey_ceremony(
     State(state): State<GlobalServerContext>,
+    session: Option<EnrollingSessionUser>,
     Path(ceremony): Path<String>,
     Json(request): Json<PasskeyCredentialRequest>,
 ) -> ApiResult<Json<PasskeyCeremonyOutcome>> {
+    let caller = session.as_ref().map(|EnrollingSessionUser(s)| &s.caller);
     Ok(Json(
-        match app::passkey::complete(&state, &ceremony, request.credential).await? {
+        match app::passkey::complete(&state, &ceremony, caller, request.credential).await? {
             Completion::Done(result) => result.into(),
             Completion::HandedOff { return_to } => PasskeyCeremonyOutcome::HandedOff { return_to },
         },
@@ -559,30 +569,44 @@ pub async fn complete_passkey_ceremony(
 pub struct PasskeyClaimRequest {
     /// The secret whose digest the ceremony's `handoff.codeChallenge` was.
     pub code_verifier: String,
+    /// The `code` the handoff page added to the return address. Required; a claim without it
+    /// is refused with `validation`.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
-/// Takes the result of a handed-off ceremony once the system browser has returned. A result can
-/// be claimed once, within two minutes of completion.
+/// Takes the result of a handed-off ceremony once the system browser has returned, and gives
+/// it effect. A result can be claimed once, within two minutes of completion; a `register` or
+/// `reauthenticate` ceremony only by the session that started it.
 #[utoipa::path(
     post,
     path = "/auth/passkey-ceremonies/{ceremony}/claim",
     tag = TAG_AUTH,
+    security((), ("bearerAuth" = [])),
     params(("ceremony" = String, Path, description = "The ceremony id")),
     responses(
         (status = OK, body = PasskeyCeremonyOutcome),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (no return code)", body = Problem),
         (status = UNAUTHORIZED, description = "`invalidToken`: the sign-in ticket expired meanwhile", body = Problem),
-        (status = FORBIDDEN, description = "`verificationFailed`: wrong code verifier", body = Problem),
+        (status = FORBIDDEN, description = "`verificationFailed`: wrong code verifier or return code; `forbidden`: another sign-in started this ceremony", body = Problem),
         (status = NOT_FOUND, description = "Unknown, expired, not completed, or claimed", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn claim_passkey_ceremony(
     State(state): State<GlobalServerContext>,
+    session: Option<EnrollingSessionUser>,
     Path(ceremony): Path<String>,
     Json(request): Json<PasskeyClaimRequest>,
 ) -> ApiResult<Json<PasskeyCeremonyOutcome>> {
-    let result = app::passkey::claim(&state, &ceremony, &request.code_verifier).await?;
+    let result = app::passkey::claim(
+        &state,
+        &ceremony,
+        session.as_ref().map(|EnrollingSessionUser(s)| &s.caller),
+        &request.code_verifier,
+        request.code.as_deref(),
+    )
+    .await?;
     Ok(Json(result.into()))
 }
 

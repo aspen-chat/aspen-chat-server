@@ -59,7 +59,10 @@ interface AspenDesktopBridge {
   /** Passkey ceremonies in the system browser (`packages/desktop/src/main/passkeyHandoff.ts`). */
   readonly passkeyHandoff: {
     prepare(): Promise<{ id: string; returnTo: string }>;
-    open(id: string, url: string): Promise<{ ceremony: string; outcome: "done" | "cancelled" }>;
+    open(
+      id: string,
+      url: string,
+    ): Promise<{ ceremony: string; outcome: "done" | "cancelled"; code: string | null }>;
     dispose(id: string): void;
   };
   /**

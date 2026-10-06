@@ -210,7 +210,7 @@ describe("AspenClient", () => {
     expect(client.session?.twoFactorEnrollmentRequired).toBeUndefined();
   });
 
-  it("hands a passkey ceremony to the browser and claims it with the PKCE verifier", async () => {
+  it("hands a passkey ceremony to the browser and claims it with the PKCE verifier and the return code", async () => {
     const store = new MemorySessionStore();
     let challenge = "";
     const { fetch, calls } = scriptedFetch([
@@ -247,7 +247,11 @@ describe("AspenClient", () => {
               returnTo: "http://127.0.0.1:4000/passkey",
               open: (url: string) => {
                 opened.push(url);
-                return Promise.resolve({ ceremony: "cer-1", outcome: "done" as const });
+                return Promise.resolve({
+                  ceremony: "cer-1",
+                  outcome: "done" as const,
+                  code: "returned",
+                });
               },
               dispose: () => {
                 disposed = true;
@@ -260,7 +264,8 @@ describe("AspenClient", () => {
     expect(disposed).toBe(true);
     expect(outcome.outcome).toBe("signedIn");
     expect(store.load()?.sessionToken).toBe("s");
-    const claim = JSON.parse(calls[1]?.body ?? "") as { codeVerifier: string };
+    const claim = JSON.parse(calls[1]?.body ?? "") as { codeVerifier: string; code: string };
+    expect(claim.code).toBe("returned");
     const digest = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(claim.codeVerifier),
@@ -284,7 +289,8 @@ describe("AspenClient", () => {
             prepare: () =>
               Promise.resolve({
                 returnTo: "http://127.0.0.1:4000/passkey",
-                open: () => Promise.resolve({ ceremony: "cer-2", outcome: "cancelled" as const }),
+                open: () =>
+                  Promise.resolve({ ceremony: "cer-2", outcome: "cancelled" as const, code: null }),
                 dispose: () => undefined,
               }),
           },

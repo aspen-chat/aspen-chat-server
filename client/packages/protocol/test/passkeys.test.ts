@@ -51,13 +51,17 @@ describe("passkeys", () => {
   });
 
   it("reads the browser's return", () => {
-    expect(parseHandoffReturn("http://127.0.0.1:5000/passkey?ceremony=abc&outcome=done")).toEqual({
+    expect(
+      parseHandoffReturn("http://127.0.0.1:5000/passkey?ceremony=abc&outcome=done&code=xyz"),
+    ).toEqual({
       ceremony: "abc",
       outcome: "done",
+      code: "xyz",
     });
     expect(parseHandoffReturn("aspen://auth/passkey?ceremony=abc&outcome=cancelled")).toEqual({
       ceremony: "abc",
       outcome: "cancelled",
+      code: null,
     });
     expect(parseHandoffReturn("http://127.0.0.1:5000/favicon.ico")).toBeNull();
     expect(parseHandoffReturn("not a url")).toBeNull();

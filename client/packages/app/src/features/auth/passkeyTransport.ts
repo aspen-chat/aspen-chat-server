@@ -72,7 +72,7 @@ const mobileHandoff: PasskeyHandoff = {
     });
     // The user closed the in-app browser without finishing.
     const closed = await Browser.addListener("browserFinished", () => {
-      settle({ ceremony: "", outcome: "cancelled" });
+      settle({ ceremony: "", outcome: "cancelled", code: null });
     });
     return {
       returnTo: "aspen://auth/passkey",
