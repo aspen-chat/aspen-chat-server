@@ -215,6 +215,8 @@ addEventListener("message", async (event) => {
   if (!message || message.aspen !== 1) return;
   if (message.type === "response" || message.type === "users") {
     pending.get(message.id)?.(message);
+  } else if (message.type === "goTo") {
+    location.href = "https://elsewhere.test/page";
   } else if (message.type === "event") {
     out("events", message.kind + " " + JSON.stringify(message.payload));
   } else if (message.type === "hello" && !greeted) {
@@ -341,6 +343,47 @@ test("a channel of a plugin's kind shows its page, which reaches the app only by
   await settleAnimations(page);
   const audit = await new AxeBuilder({ page }).analyze();
   expect(audit.violations.map((v) => v.id)).toEqual([]);
+});
+
+/** A page elsewhere that a view's link leads to, which asks the bridge once it has loaded. */
+const ELSEWHERE = "https://elsewhere.test/page";
+const ELSEWHERE_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Elsewhere</title></head>
+<body><p id="here">elsewhere</p>
+<script>
+addEventListener("load", () => {
+  setTimeout(() => {
+    parent.postMessage({ aspen: 1, type: "request", id: 1, method: "DELETE", path: "boards/all" }, "*");
+  }, 100);
+});
+</script></body></html>`;
+
+test("a view that goes to another page loses the bridge until it is loaded again", async ({
+  page,
+}) => {
+  const { publish, asked } = await withBoards(page);
+  await page.route(ELSEWHERE, (route) =>
+    route.fulfill({ body: ELSEWHERE_PAGE, contentType: "text/html; charset=utf-8" }),
+  );
+  await openGeneral(page);
+  addBoard(publish, `${BOARDS}:board`);
+  await openBoard(page);
+  const title = 'iframe[title="announcements, shown by the Boards plugin"]';
+  const view = page.frameLocator(title);
+  await expect(view.locator("#answer")).toHaveText('200 [{"title":"Welcome"}]');
+  const before = asked.length;
+
+  // The view's page sends its frame elsewhere, as a link in it would.
+  await page.locator(title).evaluate((frame: HTMLIFrameElement) => {
+    frame.contentWindow?.postMessage({ aspen: 1, type: "goTo" }, "*");
+  });
+  const reload = page.getByRole("button", { name: "Load the view again" });
+  await expect(reload).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(asked.slice(before)).toEqual([]);
+
+  await reload.click();
+  await expect(view.locator("#answer")).toHaveText('200 [{"title":"Welcome"}]');
 });
 
 test("a channel of a kind no plugin here declares says it needs one", async ({ page }) => {

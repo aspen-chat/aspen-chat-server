@@ -30,6 +30,9 @@ export const plugins = {
   needsPlugin:
     "This channel is shown by a plugin this server does not run here. Its administrators can turn it on.",
   viewTitle: "{channel}, shown by the {plugin} plugin",
+  viewLeft:
+    "{plugin}'s view went to another page, so it can no longer act for you. Load it again to go on; if this keeps happening, tell this community's moderators.",
+  reloadView: "Load the view again",
   pressFailed:
     "{plugin} could not do that. Try again; if it keeps failing, tell this community's moderators.",
   accountAsks: "Its account asks for these permissions here:",

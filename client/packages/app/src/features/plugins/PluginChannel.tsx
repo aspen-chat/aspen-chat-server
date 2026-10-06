@@ -7,9 +7,11 @@ import {
   PuzzlePieceIcon,
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Button } from "react-aria-components";
 import { useMe, usePluginKind, useSync } from "@/api/hooks";
 import { ChannelHeader } from "@/features/channels/ChannelHeader";
+import { secondaryButtonClass } from "@/features/invites/dialog";
 import { channelLink, messageLink, useDomain } from "@/features/messages/links";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -166,6 +168,13 @@ const isString = (value: unknown): value is string => typeof value === "string";
  * The frame's only way out is asking the app, which calls the plugin's routes as the person
  * (beneath them and nowhere else), names people, passes on the plugin's events for the channel,
  * its community, and the person, and opens what the person may open.
+ *
+ * The bridge speaks only to the plugin's own page, loaded by the app. A frame's window stays
+ * the same when its page navigates, so the app counts the frame's loads: the first load of the
+ * frame the app made arms the bridge, and any later one means the page went elsewhere (a link,
+ * a redirect), where whatever was loaded could otherwise act as the person. The bridge then
+ * falls silent, in both directions, and the view offers to load the plugin's page again, in a
+ * new frame, which arms it afresh.
  */
 function PluginView({
   plugin,
@@ -186,6 +195,17 @@ function PluginView({
   const { resolved } = useLanguageSetting();
   const theme = useBridgeTheme();
   const frame = useRef<HTMLIFrameElement>(null);
+  const src = `${sync.apiBase}${kind.view}`;
+  // Each frame the app makes, by its key: a new one for another page or a reload.
+  const [generation, setGeneration] = useState(0);
+  const frameKey = `${String(generation)} ${src}`;
+  // The frame whose first load has been seen, and whether the bridge answers it.
+  const loaded = useRef<string | null>(null);
+  const armed = useRef(false);
+  const [left, setLeft] = useState(false);
+  useLayoutEffect(() => {
+    armed.current = false;
+  }, [frameKey]);
 
   // What `hello` says, kept current for the listener, which outlives renders.
   const context = useMemo(
@@ -210,12 +230,18 @@ function PluginView({
   }, [context]);
 
   const post = useCallback((message: object) => {
-    frame.current?.contentWindow?.postMessage({ aspen: 1, ...message }, "*");
+    if (armed.current) {
+      frame.current?.contentWindow?.postMessage({ aspen: 1, ...message }, "*");
+    }
   }, []);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.source === null || event.source !== frame.current?.contentWindow) {
+      if (
+        !armed.current ||
+        event.source === null ||
+        event.source !== frame.current?.contentWindow
+      ) {
         return;
       }
       const data: unknown = event.data;
@@ -316,15 +342,41 @@ function PluginView({
     }
   }, [theme, firstTheme, post]);
 
+  if (left) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <p role="alert" className="max-w-md text-ink-muted">
+          {format(m.plugins.viewLeft, { plugin: plugin.name })}
+        </p>
+        <Button
+          onPress={() => {
+            setLeft(false);
+            setGeneration((n) => n + 1);
+          }}
+          className={secondaryButtonClass}
+        >
+          {m.plugins.reloadView}
+        </Button>
+      </div>
+    );
+  }
   return (
     <iframe
+      key={frameKey}
       ref={frame}
-      src={`${sync.apiBase}${kind.view}`}
+      src={src}
       title={format(m.plugins.viewTitle, { channel: channel.name, plugin: plugin.name })}
       sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
       referrerPolicy="no-referrer"
       onLoad={() => {
-        post({ type: "hello", context: latest.current });
+        if (loaded.current !== frameKey) {
+          loaded.current = frameKey;
+          armed.current = true;
+          post({ type: "hello", context: latest.current });
+        } else {
+          armed.current = false;
+          setLeft(true);
+        }
       }}
       className="min-h-0 w-full flex-1 border-0 bg-surface"
     />
