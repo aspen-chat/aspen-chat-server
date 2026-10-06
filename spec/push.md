@@ -204,7 +204,8 @@ fetch.
 - `POST /api/v1/users/@me/push-subscriptions` with `{ endpoint, p256dh, auth }` registers the
   calling sign-in's phone, answering `201`. A subscription belongs to the sign-in that made it
   (its refresh token): signing out, or the sign-in ending any other way, deletes it. One
-  sign-in holds at most one; registering again replaces it. The app ends its relay subscription
+  sign-in holds at most one; registering again replaces it. An account holds at most ten: a
+  registration beyond them deletes the oldest, and those of sign-ins that have expired. The app ends its relay subscription
   itself when it signs out; one whose sign-in ended some other way is simply never pushed to
   again.
 - `DELETE /api/v1/users/@me/push-subscriptions/{subscription}`.
