@@ -89,3 +89,4 @@ pub mod m20261004_203124_manage_plugins_permission;
 pub mod m20261004_214803_remove_content_permission;
 pub mod m20261004_214820_attachment_descriptions;
 pub mod m20261004_224404_email;
+pub mod m20261005_140058_attachment_previews;

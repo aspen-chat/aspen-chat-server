@@ -11,6 +11,32 @@ export interface Picture {
   height?: number | null | undefined;
   /** What it shows, in its uploader's words, when it is an attachment they described. */
   description?: string | null | undefined;
+  /**
+   * The smaller copy the server made for showing it inline, when it made one worth having; the
+   * gallery shows `src`, the original.
+   */
+  preview?: InlinePreview | undefined;
+}
+
+/** A smaller copy of a picture, for showing it inline, and its size in pixels. */
+export interface InlinePreview {
+  src: string;
+  width: number;
+  height: number;
+}
+
+/** The inline copy an attachment's record names, when it has one. */
+export function inlinePreview(
+  preview: { url: string; width: number; height: number } | null | undefined,
+): InlinePreview | undefined {
+  return preview == null
+    ? undefined
+    : { src: preview.url, width: preview.width, height: preview.height };
+}
+
+/** Whether a MIME type is a video's. */
+export function isVideoType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("video/");
 }
 
 /** Whether a file is one a description is offered for: a picture or a video. */

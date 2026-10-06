@@ -19,11 +19,14 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import json
 import shutil
+import struct
 import subprocess
 import sys
 import time
 import urllib.request
+import zlib
 from pathlib import Path
 
 from stack import REPO, Failed, Ports, Stack, WebSocket, psql, start_services, wait_for, wait_for_services
@@ -276,8 +279,14 @@ def attachments(world: World, check: Checks) -> None:
     put = urllib.request.Request(handle["uploadUrl"], data=b"secret notes", method="PUT",
                                  headers={"content-type": "text/plain"})
     urllib.request.urlopen(put, timeout=15).close()
-    world.as_owner("POST", f"/attachments/{handle['id']}/confirm")
+    confirmed = world.as_owner("POST", f"/attachments/{handle['id']}/confirm")
     path = f"/attachments/{handle['id']}"
+    again = urllib.request.Request(handle["uploadUrl"], data=b"swapped notes", method="PUT",
+                                   headers={"content-type": "text/plain"})
+    urllib.request.urlopen(again, timeout=15).close()
+    with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as read:
+        check("its upload link, used again once it is confirmed, changes nothing anyone reads",
+              read.read() == b"secret notes")
     check("its uploader reads it", stack.status("GET", path, token=world.owner["token"]) == 200)
     check("nobody else reads it before it is sent", stack.status("GET", path, token=world.member["token"]) == 404)
     check("nor deletes it", stack.status("DELETE", path, token=world.member["token"]) == 404)
@@ -296,6 +305,80 @@ def attachments(world: World, check: Checks) -> None:
           stack.status("PATCH", path, {"description": "changed"}, world.owner["token"]) == 404)
     world.as_owner("PUT", f"/channels/{general}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     check("and nobody once they may not", stack.status("GET", path, token=world.member["token"]) == 404)
+
+
+def picture(width: int = 1600, height: int = 1200) -> bytes:
+    """A PNG with detail everywhere, as a photo has, large enough that its preview is kept."""
+    rows = b"".join(
+        b"\x00" + bytes(((x * 7 + y * 3) & 0xFF, (x ^ y) & 0xFF, (x * y >> 4) & 0xFF)[i % 3]
+                         for x in range(width) for i in range(3))
+        for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows, 6))
+            + chunk(b"IEND", b""))
+
+
+def upload_picture(world: World, token: str, png: bytes) -> str:
+    handle = world.stack.api("POST", "/attachments", {"fileName": "photo.png", "mimeType": "image/png"}, token)
+    put = urllib.request.Request(handle["uploadUrl"], data=png, method="PUT", headers={"content-type": "image/png"})
+    urllib.request.urlopen(put, timeout=15).close()
+    world.stack.api("POST", f"/attachments/{handle['id']}/confirm", token=token)
+    return handle["id"]
+
+
+def previews(world: World, check: Checks) -> None:
+    say("previews of pictures, and messages held for them")
+    stack = world.stack
+    png = picture()
+    secret = world.channel("secret previews",
+                           overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    hidden = upload_picture(world, world.owner["token"], png)
+    world.as_owner("POST", f"/channels/{secret}/messages", {"content": "hidden", "attachments": [hidden]})
+    made = soon(lambda: "preview" in stack.api("GET", f"/attachments/{hidden}", token=world.owner["token"]), 30)
+    check("a preview is made of a picture sent", made)
+    got = world.stream.gather(1.0)
+    check("its event does not reach a member who may not view the channel",
+          not of(got, "attachmentPreviewed", attachment=hidden), [e["serverEvent"] for e in got])
+    check("nor may they read it", stack.status("GET", f"/attachments/{hidden}", token=world.member["token"]) == 404)
+
+    shared = world.channel("shared previews")
+    world.stream.gather(0.5)
+    mine = upload_picture(world, world.owner["token"], png)
+    status, _ = stack.request("POST", f"/channels/{shared}/messages",
+                              {"content": "held", "attachments": [mine], "mayHold": True}, world.owner["token"])
+    check("a message sent while its picture's preview is made is held", status == 202, status)
+    first = []
+    soon(lambda: bool(first.extend(world.stream.gather(0.2)) or of(first, "message", content="held")), 30)
+    check("nobody else hears of it until it is posted",
+          not of(first, "heldMessagePosted") and not of(first, "heldMessageFailed"),
+          [e["serverEvent"] for e in first])
+    check("and then they hear of it, with its preview on the attachment",
+          bool(of(first, "message", content="held"))
+          and "preview" in stack.api("GET", f"/attachments/{mine}", token=world.member["token"]))
+
+    theirs = upload_picture(world, world.member["token"], png)
+    status, body = stack.request("POST", f"/channels/{shared}/messages",
+                                 {"content": "not allowed", "attachments": [theirs], "mayHold": True},
+                                 world.member["token"])
+    held = json.loads(body) if status == 202 else {}
+    check("the member's own is held too", status == 202, status)
+    world.as_owner("PUT", f"/channels/{shared}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    owner_stream = stack.events(world.owner["token"])
+    seen = []
+    dropped = soon(lambda: bool(seen.extend(world.stream.gather(0.2))
+                                or of(seen, "heldMessageFailed", held=held.get("id"))), 30)
+    check("losing the right to post drops it, and its author is told why",
+          dropped and bool(of(seen, "heldMessageFailed", held=held.get("id"))[0].get("detail")),
+          [e["serverEvent"] for e in seen])
+    check("and nobody else ever sees it", not of(owner_stream.gather(1.0), "message", content="not allowed"))
+    owner_stream.close()
+    check("nor is it in the channel",
+          all(m["content"] != "not allowed" for m in
+              stack.api("GET", f"/channels/{shared}/messages", token=world.owner["token"])["data"]))
 
 
 def operators(world: World, check: Checks) -> None:
@@ -958,7 +1041,7 @@ def invite_previews(world: World, check: Checks) -> None:
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, calls, attachments, operators,
              deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
-             nicknames, review_powers, plugins, calendar_channels, email, invite_previews]
+             nicknames, review_powers, plugins, calendar_channels, email, invite_previews, previews]
 
 
 def main() -> None:

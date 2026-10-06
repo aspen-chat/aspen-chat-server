@@ -4,6 +4,7 @@
  */
 
 import type {
+  HeldEntry,
   AspenSync,
   Attachment,
   BotCommands,
@@ -217,6 +218,11 @@ export function useIdWizard(): boolean {
   const developer = usePreference(DEVELOPER_MODE);
   const wizard = usePreference(ID_WIZARD);
   return developer && wizard;
+}
+
+/** The caller's messages in a channel held for their attachments' previews. */
+export function useHeldMessages(channelId: string): readonly HeldEntry[] {
+  return useTopic(`held:${channelId}`, (s) => s.heldMessages(channelId));
 }
 
 /** An attachment record by id, fetched on demand when the cache lacks it. */

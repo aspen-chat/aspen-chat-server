@@ -16,12 +16,14 @@ type PollSideload = (
 use crate::api::{API_PREFIX, TAG_MESSAGES};
 use crate::app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use crate::app::context::GlobalServerContext;
-use crate::app::{AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
+use crate::app::{AttachmentId, ChannelId, CommunityId, HeldMessageId, MessageId, PollId, UserId};
 use crate::t;
 use crate::{api, app};
 use axum::extract::State;
 use axum::http::StatusCode;
-use serde::Deserialize;
+use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
 
@@ -463,6 +465,33 @@ pub async fn search_messages(
     Ok(Json(MessageList::new(messages, included)))
 }
 
+/// A message held while a preview of one of its attachments is being made, as its author's
+/// apps show it waiting (`app::message::held`). `heldMessagePosted` names the message it
+/// becomes; `heldMessageFailed` says why it was dropped instead.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldMessage {
+    pub id: HeldMessageId,
+    pub channel_id: ChannelId,
+    pub content: String,
+    pub attachments: Vec<AttachmentId>,
+    pub echo_to_parent: bool,
+    pub held_at: DateTime<Utc>,
+}
+
+impl From<app::message::held::HeldMessage> for HeldMessage {
+    fn from(held: app::message::held::HeldMessage) -> Self {
+        HeldMessage {
+            id: held.id,
+            channel_id: held.channel,
+            content: held.content,
+            attachments: held.attachments,
+            echo_to_parent: held.echo_to_parent,
+            held_at: held.held_at,
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/channels/{channel}/messages",
@@ -471,6 +500,7 @@ pub async fn search_messages(
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
+        (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later", body = HeldMessage),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
@@ -483,24 +513,52 @@ pub async fn create_message(
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
     Json(request): Json<MessageCreateRequest>,
-) -> ApiResult<Created<Message>> {
-    let msg = app::message::create_message(
+) -> ApiResult<Response> {
+    let posted = app::message::held::post(
         &state,
         user.id,
         channel,
         request.content,
         request.attachments.clone(),
         request.echo_to_parent.unwrap_or(false),
-        app::message::Posting::Text,
+        request.may_hold.unwrap_or(false),
     )
     .await?;
+    let msg = match posted {
+        app::message::held::Posted::Sent(msg) => *msg,
+        app::message::held::Posted::Held(held) => {
+            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response());
+        }
+    };
     let location = format!("{API_PREFIX}/messages/{}", msg.id.0);
     // Freshly-created messages always ship with an empty preview list; the async fetcher's
     // `Update` event will populate the final set shortly.
     Ok(Created::new(
         location,
         message_to_api(msg, request.attachments, Vec::new()),
-    ))
+    )
+    .into_response())
+}
+
+/// The caller's messages held for their attachments' previews, oldest first, which their apps
+/// show waiting until each is posted.
+#[utoipa::path(
+    get,
+    path = "/users/@me/held-messages",
+    tag = TAG_MESSAGES,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<HeldMessage>),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_held_messages(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+) -> ApiResult<Json<Vec<HeldMessage>>> {
+    let held = app::message::held::read_held(&state, user.id).await?;
+    Ok(Json(held.into_iter().map(HeldMessage::from).collect()))
 }
 
 const DEFAULT_MESSAGE_LIMIT: u32 = 50;

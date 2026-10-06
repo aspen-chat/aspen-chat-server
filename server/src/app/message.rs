@@ -11,7 +11,7 @@ use crate::app::link_preview::{delete_images_for_message, load_previews, spawn_p
 use crate::app::mention::{self, Mentions};
 use crate::app::message_link::{self, MessageLinks};
 use crate::app::moderation_log::{ModerationAction, log_moderation};
-use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::permissions::{ChannelAccess, Permissions, channel_access, missing};
 use crate::app::plugin::card::Card;
 use crate::app::plugin::intercept;
 use crate::app::plugin::manifest::InterceptHook;
@@ -21,7 +21,7 @@ use crate::app::{
     AttachmentId, ChannelId, CommunityId, EventScope, PollId, UserId, publish_event, read_state,
     system_account, thread,
 };
-use crate::app::{MaybeLoaded, MessageId};
+use crate::app::{HeldMessageId, MaybeLoaded, MessageId};
 use crate::database::schema::attachment;
 use crate::database::schema::channel;
 use crate::database::schema::message;
@@ -73,6 +73,8 @@ pub struct Message {
     /// For a message of a plugin's account, the card it shows (`app::plugin::card`).
     pub card: Option<Card>,
 }
+
+pub mod held;
 
 /// The message's wire record, with the relations it carries from child tables.
 pub fn record(
@@ -158,6 +160,47 @@ async fn ensure_attachments_ready(
     Ok(())
 }
 
+/// Checks that `author` may post in `channel_id` with `attachments`, as `create_message` and
+/// `held::post` do, answering the channel and the author's access to it.
+async fn check_posting(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    channel_id: ChannelId,
+    attachments: &[AttachmentId],
+    echo_to_parent: bool,
+) -> Result<(Channel, ChannelAccess), app::Error> {
+    let target: Channel = channel::table
+        .select(Channel::as_select())
+        .filter(
+            channel::id
+                .eq(channel_id)
+                .and(channel::deleted_at.is_null()),
+        )
+        .first(conn)
+        .await?;
+    // A plugin's channel holds the plugin's contents, not messages.
+    if target.ty == ChannelType::Plugin {
+        return Err(app::Error::Validation(t!("pluginChannelHasNoMessages")));
+    }
+    let access = channel_access(state, conn, author, channel_id).await?;
+    access.require(access.send_permission())?;
+    if !attachments.is_empty() {
+        access.require(Permissions::ATTACH_FILES)?;
+    }
+    if echo_to_parent {
+        let Some(parent) = target.parent_channel else {
+            return Err(app::Error::Validation(t!("echoOutsideThread")));
+        };
+        // An echo is posted in the parent channel, so it takes sending there.
+        channel_access(state, conn, author, parent)
+            .await?
+            .require(Permissions::SEND_MESSAGES)?;
+    }
+    ensure_attachments_ready(conn, author, None, attachments).await?;
+    Ok((target, access))
+}
+
 /// What `create_message` posts besides its text.
 pub enum Posting {
     /// Text written by its author.
@@ -181,6 +224,33 @@ pub async fn create_message(
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
     posting: Posting,
+) -> Result<Message, app::Error> {
+    post(
+        state,
+        author,
+        channel_id,
+        content,
+        attachments,
+        echo_to_parent,
+        posting,
+        None,
+    )
+    .await
+}
+
+/// Posts a message as [`create_message`] does; `released` names the held message it posts
+/// (`held`), which goes in the same transaction, so that it is posted once however many servers
+/// try, and its author's apps learn which message it became.
+#[allow(clippy::too_many_arguments)]
+async fn post(
+    state: &GlobalServerContext,
+    author: UserId,
+    channel_id: ChannelId,
+    content: String,
+    attachments: Vec<AttachmentId>,
+    echo_to_parent: bool,
+    posting: Posting,
+    released: Option<HeldMessageId>,
 ) -> Result<Message, app::Error> {
     let (command, warning, card) = match posting {
         Posting::Text => (None, None, None),
@@ -226,34 +296,18 @@ pub async fn create_message(
     let message = conn
         .transaction(|conn| {
             async move {
-                let target: Channel = channel::table
-                    .select(Channel::as_select())
-                    .filter(
-                        channel::id
-                            .eq(channel_id)
-                            .and(channel::deleted_at.is_null()),
-                    )
-                    .first(conn.as_mut())
-                    .await?;
-                // A plugin's channel holds the plugin's contents, not messages.
-                if target.ty == ChannelType::Plugin {
-                    return Err(app::Error::Validation(t!("pluginChannelHasNoMessages")));
+                if let Some(held) = released {
+                    held::take(conn.as_mut(), held).await?;
                 }
-                let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
-                access.require(access.send_permission())?;
-                if !attachments.is_empty() {
-                    access.require(Permissions::ATTACH_FILES)?;
-                }
-                if echo_to_parent {
-                    let Some(parent) = target.parent_channel else {
-                        return Err(app::Error::Validation(t!("echoOutsideThread")));
-                    };
-                    // An echo is posted in the parent channel, so it takes sending there.
-                    channel_access(state, conn.as_mut(), author, parent)
-                        .await?
-                        .require(Permissions::SEND_MESSAGES)?;
-                }
-                ensure_attachments_ready(conn.as_mut(), author, None, &attachments).await?;
+                let (target, access) = check_posting(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    channel_id,
+                    &attachments,
+                    echo_to_parent,
+                )
+                .await?;
                 // A command's text is the command as sent, checked here, and it tags no one.
                 let invoked = match &command {
                     Some(invocation) => Some(
@@ -374,6 +428,9 @@ pub async fn create_message(
                 } else {
                     read_state::advance(state, conn.as_mut(), author, channel_id, message.id)
                         .await?;
+                }
+                if let Some(held) = released {
+                    held::announce_released(state, conn.as_mut(), author, held, &message).await?;
                 }
                 Ok::<_, app::Error>(message)
             }

@@ -11,7 +11,7 @@ development, with passwords written into it; it is not a production setup.
   Aspen creates the stream it needs and keeps only the last minute of events, in memory.
 - **Valkey** (or anything that speaks the Redis protocol).
 - **Object storage that speaks S3**: SeaweedFS, Garage, MinIO, or AWS S3. It needs a bucket, a
-  key pair that may read and write it, and two things clients reach directly: the S3 API (they
+  key pair that may read, write, delete, and list in it, and two things clients reach directly: the S3 API (they
   upload to presigned URLs, so it must allow your deployment's origin and the apps' by CORS) and an anonymous
   read path for downloads (a public bucket, a website endpoint, or a CDN in front of one). See
   [`[media.s3]`](configuration.md#medias3).
@@ -23,7 +23,9 @@ cargo build --release -p aspen-chat-server -p aspen-migrate -p voice_server
 ```
 
 The API server links the system's OpenSSL (for passkeys), so it needs OpenSSL's development
-files. The voice server builds mediasoup's C++ worker, which needs a C++ compiler, `make`, and
+files. To show videos inline with a poster, it runs `ffmpeg` and `ffprobe`, which it finds on
+`PATH`; without them it shows pictures inline and offers videos for download (see
+[`[media.previews]`](configuration.md#mediapreviews)). The voice server builds mediasoup's C++ worker, which needs a C++ compiler, `make`, and
 Python 3. The binaries land in `target/release/`.
 
 For 64-bit ARM, such as a Raspberry Pi 5, `scripts/cross_aarch64.py` builds everything on an

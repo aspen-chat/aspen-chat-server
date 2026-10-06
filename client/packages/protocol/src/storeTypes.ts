@@ -8,6 +8,17 @@ import type { components } from "./generated/openapi";
 
 export type Attachment = components["schemas"]["Attachment"];
 export type Icon = components["schemas"]["Icon"];
+/** A message held by the server while a preview of one of its attachments is made. */
+export type HeldMessage = components["schemas"]["HeldMessage"];
+
+/**
+ * A held message of the caller's as their app shows it until it is posted: waiting, or dropped
+ * with `failure` saying why, kept so they can send it again or let it go.
+ */
+export interface HeldEntry {
+  message: HeldMessage;
+  failure: string | null;
+}
 export type Included = components["schemas"]["Included"];
 /**
  * What the caller finds at a message another links to: `available` (its record is held as any
@@ -76,6 +87,7 @@ export type Listener = () => void;
  * - `access:<communityId>`: what the caller may do across a community
  * - `channelAccess:<channelId>`: what the caller may do in one channel
  * - `pins:<channelId>`: a channel's pinned messages, once loaded
+ * - `held:<channelId>`: the caller's messages there held for their attachments' previews
  * - `commands:<channelId>`: the commands of the bots that can see a channel, once loaded
  * - `annotations:<messageId>`: what plugins say about a message
  * - `userAnnotations:<userId>`: what plugins say about a person, once loaded

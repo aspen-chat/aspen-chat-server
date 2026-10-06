@@ -2,7 +2,8 @@
 //!
 //! Same shape as [`crate::app::attachment`]: the server reserves a row in
 //! the `icon` table with `ready_at = NULL`, hands back a presigned `PUT`
-//! URL, and waits for the client to confirm before flipping the row to
+//! URL for the icon's staging key, and waits for the client to confirm,
+//! promoting the upload to the icon's own key, before flipping the row to
 //! ready and exposing it to readers. Icons carry no `file_name`, only a
 //! mime type, so the wire surface is one field shorter; everything else
 //! is symmetric.
@@ -85,7 +86,7 @@ pub async fn init_upload(
         .values((&row, icon::uploaded_by.eq(Some(uploader))))
         .execute(conn.as_mut())
         .await?;
-    match state.media_store.presign_put(&key, &mime_type).await {
+    match state.media_store.presign_upload(&key, &mime_type).await {
         Ok(PresignedUpload { url, expires_at }) => Ok(IconUpload {
             id,
             upload_url: url,
@@ -115,7 +116,7 @@ pub async fn confirm_upload(state: &GlobalServerContext, id: IconId) -> app::Res
         .filter(icon::id.eq(id).and(icon::ready_at.is_null()))
         .first(conn.as_mut())
         .await?;
-    if !state.media_store.head_object(&row.storage_key).await? {
+    if state.media_store.promote(&row.storage_key).await?.is_none() {
         return Err(app::Error::Validation(t!("iconUploadNotFound")));
     }
     let confirmed = Utc::now();
@@ -198,7 +199,7 @@ pub(crate) async fn delete_icon(state: &GlobalServerContext, id: IconId) -> app:
     else {
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     };
-    if let Err(e) = state.media_store.delete(&deleted.storage_key).await {
+    if let Err(e) = state.media_store.delete_upload(&deleted.storage_key).await {
         warn!(
             error = e.to_string(),
             key = deleted.storage_key,

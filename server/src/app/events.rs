@@ -139,6 +139,11 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         ServerEvent::PluginEvent {
             channel: Some(_), ..
         } => ScopeKind::Channel,
+        // A preview goes where its attachment is seen: a message's channel, or its uploader.
+        ServerEvent::AttachmentPreviewed {
+            message: Some(_), ..
+        } => ScopeKind::Channel,
+        ServerEvent::AttachmentPreviewed { message: None, .. } => ScopeKind::User,
         ServerEvent::PluginEvent {
             channel: None,
             community: Some(_),
@@ -174,7 +179,9 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::AccountBanned { .. }
         | ServerEvent::SignInsEnded { .. }
         | ServerEvent::ReportsChanged { .. }
-        | ServerEvent::PluginNotice { .. } => ScopeKind::User,
+        | ServerEvent::PluginNotice { .. }
+        | ServerEvent::HeldMessagePosted { .. }
+        | ServerEvent::HeldMessageFailed { .. } => ScopeKind::User,
         ServerEvent::User(_)
         | ServerEvent::BotCommandsChanged { .. }
         | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
@@ -658,7 +665,10 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::UserAnnotation(_)
         | ServerEvent::CommunityPlugin(_)
         | ServerEvent::PluginEvent { .. }
-        | ServerEvent::PluginNotice { .. } => Vec::new(),
+        | ServerEvent::PluginNotice { .. }
+        | ServerEvent::AttachmentPreviewed { .. }
+        | ServerEvent::HeldMessagePosted { .. }
+        | ServerEvent::HeldMessageFailed { .. } => Vec::new(),
     }
 }
 

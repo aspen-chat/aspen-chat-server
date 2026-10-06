@@ -3,9 +3,13 @@
 //! 1. [`init_upload`] reserves an `attachment` row with `ready_at = NULL`,
 //!    presigns a short-lived `PUT` URL, and hands `(id, upload_url, expiry)`
 //!    back to the client. Bytes never touch the API process.
-//! 2. The client uploads directly to S3 / Garage using the presigned URL.
-//! 3. [`confirm_upload`] HEADs the bucket, flips `ready_at` to `now()`, and
-//!    returns the wire DTO including a stable `download_url`. Until that
+//! 2. The client uploads directly to S3 / Garage using the presigned URL, which
+//!    writes the object's staging key, never the one readers fetch
+//!    (`app::media_store`).
+//! 3. [`confirm_upload`] promotes the upload to its own key within the store,
+//!    so once confirmed the attachment is what was uploaded and the URL can no
+//!    longer change it, flips `ready_at` to `now()`, and returns the wire DTO
+//!    including a stable `download_url`. Until that
 //!    flip happens the row is invisible to readers and to message-attach
 //!    validation, so a half-finished upload can't be referenced from a
 //!    message.
@@ -20,6 +24,9 @@
 //! readers' apps give as the picture's or video's text alternative. It is given when the upload
 //! starts or set with [`describe_attachment`] until the attachment is sent; a sent attachment's
 //! description is part of the message it went with and stays as it was sent.
+//!
+//! Confirming a picture or video queues the making of its preview, a smaller copy for showing it
+//! inline, which the servers that make previews do in the background ([`preview`]).
 //!
 //! [`delete_attachment`] removes an unsent row of the caller's, confirmed or
 //! not, and best-effort deletes the S3 object. Stale `ready_at IS NULL` rows
@@ -39,7 +46,8 @@ use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,
     SelectableHelper,
 };
-use diesel_async::RunQueryDsl;
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::warn;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -60,7 +68,14 @@ pub struct Attachment {
     pub uploader: Option<UserId>,
     /// What it shows, in its uploader's words; see [`description`].
     pub description: Option<String>,
+    /// Its preview, all four or none; see [`preview`].
+    pub preview_storage_key: Option<String>,
+    pub preview_mime_type: Option<String>,
+    pub preview_width: Option<i32>,
+    pub preview_height: Option<i32>,
 }
+
+pub mod preview;
 
 /// The largest side, in pixels, a picture's stated size may have.
 pub const MAX_PICTURE_SIDE: u32 = 100_000;
@@ -189,13 +204,17 @@ pub async fn init_upload(
         height: size.map(|(_, h)| h),
         uploader: Some(caller),
         description,
+        preview_storage_key: None,
+        preview_mime_type: None,
+        preview_width: None,
+        preview_height: None,
     };
     let mut conn = state.connection_pool.get().await?;
     diesel::insert_into(attachment::table)
         .values(&row)
         .execute(conn.as_mut())
         .await?;
-    match state.media_store.presign_put(&key, &mime_type).await {
+    match state.media_store.presign_upload(&key, &mime_type).await {
         Ok(PresignedUpload { url, expires_at }) => Ok(AttachmentUpload {
             id,
             upload_url: url,
@@ -244,19 +263,34 @@ pub async fn confirm_upload(
         )
         .first(conn.as_mut())
         .await?;
-    if !state.media_store.head_object(&row.storage_key).await? {
+    if state.media_store.promote(&row.storage_key).await?.is_none() {
         return Err(app::Error::Validation(t!("attachmentUploadNotFound")));
     }
     let confirmed = Utc::now();
-    let updated: usize = diesel::update(attachment::table)
-        .filter(attachment::id.eq(id).and(attachment::ready_at.is_null()))
-        .set(attachment::ready_at.eq(confirmed))
-        .execute(conn.as_mut())
+    let wants_preview = preview::wanted(&row.mime_type);
+    let updated: usize = conn
+        .transaction::<_, app::Error, _>(|conn| {
+            async move {
+                let updated = diesel::update(attachment::table)
+                    .filter(attachment::id.eq(id).and(attachment::ready_at.is_null()))
+                    .set(attachment::ready_at.eq(confirmed))
+                    .execute(conn)
+                    .await?;
+                if updated > 0 && wants_preview {
+                    preview::queue(conn, id).await?;
+                }
+                Ok(updated)
+            }
+            .scope_boxed()
+        })
         .await?;
     if updated == 0 {
         // Lost a race with a concurrent confirm; treat the second caller as
         // a no-op error rather than re-confirming.
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
+    }
+    if wants_preview {
+        preview::wake(state).await;
     }
     Ok(Attachment {
         ready_at: Some(confirmed),
@@ -370,11 +404,20 @@ pub async fn delete_attachment(
     else {
         return Err(app::Error::Diesel(diesel::result::Error::NotFound));
     };
-    if let Err(e) = state.media_store.delete(&deleted.storage_key).await {
+    if let Err(e) = state.media_store.delete_upload(&deleted.storage_key).await {
         warn!(
             error = e.to_string(),
             key = deleted.storage_key,
             "failed to delete attachment object from media store after db deletion"
+        );
+    }
+    // A preview being made as it is deleted is deleted by its maker, which finds the row gone.
+    if let Some(key) = deleted.preview_storage_key
+        && let Err(e) = state.media_store.delete(&key).await
+    {
+        warn!(
+            error = e.to_string(),
+            key, "failed to delete attachment preview from media store after db deletion"
         );
     }
     Ok(())

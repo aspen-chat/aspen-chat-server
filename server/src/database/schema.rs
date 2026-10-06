@@ -22,6 +22,20 @@ diesel::table! {
         height -> Nullable<Int4>,
         uploader -> Nullable<Uuid>,
         description -> Nullable<Text>,
+        preview_storage_key -> Nullable<Text>,
+        preview_mime_type -> Nullable<Text>,
+        preview_width -> Nullable<Int4>,
+        preview_height -> Nullable<Int4>,
+    }
+}
+
+diesel::table! {
+    attachment_preview_job (attachment_id) {
+        attachment_id -> Uuid,
+        priority -> Int2,
+        not_before -> Timestamptz,
+        attempts -> Int4,
+        hold_until -> Timestamptz,
     }
 }
 
@@ -325,6 +339,21 @@ diesel::table! {
         ended_at -> Nullable<Timestamptz>,
         outcome -> Nullable<Text>,
         ended_by -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    held_message (id) {
+        id -> Uuid,
+        author -> Uuid,
+        channel -> Uuid,
+        content -> Text,
+        attachments -> Array<Nullable<Uuid>>,
+        echo_to_parent -> Bool,
+        locale -> Text,
+        held_at -> Timestamptz,
+        not_before -> Timestamptz,
+        attempts -> Int4,
     }
 }
 
@@ -877,6 +906,7 @@ diesel::table! {
 }
 
 diesel::joinable!(attachment -> user (uploader));
+diesel::joinable!(attachment_preview_job -> attachment (attachment_id));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
@@ -917,6 +947,8 @@ diesel::joinable!(federation_list_entry -> user (added_by));
 diesel::joinable!(file_offer -> channel (channel));
 diesel::joinable!(file_offer -> user (sender));
 diesel::joinable!(file_transfer -> file_offer (offer));
+diesel::joinable!(held_message -> channel (channel));
+diesel::joinable!(held_message -> user (author));
 diesel::joinable!(icon -> user (uploaded_by));
 diesel::joinable!(invite -> community (community));
 diesel::joinable!(invite -> user (created_by));
@@ -990,6 +1022,7 @@ diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
+    attachment_preview_job,
     benchmark_community,
     benchmark_run,
     benchmark_user,
@@ -1017,6 +1050,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     federation_list_entry,
     file_offer,
     file_transfer,
+    held_message,
     icon,
     invite,
     mention,

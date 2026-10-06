@@ -296,7 +296,10 @@ async fn purge_rows(
     .await?;
     storage_keys.extend(
         diesel::sql_query(
-            r#"SELECT storage_key AS key FROM attachment WHERE id IN (SELECT * FROM "purge_attachment")"#,
+            r#"SELECT storage_key AS key FROM attachment WHERE id IN (SELECT * FROM "purge_attachment")
+               UNION ALL
+               SELECT preview_storage_key AS key FROM attachment
+               WHERE id IN (SELECT * FROM "purge_attachment") AND preview_storage_key IS NOT NULL"#,
         )
         .load::<StorageKey>(conn)
         .await?

@@ -17,6 +17,15 @@
   latest" answers at once: the pill keeps its own state, so a press repaints it alone, saying
   the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
+- Messages held for their previews (`HeldMessages.tsx`): `AspenSync.sendMessage` sends with
+  `mayHold`, so a message whose picture or video is still having its preview made is held by
+  the server for up to twenty seconds from the upload and answered `202` with the held message,
+  which the store keeps (`heldMessages`, topic `held:<channelId>`) and the message box shows
+  above itself, waiting, until `heldMessagePosted` (the message itself arriving in the list by
+  its own event) or `heldMessageFailed`, when it says why and offers to send it again
+  (`AspenSync.sendHeldAgain`) or let it go. The box clears as soon as the server has it, held or
+  posted. Held messages are read at bootstrap (`GET /users/@me/held-messages`), and a dropped one
+  stays, on this device, until it is sent again or let go.
 - Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent
   (text, picked tags, files already uploaded, and a thread's echo choice) waits in its channel
   on this device, per account, through going elsewhere, a notification opened, and a reload,

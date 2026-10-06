@@ -73,6 +73,12 @@ pub mod api {
     pub const EMAILS_SENT: &str = "aspen_emails_sent_total";
     /// Mail given up: refused for good, or failing for about a day.
     pub const EMAILS_FAILED: &str = "aspen_emails_failed_total";
+    /// Attachment previews made and kept, by `kind` (`picture`, `video`).
+    pub const ATTACHMENT_PREVIEWS_MADE: &str = "aspen_attachment_previews_made_total";
+    /// Attachment previews given up after failing every attempt, by `kind`.
+    pub const ATTACHMENT_PREVIEWS_FAILED: &str = "aspen_attachment_previews_failed_total";
+    /// How long making one attachment preview took, kept or not, by `kind`.
+    pub const ATTACHMENT_PREVIEW_DURATION: &str = "aspen_attachment_preview_duration_seconds";
 }
 
 /// Voice server metrics.

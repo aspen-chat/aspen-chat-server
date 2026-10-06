@@ -468,3 +468,4 @@ unsubscribeDigestQuestion: "Stop receiving the daily digest of %{deployment} at 
 unsubscribeConfirm: "Unsubscribe"
 unsubscribeDone: "You are unsubscribed. You can subscribe again in your account settings."
 unsubscribeUnknown: "This link no longer works: the address it was sent to has changed, or the link is incomplete. You can change what you receive in your account settings."
+heldMessageNotPosted: "This message could not be posted. Check that you may still post in this channel, then send it again."

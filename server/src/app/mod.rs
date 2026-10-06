@@ -252,6 +252,8 @@ id_type!(UserId);
 id_type!(ChannelId);
 
 id_type!(MessageId);
+// A message waiting for its attachments' previews before it is posted (`app::message::held`).
+id_type!(HeldMessageId);
 
 id_type!(PollId);
 

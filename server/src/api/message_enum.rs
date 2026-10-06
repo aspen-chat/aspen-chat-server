@@ -1,3 +1,4 @@
+use crate::api::attachment::AttachmentPreview;
 use crate::api::link_preview::LinkPreview;
 use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
 use crate::api::user::{CustomStatus, UserOnlineStatus};
@@ -9,8 +10,8 @@ use crate::app::permissions::Permission;
 use crate::app::plugin::PluginText;
 use crate::app::plugin::annotation::Severity;
 use crate::app::{
-    AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, IconId,
-    MessageId, PollId, ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
+    AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, HeldMessageId,
+    IconId, MessageId, PollId, ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
 };
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -103,6 +104,33 @@ enum MessageEnumSource {
     ChannelRead {
         channel: ChannelId,
         last_read: MessageId,
+    },
+    // An attachment's preview was made: the smaller copy of a picture or video that apps show
+    // inline in place of the original (`app::attachment::preview`). Published in the channel of
+    // each message holding the attachment, naming the message, or to its uploader alone while
+    // it is in none, without one; apps that hold the attachment set its `preview`.
+    #[message_gen(custom_event)]
+    AttachmentPreviewed {
+        attachment: AttachmentId,
+        message: Option<MessageId>,
+        preview: AttachmentPreview,
+    },
+    // A message its author sent while a preview of one of its attachments was being made, and
+    // which was held for it, was posted as `message` (`app::message::held`); the author's apps
+    // show the message in place of the one they showed waiting.
+    #[message_gen(custom_event)]
+    HeldMessagePosted {
+        held: HeldMessageId,
+        channel: ChannelId,
+        message: MessageId,
+    },
+    // A held message could not be posted after all, and was dropped: `detail` says why, in the
+    // language it was sent in. The author's apps offer to send it again.
+    #[message_gen(custom_event)]
+    HeldMessageFailed {
+        held: HeldMessageId,
+        channel: ChannelId,
+        detail: String,
     },
     // Something announced about the community may not have happened: a request published
     // events about it inside a transaction that was then rolled back. Whoever holds the
@@ -260,6 +288,12 @@ enum MessageEnumSource {
         // `ThreadEcho` message there.
         #[message_gen(secret)]
         echo_to_parent: Option<bool>,
+        // The sending client shows a message waiting until it is posted, so the server may hold
+        // it while one of its attachments' previews is being made, answering `202 Accepted`
+        // with the held message (`app::message::held`); without it the message is posted at
+        // once.
+        #[message_gen(secret)]
+        may_hold: Option<bool>,
     },
     Poll {
         #[message_gen(id)]

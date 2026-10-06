@@ -53,7 +53,11 @@ by each API server, at the same origin.
 
 Where attachments, icons, avatars, and link preview images are kept. Clients upload straight to
 storage with short-lived URLs the server signs, and download from a public path, so two of these
-addresses are the clients' and must be reachable by them.
+addresses are the clients' and must be reachable by them. An upload URL writes under `uploads/`,
+never where readers fetch from: confirming the upload has the store copy it into place, so a URL
+used again later changes nothing anyone reads, and each server deletes what is left under
+`uploads/` an hour after its URL expired. A lifecycle rule expiring `uploads/` after a day does
+no harm.
 
 | Setting | Default | |
 | --- | --- | --- |
@@ -62,8 +66,34 @@ addresses are the clients' and must be reachable by them.
 | `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: a public read path on the bucket, such as a website endpoint or a CDN. The server itself never needs to reach it. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
-| `access_key`, `secret_key` | development values | A key pair that may read, write, and delete in the bucket. |
+| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
+
+## `[media.previews]`
+
+Readers' apps show pictures and videos inline from a smaller copy the server makes: a picture
+fitted within 1920 × 960 pixels as WebP, and a video's poster, one frame of it, with the video
+itself played only when asked. The originals stay what the gallery shows and what is saved.
+A message sent with a picture or video whose preview is still being made may wait for it, up to
+twenty seconds from the upload, before it is posted. Every server queues previews; those with
+`make` on make them, from the database's queue, so a server that dies leaves its work to the
+others. Pictures are made in the server itself. Videos' posters are taken by running `ffmpeg`
+and `ffprobe`, which need not be installed: a server without them makes previews of pictures
+only, and says so when it starts. Each video is copied whole to a scratch file under `TMPDIR`,
+so point that at a disk with room for `max_video_bytes` times `concurrency` (not a RAM-backed
+`/tmp`).
+
+| Setting | Default | |
+| --- | --- | --- |
+| `make` | `true` | Whether this server makes previews. Leave it on somewhere: with no server making them, messages sent with pictures wait their full twenty seconds. |
+| `concurrency` | `2` | How many previews this server makes at once. A large picture may take several hundred megabytes while it is made. |
+| `max_picture_bytes` | `67108864` (64 MiB) | The largest picture a preview is made of. |
+| `max_picture_pixels` | `100000000` | The most pixels a picture may have for a preview to be made of it. |
+| `ffmpeg`, `ffprobe` | `"ffmpeg"`, `"ffprobe"` | The programs that take videos' posters, by path or by name on `PATH`. An empty `ffmpeg` takes none. |
+| `max_video_bytes` | `2147483648` (2 GiB) | The largest video a poster is taken of. |
+
+The metrics `aspen_attachment_previews_made_total`, `aspen_attachment_previews_failed_total`,
+and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`, `video`).
 
 ## `[auth]`
 

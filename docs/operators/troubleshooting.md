@@ -95,6 +95,15 @@ reachable from the client, over HTTPS when the page is, and allow the page's ori
 **Pictures do not load.** They load from `[media.s3] public_base_url`, which must serve the bucket
 without credentials.
 
+**Videos show as downloads, without a poster.** No server that makes previews can run `ffmpeg`
+and `ffprobe`; each says so in its log as it starts ("makes previews of pictures only"). Install
+them, or name them in [`[media.previews]`](configuration.md#mediapreviews). An HDR video, or one
+larger than `max_video_bytes`, has no poster by design.
+
+**Messages with a picture take twenty seconds to appear.** No server makes previews (`[media.previews]
+make` is off everywhere, or every maker is stuck), so each message waits out its hold. The
+`attachment_preview_job` table shows what is waiting.
+
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
 enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet
 tab shows each voice server's last report. Check that the voice server is running, reaches

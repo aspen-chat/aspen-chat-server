@@ -32,6 +32,7 @@ import {
 } from "@/api/hooks";
 import { describable, isImageType } from "@/features/messages/images";
 import { AttachmentDescriptionButton } from "@/features/messages/AttachmentDescription";
+import { HeldMessages } from "@/features/messages/HeldMessages";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -364,6 +365,7 @@ export function Composer({
       }}
       className="flex flex-col gap-2 border-t border-line px-4 py-3"
     >
+      <HeldMessages channelId={channelId} />
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
           {error}

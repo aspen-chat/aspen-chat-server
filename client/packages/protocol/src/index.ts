@@ -70,6 +70,8 @@ export { UNREAD_DMS } from "./notifyRules";
 export { groupChannels, isDm } from "./channels";
 export type {
   Attachment,
+  HeldEntry,
+  HeldMessage,
   ChannelMute,
   NotificationLevel,
   NotificationSetting,
@@ -162,6 +164,7 @@ export {
   type SyncListener,
   type SyncStatus,
   type MessageHolding,
+  type Sent,
   type MessageSearch,
   type ForeignDmNotice,
   type PluginEvent,

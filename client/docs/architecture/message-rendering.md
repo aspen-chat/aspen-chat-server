@@ -17,7 +17,8 @@
   (`server/src/app/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
   as a link is what gets a preview; change both together.
 - Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (`upload.ts`; reserve,
-  `PUT` the bytes straight to storage with `uploadFetch`, confirm) and are named by id in
+  `PUT` the bytes straight to storage with `uploadFetch`, confirm, which has the server move them
+  from the URL's staging key to where readers fetch them, so the URL can change nothing after) and are named by id in
   `sendMessage`. A picture's reservation carries its size, which the composer measures first
   (`measurePicture`), and its record gives it back as `width` and `height`. A message event carries only ids, so `useAttachment` fetches records on
   demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
@@ -25,6 +26,17 @@
   arrive as previews with a picture and no text. `MessageMedia` there gathers all three into
   one strip and shows at most `INLINE_IMAGE_LIMIT` (three) inline; beyond that a `+N` tile,
   like any inline picture, opens `ImageGallery.tsx`, a modal that pages through the whole set.
+- Inline, an attachment shows the preview the server made of it where there is one (the record's
+  `preview`: a smaller WebP copy of a picture, fitted within 1920 × 960, or a video's poster; see
+  the server's `docs/architecture/attachment-previews.md`), at the preview's exact size, so its
+  room is kept as a measured picture's is (`keptRoom`). A picture whose preview cannot be loaded
+  falls back to its original, and one whose original has already loaded keeps it when a preview
+  arrives later (`attachmentPreviewed`, which the store applies to the record; a record read
+  from before the preview was made keeps the preview the store already holds). The gallery shows
+  the original, and its thumbnail strip the previews. A video with a poster shows the poster with
+  a play control (`InlineVideo`), which swaps in a `<video>` of the original in the poster's
+  room, so nothing of the video is fetched until the reader asks; a video the browser cannot
+  play, and one without a poster, is a download chip.
 - A picture or video may carry a description, in its uploader's words, for readers who cannot
   see it: the attachment record's `description` (at most `ATTACHMENT_DESCRIPTION_MAX_CHARS`,
   1500 characters, the server's `app::attachment::DESCRIPTION_MAX_CHARS`; blank is none). It is

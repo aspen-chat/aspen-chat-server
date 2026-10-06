@@ -188,8 +188,10 @@ function GalleryBody({
                 (i === index ? "ring-2 ring-white" : "opacity-60 hover:opacity-100")
               }
             >
+              {/* A thumbnail: the inline copy does, where there is one, at a fraction of the
+                  original's bytes. */}
               <img
-                src={picture.src}
+                src={picture.preview?.src ?? picture.src}
                 alt=""
                 loading="lazy"
                 referrerPolicy="no-referrer"

@@ -314,6 +314,8 @@ export function coreRoutes({
     // The deployment runs no plugins, and they say nothing about anyone; `plugins.spec.ts`
     // answers these itself.
     ["GET", /^\/plugins$/, () => []],
+    // Nothing of the caller's is held for its previews.
+    ["GET", /^\/users\/@me\/held-messages$/, () => []],
     ["GET", /^\/users\/[^/]+\/annotations$/, () => []],
     // Blocking answers as the server does, and tells the caller's devices by event.
     [
