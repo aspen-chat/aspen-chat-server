@@ -89,6 +89,14 @@ async fn main() -> anyhow::Result<()> {
     }
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
+    // The API server refuses these at an `https` address, so a voice server of a public
+    // deployment cannot match them; this server cannot tell which it serves, and warns.
+    if config.token_secret == "aspen_dev_voice_secret" || config.token_secret.len() < 32 {
+        tracing::warn!(
+            "token_secret is the development value or shorter than 32 bytes; whoever knows it can \
+             join any call, so a public deployment needs a long random one"
+        );
+    }
     let limits = Arc::new(
         limits::Limits::new(&config.rate_limits)
             .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,

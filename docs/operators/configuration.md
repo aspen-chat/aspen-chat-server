@@ -134,7 +134,7 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string.** |
+| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
 | `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, disable it until an administrator enables it again. Only people a join offer sent to that server within the token's lifetime and a minute count, and bots never do. |
 | `failure_window_seconds` | `3600` | |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
@@ -284,7 +284,7 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | Setting | Default | |
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
-| `token_secret` | required | The API servers' `[voice] token_secret`. |
+| `token_secret` | required | The API servers' `[voice] token_secret`. The server warns at startup when it is the development value or shorter than 32 bytes. |
 | `nats_url`, `nats_auth_token` | required | The same NATS as the API servers. |
 | `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front. |
 | `workers` | one per CPU | Media worker processes, each using at most one core. |
