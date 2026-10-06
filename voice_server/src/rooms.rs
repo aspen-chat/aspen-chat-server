@@ -171,6 +171,16 @@ impl Participant {
         self.muted || self.server_muted
     }
 
+    /// Whether a new producer of `source` may join the participant's, checked under the room's
+    /// lock as it is added: making one awaits mediasoup, and meanwhile their grants may have
+    /// been taken away or another producer of the source added.
+    fn admit(&self, source: MediaSource) -> Result<(), RoomError> {
+        if !self.grants.may_produce(source) {
+            return Err(RoomError::NotPermitted(source));
+        }
+        self.ensure_source_free(source)
+    }
+
     fn sharing_screen(&self) -> bool {
         self.producers
             .values()
@@ -754,22 +764,38 @@ impl Rooms {
             )
         };
         let mut options = ProducerOptions::new(media_kind(kind), rtp_parameters);
-        options.paused = muted && source == MediaSource::Microphone;
+        let paused = muted && source == MediaSource::Microphone;
+        options.paused = paused;
         let producer = transport.produce(options).await?;
         Self::observe_audio(&room, &producer, user).await;
         let producer_id = producer.id();
         let state = {
             let mut participants = room.participants.lock().expect("room lock");
-            let participant = seated_mut(&mut participants, seat)?;
-            participant
-                .producers
-                .insert(producer_id, (producer, source));
-            participant.send(ServerMessage::Produced {
-                producer_id: producer_id.to_string(),
-                source,
-            });
-            (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
+            match seated_mut(&mut participants, seat).and_then(|participant| {
+                participant.admit(source)?;
+                Ok(participant)
+            }) {
+                Ok(participant) => {
+                    participant
+                        .producers
+                        .insert(producer_id, (producer.clone(), source));
+                    participant.send(ServerMessage::Produced {
+                        producer_id: producer_id.to_string(),
+                        source,
+                    });
+                    (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
+                }
+                Err(e) => {
+                    drop(participants);
+                    Self::refuse_producer(&room, producer);
+                    return Err(e);
+                }
+            }
         };
+        if source == MediaSource::Microphone {
+            Self::settle_microphone(&room, seat, &producer, paused).await;
+        }
+        drop(producer);
         if let Some(report) = state {
             self.reporter.report(report);
         }
@@ -870,6 +896,42 @@ impl Rooms {
             consumer
         };
         consumer.resume().await.map_err(RoomError::from)
+    }
+
+    /// Closes a producer made for a participant who, by the time it was ready, was gone or no
+    /// longer allowed it. No one consumes it yet.
+    fn refuse_producer(room: &Room, producer: Producer) {
+        room.producer_owner
+            .lock()
+            .expect("owner lock")
+            .remove(&producer.id());
+        drop(producer);
+    }
+
+    /// Brings a new microphone, made `paused` or not by the participant's mute as it stood
+    /// before mediasoup made it, in line with their mute as it stands now: a mute, a
+    /// moderator's above all, that arrived meanwhile found no microphone to pause. It checks
+    /// again after each change, since another may have arrived during it.
+    async fn settle_microphone(room: &Room, seat: Seat, producer: &Producer, mut paused: bool) {
+        loop {
+            let silenced = match seated(&room.participants.lock().expect("room lock"), seat) {
+                Ok(participant) => participant.silenced(),
+                Err(_) => return,
+            };
+            if silenced == paused {
+                return;
+            }
+            let result = if silenced {
+                producer.pause().await
+            } else {
+                producer.resume().await
+            };
+            if let Err(e) = result {
+                warn!(error = e.to_string(), "microphone pause state not applied");
+                return;
+            }
+            paused = silenced;
+        }
     }
 
     /// Lets the room's audio level observer hear an audio producer, so its owner is reported

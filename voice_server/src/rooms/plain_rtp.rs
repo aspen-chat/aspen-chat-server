@@ -85,7 +85,12 @@ impl Rooms {
     pub async fn produce_rtp(&self, seat: Seat, source: MediaSource) -> Result<(), RoomError> {
         let user = seat.user;
         let room = self.room(seat.channel)?;
-        seated(&room.participants.lock().expect("room lock"), seat)?.ensure_source_free(source)?;
+        let muted = {
+            let participants = room.participants.lock().expect("room lock");
+            let participant = seated(&participants, seat)?;
+            participant.ensure_source_free(source)?;
+            participant.silenced()
+        };
         let (transport, srtp) = self.plain_transport(&room).await?;
         let ssrc = (Uuid::now_v7().as_u128() as u32) | 1;
         // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
@@ -148,35 +153,52 @@ impl Rooms {
                 reduced_size: true,
             },
         };
-        let producer = transport
-            .produce(ProducerOptions::new(kind, rtp_parameters))
-            .await?;
+        let mut options = ProducerOptions::new(kind, rtp_parameters);
+        let paused = muted && source == MediaSource::Microphone;
+        options.paused = paused;
+        let producer = transport.produce(options).await?;
         Self::observe_audio(&room, &producer, user).await;
         let (local_address, local_port) = local_tuple(&transport);
         let producer_id = producer.id();
         let state = {
             let mut participants = room.participants.lock().expect("room lock");
-            let participant = seated_mut(&mut participants, seat)?;
-            participant
-                .producers
-                .insert(producer_id, (producer, source));
-            // Only video is previewed back to the sender; their own audio would be an echo.
-            if kind == MediaKind::Video {
-                participant.own_preview.insert(producer_id);
+            match seated_mut(&mut participants, seat).and_then(|participant| {
+                participant.admit(source)?;
+                Ok(participant)
+            }) {
+                Ok(participant) => {
+                    participant
+                        .producers
+                        .insert(producer_id, (producer.clone(), source));
+                    // Only video is previewed back to the sender; their own audio would be an
+                    // echo.
+                    if kind == MediaKind::Video {
+                        participant.own_preview.insert(producer_id);
+                    }
+                    participant.rtp_transports.insert(producer_id, transport);
+                    participant.send(ServerMessage::RtpProduced {
+                        producer_id: producer_id.to_string(),
+                        source,
+                        ip: local_address.to_string(),
+                        port: local_port,
+                        ssrc,
+                        payload_type,
+                        srtp_crypto_suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
+                        srtp_key_base64: srtp.key_base64.clone(),
+                    });
+                    (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
+                }
+                Err(e) => {
+                    drop(participants);
+                    Self::refuse_producer(&room, producer);
+                    return Err(e);
+                }
             }
-            participant.rtp_transports.insert(producer_id, transport);
-            participant.send(ServerMessage::RtpProduced {
-                producer_id: producer_id.to_string(),
-                source,
-                ip: local_address.to_string(),
-                port: local_port,
-                ssrc,
-                payload_type,
-                srtp_crypto_suite: "AES_CM_128_HMAC_SHA1_80".to_string(),
-                srtp_key_base64: srtp.key_base64.clone(),
-            });
-            (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
         };
+        if source == MediaSource::Microphone {
+            Self::settle_microphone(&room, seat, &producer, paused).await;
+        }
+        drop(producer);
         if let Some(report) = state {
             self.reporter.report(report);
         }
