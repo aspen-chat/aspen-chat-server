@@ -163,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
         announced_address,
         reporter.clone(),
         Arc::clone(&relay),
+        &config.rate_limits,
     );
     {
         let rooms = Arc::clone(&rooms);

@@ -96,6 +96,10 @@ pub struct LimitSettings {
     pub max_suspension_seconds: u64,
     pub max_message_bytes: usize,
     pub max_pending_sockets_per_ip: u32,
+    /// Calls one user may be in at once on this server (`rooms::Rooms::join`).
+    pub max_seats_per_user: usize,
+    /// People one call on this server may hold at once.
+    pub max_participants_per_call: usize,
     /// By route: `health`, `signalling`.
     #[serde(default)]
     pub http: HashMap<String, RuleTable>,
@@ -115,6 +119,8 @@ pub struct LimitOverrides {
     pub max_suspension_seconds: Option<u64>,
     pub max_message_bytes: Option<usize>,
     pub max_pending_sockets_per_ip: Option<u32>,
+    pub max_seats_per_user: Option<usize>,
+    pub max_participants_per_call: Option<usize>,
     #[serde(default)]
     pub http: HashMap<String, RuleTable>,
     #[serde(default)]
@@ -152,6 +158,12 @@ impl LimitSettings {
         }
         if let Some(sockets) = overrides.max_pending_sockets_per_ip {
             self.max_pending_sockets_per_ip = sockets;
+        }
+        if let Some(seats) = overrides.max_seats_per_user {
+            self.max_seats_per_user = seats;
+        }
+        if let Some(people) = overrides.max_participants_per_call {
+            self.max_participants_per_call = people;
         }
         aspen_limits::overlay_tables(&mut self.http, overrides.http);
         aspen_limits::overlay_tables(&mut self.frames, overrides.frames);

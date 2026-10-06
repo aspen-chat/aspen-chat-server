@@ -318,4 +318,15 @@ calls, never to the rest of the internet, and sees only ciphertext.
 
 As the API server's, with `listen_addr` defaulting to `127.0.0.1:9465`. The voice server's
 built-in limits are `voice_server/src/limits.toml`, which documents each, including
-`max_message_bytes` and `max_pending_sockets_per_ip`.
+`max_message_bytes` and `max_pending_sockets_per_ip`, and these, which bound how much of the
+media port range one account can hold:
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max_seats_per_user` | `2` | Calls one account may be in at once on this server. Joining the same call again from another device replaces the first and takes no more. |
+| `max_participants_per_call` | `500` | People one call on this server may hold at once. |
+
+A transport that has not connected within thirty seconds of being made is closed, so ports are
+not held by transports nobody uses. `createTransport`, `produceRtp`, and `consumeRtp` are limited
+per address and for the whole server as well as per account; a load test from a few addresses
+suspends the limits (`limits suspend`).
