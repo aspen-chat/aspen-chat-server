@@ -8,7 +8,6 @@ use diesel::{BoolExpressionMethods, ExpressionMethods as _, QueryDsl, Selectable
 use diesel_async::{
     AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
 };
-use futures_util::StreamExt;
 use rand::RngExt;
 use tracing::error;
 
@@ -386,32 +385,33 @@ pub async fn finish_ticket(
     ))
 }
 
+/// Issues a new session token from a live refresh token. A sign-in of an account that has been
+/// deleted, or is banned from the deployment, gets none: its refresh token answers as invalid,
+/// so the app signs out, and signing in again tells of the ban.
 pub async fn try_token_refresh(
     mut conn: impl AsMut<AsyncPgConnection>,
     refresh_token_value: &str,
 ) -> Result<TokenRefreshOutcome, app::Error> {
-    use schema::{refresh_token, session};
+    use schema::{refresh_token, session, user};
     let conn = conn.as_mut();
-    let expires: Option<NaiveDateTime> = refresh_token::table
-        .select(refresh_token::expires)
+    let found: Option<(NaiveDateTime, UserId)> = refresh_token::table
+        .inner_join(user::table)
+        .select((refresh_token::expires, refresh_token::user))
         .filter(refresh_token::dsl::token.eq(refresh_token_value))
-        .limit(1)
-        .load_stream(conn)
-        .await?
-        .next()
+        .filter(user::deleted_at.is_null())
+        .first(conn)
         .await
-        .transpose()?;
-    match expires {
-        Some(expires) => {
-            let expires = expires.and_utc();
-            if expires < Utc::now() {
-                // Token expired
-                return Ok(TokenRefreshOutcome::InvalidToken);
-            }
-        }
-        None => {
-            return Ok(TokenRefreshOutcome::InvalidToken);
-        }
+        .optional()?;
+    let Some((expires, owner)) = found else {
+        return Ok(TokenRefreshOutcome::InvalidToken);
+    };
+    if expires.and_utc() < Utc::now() {
+        return Ok(TokenRefreshOutcome::InvalidToken);
+    }
+    match app::user_ban::check_not_banned(conn, owner).await {
+        Ok(()) => {}
+        Err(app::Error::DeploymentBanned { .. }) => return Ok(TokenRefreshOutcome::InvalidToken),
+        Err(e) => return Err(e),
     }
     // If we got here then the token is valid. Issue a refresh.
     let new_token = make_token();
