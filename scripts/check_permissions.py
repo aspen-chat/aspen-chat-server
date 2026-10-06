@@ -230,6 +230,36 @@ def hidden_managers(world: World, check: Checks) -> None:
           world.stack.status("PATCH", f"/channels/{open_channel}", {"name": "managed"}, member) == 200)
 
 
+def role_grants(world: World, check: Checks) -> None:
+    say("giving a role whose permissions the giver lacks, in a community and the deployment")
+    stack, member = world.stack, world.member
+    world.give(world.role("Assigners", ["assignRoles"]))
+    # Each role is made just above everyone's, so these two rank below Assigners.
+    powerful = world.role("Powerful", ["manageChannels"])
+    plain = world.role("Plain")
+    world.stream.gather(0.5)
+    mine = f"/communities/{world.community}/members/{member['id']}/roles"
+    check("Assign roles does not give a role allowing what its holder lacks",
+          stack.status("PUT", f"{mine}/{powerful}", token=member["token"]) == 403)
+    check("but gives one allowing nothing more", stack.status("PUT", f"{mine}/{plain}", token=member["token"]) == 201)
+    world.give(powerful)
+    check("and takes one away by rank alone", stack.status("DELETE", f"{mine}/{powerful}", token=member["token"]) == 204)
+    stack.command("admin", "grant", world.owner["name"])
+    keepers = world.as_owner("POST", "/admin/roles", {"name": f"Keepers{world.run}",
+                                                      "permissions": ["manageDeploymentRoles"]})["id"]
+    settings = world.as_owner("POST", "/admin/roles", {"name": f"Settings{world.run}",
+                                                       "permissions": ["manageDeploymentSettings"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{keepers}")
+    theirs = f"/admin/users/{member['id']}/roles/{settings}"
+    check("Manage deployment roles does not give a role allowing what its holder lacks",
+          stack.status("PUT", theirs, token=member["token"]) == 403)
+    world.as_owner("PUT", theirs)
+    check("but takes one away by rank alone", stack.status("DELETE", theirs, token=member["token"]) == 204)
+    world.as_owner("DELETE", f"/admin/roles/{settings}")
+    world.as_owner("DELETE", f"/admin/roles/{keepers}")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
 def thread_echoes(world: World, check: Checks) -> None:
     say("a thread reply echoed to its channel after it was posted")
     member = world.member["token"]
@@ -1130,7 +1160,8 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, thread_echoes, calls, attachments,
+SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
+             thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, plugins, calendar_channels, email, invite_previews, previews]
 

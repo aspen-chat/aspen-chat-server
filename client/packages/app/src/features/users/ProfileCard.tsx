@@ -322,8 +322,8 @@ function CommunityRoles({
   const holding = new Set(held);
   // Roles are kept lowest first; a card lists the highest first.
   const shown = [...roles].reverse().filter((role) => !role.everyone && holding.has(role.id));
-  const addable = [...assignable].reverse().filter((role) => !holding.has(role.id));
-  const removable = new Set(assignable.map((role) => role.id));
+  const addable = [...assignable.give].reverse().filter((role) => !holding.has(role.id));
+  const removable = new Set(assignable.take.map((role) => role.id));
   const change = (roleId: string, held: boolean) => {
     setError(null);
     sync.setMemberRole(communityId, userId, roleId, held).catch((failure: unknown) => {

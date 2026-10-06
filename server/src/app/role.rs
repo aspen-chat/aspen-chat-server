@@ -680,7 +680,9 @@ async fn member_below(
     Ok(target.role_rank())
 }
 
-/// Gives `member` a role, or takes it away. Returns whether anything changed.
+/// Gives `member` a role, or takes it away, which takes Assign roles, the role and the member
+/// ranking below the caller, and, to give it, holding every permission it allows. Returns
+/// whether anything changed.
 pub async fn set_member_role(
     state: &GlobalServerContext,
     caller: UserId,
@@ -702,6 +704,11 @@ pub async fn set_member_role(
                 return Err(app::Error::Validation(t!("botRoleFixed")));
             }
             access.require_above(role.position)?;
+            // Giving a role gives what it allows, which must be the caller's to give, as for
+            // making or editing one; taking it away takes rank alone.
+            if held {
+                access.require_holds(role.permissions)?;
+            }
             member_below(conn.as_mut(), &access, member).await?;
             let changed = if held {
                 diesel::insert_into(community_member_role::table)

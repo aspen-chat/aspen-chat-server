@@ -165,8 +165,8 @@ pub async fn reorder_roles(
     ))
 }
 
-/// Gives a member a role. Takes Assign roles; the role, and the member unless it is the caller,
-/// must rank below the caller's highest. Returns the membership, `201` when the role was new to
+/// Gives a member a role. Takes Assign roles and every permission the role allows; the role, and
+/// the member unless it is the caller, must rank below the caller's highest. Returns the membership, `201` when the role was new to
 /// them and `200` when they held it already.
 #[utoipa::path(
     put,
@@ -203,7 +203,8 @@ pub async fn add_member_role(
     Ok((status, Json(membership)))
 }
 
-/// Takes a role from a member, on the same terms as giving it.
+/// Takes a role from a member, on the same terms as giving it but for its permissions, which the
+/// caller need not hold.
 #[utoipa::path(
     delete,
     path = "/communities/{community}/members/{user}/roles/{role}",
