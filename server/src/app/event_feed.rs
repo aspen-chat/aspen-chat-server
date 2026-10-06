@@ -121,8 +121,9 @@ pub struct FeedEvent {
     /// On a user's own subject, the sign-ins of theirs that ended: only their connections
     /// receive the event.
     sign_ins: Option<EndedSignIns>,
-    /// On a community's subject, that what was announced about it may not have happened
-    /// (`app::events::settle`): the model is dropped and its readers resume.
+    /// That what was announced on its subject may not have happened (`app::events::settle`):
+    /// on a community's, the model is dropped and its readers resume; on a user's, their
+    /// connections resume.
     resync: bool,
     /// On a user's own subject, that their email account changed (`app::email`): whether it now
     /// holds an address it has not verified, which a connection checks against the deployment's
@@ -364,9 +365,9 @@ fn own_membership(
 }
 
 /// Whether an event on a user's own subject says they now moderate the deployment, or no
-/// longer do, read without parsing anything else.
-fn moderation_change(payload: &str) -> Option<bool> {
-    if !payload.contains(r#""serverEvent":"deploymentAccessChanged""#) {
+/// longer do, parsed only for an event of that kind.
+fn moderation_change(kind: Option<&str>, payload: &str) -> Option<bool> {
+    if kind != Some("deploymentAccessChanged") {
         return None;
     }
     #[derive(Deserialize)]
@@ -825,6 +826,20 @@ async fn reopen(context: &jetstream::Context, policy: DeliverPolicy) -> (Ordered
     }
 }
 
+/// An event's kind: its payload's own `serverEvent`, at the top. Searching the text for the tag
+/// would not do, since an event may carry JSON of someone else's making (a plugin event's
+/// `payload`) with any tag inside it, and the kinds read here end streams.
+fn server_event_of(payload: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Tag {
+        server_event: String,
+    }
+    serde_json::from_str::<Tag>(payload)
+        .ok()
+        .map(|tag| tag.server_event)
+}
+
 /// Reads a delivered message into an event; `None` for one that is not an event.
 fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     let info = match message.info() {
@@ -848,39 +863,45 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             return None;
         }
     };
+    let kind = server_event_of(payload.get());
+    let kind = kind.as_deref();
     let (membership, roles, moderator, change) = match owner {
         SubjectOwner::User(user) => {
             let (membership, roles) = own_membership(payload.get(), user);
-            (membership, roles, moderation_change(payload.get()), None)
+            (
+                membership,
+                roles,
+                moderation_change(kind, payload.get()),
+                None,
+            )
         }
         SubjectOwner::Community(_) => (None, None, None, ModelChange::read(payload.get())),
     };
     let own = matches!(owner, SubjectOwner::User(_));
-    let sign_ins = (own && payload.get().contains(r#""serverEvent":"signInsEnded""#))
+    let sign_ins = (own && kind == Some("signInsEnded"))
         .then(|| serde_json::from_str::<EndedSignIns>(payload.get()).ok())
         .flatten();
-    let ends = if own && payload.get().contains(r#""serverEvent":"accountBanned""#) {
+    let ends = if own && kind == Some("accountBanned") {
         Some(StreamEnd::Banned)
     } else if sign_ins.is_some() {
         Some(StreamEnd::SignedOut)
     } else {
         None
     };
-    let resync = matches!(owner, SubjectOwner::Community(_))
-        && payload.get().contains(r#""serverEvent":"communityResync""#);
-    let email_unverified = (own
-        && payload
-            .get()
-            .contains(r#""serverEvent":"emailAccountChanged""#))
-    .then(|| {
-        #[derive(Deserialize)]
-        struct Changed {
-            unverified: bool,
-        }
-        serde_json::from_str::<Changed>(payload.get()).ok()
-    })
-    .flatten()
-    .map(|changed| changed.unverified);
+    let resync = match owner {
+        SubjectOwner::Community(_) => kind == Some("communityResync"),
+        SubjectOwner::User(_) => kind == Some("userResync"),
+    };
+    let email_unverified = (own && kind == Some("emailAccountChanged"))
+        .then(|| {
+            #[derive(Deserialize)]
+            struct Changed {
+                unverified: bool,
+            }
+            serde_json::from_str::<Changed>(payload.get()).ok()
+        })
+        .flatten()
+        .map(|changed| changed.unverified);
     let channel = message
         .headers
         .as_ref()
@@ -1006,8 +1027,9 @@ impl Models {
 
     /// Applies `event`'s change to its community's model and attaches the model as it now
     /// stands; follows the memberships it makes or ends. Returns the connections that must
-    /// resume: those that joined a community with no model here, and on a resync, every one
-    /// reading the community, whose model is dropped.
+    /// resume: those that joined a community with no model here, on a community's resync every
+    /// one reading the community, whose model is dropped, and on a user's, every one of theirs,
+    /// whose communities and roles were followed from events that may not have happened.
     fn follow(&mut self, event: &mut FeedEvent) -> Vec<u64> {
         match event.owner {
             SubjectOwner::Community(community) if event.resync => {
@@ -1028,6 +1050,13 @@ impl Models {
                     apply_and_attach(model, event);
                 }
                 Vec::new()
+            }
+            SubjectOwner::User(user) if event.resync => {
+                let resync = self.by_user.get(&user).cloned().unwrap_or_default();
+                for id in &resync {
+                    self.unregister(*id);
+                }
+                resync
             }
             SubjectOwner::User(user) => {
                 let Some((community, joined)) = event.membership else {
@@ -1285,14 +1314,16 @@ mod tests {
             (Some((community, false)), None)
         );
         assert_eq!(own_membership(&join, UserId::new()), (None, None));
+        let moderation =
+            |payload: &str| moderation_change(server_event_of(payload).as_deref(), payload);
         assert_eq!(
-            moderation_change(
+            moderation(
                 r#"{"serverEvent":"deploymentAccessChanged","permissions":["viewDashboard","moderateCommunities"]}"#
             ),
             Some(true)
         );
         assert_eq!(
-            moderation_change(r#"{"serverEvent":"deploymentAccessChanged","permissions":[]}"#),
+            moderation(r#"{"serverEvent":"deploymentAccessChanged","permissions":[]}"#),
             Some(false)
         );
         assert_eq!(
@@ -1523,6 +1554,27 @@ mod tests {
         // The other community is still read, by the connection that stays.
         assert!(models.models.contains_key(&other));
         assert_eq!(models.readers.get(&other), Some(&1));
+    }
+
+    #[test]
+    fn a_users_resync_drops_their_connections_alone() {
+        let community = CommunityId::new();
+        let user = UserId::new();
+        let mut models = Models::default();
+        models
+            .models
+            .insert(community, Arc::new(CommunityModel::new(community)));
+        models.register(1, user, HashSet::from([community]));
+        models.register(2, user, HashSet::new());
+        models.register(3, UserId::new(), HashSet::from([community]));
+        let mut resync = plain(1, SubjectOwner::User(user), None);
+        resync.resync = true;
+        let mut dropped = models.follow(&mut resync);
+        dropped.sort();
+        assert_eq!(dropped, vec![1, 2]);
+        // The community is still read, by the other user's connection.
+        assert!(models.models.contains_key(&community));
+        assert_eq!(models.readers.get(&community), Some(&1));
     }
 
     #[test]
@@ -1759,5 +1811,19 @@ mod tests {
             .map(|rx| rx.try_recv().is_ok())
             .collect();
         assert_eq!(got, vec![true, true, false]);
+    }
+
+    #[test]
+    fn an_events_kind_is_its_own_tag_not_one_it_carries() {
+        let event = crate::api::message_enum::server_event::ServerEvent::PluginEvent {
+            plugin: "example".into(),
+            kind: "anything".into(),
+            channel: None,
+            community: None,
+            payload: serde_json::json!({ "serverEvent": "communityResync" }),
+        };
+        let payload = serde_json::to_string(&event).unwrap();
+        assert!(payload.contains(r#""serverEvent":"communityResync""#));
+        assert_eq!(server_event_of(&payload).as_deref(), Some("pluginEvent"));
     }
 }

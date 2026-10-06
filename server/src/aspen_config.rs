@@ -24,6 +24,10 @@ pub struct AspenConfig {
     /// write holds one until its event is acknowledged, so a busy server may want more, within
     /// what PostgreSQL's `max_connections` allows for every server together.
     pub database_pool_size: Option<usize>,
+    /// How long a request or task waits for one of those connections before it gives up with
+    /// `serverBusy`, so a pool that runs dry refuses work rather than holding it forever.
+    #[serde(default = "default_database_pool_wait_seconds")]
+    pub database_pool_wait_seconds: u64,
     pub nats_url: String,
     pub nats_auth_token: String,
     pub valkey_url: String,
@@ -480,6 +484,10 @@ pub struct MediaS3Config {
 
 pub fn default_event_feed_shards() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+pub fn default_database_pool_wait_seconds() -> u64 {
+    10
 }
 
 pub fn default_event_queue_size() -> usize {

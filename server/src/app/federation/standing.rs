@@ -232,22 +232,25 @@ type DueRow = (
 
 /// Asks every home about its users here who are due, if no other server is doing so.
 pub async fn pass(state: &GlobalServerContext) -> app::Result<()> {
+    // The lock belongs to a transaction, so it is let go however the pass ends: done, failed,
+    // or dropped part way, when the pool discards the connection rather than recycling it
+    // still in the transaction.
     let mut lock = state.connection_pool.get().await?;
-    let locked: bool = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
-        "pg_try_advisory_lock({PASS_LOCK})"
-    )))
-    .get_result(&mut lock)
-    .await?;
-    if !locked {
-        return Ok(());
-    }
-    let result = pass_locked(state).await;
-    diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
-        "pg_advisory_unlock({PASS_LOCK})"
-    )))
-    .get_result::<bool>(&mut lock)
-    .await?;
-    result
+    lock.transaction(|lock| {
+        async move {
+            let locked: bool = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                &format!("pg_try_advisory_xact_lock({PASS_LOCK})"),
+            ))
+            .get_result(lock.as_mut())
+            .await?;
+            if !locked {
+                return Ok(());
+            }
+            pass_locked(state).await
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 async fn pass_locked(state: &GlobalServerContext) -> app::Result<()> {

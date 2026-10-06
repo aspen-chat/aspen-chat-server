@@ -38,6 +38,7 @@ by each API server, at the same origin.
 | --- | --- | --- |
 | `database_url` | required | PostgreSQL, as `postgres://user:password@host/database`. |
 | `database_pool_size` | two per logical CPU | The most PostgreSQL connections this server holds at once. Every write holds one until NATS acknowledges its event, so a busy server may run out of connections before PostgreSQL runs out of CPU; the database connections metric shows requests waiting. Keep the total over every API server below PostgreSQL's `max_connections`. |
+| `database_pool_wait_seconds` | `10` | How long a request or background task waits for one of those connections before it is refused with `serverBusy`. A pool that runs dry, because NATS is slow to acknowledge or the server has more work than connections, then refuses work rather than holding it until it frees. |
 | `nats_url` | required | NATS with JetStream, as `host:4222`. |
 | `nats_auth_token` | required | The token NATS was started with. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |

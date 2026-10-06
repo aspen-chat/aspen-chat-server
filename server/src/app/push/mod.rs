@@ -50,6 +50,12 @@ const CONCURRENCY: usize = 16;
 /// How many people one event wakes at once: a message tagging everyone in a large community
 /// wakes thousands, each a request to a push service that spends most of its time waiting.
 const FAN_OUT: usize = 128;
+/// How long the dispatcher waits for what an event announces to be committed: events are
+/// published before their transaction commits, and one whose change is not there by then was
+/// rolled back.
+const COMMIT_WAIT: Duration = Duration::from_secs(10);
+/// How long it waits before it first looks again; each wait after doubles, up to a second.
+const FIRST_LOOK_AGAIN: Duration = Duration::from_millis(50);
 /// How long whom a message woke, and for what, is remembered: longer than anyone leaves a
 /// notification unread on a phone that has not been turned on meanwhile.
 const REMEMBERED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -428,7 +434,11 @@ pub fn spawn_dispatcher(state: GlobalServerContext) {
     });
 }
 
+/// How long an event whose handling failed waits to be delivered again.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+
 async fn dispatch(state: &GlobalServerContext) -> anyhow::Result<()> {
+    use async_nats::jetstream::AckKind;
     use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, pull};
     let stream = state
         .nats_context
@@ -455,10 +465,15 @@ async fn dispatch(state: &GlobalServerContext) -> anyhow::Result<()> {
             let Ok(received) = received else {
                 return;
             };
-            if let Err(e) = handle(state, &received.subject, &received.payload).await {
-                tracing::warn!("handling an event for push failed: {e}");
-            }
-            if let Err(e) = received.ack().await {
+            // A failure is delivered again, up to `max_deliver` times in all.
+            let ack = match handle(state, &received.subject, &received.payload).await {
+                Ok(()) => AckKind::Ack,
+                Err(e) => {
+                    tracing::warn!("handling an event for push failed: {e}");
+                    AckKind::Nak(Some(RETRY_AFTER))
+                }
+            };
+            if let Err(e) = received.ack_with(ack).await {
                 tracing::warn!("acknowledging an event for push failed: {e}");
             }
         })
@@ -484,17 +499,19 @@ async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> a
     };
     match (seen.server_event.as_str(), seen.change.as_deref()) {
         ("message", Some("create")) => {
-            if let Some(id) = seen.id
-                && first_time(state, &format!("push:created:{}", id.0)).await?
-            {
-                message_created(state, id).await?;
+            if let Some(id) = seen.id {
+                let key = format!("push:created:{}", id.0);
+                if first_time(state, &key).await? {
+                    released_on_failure(state, &key, message_created(state, id).await).await?;
+                }
             }
         }
         ("message", Some("delete")) => {
-            if let Some(id) = seen.id
-                && first_time(state, &format!("push:deleted:{}", id.0)).await?
-            {
-                message_deleted(state, id).await?;
+            if let Some(id) = seen.id {
+                let key = format!("push:deleted:{}", id.0);
+                if first_time(state, &key).await? {
+                    released_on_failure(state, &key, message_deleted(state, id).await).await?;
+                }
             }
         }
         ("channelRead", _) => {
@@ -525,6 +542,42 @@ async fn first_time(state: &GlobalServerContext, key: &str) -> app::Result<bool>
     Ok(set.is_some())
 }
 
+/// `result`, of handling what `first_time` claimed as `key`; a failure lets the claim go, so
+/// that the event delivered again is handled. Handling fails only before it wakes anyone.
+async fn released_on_failure(
+    state: &GlobalServerContext,
+    key: &str,
+    result: app::Result<()>,
+) -> app::Result<()> {
+    if result.is_err()
+        && let Err(e) = state.valkey.del::<(), _>(key).await
+    {
+        tracing::warn!("letting go of a push claim failed: {e}");
+    }
+    result
+}
+
+/// What `look` finds once it finds anything, or `None` if it has found nothing within
+/// `COMMIT_WAIT`: what an event announces is committed moments after the event is published.
+async fn once_committed<T, Looking>(mut look: impl FnMut() -> Looking) -> app::Result<Option<T>>
+where
+    Looking: std::future::Future<Output = app::Result<Option<T>>>,
+{
+    let deadline = tokio::time::Instant::now() + COMMIT_WAIT;
+    let mut wait = FIRST_LOOK_AGAIN;
+    loop {
+        if let Some(found) = look().await? {
+            return Ok(Some(found));
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(wait.min(deadline - now)).await;
+        wait = (wait * 2).min(Duration::from_secs(1));
+    }
+}
+
 fn woken_key(user: UserId, channel: ChannelId) -> String {
     format!("push:woken:{}:{}", user.0, channel.0)
 }
@@ -534,24 +587,18 @@ fn message_key(message: MessageId) -> String {
 }
 
 async fn message_created(state: &GlobalServerContext, id: MessageId) -> app::Result<()> {
-    // The event is published before the transaction that wrote the message commits; it is
-    // there moments later.
-    let mut found = None;
-    for _ in 0..5 {
+    // A message deleted since is found too, so that waiting ends there.
+    let found = once_committed(|| async move {
         let mut conn = state.connection_pool.get().await?;
-        found = message::table
+        Ok(message::table
             .select(Message::as_select())
-            .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+            .filter(message::id.eq(id))
             .first(conn.as_mut())
             .await
-            .optional()?;
-        if found.is_some() {
-            break;
-        }
-        drop(conn);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    let Some(found) = found else {
+            .optional()?)
+    })
+    .await?;
+    let Some(found) = found.filter(|found| found.deleted_at.is_none()) else {
         return Ok(());
     };
     // An echo and a poll's result say nothing of their own, a call's record follows the ring
@@ -627,7 +674,6 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> app::Res
     if woken.is_empty() {
         return Ok(());
     }
-    let _: () = state.valkey.del(message_key(id)).await?;
     let mut conn = state.connection_pool.get().await?;
     let Some(channel) = message::table
         .select(message::channel)
@@ -648,6 +694,8 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> app::Res
         message: id,
     };
     let phones = phones_of(state, &woken).await?;
+    // Forgotten only now, so that a failure before here leaves it for the event's next delivery.
+    let _: () = state.valkey.del(message_key(id)).await?;
     futures_util::stream::iter(phones.values())
         .for_each_concurrent(FAN_OUT, |phones| wake(state, phones, pointer, None))
         .await;
@@ -670,9 +718,8 @@ async fn channel_read(
         return Ok(());
     }
     let _: () = state.valkey.del(woken_key(user, channel)).await?;
-    // The event is published before the transaction that moved the position commits; the badge
-    // is counted once it has.
-    for _ in 0..10 {
+    // The badge is counted once the position has moved.
+    once_committed(|| async move {
         let mut conn = state.connection_pool.get().await?;
         let recorded: Option<MessageId> = read_state::table
             .select(read_state::message)
@@ -684,12 +731,11 @@ async fn channel_read(
             .first(conn.as_mut())
             .await
             .optional()?;
-        if recorded.is_some_and(|recorded| recorded >= last_read) {
-            break;
-        }
-        drop(conn);
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+        Ok(recorded
+            .is_some_and(|recorded| recorded >= last_read)
+            .then_some(()))
+    })
+    .await?;
     let phones = phones_of(state, &[user]).await?;
     let Some(phones) = phones.get(&user) else {
         return Ok(());

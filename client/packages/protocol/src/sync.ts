@@ -2909,6 +2909,12 @@ export class AspenSync {
   }
 
   #apply(event: ServerEvent): void {
+    // Something the user's own subject told of (their DMs, memberships, settings) may not have
+    // happened; everything held is read again.
+    if (event.serverEvent === "userResync") {
+      void this.#resync();
+      return;
+    }
     if (event.serverEvent === "pluginEvent") {
       for (const listener of this.#pluginEventListeners) {
         listener(event);

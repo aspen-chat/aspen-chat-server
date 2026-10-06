@@ -517,20 +517,21 @@ pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
     openapi
 }
 
-/// Handles a request inside `app::events::noting`, and settles what it published once it is
-/// done (`app::events::settle`): the calls its events changed access to are rechecked, and when
-/// it failed after publishing about communities, those are announced as possibly not having
-/// happened, since its transaction may have been rolled back after they were published.
+/// Handles a request inside `app::events::settle_after`, which settles what it published once
+/// it is done (`app::events::settle`): the calls its events changed access to are rechecked,
+/// and when it failed, or its client went away before it finished, after publishing about
+/// communities, those are announced as possibly not having happened, since its transaction may
+/// have been rolled back after they were published.
 async fn settle_after_request(
     axum::extract::State(state): axum::extract::State<GlobalServerContext>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let (response, noted) = app::events::noting(next.run(request)).await;
-    let status = response.status();
-    let failed = status.is_client_error() || status.is_server_error();
-    app::events::settle(&state, noted, failed).await;
-    response
+    app::events::settle_after(&state, next.run(request), |response| {
+        let status = response.status();
+        status.is_client_error() || status.is_server_error()
+    })
+    .await
 }
 
 /// Starts the server's work: connects to the services, starts the metrics listener and the

@@ -124,7 +124,9 @@ impl GlobalServerContext {
         let connection_pool = {
             let conn_manager =
                 AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-            let pool = Pool::builder(conn_manager);
+            let pool = Pool::builder(conn_manager)
+                .runtime(::deadpool::Runtime::Tokio1)
+                .wait_timeout(Some(Duration::from_secs(config.database_pool_wait_seconds)));
             match config.database_pool_size {
                 Some(size) => pool.max_size(size),
                 None => pool,
@@ -169,8 +171,9 @@ impl GlobalServerContext {
 
 /// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
 /// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
-/// dispatcher, the mail sender and digest scheduler, the attachment preview maker and held message releaser, the sweeper of staging uploads, and the plugins with their observers, making the federation and push keys where
-/// they are missing.
+/// dispatcher, the mail sender and digest scheduler, the attachment preview maker and held
+/// message releaser, the sweeper of staging uploads, and the plugins with their observers,
+/// making the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), app::Error> {
     app::deployment_settings::spawn_watcher(context.clone());
     app::poll::spawn_closer(context.clone());

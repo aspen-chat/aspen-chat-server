@@ -278,6 +278,10 @@ async fn post(
         } else {
             let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
             access.require(access.send_permission())?;
+            // The plugins' host calls take connections of their own, so this one goes back to
+            // the pool while they run: a task holding one while it waits for another can leave
+            // every connection waiting.
+            drop(conn);
             let decided = intercept::decide(
                 state,
                 InterceptHook::MessageCreate,
@@ -291,6 +295,7 @@ async fn post(
                 },
             )
             .await?;
+            conn = state.connection_pool.get().await?;
             (decided.content, decided.altered_by)
         }
     } else {
@@ -623,19 +628,30 @@ pub async fn update_message(
                     .await?
             }
         };
-        let decided = intercept::decide(
-            state,
-            InterceptHook::MessageEdit,
-            running,
-            intercept::Draft {
-                author: caller,
-                access: &access,
+        // As on create, the connection goes back to the pool while the plugins run.
+        let decided = if running.is_empty() {
+            intercept::Decided {
                 content,
-                attachments: &attachments,
-                editing: Some(id),
-            },
-        )
-        .await?;
+                altered_by: Vec::new(),
+            }
+        } else {
+            drop(conn);
+            let decided = intercept::decide(
+                state,
+                InterceptHook::MessageEdit,
+                running,
+                intercept::Draft {
+                    author: caller,
+                    access: &access,
+                    content,
+                    attachments: &attachments,
+                    editing: Some(id),
+                },
+            )
+            .await?;
+            conn = state.connection_pool.get().await?;
+            decided
+        };
         command.content = Some(decided.content);
         altered_by = Some(decided.altered_by);
     }

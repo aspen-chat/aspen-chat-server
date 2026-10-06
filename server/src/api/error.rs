@@ -107,7 +107,8 @@ pub enum ProblemCode {
     /// Password change: the new password fails a requirement named in `requirement`.
     PasswordRequirementsNotMet,
     /// The server has too much of this kind of work queued, as when many people sign in at
-    /// once. `Retry-After` says how many seconds to wait.
+    /// once, or every database connection stays taken for `database_pool_wait_seconds`.
+    /// `Retry-After` says how many seconds to wait.
     ServerBusy,
     /// Another deployment could not be reached, or did not answer as a deployment does.
     /// `detail` says which.
@@ -396,6 +397,14 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::PluginUnavailable).with_detail(detail)
             }
             app::Error::Busy => {
+                Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
+            }
+            app::Error::Deadpool(
+                diesel_async::pooled_connection::deadpool::PoolError::Timeout(_),
+            ) => {
+                tracing::warn!(
+                    "no database connection came free within database_pool_wait_seconds"
+                );
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)
             }
             other => {

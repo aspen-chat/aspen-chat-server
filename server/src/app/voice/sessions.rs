@@ -901,6 +901,19 @@ pub(super) async fn end_session(
     for participant in participants {
         remove_participant(state, conn, session, participant.user).await?;
     }
+    // Two may end a call at once (every API server's reapers, a voice server's report): the
+    // first to lock its row ends it, and the other finds it gone and leaves it be, so the call
+    // is recorded once. The row is locked after the participants' rows, as a join locks them.
+    let current = voice_session::table
+        .select(voice_session::id)
+        .filter(voice_session::id.eq(session.id))
+        .for_update()
+        .first::<VoiceSessionId>(conn)
+        .await
+        .optional_not_found()?;
+    if current.is_none() {
+        return Ok(());
+    }
     // A call lost with its voice server goes on on another, so only one that is over is
     // recorded.
     if !matches!(reason, VoiceSessionEndReason::ServerLost) {

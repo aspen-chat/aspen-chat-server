@@ -38,7 +38,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | Code | What it means | What to do |
 | --- | --- | --- |
 | `rateLimited` | Too many requests to one endpoint; `Retry-After` says for how long. | If many people share one address (an office, a school, a load test), check `[rate_limits] trusted_proxies` first: behind a proxy that is not listed, everyone counts as the proxy. `aspen-chat-server limits suspend --scope networks --network <cidr> --reason …` lifts the per-address limits for a network for a while. |
-| `serverBusy` | More sign-ins than `[auth] password_hashing_threads` can check within `password_hashing_wait_seconds`. | Brief bursts are expected (after an outage, everyone signs in again). If it lasts, add API servers or CPU. |
+| `serverBusy` | More sign-ins than `[auth] password_hashing_threads` can check within `password_hashing_wait_seconds`, or every database connection stayed taken for `database_pool_wait_seconds` (the server logs "no database connection came free"). | Brief bursts are expected (after an outage, everyone signs in again). If sign-ins cause it and it lasts, add API servers or CPU. If database connections do, check NATS first: every write holds its connection until NATS acknowledges its event. Then raise `database_pool_size` within what PostgreSQL's `max_connections` allows, or add API servers. |
 | `internal` | Something failed on the server. | The log has an `ERROR` line for each, with the cause. Most are the database, NATS, Valkey, or storage being unreachable. |
 
 ### Federation

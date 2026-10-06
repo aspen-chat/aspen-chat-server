@@ -1220,6 +1220,27 @@ describe("AspenSync", () => {
     expect(communityReads).toBe(1);
   });
 
+  it("reads everything again when told something announced to the user did not happen", async () => {
+    let bootstraps = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/admin": () => {
+        bootstraps += 1;
+        return json({ permissions: [], roles: [], inclusions: [] });
+      },
+    });
+    const socket = await goLive(sync);
+    expect(bootstraps).toBe(1);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "userResync", user: me.id },
+    });
+    await settle();
+    expect(bootstraps).toBe(2);
+    expect(sync.status).toBe("live");
+  });
+
   it("renumbers only the communities and channels whose position changed", async () => {
     const birch: Community = { id: id(11), name: "Birch", icon: null };
     const dev: Channel = { ...general, id: id(21), name: "dev", sortIndex: 1 };

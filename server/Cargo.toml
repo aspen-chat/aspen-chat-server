@@ -32,6 +32,8 @@ rand = "0.10.0"
 rand_chacha = "0.10.0"
 base64 = "0.22.1"
 diesel-async = { version = "0.7.4", features = ["deadpool", "postgres", "r2d2"] }
+# The pool diesel-async builds on, for its Tokio timer: without one it cannot time out a wait.
+deadpool = { version = "0.12.2", default-features = false, features = ["managed", "rt_tokio_1"] }
 hyper = { version = "1.6.0", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.12", features = ["http1", "http2", "server", "server-auto", "server-graceful"] }
 tower = { version = "0.5.2", features = ["tokio", "tracing"] }

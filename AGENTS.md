@@ -8,7 +8,7 @@ Once complete, Aspen will have rigorous test suites, hardware benchmarking progr
 
 Aspen aims to be horizontally scalable, providing a user experience suitable for millions of users, and also to be just as suitable for communities containing less than a dozen users.
 
-Federation, letting a user of one deployment use others, is being built in phases; the design is settled and phase one (each deployment's identity, key, policy, and directory of other deployments) is in place. See `docs/architecture/federation.md`. Build later phases only with explicit direction.
+Federation, letting a user of one deployment use others, is built in five phases, all in place: each deployment's identity, key, policy, and directory of other deployments; signing in abroad; a client holding sessions on several deployments; DMs across deployments; and revocation, deletion notices, and moderating foreign users. See `docs/architecture/federation.md`. Extend it only with explicit direction.
 
 ## Tech Stack
 
@@ -63,6 +63,7 @@ Federation, letting a user of one deployment use others, is being built in phase
    - `[web_client] dir` — the built web client (`client/packages/app/dist` by default), which this server serves at `public_url`, answering every path the API does not own with its `index.html` and Open Graph tags (see The web client)
    - `database_url` — PostgreSQL connection string
    - `database_pool_size` — the most database connections the server holds (two per logical CPU by default); every write holds one until its event is acknowledged
+   - `database_pool_wait_seconds` — how long a request or task waits for a database connection before it is refused with `serverBusy` (ten by default). Do not hold one connection while waiting for another (give it back first, as `app::message` does around plugins): when every connection is held that way the pool has none to give, and every waiter is refused
    - `nats_url` — NATS server address
    - `nats_auth_token` — NATS authentication token
    - `[voice]` — `token_secret` shared with the voice servers, the failure threshold and window, the join token lifetime, the candidate cap, the two silence limits, and the idle call limit. The voice servers themselves are rows of `voice_server`, registered from the dashboard or with `aspen-chat-server voice-servers add` (see Voice)
@@ -306,7 +307,7 @@ Most security holes in a chat server are stale state: someone loses a permission
 3. **When the deciding permission is lost, what happens to what is already open?** Think through each way it can go: a role's permissions edited, a role taken or deleted, an override, a channel moved, a category deleted, a member removed, banned, or leaving, the owner changed, a deployment role, a sign-out, a password change, a ban from the deployment, an account deleted. For each, say what becomes of open event streams (the side losing access receives the change and nothing after it), calls (`app::events::rechecks_of`), phones (`app::push`), server caches, and the client's cache (`RecordStore`'s pruning).
 4. **When it is gained, how does a client already open find out without a reload?** Events that change who may view a channel reach both sides (`FeedEvent::before`); the client looks up what it hears of and lacks (`AspenSync`).
 5. **Does every path that changes it announce it?** That includes operator commands (`app::events::Publisher`), background tasks (inside `app::events::noting`), and database cascades: either the cascade's effect is announced, or every reader (the event feed's model, the client's store) infers it from the event that caused it.
-6. **Is it published inside the transaction that makes the change?** Then a rollback is answered by `communityResync` (`app::events::settle`).
+6. **Is it published inside the transaction that makes the change?** Then a rollback is answered by `communityResync` for the communities it was published to and `userResync` for the users (`app::events::settle`).
 
 The code holds some of these on its own: `expected_kind` and `rechecks_of` match every event with no wildcard, so a new event cannot be published until its routing and its effect on calls are decided; `rechecks_of` runs those rechecks after the work commits, so no call site needs to remember them; `ChannelAccess` and `Visibility` cannot be made without the check they stand for. Prefer extending these to adding a rule here.
 

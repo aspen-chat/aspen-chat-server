@@ -137,6 +137,12 @@ enum MessageEnumSource {
     // community's state reads it again. See `app::events::settle`.
     #[message_gen(custom_event)]
     CommunityResync { community: CommunityId },
+    // Something announced to the user alone (their DMs, their memberships, their settings) may
+    // not have happened: a request published events about it inside a transaction that was then
+    // rolled back. Their clients read everything they hold again, and the event feed registers
+    // their connections afresh. See `app::events::settle`.
+    #[message_gen(custom_event)]
+    UserResync { user: UserId },
     // Some of the user's sign-ins ended: signed out, or every other one when they changed their
     // password or second factor, or all of them. Sign-ins are named by `app::login::sign_in_id`.
     // `ended` names the one that ended; without it, every sign-in but `kept` did. Event streams

@@ -42,7 +42,7 @@ use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::future::try_join_all;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// The subject prefix of every event; the stream captures `aspen.events.>`.
@@ -178,6 +178,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::DeploymentAccessChanged { .. }
         | ServerEvent::AccountBanned { .. }
         | ServerEvent::SignInsEnded { .. }
+        | ServerEvent::UserResync { .. }
         | ServerEvent::ReportsChanged { .. }
         | ServerEvent::PluginNotice { .. }
         | ServerEvent::HeldMessagePosted { .. }
@@ -647,6 +648,7 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::CustomEmoji(_)
         | ServerEvent::CommunityBan(_)
         | ServerEvent::CommunityResync { .. }
+        | ServerEvent::UserResync { .. }
         | ServerEvent::UserPreferencesChanged { .. }
         | ServerEvent::EmailAccountChanged { .. }
         | ServerEvent::ChannelRead { .. }
@@ -677,25 +679,85 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
 pub struct Noted {
     /// The communities it published events about.
     pub communities: HashSet<CommunityId>,
+    /// The users it published events to alone, on their own subjects.
+    pub users: HashSet<UserId>,
     /// The calls its events may have changed access to (`rechecks_of`).
     pub rechecks: HashSet<Recheck>,
 }
 
+impl Noted {
+    /// Whether nothing was noted, so there is nothing to settle.
+    fn is_empty(&self) -> bool {
+        self.communities.is_empty() && self.users.is_empty() && self.rechecks.is_empty()
+    }
+}
+
 tokio::task_local! {
-    /// What the work in `noting` has published.
-    static NOTED: std::cell::RefCell<Noted>;
+    /// What the work in `noting` has published, shared with `settle_after` so that work dropped
+    /// part way is still settled.
+    static NOTED: Arc<Mutex<Noted>>;
 }
 
 /// Runs `work`, returning with its result what it published (`Noted`), for `settle` once it is
-/// done. Every request runs in one (`api::settle_after_request`), and so must any other work
-/// that publishes an event changing access; one published outside is logged as an error.
+/// done. Every request runs in one (`settle_after`), and so must any other work that publishes
+/// an event changing access; one published outside is logged as an error.
 pub async fn noting<T>(work: impl std::future::Future<Output = T>) -> (T, Noted) {
-    NOTED
-        .scope(std::cell::RefCell::new(Noted::default()), async move {
-            let result = work.await;
-            (result, NOTED.with(std::cell::RefCell::take))
-        })
-        .await
+    let noted = Arc::<Mutex<Noted>>::default();
+    let result = NOTED.scope(noted.clone(), work).await;
+    (result, take_noted(&noted))
+}
+
+fn take_noted(noted: &Mutex<Noted>) -> Noted {
+    std::mem::take(
+        &mut *noted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+/// Runs `work` inside `noting` and settles what it published (`settle`), as having failed when
+/// `failed` says its result is a failure. Work dropped before it finishes, as a request is when
+/// its client goes away, is settled as failed in a task of its own: its transactions were
+/// rolled back with it, perhaps after it published.
+pub async fn settle_after<T>(
+    state: &GlobalServerContext,
+    work: impl std::future::Future<Output = T>,
+    failed: impl FnOnce(&T) -> bool,
+) -> T {
+    /// Settles what was noted as failed if dropped before it is disarmed.
+    struct Unsettled {
+        state: Option<GlobalServerContext>,
+        noted: Arc<Mutex<Noted>>,
+    }
+    impl Drop for Unsettled {
+        fn drop(&mut self) {
+            if let Some(state) = self.state.take() {
+                let noted = take_noted(&self.noted);
+                if !noted.is_empty()
+                    && let Ok(runtime) = tokio::runtime::Handle::try_current()
+                {
+                    runtime.spawn(async move { settle(&state, noted, true).await });
+                }
+            }
+        }
+    }
+    let mut unsettled = Unsettled {
+        state: Some(state.clone()),
+        noted: Arc::default(),
+    };
+    let result = NOTED.scope(unsettled.noted.clone(), work).await;
+    unsettled.state = None;
+    let noted = take_noted(&unsettled.noted);
+    if !noted.is_empty() {
+        let failed = failed(&result);
+        let state = state.clone();
+        // In a task of its own, so that it finishes even if the work's caller is dropped
+        // while it runs.
+        if let Err(e) = tokio::spawn(async move { settle(&state, noted, failed).await }).await {
+            tracing::error!("settling what a request published failed: {e}");
+        }
+    }
+    result
 }
 
 /// Finishes what `noting` recorded, once the work is done and its transactions have committed
@@ -706,8 +768,8 @@ pub async fn settle(state: &GlobalServerContext, noted: Noted, failed: bool) {
     for which in noted.rechecks {
         app::voice::recheck(state, which);
     }
-    if failed && !noted.communities.is_empty() {
-        announce_resync(state, noted.communities).await;
+    if failed && (!noted.communities.is_empty() || !noted.users.is_empty()) {
+        announce_resync(state, noted.communities, noted.users).await;
     }
 }
 
@@ -724,21 +786,28 @@ pub async fn settle_in(
             tracing::error!(?which, "could not recheck who may stay in calls: {e}");
         }
     }
-    if failed && !noted.communities.is_empty() {
-        announce_resync_in(state, conn, noted.communities).await;
+    if failed && (!noted.communities.is_empty() || !noted.users.is_empty()) {
+        announce_resync_in(state, conn, noted.communities, noted.users).await;
     }
 }
 
-/// Tells everyone reading `communities` that what was announced about them may not have
-/// happened, for work that published events and then failed: events are published before
-/// their transaction commits, so a transaction rolled back after publishing leaves events in
-/// the stream that the database does not bear out. Each event feed drops what it holds of the
-/// community and the connections reading it, which resume with it loaded afresh, and clients
-/// read the community again.
-async fn announce_resync(state: &GlobalServerContext, communities: HashSet<CommunityId>) {
+/// Tells everyone reading `communities`, and each of `users`, that what was announced to them
+/// may not have happened, for work that published events and then failed: events are
+/// published before their transaction commits, so a transaction rolled back after publishing
+/// leaves events in the stream that the database does not bear out. Each event feed drops what
+/// it holds of the community and the connections reading it, or the user's connections, which
+/// resume with it loaded afresh; clients read the community, or everything the user's own
+/// subject told them of, again.
+async fn announce_resync(
+    state: &GlobalServerContext,
+    communities: HashSet<CommunityId>,
+    users: HashSet<UserId>,
+) {
     match state.connection_pool.get().await {
-        Ok(mut conn) => announce_resync_in(state, conn.as_mut(), communities).await,
-        Err(e) => tracing::error!("could not announce a resync of {communities:?}: {e}"),
+        Ok(mut conn) => announce_resync_in(state, conn.as_mut(), communities, users).await,
+        Err(e) => {
+            tracing::error!("could not announce a resync of {communities:?} and {users:?}: {e}")
+        }
     }
 }
 
@@ -747,6 +816,7 @@ async fn announce_resync_in(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     communities: HashSet<CommunityId>,
+    users: HashSet<UserId>,
 ) {
     for community in communities {
         if let Err(e) = publish_event(
@@ -758,6 +828,18 @@ async fn announce_resync_in(
         .await
         {
             tracing::error!(%community, "could not announce a resync: {e}");
+        }
+    }
+    for user in users {
+        if let Err(e) = publish_event(
+            state,
+            conn,
+            EventScope::User(user),
+            &ServerEvent::UserResync { user },
+        )
+        .await
+        {
+            tracing::error!(user = %user.0, "could not announce a resync: {e}");
         }
     }
 }
@@ -796,17 +878,20 @@ pub async fn publish_event(
     let subjects = subjects(state, conn, scope).await?;
     // Noted before publishing, since a failure may come after some copies are out.
     let noted = NOTED.try_with(|noted| {
-        let mut noted = noted.borrow_mut();
-        noted
-            .communities
-            .extend(
-                subjects
-                    .iter()
-                    .filter_map(|subject| match subject_owner(subject) {
-                        Some(SubjectOwner::Community(community)) => Some(community),
-                        _ => None,
-                    }),
-            );
+        let mut noted = noted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for subject in &subjects {
+            match subject_owner(subject) {
+                Some(SubjectOwner::Community(community)) => {
+                    noted.communities.insert(community);
+                }
+                Some(SubjectOwner::User(user)) => {
+                    noted.users.insert(user);
+                }
+                None => {}
+            }
+        }
         noted.rechecks.extend(rechecks.iter().copied());
     });
     if noted.is_err() && !rechecks.is_empty() {
