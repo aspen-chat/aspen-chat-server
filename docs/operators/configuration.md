@@ -79,6 +79,13 @@ running what it holds at your media address; apps still show the type its sender
 it. Icons may only be PNG, JPEG, WebP, or GIF, and the pictures of link previews are kept only
 when they are one of those (a page whose picture is an SVG is previewed without it).
 
+The server fetches the pages messages link to, and their pictures, to show previews of them.
+It reaches only public addresses, and only their ports 80 and 443, so a link to another port of
+a public host (your own server's NATS, PostgreSQL, or metrics, at its public address) is shown
+without a preview; keep those services off public interfaces all the same. Each server fetches
+at most 64 messages' previews at once and two of one author's; a message past that, or one that
+waits more than 30 seconds for its turn, is shown without previews.
+
 ## `[media.s3]`
 
 Where attachments, icons, avatars, and link preview images are kept. Clients upload straight to

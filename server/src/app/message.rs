@@ -472,7 +472,7 @@ async fn post(
         })
         .await?;
     if message.kind == MessageKind::Standard {
-        spawn_preview_fetch(state.clone(), message.id, message.content.clone());
+        spawn_preview_fetch(state.clone(), author, message.id, &message.content);
     }
     Ok(message)
 }
@@ -788,7 +788,7 @@ pub async fn update_message(
         .await?;
 
     if previews_cleared && let Some(content) = new_content_for_refetch {
-        spawn_preview_fetch(state.clone(), id, content);
+        spawn_preview_fetch(state.clone(), caller, id, &content);
     }
 
     // Re-load the current preview set for the REST response. On a content
