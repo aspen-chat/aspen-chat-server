@@ -34,11 +34,13 @@ struct PushState: Codable {
 
 /// The `PushState`, as JSON, in a keychain item of the access group the app and the extension
 /// share (`AspenKeychainAccessGroup` in each one's `Info.plist`, `$(AppIdentifierPrefix)` and
-/// the app's bundle id with `.push`), readable before the device is first unlocked is not
-/// needed: a push arrives to the extension only while the phone is unlocked once.
+/// the app's bundle id with `.push`), readable once the phone has been unlocked after starting
+/// (a push reaches the extension only then), and on this device only: the item holds sessions
+/// and the subscriptions' private keys, so it goes into no backup and moves to no new phone.
 enum PushStateStore {
     private static let service = "org.aspenchat.client.push"
     private static let account = "state"
+    private static let accessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
     private static var accessGroup: String? {
         Bundle.main.object(forInfoDictionaryKey: "AspenKeychainAccessGroup") as? String
@@ -56,8 +58,17 @@ enum PushStateStore {
         return query
     }
 
+    /// Makes the kept item this device's only, should it have been kept with an accessibility
+    /// that backups carry; one already so, or none at all, is left as it is. Every read does
+    /// it, which costs one keychain call and holds no state between calls.
+    private static func migrate() {
+        let attributes: [String: Any] = [kSecAttrAccessible as String: accessible]
+        _ = SecItemUpdate(query() as CFDictionary, attributes as CFDictionary)
+    }
+
     /// The state as the app wrote it, or `nil` when it has written none.
     static func loadJSON() -> String? {
+        migrate()
         var query = query()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -75,7 +86,7 @@ enum PushStateStore {
         let data = Data(json.utf8)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: accessible,
         ]
         let status = SecItemUpdate(query() as CFDictionary, attributes as CFDictionary)
         if status == errSecSuccess {
