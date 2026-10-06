@@ -201,7 +201,7 @@ them, a limit you give replacing the built-in one whole.
 | Setting | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | |
-| `trusted_proxies` | `[]` | Reverse proxies, as addresses or networks (`"10.0.0.0/8"`), whose `X-Forwarded-For` names the client. **Set it when the server is behind a proxy**, or every client counts as the proxy. |
+| `trusted_proxies` | `[]` | Reverse proxies, as addresses or networks (`"10.0.0.0/8"`), whose `X-Forwarded-For` names the client: the right-most entry that is not itself a listed proxy, read with or without a port (`192.0.2.1:5678`, `[2001:db8::1]:80`). An entry that is not an address (`unknown`) ends the reading there, and the client counts as the listed proxy that passed it on. **Set it when the server is behind a proxy**, or every client counts as the proxy. |
 | `ipv6_prefix` | `64` | IPv6 clients are counted by their network of this many bits, since one household holds a whole /64. |
 | `max_suspension_seconds` | `86400` | The longest this server honours a suspension of the limits (`aspen-chat-server limits suspend`), counted from when it began. |
 

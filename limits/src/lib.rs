@@ -152,22 +152,33 @@ impl ClientAddresses {
     /// The client's address: the peer's, unless the peer is a trusted proxy, in which case the
     /// right-most `X-Forwarded-For` address that is not itself a trusted proxy. Addresses
     /// further left are the client's own claims and are ignored. `forwarded` is every
-    /// `X-Forwarded-For` header value, in order.
+    /// `X-Forwarded-For` header value, in order. An entry may carry a port (`192.0.2.1:5678`,
+    /// `[2001:db8::1]:80`) or brackets alone, as some proxies write it. Reading from the right
+    /// stops at the first entry that is not an address (`unknown`, an obfuscated name, or
+    /// garbage): what lies left of it was written by no proxy this server trusts to have
+    /// checked it, so the client is taken to be the trusted proxy that passed it on.
     pub fn client<'a>(&self, peer: IpAddr, forwarded: impl IntoIterator<Item = &'a str>) -> IpAddr {
         if !self.is_trusted(peer) {
             return canonical(peer);
         }
-        let chain: Vec<IpAddr> = forwarded
+        let entries: Vec<&str> = forwarded
             .into_iter()
             .flat_map(|value| value.split(','))
-            .filter_map(|entry| entry.trim().parse().ok())
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
             .collect();
-        chain
-            .iter()
-            .rev()
-            .find(|ip| !self.is_trusted(**ip))
-            .or(chain.first())
-            .map_or(canonical(peer), |ip| canonical(*ip))
+        let mut nearest_proxy = canonical(peer);
+        for entry in entries.into_iter().rev() {
+            let Some(ip) = forwarded_address(entry) else {
+                return nearest_proxy;
+            };
+            let ip = canonical(ip);
+            if !self.is_trusted(ip) {
+                return ip;
+            }
+            nearest_proxy = ip;
+        }
+        nearest_proxy
     }
 
     /// An address as limits count it: IPv4 as is, IPv6 by its `/ipv6_prefix` network.
@@ -179,6 +190,22 @@ impl ClientAddresses {
                 .unwrap_or_else(|_| v6.to_string()),
         }
     }
+}
+
+/// The address an `X-Forwarded-For` entry names: a bare address, an address with a port, or a
+/// bracketed IPv6 address with or without one.
+fn forwarded_address(entry: &str) -> Option<IpAddr> {
+    entry
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| entry.parse::<std::net::SocketAddr>().ok().map(|at| at.ip()))
+        .or_else(|| {
+            entry
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+                .and_then(|inner| inner.parse::<std::net::Ipv6Addr>().ok())
+                .map(IpAddr::V6)
+        })
 }
 
 /// An IPv4 address carried in IPv6 (`::ffff:a.b.c.d`) is the IPv4 address.
@@ -366,6 +393,48 @@ mod tests {
         assert!(addresses.is_trusted(ip("::ffff:10.0.0.1")));
         assert!(ClientAddresses::new(&["proxy.local".into()], 64).is_err());
         assert!(ClientAddresses::new(&[], 129).is_err());
+    }
+
+    #[test]
+    fn forwarded_entries_with_ports_or_brackets_are_read() {
+        let addresses = ClientAddresses::new(&["10.0.0.0/8".into(), "::1".into()], 64).unwrap();
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let proxy = ip("10.0.0.2");
+        assert_eq!(
+            addresses.client(proxy, ["6.6.6.6, 198.51.100.9:5678"]),
+            ip("198.51.100.9")
+        );
+        assert_eq!(
+            addresses.client(proxy, ["6.6.6.6, [2001:db8::7]:80"]),
+            ip("2001:db8::7")
+        );
+        assert_eq!(
+            addresses.client(proxy, ["6.6.6.6, [2001:db8::7]"]),
+            ip("2001:db8::7")
+        );
+        assert_eq!(
+            addresses.client(proxy, ["6.6.6.6", "198.51.100.9:1, 10.0.0.3:443"]),
+            ip("198.51.100.9")
+        );
+    }
+
+    #[test]
+    fn an_unreadable_forwarded_entry_ends_the_chain_at_the_nearest_proxy() {
+        let addresses = ClientAddresses::new(&["10.0.0.0/8".into()], 64).unwrap();
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let proxy = ip("10.0.0.2");
+        // The client's own claim left of an entry no trusted proxy could have written is not
+        // believed.
+        assert_eq!(addresses.client(proxy, ["6.6.6.6, unknown"]), proxy);
+        assert_eq!(addresses.client(proxy, ["6.6.6.6, garbage:x"]), proxy);
+        assert_eq!(
+            addresses.client(proxy, ["6.6.6.6, _hidden, 10.0.0.3"]),
+            ip("10.0.0.3")
+        );
+        assert_eq!(
+            addresses.client(proxy, ["10.0.0.4, 10.0.0.3"]),
+            ip("10.0.0.4")
+        );
     }
 
     #[test]
