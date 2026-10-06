@@ -1,9 +1,9 @@
 //! Statements other deployments sign and send here: an assertion that one of their users is who
 //! they say, a notice about one of this deployment's users. Each is believed only once it
-//! verifies against the key pinned for its issuer, is addressed to this deployment, is within
-//! its lifetime, has not been seen before, and comes from a deployment this one federates with
-//! in the direction concerned (or, for a statement that only takes away, one whose key is pinned
-//! here) and shares a protocol version with.
+//! verifies against the key pinned for its issuer, which has offered no other key since, is
+//! addressed to this deployment, is within its lifetime, has not been seen before, and comes
+//! from a deployment this one federates with in the direction concerned (or, for a statement
+//! that only takes away, one whose key is pinned here) and shares a protocol version with.
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
@@ -121,6 +121,15 @@ pub async fn receive<T: Statement>(
         .await
         .optional()?;
     drop(conn);
+    // A deployment that presented a key nothing vouches for is suspended until an
+    // administrator accepts it: the key pinned may be the one that leaked, so nothing it signs
+    // is believed any more, and the new key is not believed yet.
+    if known.as_ref().is_some_and(|d| d.offered_key.is_some()) {
+        return Err(invalid(
+            Some(&from),
+            t!("statementKeyPending", domain = from.as_str()),
+        ));
+    }
     let verified = known
         .as_ref()
         .and_then(|d| d.public_key.as_deref())
@@ -181,34 +190,31 @@ pub async fn receive<T: Statement>(
             ),
         ));
     }
-    if claims.expires_at() <= now {
+    let (issued_at, expires_at) = (claims.issued_at(), claims.expires_at());
+    if let Err(problem) = check_times(now, issued_at, expires_at) {
         return Err(invalid(
             Some(&from),
-            t!(
-                "statementExpired",
-                domain = from.as_str(),
-                seconds = now - claims.expires_at()
-            ),
-        ));
-    }
-    if claims.issued_at() > now + CLOCK_SKEW.num_seconds() {
-        return Err(invalid(
-            Some(&from),
-            t!(
-                "statementFromFuture",
-                domain = from.as_str(),
-                seconds = claims.issued_at() - now
-            ),
-        ));
-    }
-    if claims.expires_at() - claims.issued_at() > MAX_LIFETIME.num_seconds() {
-        return Err(invalid(
-            Some(&from),
-            t!(
-                "statementTooLong",
-                seconds = claims.expires_at() - claims.issued_at(),
-                max = MAX_LIFETIME.num_seconds()
-            ),
+            match problem {
+                TimeProblem::Expired { seconds } => {
+                    t!(
+                        "statementExpired",
+                        domain = from.as_str(),
+                        seconds = seconds
+                    )
+                }
+                TimeProblem::FromFuture { seconds } => {
+                    t!(
+                        "statementFromFuture",
+                        domain = from.as_str(),
+                        seconds = seconds
+                    )
+                }
+                TimeProblem::TooLong { seconds } => t!(
+                    "statementTooLong",
+                    seconds = seconds,
+                    max = MAX_LIFETIME.num_seconds()
+                ),
+            },
         ));
     }
     // Used once: the id is remembered until the statement could no longer be accepted anyway.
@@ -218,7 +224,10 @@ pub async fn receive<T: Statement>(
             format!("federation:statement:{}:{from}:{}", T::TYPE, claims.id()),
             1,
             Some(fred::types::Expiration::EX(
-                (claims.expires_at() - now + CLOCK_SKEW.num_seconds()).max(1),
+                expires_at
+                    .saturating_sub(now)
+                    .saturating_add(CLOCK_SKEW.num_seconds())
+                    .max(1),
             )),
             Some(fred::types::SetOptions::NX),
             false,
@@ -237,10 +246,84 @@ pub async fn receive<T: Statement>(
     })
 }
 
+/// What is wrong with the times a statement claims.
+#[derive(Debug, PartialEq, Eq)]
+enum TimeProblem {
+    Expired { seconds: i64 },
+    FromFuture { seconds: i64 },
+    TooLong { seconds: i64 },
+}
+
+/// Checks a statement's `iat` and `exp` against `now`: it has not expired, was not signed
+/// further ahead than [`CLOCK_SKEW`], and neither the lifetime it claims nor how far ahead it
+/// expires passes [`MAX_LIFETIME`] (with the skew), so its id is remembered no longer than that.
+/// Every sum and difference saturates, since the claims are the sender's and may be anything.
+fn check_times(now: i64, issued_at: i64, expires_at: i64) -> Result<(), TimeProblem> {
+    if expires_at <= now {
+        return Err(TimeProblem::Expired {
+            seconds: now.saturating_sub(expires_at),
+        });
+    }
+    if issued_at > now.saturating_add(CLOCK_SKEW.num_seconds()) {
+        return Err(TimeProblem::FromFuture {
+            seconds: issued_at.saturating_sub(now),
+        });
+    }
+    let lifetime = expires_at.saturating_sub(issued_at);
+    let latest = now
+        .saturating_add(MAX_LIFETIME.num_seconds())
+        .saturating_add(CLOCK_SKEW.num_seconds());
+    if lifetime > MAX_LIFETIME.num_seconds() || expires_at > latest {
+        return Err(TimeProblem::TooLong {
+            seconds: lifetime.max(expires_at.saturating_sub(now)),
+        });
+    }
+    Ok(())
+}
+
 /// The refusal of a deployment a gate of `direction` does not admit.
 pub fn refused(from: &Domain, direction: Direction) -> app::Error {
     app::Error::FederationRefused(match direction {
         Direction::Immigration => t!("federationImmigrationClosed", domain = from.as_str()),
         Direction::Emigration => t!("federationEmigrationClosed", domain = from.as_str()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_are_checked_without_overflow() {
+        let now = 1_800_000_000;
+        assert_eq!(check_times(now, now, now + 120), Ok(()));
+        assert_eq!(check_times(now, now + 30, now + 150), Ok(()));
+        assert!(matches!(
+            check_times(now, now - 10, now),
+            Err(TimeProblem::Expired { seconds: 0 })
+        ));
+        assert!(matches!(
+            check_times(now, 0, i64::MIN),
+            Err(TimeProblem::Expired { .. })
+        ));
+        assert!(matches!(
+            check_times(now, i64::MAX, i64::MAX),
+            Err(TimeProblem::FromFuture { .. })
+        ));
+        // A lifetime that would overflow, and an expiry far ahead with a lifetime that looks
+        // short, are both too long.
+        assert!(matches!(
+            check_times(now, i64::MIN, now + 10),
+            Err(TimeProblem::TooLong { seconds: i64::MAX })
+        ));
+        assert!(matches!(check_times(now, now + 60, now + 60 + 300), Ok(())));
+        assert!(matches!(
+            check_times(now, now - 10_000, i64::MAX),
+            Err(TimeProblem::TooLong { .. })
+        ));
+        assert!(matches!(
+            check_times(now, now, now + 301),
+            Err(TimeProblem::TooLong { seconds: 301 })
+        ));
+    }
 }

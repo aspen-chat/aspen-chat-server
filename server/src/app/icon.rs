@@ -272,6 +272,37 @@ pub async fn delete_own_icon(
     delete_icon(state, id).await
 }
 
+/// Deletes an icon and its stored picture if nothing uses it ([`ICON_IN_USE_SQL`]), checked
+/// in the statement that deletes it, for the server's own use: a picture it replaced, such as
+/// the copy of a foreign user's avatar their home changed. Returns whether it was deleted.
+pub(crate) async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> app::Result<bool> {
+    #[derive(diesel::QueryableByName)]
+    struct Deleted {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        storage_key: String,
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let deleted: Option<Deleted> = diesel::sql_query(format!(
+        "DELETE FROM icon WHERE id = $1 AND NOT ({ICON_IN_USE_SQL}) RETURNING storage_key"
+    ))
+    .bind::<diesel::sql_types::Uuid, _>(id)
+    .get_result(conn.as_mut())
+    .await
+    .optional()?;
+    drop(conn);
+    let Some(Deleted { storage_key }) = deleted else {
+        return Ok(false);
+    };
+    if let Err(e) = state.media_store.delete_upload(&storage_key).await {
+        warn!(
+            error = e.to_string(),
+            key = storage_key,
+            "failed to delete icon object from media store after db deletion"
+        );
+    }
+    Ok(true)
+}
+
 /// Deletes an icon and its stored picture, for the server's own use: the caller has decided it
 /// may go, as when its custom emoji is removed.
 pub(crate) async fn delete_icon(state: &GlobalServerContext, id: IconId) -> app::Result<()> {

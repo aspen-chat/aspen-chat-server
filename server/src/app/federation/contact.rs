@@ -3,8 +3,9 @@
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
+use crate::app::events::Publishing;
 use crate::app::federation::keys::{DeploymentDocument, current_of, follow_handovers};
-use crate::app::federation::{Domain, Listed, Origin, fetch, get, own_domain};
+use crate::app::federation::{Domain, Listed, Origin, fetch, get, own_domain, standing};
 use crate::aspen_config::FederationConfig;
 use crate::database::schema::federated_deployment;
 use crate::t;
@@ -42,6 +43,7 @@ pub async fn contact(
         fetch_document(&state.config.federation, &state.federation_client, domain).await?;
     // The connection is taken once the other deployment has answered, not held while it might.
     record_contact(
+        state,
         state.connection_pool.get().await?.as_mut(),
         domain,
         &document,
@@ -82,8 +84,11 @@ fn check_document(domain: &Domain, document: &DeploymentDocument) -> app::Result
 }
 
 /// Checks the key `document` presents against the one pinned for `domain`, as [`contact`]
-/// describes.
+/// describes. A key nothing vouches for suspends the deployment until an administrator accepts
+/// it, since the key pinned may be in someone else's hands: everything it signs is refused
+/// (`received::receive`), and its users signed in here are signed out at once.
 pub async fn record_contact(
+    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     domain: &Domain,
     document: &DeploymentDocument,
@@ -91,6 +96,19 @@ pub async fn record_contact(
     let presented = current_of(document).ok_or_else(|| {
         app::Error::DeploymentUnreachable(t!("federationDocumentInvalid", domain = domain.as_str()))
     })?;
+    let recorded = record_key(conn, domain, document, presented).await?;
+    if recorded.1 == ContactOutcome::KeyChanged {
+        standing::shut_out_home(state, conn, domain).await?;
+    }
+    Ok(recorded)
+}
+
+async fn record_key(
+    conn: &mut AsyncPgConnection,
+    domain: &Domain,
+    document: &DeploymentDocument,
+    presented: Vec<u8>,
+) -> app::Result<(Listed, ContactOutcome)> {
     let domain = domain.clone();
     conn.transaction(|conn| {
         async move {

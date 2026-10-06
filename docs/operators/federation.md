@@ -55,12 +55,18 @@ first time for a registration invite, as `registration-invite-required` does of 
 `aspen-chat-server settings show` shows them all.
 
 Closing an immigration gate, or narrowing it, signs out at once the visitors from deployments it
-no longer admits. Closing an emigration gate stops your people signing in elsewhere; the
+no longer admits, and so does putting a deployment on a block list, taking it off an allow list,
+or forgetting it. Closing an emigration gate stops your people signing in elsewhere; the
 deployments they are visiting sign them out when they next ask about them (`[federation]
 standing_interval_seconds`).
 
 Lists keep their entries whichever gate reads them, so switching a gate from an allow list to a
 block list never turns the allowed into the blocked.
+
+A deployment on a block list is blocked with every name under it and on every port: blocking
+`evil.org` blocks `chat.evil.org` and `evil.org:8443` too, and `federation list` says when a
+deployment is blocked that way. An allow list admits exactly the deployments on it, with the
+port each is listed with, and nothing under them.
 
 ## The directory
 
@@ -79,6 +85,10 @@ aspen-chat-server federation list-add friends.example.net usersEmigrationAllow
 A deployment is also recorded the first time it is in contact, as when one of its people signs
 in here.
 
+`aspen-chat-server federation remove <domain>` (or Forget in the dashboard) forgets a deployment,
+its key and the lists it is on. A deployment on a block list cannot be forgotten, since that
+would take it off the list and let it in: take it off its block lists first if you mean to.
+
 ### Keys
 
 The first time this deployment reads another's document, it remembers that deployment's key.
@@ -86,20 +96,33 @@ From then on:
 
 - The same key: nothing to do.
 - A new key the old one handed over to: followed on its own.
-- **A new key nothing vouches for: refused.** Everything from that deployment is refused until
-  an administrator accepts the new key. Ask its administrators, by some other way than Aspen,
-  whether they replaced their key, and compare fingerprints before accepting it, in the
-  dashboard or with `aspen-chat-server federation accept-key <domain> --fingerprint SHA256:…`.
-  A key that changes unannounced can mean someone else is answering at that domain.
+- **A new key nothing vouches for: refused.** The deployment is suspended until an
+  administrator accepts the new key: everything from it is refused, even what its old key
+  signs, since the old key may be the one that leaked, and its people signed in here are signed
+  out at once. Ask its administrators, by some other way than Aspen, whether they replaced their
+  key, and compare fingerprints before accepting it, in the dashboard or with
+  `aspen-chat-server federation accept-key <domain> --fingerprint SHA256:…`. Its people then
+  sign in again. A key that changes unannounced can mean someone else is answering at that
+  domain.
+
+While any gate is open, this deployment reads again, about every `[federation]
+standing_interval_seconds`, the document of each deployment it federates with, so it notices a
+replaced key within about that long even when nothing else contacts that deployment.
 
 To replace your own key:
 
 - `aspen-chat-server federation rotate-key --planned` has the old key sign a handover to the
-  new one. Every deployment follows it on its own.
+  new one. Every deployment follows it on its own, as long as it last saw a key among your
+  sixteen newest from the last ninety days.
 - `aspen-chat-server federation rotate-key --compromised` when the old key may be in someone
   else's hands. It vouches for nothing, so every deployment that knew you refuses the new key
   until its administrators accept it: tell them, and give them the new fingerprint
-  (`federation status` prints it).
+  (`federation status` prints it). Each notices the change at its next check (about every
+  `standing_interval_seconds`, an hour by default) or sooner, and from then on refuses
+  everything signed as you, old key or new, and signs your people out, until it accepts the new
+  key. Until a deployment notices, whoever holds the old key can sign as you there, so tell
+  their administrators at once: one who runs `aspen-chat-server federation contact
+  <your domain>` notices straight away.
 
 ## What people see
 
@@ -117,7 +140,9 @@ good standing there.
 About every `standing_interval_seconds` this deployment asks each visitor's home whether they
 are still in good standing. A visitor whose account was deleted, who left, or whose home closed
 its gate to you is signed out; so are the visitors of a home unreached for
-`standing_grace_seconds`.
+`standing_grace_seconds`. Homes are asked sixteen at a time, each given twenty seconds, and one
+that keeps failing is asked less often, up to once an interval, so slow homes hold up no one
+else.
 
 ## Protocol versions
 

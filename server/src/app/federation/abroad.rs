@@ -421,6 +421,14 @@ async fn arrive(
             if existing.deleted_at.is_some() {
                 return Err(app::Error::FederationRefused(t!("federationAccountClosed")));
             }
+            // The gate checked was the one for the kind of account the assertion claims, and
+            // an account is a bot or a person for good.
+            if existing.bot != profile.bot {
+                return Err(invalid(
+                    Some(home),
+                    t!("statementInconsistent", domain = home.as_str()),
+                ));
+            }
             let banned: bool = user::table
                 .select(user::banned_at.is_not_null())
                 .find(existing.id)
@@ -484,13 +492,24 @@ async fn arrive(
     .await
 }
 
-/// Makes `user`'s avatar a copy of `home`'s icon `home_icon`, or takes it away with `None`.
+/// Makes `user`'s avatar a copy of `home`'s icon `home_icon`, or takes it away with `None`. The
+/// copy it replaces is deleted once nothing uses it, so a home that changes its user's avatar
+/// at every sign-in leaves one copy here, not one for each.
 async fn copy_avatar(
     state: &GlobalServerContext,
     user_id: UserId,
     home: &Domain,
     home_icon: Option<Uuid>,
 ) -> app::Result<()> {
+    // Another sign-in may have copied it since this one read the user.
+    let copied_already: Option<Uuid> = user::table
+        .select(user::home_icon)
+        .find(user_id)
+        .first(state.connection_pool.get().await?.as_mut())
+        .await?;
+    if copied_already == home_icon {
+        return Ok(());
+    }
     let copied = match home_icon {
         Some(home_icon) => Some(fetch_avatar(state, home, home_icon).await?),
         None => None,
@@ -511,42 +530,72 @@ async fn copy_avatar(
         None => None,
     };
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            if let Some(local) = &local {
-                diesel::insert_into(icon::table)
-                    .values(local)
+    let replaced = conn
+        .transaction(|conn| {
+            let local = &local;
+            async move {
+                let replaced: Option<IconId> = user::table
+                    .select(user::icon)
+                    .find(user_id)
+                    .for_update()
+                    .first(conn)
+                    .await?;
+                if let Some(local) = local {
+                    diesel::insert_into(icon::table)
+                        .values(local)
+                        .execute(conn)
+                        .await?;
+                }
+                let icon_id = local.as_ref().map(|local| local.id);
+                diesel::update(user::table.find(user_id))
+                    .set((user::icon.eq(icon_id), user::home_icon.eq(home_icon)))
                     .execute(conn)
                     .await?;
-            }
-            let icon_id = local.as_ref().map(|local| local.id);
-            diesel::update(user::table.find(user_id))
-                .set((user::icon.eq(icon_id), user::home_icon.eq(home_icon)))
-                .execute(conn)
+                publish_event(
+                    state,
+                    conn,
+                    EventScope::UserEverywhere(user_id),
+                    &ServerEvent::User(UserEvent::Update {
+                        id: user_id,
+                        name: None,
+                        icon: Some(icon_id),
+                        display_name: None,
+                        pronouns: None,
+                        bio: None,
+                        status: None,
+                        bot_owner: None,
+                        bot_public: None,
+                        name_hue: None,
+                        public_email: None,
+                    }),
+                )
                 .await?;
-            publish_event(
-                state,
-                conn,
-                EventScope::UserEverywhere(user_id),
-                &ServerEvent::User(UserEvent::Update {
-                    id: user_id,
-                    name: None,
-                    icon: Some(icon_id),
-                    display_name: None,
-                    pronouns: None,
-                    bio: None,
-                    status: None,
-                    bot_owner: None,
-                    bot_public: None,
-                    name_hue: None,
-                    public_email: None,
-                }),
-            )
-            .await
+                Ok::<_, app::Error>(replaced)
+            }
+            .scope_boxed()
+        })
+        .await;
+    drop(conn);
+    let replaced = match replaced {
+        Ok(replaced) => replaced,
+        Err(error) => {
+            // The copy stored for a change that did not happen is nobody's.
+            if let Some(local) = &local
+                && let Err(e) = state.media_store.delete_upload(&local.storage_key).await
+            {
+                tracing::warn!(key = local.storage_key, error = %e, "could not delete an avatar copy no one uses");
+            }
+            return Err(error);
         }
-        .scope_boxed()
-    })
-    .await
+    };
+    // A report or a warning may keep the replaced copy as part of the profile it records.
+    if let Some(replaced) = replaced
+        && Some(replaced) != local.as_ref().map(|local| local.id)
+        && let Err(error) = app::icon::delete_if_unused(state, replaced).await
+    {
+        tracing::warn!(icon = %replaced.0, %error, "could not delete a replaced avatar copy");
+    }
+    Ok(())
 }
 
 /// The avatar `icon` of one of this deployment's own users, with its type, for a deployment

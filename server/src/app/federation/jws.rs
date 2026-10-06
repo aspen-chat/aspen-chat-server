@@ -56,10 +56,11 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> String {
 
 /// A statement read but not yet verified. The key that verifies it comes from what the
 /// verifier pinned, never from the statement; the `kid` its header names is for people
-/// reading it.
+/// reading it, and at most a hint at which key to try first.
 #[derive(Debug)]
 pub struct Unverified<'a> {
     typ: String,
+    kid: FederationKeyId,
     signing_input: &'a str,
     payload: Vec<u8>,
     signature: Vec<u8>,
@@ -84,6 +85,7 @@ pub fn parse(token: &str) -> Result<Unverified<'_>, JwsError> {
     }
     Ok(Unverified {
         typ: header.typ,
+        kid: header.kid,
         signing_input,
         payload: decode(payload)?,
         signature: decode(signature)?,
@@ -95,6 +97,12 @@ impl Unverified<'_> {
     /// finding the key to verify with, never to be believed.
     pub fn peek<T: DeserializeOwned>(&self) -> Result<T, JwsError> {
         serde_json::from_slice(&self.payload).map_err(|_| JwsError::Claims)
+    }
+
+    /// The key its header says signed it: only a hint at which key to try first, never to
+    /// be believed.
+    pub fn kid(&self) -> FederationKeyId {
+        self.kid
     }
 
     /// The claims, once the signature verifies with `public_key` and the statement is of kind

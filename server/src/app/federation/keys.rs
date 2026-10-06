@@ -29,6 +29,11 @@ use utoipa::ToSchema;
 /// How long a replaced key's handover stays in the document: a deployment that has not
 /// contacted this one for longer must have the new key accepted by its administrators.
 pub const HANDOVER_WINDOW_DAYS: i64 = 90;
+/// The most keys of a document read: those this deployment publishes, and those it reads of
+/// another's when following handovers. A deployment that replaced its key more often than this
+/// within the handover window must have its new key accepted by deployments that pinned an
+/// older one.
+pub const MAX_DOCUMENT_KEYS: usize = 16;
 /// The `typ` of a key handover.
 const HANDOVER_TYPE: &str = "aspen-key-handover+jwt";
 
@@ -299,6 +304,7 @@ pub async fn document(state: &GlobalServerContext) -> app::Result<Option<Deploym
             federation_key::retired_at.desc().nulls_first(),
             federation_key::created_at.desc(),
         ))
+        .limit(MAX_DOCUMENT_KEYS as i64)
         .load(&mut conn)
         .await?;
     Ok(Some(DeploymentDocument {
@@ -329,27 +335,51 @@ fn decode_key(key: &DocumentKey) -> Option<Vec<u8>> {
 
 /// The document's current key, when a chain of handovers in it leads there from `pinned`, each
 /// signed by the key before and naming the next as the document lists it.
+///
+/// The chain is walked back from the current key, and only the first [`MAX_DOCUMENT_KEYS`]
+/// keys are read. At each step the key a handover's header names is tried first, so a
+/// well-formed chain costs one verification a step; a document that names the wrong keys costs
+/// at most one verification for each pair of keys read, which the cap keeps small.
 pub fn follow_handovers(document: &DeploymentDocument, pinned: &[u8]) -> Option<Vec<u8>> {
     let current = current_of(document)?;
-    let mut trusted = pinned.to_vec();
-    // Each step moves to another key of the document, so a chain is never longer than it.
-    for _ in 0..document.keys.len() {
-        if trusted == current {
+    if current == pinned {
+        return Some(current);
+    }
+    let keys = &document.keys[..document.keys.len().min(MAX_DOCUMENT_KEYS)];
+    let mut visited = vec![false; keys.len()];
+    let mut at = 0;
+    // Each step moves to a key not yet visited, so the walk ends within the keys read.
+    loop {
+        visited[at] = true;
+        let key = &keys[at];
+        let handover = jws::parse(key.handover.as_deref()?).ok()?;
+        let named = keys.iter().position(|k| k.id == handover.kid());
+        let candidates = named
+            .into_iter()
+            .chain((0..keys.len()).filter(|i| Some(*i) != named))
+            .filter(|i| !visited[*i]);
+        let mut signer = None;
+        for candidate in candidates {
+            let Some(public_key) = decode_key(&keys[candidate]) else {
+                continue;
+            };
+            let Ok(claims) = handover.verify::<Handover>(HANDOVER_TYPE, &public_key) else {
+                continue;
+            };
+            if claims.iss == document.domain
+                && claims.key == key.id
+                && claims.public_key == key.public_key
+            {
+                signer = Some((candidate, public_key));
+            }
+            break;
+        }
+        let (candidate, public_key) = signer?;
+        if public_key == pinned {
             return Some(current);
         }
-        trusted = document.keys.iter().find_map(|key| {
-            let claims: Handover = jws::parse(key.handover.as_deref()?)
-                .ok()?
-                .verify(HANDOVER_TYPE, &trusted)
-                .ok()?;
-            (claims.iss == document.domain
-                && claims.key == key.id
-                && claims.public_key == key.public_key)
-                .then(|| decode_key(key))
-                .flatten()
-        })?;
+        at = candidate;
     }
-    (trusted == current).then_some(current)
 }
 
 #[cfg(test)]
@@ -426,6 +456,17 @@ mod tests {
         assert_eq!(follow_handovers(&document, &keys[0]), None);
         assert_eq!(follow_handovers(&document, &keys[1]), None);
         assert_eq!(follow_handovers(&document, &keys[2]), Some(keys[2].clone()));
+    }
+
+    #[test]
+    fn only_the_first_keys_of_a_document_are_followed() {
+        let (document, keys) = chain(&[true; 20]);
+        // The document lists the newest first, so the sixteenth it lists is keys[5].
+        assert_eq!(
+            follow_handovers(&document, &keys[5]),
+            Some(keys[20].clone())
+        );
+        assert_eq!(follow_handovers(&document, &keys[4]), None);
     }
 
     #[test]

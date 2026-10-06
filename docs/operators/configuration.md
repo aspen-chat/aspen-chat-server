@@ -258,7 +258,7 @@ See [Federation](federation.md) for what these mean together. The deployment's d
 
 | Setting | Default | |
 | --- | --- | --- |
-| `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing. |
+| `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing, and reads again the documents of the deployments it federates with, which is how soon it notices one replaced its key. |
 | `standing_grace_seconds` | `86400` | How long another deployment may go unreached before its users' sessions here end. |
 
 ### `[federation.development]`

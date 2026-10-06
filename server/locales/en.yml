@@ -507,3 +507,5 @@ unsubscribeUnknown: "This link no longer works: the address it was sent to has c
 heldMessageNotPosted: "This message could not be posted. Check that you may still post in this channel, then send it again."
 messageNotEditable: "This message records something Aspen keeps, such as a poll, a call, or a warning, rather than text you wrote, so it can't be edited."
 pluginWouldRewrite: "The %{plugin} plugin would change this text, which can only be sent as you wrote it. Change it yourself and try again."
+federationRemoveBlocked: "%{domain} is on the list %{list}, and forgetting it would take it off and let it in wherever a gate blocks only those listed. Take it off its block lists first if you mean to admit it."
+statementKeyPending: "%{domain} now presents a different key from the one this server trusts, with nothing vouching for it, so this server refuses everything from %{domain} until its administrators accept the new key. They should confirm the new key with %{domain}'s administrators and accept it under Administration, Federation, or with aspen-chat-server federation accept-key."

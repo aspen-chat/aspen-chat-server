@@ -1,7 +1,7 @@
 //! `federation …`: the directory of other deployments and this deployment's key
 //! (`app::federation`).
 
-use super::{database, operator};
+use super::{database, operator, publisher};
 use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow, bail};
 use clap::Subcommand;
@@ -81,7 +81,7 @@ fn print_deployment(
     ]
     .into_iter()
     .filter(|(subject, direction, _)| {
-        federation::admits(policy, *subject, *direction, &listed.lists)
+        federation::admits(policy, *subject, *direction, &listed.deciding)
     })
     .map(|(_, _, name)| name)
     .collect();
@@ -120,6 +120,18 @@ fn print_deployment(
         let lists: Vec<String> = listed.lists.iter().map(ToString::to_string).collect();
         println!("  on {}", lists.join(", "));
     }
+    let inherited: Vec<String> = listed
+        .deciding
+        .iter()
+        .filter(|list| !listed.lists.contains(list))
+        .map(ToString::to_string)
+        .collect();
+    if !inherited.is_empty() {
+        println!(
+            "  blocked through a parent domain or another port on {}",
+            inherited.join(", ")
+        );
+    }
     println!(
         "  admits: {}",
         if admitted.is_empty() {
@@ -145,7 +157,8 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
         let document = federation::fetch_document(&config.federation, &client, domain)
             .await
             .map_err(fail)?;
-        let (listed, outcome) = federation::record_contact(conn, domain, &document)
+        let publisher = publisher(config).await?;
+        let (listed, outcome) = federation::record_contact(&publisher, conn, domain, &document)
             .await
             .map_err(fail)?;
         tracing::info!(%domain, ?outcome, operator = operator(), "contacted a deployment");
@@ -155,9 +168,10 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             ContactOutcome::HandedOver => {
                 println!("{domain} handed over to a new key, which is now pinned")
             }
-            ContactOutcome::KeyChanged => {
-                println!("{domain} presented a different key, which is refused until accepted")
-            }
+            ContactOutcome::KeyChanged => println!(
+                "{domain} presented a different key; everything from it is refused, and its users \
+                 signed out here, until the new key is accepted"
+            ),
         }
         print_deployment(&policy, &listed);
         Ok(())
@@ -217,7 +231,10 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             contact(&mut conn, &domain).await?;
         }
         FederationCommand::Remove { domain } => {
-            federation::remove(&mut conn, &domain).await.map_err(fail)?;
+            let publisher = publisher(config).await?;
+            federation::remove(&publisher, &mut conn, &policy, &domain)
+                .await
+                .map_err(fail)?;
             tracing::info!(%domain, operator = operator(), "forgot a deployment");
             println!("forgot {domain}");
         }
@@ -246,9 +263,11 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             print_deployment(&policy, &listed);
         }
         FederationCommand::ListAdd { domain, list } => {
-            let added = federation::set_listed(&mut conn, &domain, list, true, None)
-                .await
-                .map_err(fail)?;
+            let publisher = publisher(config).await?;
+            let added =
+                federation::set_listed(&publisher, &mut conn, &policy, &domain, list, true, None)
+                    .await
+                    .map_err(fail)?;
             if added {
                 tracing::info!(%domain, %list, operator = operator(), "put a deployment on a list");
             }
@@ -258,7 +277,8 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             );
         }
         FederationCommand::ListRemove { domain, list } => {
-            if federation::set_listed(&mut conn, &domain, list, false, None)
+            let publisher = publisher(config).await?;
+            if federation::set_listed(&publisher, &mut conn, &policy, &domain, list, false, None)
                 .await
                 .map_err(fail)?
             {

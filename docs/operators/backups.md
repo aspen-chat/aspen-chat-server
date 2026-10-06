@@ -17,7 +17,9 @@ deployments trust when this one vouches for its people, and it is stored in the 
 that every API server signs with the same one. Anyone holding a backup can sign as your
 deployment. Encrypt backups, and limit who can read them. If one leaks, replace the key with
 `aspen-chat-server federation rotate-key --compromised` and tell the deployments you federate
-with (see [Federation](federation.md#keys)). The sessions and password hashes in it are
+with at once (see [Federation](federation.md#keys)): each refuses everything signed as you, and
+signs your people out, from when it notices the new key (within about an hour, or at once if its
+administrators run `federation contact`) until its administrators accept the new key. The sessions and password hashes in it are
 sensitive too: a leak means everyone should change their password. So are people's email
 addresses, and the mail waiting to be sent, which can hold a password reset code for the few
 seconds before it goes.

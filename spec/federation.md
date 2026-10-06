@@ -15,7 +15,8 @@ deployments use too, are described by those two.
 - **The document**, served unauthenticated at `https://{domain}/.well-known/aspen`: the
   deployment's domain, its keys (the current one first, then those it replaced within the
   handover window, each with the handover that vouches for it), its gates, its `protocol`, and
-  its `software`.
+  its `software`. A reader follows handovers through no more than the first sixteen keys a
+  document lists, so a deployment lists at most that many.
 - **Signed statements**: compact JWS (RFC 7515) with EdDSA over Ed25519 (RFC 8037), at most
   16 KiB (16384 bytes) each, since a reader refuses a longer one. The header's `typ` names the
   kind, and a verifier checks it, so no statement passes for another:
@@ -28,7 +29,8 @@ deployments use too, are described by those two.
     about; the kinds so far:
     - `dmJoined` (`channel`, `by`): the user is in a DM on the sender, started with them or
       with them added. The home passes it on to the user's devices only while the user still
-      uses the sender.
+      uses the sender, and may ignore one whose `by` names someone in a way it would not
+      accept of its own users.
     - `accountDeleted`: sent by a home to every deployment its user used; the account is gone,
       and each retires its user. Since it only takes away, a deployment takes it from any home
       whose key it has pinned, whatever its gates now say of that home.
@@ -38,8 +40,10 @@ deployments use too, are described by those two.
     statement), about hourly. A home answers for at most the first 128 a request names, and an
     asker takes a user the answer leaves out as no news of them.
   - `aspen-standing+jwt`: the home's answer, `{"standing": "…"}`, saying of each user `good`
-    (the account exists and may still use the asker), `gone` (there is no such account), or
-    `refused` (it may no longer use the asker). An asker ends the sessions of a user it hears
+    (the account exists and may still use the asker), `gone` (the account was deleted), or
+    `refused` (it may no longer use the asker). A home answers only for users who signed in at
+    the asker, and says `refused` of anyone else, whether or not they have an account, so an
+    answer tells the asker nothing about accounts it was never given. An asker ends the sessions of a user it hears
     `refused`, or a standing it does not know, of; retires one it hears `gone` of; and ends the
     sessions of users whose home it has not reached for a day.
 
