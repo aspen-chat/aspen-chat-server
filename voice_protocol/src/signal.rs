@@ -450,7 +450,8 @@ pub enum KickReason {
     Kicked,
     /// The same user connected again from elsewhere.
     Replaced,
-    /// The server is shutting down.
+    /// The server is closing the call: it is shutting down, or the call goes on on another
+    /// server. The client rejoins, and its join offer names the server to go to.
     ServerStopping,
     /// The user may no longer be in the call: they lost access to its channel, or left or were
     /// removed from where it is.

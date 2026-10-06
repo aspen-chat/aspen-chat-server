@@ -226,6 +226,11 @@ pub enum VoiceCommand {
         user: Uuid,
         grants: crate::token::Grants,
     },
+    /// Close the session's room, telling everyone in it the server is closing the call
+    /// (`KickReason::ServerStopping`), so their clients rejoin wherever the channel's call is
+    /// recorded. Sent for a room the API server will not record because the channel's call goes
+    /// on on another server that is still reporting.
+    Close { session: Uuid },
 }
 
 #[cfg(test)]

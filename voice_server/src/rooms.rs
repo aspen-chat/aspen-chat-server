@@ -1292,6 +1292,30 @@ impl Rooms {
                     self.set_grants(&room, user, grants).await;
                 }
             }
+            VoiceCommand::Close { session } => {
+                if let Some(room) = self.room_of_session(session) {
+                    info!(
+                        channel = room.channel.to_string(),
+                        session = session.to_string(),
+                        "closing a call the API server records on another server"
+                    );
+                    self.close_room(&room, KickReason::ServerStopping).await;
+                }
+            }
+        }
+    }
+
+    /// Takes everyone out of `room`, telling them why, which ends it.
+    async fn close_room(&self, room: &Room, reason: KickReason) {
+        let users: Vec<Uuid> = room
+            .participants
+            .lock()
+            .expect("room lock")
+            .keys()
+            .copied()
+            .collect();
+        for user in users {
+            self.leave(room.channel, user, None, Some(reason)).await;
         }
     }
 
@@ -1305,17 +1329,7 @@ impl Rooms {
             .cloned()
             .collect();
         for room in rooms {
-            let users: Vec<Uuid> = room
-                .participants
-                .lock()
-                .expect("room lock")
-                .keys()
-                .copied()
-                .collect();
-            for user in users {
-                self.leave(room.channel, user, None, Some(KickReason::ServerStopping))
-                    .await;
-            }
+            self.close_room(&room, KickReason::ServerStopping).await;
         }
     }
 }

@@ -214,10 +214,16 @@ fn accepts_sessions(server: &VoiceServer, now: DateTime<Utc>, offer_silence: Dur
         && reporting(server, now, offer_silence)
 }
 
-fn reporting(server: &VoiceServer, now: DateTime<Utc>, offer_silence: Duration) -> bool {
+/// Whether a server has reported within `offer_silence`: one that has not is probably down.
+pub(super) fn reporting(server: &VoiceServer, now: DateTime<Utc>, offer_silence: Duration) -> bool {
     server
         .last_report_at
         .is_some_and(|at| now - at <= offer_silence)
+}
+
+/// How long a server may go without reporting before it counts as down (`offer_silence_seconds`).
+pub(super) fn offer_silence(state: &GlobalServerContext) -> Duration {
+    Duration::seconds(i64::try_from(state.config.voice.offer_silence_seconds).unwrap_or(60))
 }
 
 /// At most `limit` of `servers`, chosen at random. The choice is where a preference for
@@ -261,7 +267,7 @@ pub async fn join_offer(
         .first(conn.as_mut())
         .await
         .optional_not_found()?;
-    let silence = Duration::seconds(i64::try_from(voice.offer_silence_seconds).unwrap_or(60));
+    let silence = offer_silence(state);
     // A call on a server that has gone silent is not one the joiner can reach; they are
     // offered fresh servers instead, and the session the new server starts replaces it.
     let reachable = match existing {

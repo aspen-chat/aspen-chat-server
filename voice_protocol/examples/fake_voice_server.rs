@@ -16,8 +16,9 @@
 //! <user> <true|false>`, `state <session> <channel> <user> <muted> <deafened>`, `ended <session>
 //! <channel>`. Also `verify <token>
 //! <secret> <server>` checks a join token the way a voice server would, and `command-kick
-//! <server> <session> <user>` / `command-mute <server> <session> <user> <muted>` send a
-//! command to a voice server the way the API server does.
+//! <server> <session> <user>` / `command-mute <server> <session> <user> <muted>` /
+//! `command-close <server> <session>` send a command to a voice server the way the API server
+//! does.
 
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -102,6 +103,12 @@ async fn main() {
                 session: uuid(rest.get(2)),
                 user: uuid(rest.get(3)),
                 reason: None,
+            },
+        )),
+        "command-close" => Some((
+            uuid(rest.get(1)),
+            VoiceCommand::Close {
+                session: uuid(rest.get(2)),
             },
         )),
         "command-mute" => Some((
