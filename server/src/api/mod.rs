@@ -222,6 +222,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(security::confirm_totp))
         .routes(routes!(security::rename_passkey, security::remove_passkey))
         .routes(routes!(security::regenerate_recovery_codes))
+        .routes(routes!(security::end_other_sign_ins))
         .routes(routes!(community::create_community))
         .routes(routes!(
             community::get_community,

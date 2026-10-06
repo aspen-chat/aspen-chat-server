@@ -533,8 +533,9 @@ pub enum ChangePasswordOutcome {
 }
 
 /// Changes the caller's password and expires every other session and refresh token belonging
-/// to them, so a stolen credential stops working the moment the owner rotates their password,
-/// and tells the account's verified address. The session performing the change stays valid. The old password proves who the caller is
+/// to them, and every plugin capability URL of theirs (`app::plugin::capability::revoke_all`), so
+/// a stolen credential stops working the moment the owner rotates their password, and tells the
+/// account's verified address. The session performing the change stays valid. The old password proves who the caller is
 /// for an account without two-factor sign-in; one with it also needs a recent verification. A
 /// wrong old password counts toward the user's failure limit (`two_factor::limited`), as one
 /// given to re-verify does, so a stolen session cannot guess it.
@@ -590,6 +591,7 @@ pub async fn try_change_password(
             .execute(conn)
             .await?;
             revoke_other_sessions(state, conn, user_id, &current_session).await?;
+            app::plugin::capability::revoke_all(conn, user_id).await?;
             app::email::outbox::notify(
                 state,
                 conn,
@@ -625,9 +627,30 @@ pub async fn revoke_all_sessions(
     announce_ended(state, conn, user_id, None, None).await
 }
 
+/// Ends every sign-in of the caller but their own, and every plugin capability URL of theirs, as
+/// signing out everywhere else does, so whatever a stolen credential opened stops working. It
+/// needs a recently verified session, so a stolen session cannot sign the owner out.
+pub async fn end_other_sign_ins(
+    state: &GlobalServerContext,
+    caller: &two_factor::Caller,
+) -> app::Result<()> {
+    caller.ensure_recently_verified(&state.config.auth)?;
+    let user_id = caller.user;
+    let kept = caller.sign_in();
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            revoke_other_sign_ins(state, conn, user_id, &kept).await?;
+            app::plugin::capability::revoke_all(conn, user_id).await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 /// Expires every sign-in of `user_id` and its sessions except the sign-in named `kept`
-/// (`sign_in_id`), as adding a first second factor does, so a stolen credential stops working once
-/// its owner secures the account.
+/// (`sign_in_id`), as adding a first second factor and signing out everywhere else do, so a
+/// stolen credential stops working once its owner secures the account.
 pub async fn revoke_other_sign_ins(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,

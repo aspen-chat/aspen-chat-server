@@ -41,6 +41,10 @@ export const security = {
   recoveryRemaining: "{count} unused.",
   recoveryOff: "You get recovery codes when two-factor sign-in turns on.",
   regenerate: "Get new codes",
+  signInsHeading: "Other sign-ins",
+  signInsHint: "Sign out every other device and browser signed in to your account.",
+  signOutEverywhere: "Sign out everywhere else",
+  signedOutElsewhere: "Signed out everywhere else. Only this device is still signed in.",
   codesHeading: "Save your recovery codes",
   codesPrompt:
     "If you lose your authenticator app and passkeys, each code signs you in once. Keep them somewhere safe: they won't be shown again.",

@@ -1,6 +1,7 @@
-//! A user's security settings: authenticator app, passkeys, and recovery codes. Only the user
-//! themself may read or change them; anyone else is answered `403`. Every change needs a
-//! recently verified session (`POST /auth/reauthenticate`), except renaming a passkey.
+//! A user's security settings: authenticator app, passkeys, recovery codes, and their other
+//! sign-ins. Only the user themself may read or change them; anyone else is answered `403`.
+//! Every change needs a recently verified session (`POST /auth/reauthenticate`), except renaming
+//! a passkey.
 
 use crate::api::auth::{EnrollingSessionUser, Passkey, SessionUser};
 use crate::api::error::{ApiResult, Problem};
@@ -282,4 +283,31 @@ pub async fn regenerate_recovery_codes(
         format!("{API_PREFIX}/users/{}/recovery-codes", session.user.id.0),
         RecoveryCodes { codes },
     ))
+}
+
+/// Signs out everywhere else: ends every sign-in of the user but the caller's own, closing their
+/// event streams and no longer waking their phones, and ends every plugin capability URL of
+/// theirs. Needs a recently verified session.
+#[utoipa::path(
+    delete,
+    path = "/users/{user}/sign-ins",
+    tag = TAG_SECURITY,
+    params(("user" = inline(UserRef), Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden` or `reauthenticationRequired`", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn end_other_sign_ins(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path(user): Path<UserRef>,
+) -> ApiResult<NoContent> {
+    own(&session, user)?;
+    app::login::end_other_sign_ins(&state, &session.caller).await?;
+    Ok(NoContent)
 }

@@ -9,7 +9,7 @@
 //!    Each address and code is counted before it is checked, so a burst of guesses sent at once
 //!    is checked no more than [`ATTEMPTS`] times, whatever the rate limits allow.
 //! 3. [`complete`]: they type the code and a new password. The password is replaced, every
-//!    sign-in of the account ends, the second factors added and recovery codes issued in the
+//!    sign-in of the account ends, as do its plugin capability URLs, the second factors added and recovery codes issued in the
 //!    last week go (`two_factor::remove_recent`), in case whoever took the account added them,
 //!    and the address is told. The older factors stay: signing in still asks for one. Each
 //!    reset takes [`ATTEMPTS`] wrong codes before it ends.
@@ -286,6 +286,7 @@ pub async fn complete(
                 return Err(app::Error::PasswordResetExpired);
             }
             app::login::revoke_all_sessions(state, conn, user_id).await?;
+            app::plugin::capability::revoke_all(conn, user_id).await?;
             let removed_factors = app::two_factor::remove_recent(conn, user_id).await?;
             outbox::queue(
                 conn,

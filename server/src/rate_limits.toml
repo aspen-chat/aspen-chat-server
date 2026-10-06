@@ -113,6 +113,7 @@ endpoints = [
   "PATCH /users/{user}/passkeys/{passkey}",
   "DELETE /users/{user}/passkeys/{passkey}",
   "POST /users/{user}/recovery-codes",
+  "DELETE /users/{user}/sign-ins",
   "PUT /users/{user}/email/address",
   "DELETE /users/{user}/email/address",
   "POST /users/{user}/email/verification",
