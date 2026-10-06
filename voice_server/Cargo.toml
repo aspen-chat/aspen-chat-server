@@ -17,6 +17,9 @@ axum = { version = "0.8.4", features = ["macros", "ws"] }
 clap = { version = "4.5.37", features = ["derive"] }
 config = { version = "0.15.14", features = ["toml"] }
 futures-util = "0.3.31"
+hyper = { version = "1.6.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.12", features = ["http1", "server", "tokio"] }
+tower = { version = "0.5.2", features = ["util"] }
 libc = "0.2"
 local-ip-address = "0.6"
 mediasoup = "0.28.1"

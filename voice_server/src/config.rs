@@ -16,7 +16,13 @@ pub struct VoiceServerConfig {
     /// Shared with the API server; verifies join tokens.
     pub token_secret: String,
     pub nats_url: String,
-    pub nats_auth_token: String,
+    /// How this server signs in to NATS: a user of its own (`[nats]`), allowed only this
+    /// server's subjects, or the deployment's token, which lets it do anything the API servers
+    /// can. Exactly one is given.
+    #[serde(default)]
+    pub nats: Option<NatsUser>,
+    #[serde(default)]
+    pub nats_auth_token: Option<String>,
     /// Where the HTTP server, health check, and signalling socket listen.
     #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
@@ -36,6 +42,37 @@ pub struct VoiceServerConfig {
     /// The limits in force: the built-in ones (`limits.toml`) with the overrides laid over them.
     #[serde(skip)]
     pub rate_limits: LimitSettings,
+}
+
+/// A NATS user for this voice server alone. `docs/operators/installing.md` gives the
+/// permissions it needs: publishing this server's reports, reading its commands and the rate
+/// limit suspension, and replies to its own inbox (`Reporter::inbox_prefix`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct NatsUser {
+    pub user: String,
+    pub password: String,
+}
+
+/// How a voice server signs in to NATS.
+pub enum NatsAuth {
+    User(NatsUser),
+    Token(String),
+}
+
+impl VoiceServerConfig {
+    /// The one way of signing in to NATS the settings give.
+    pub fn nats_auth(&self) -> anyhow::Result<NatsAuth> {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(user), None) => Ok(NatsAuth::User(user.clone())),
+            (None, Some(token)) => Ok(NatsAuth::Token(token.clone())),
+            (None, None) => anyhow::bail!(
+                "give [nats] user and password (a NATS user for voice servers), or nats_auth_token"
+            ),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("give either [nats] user and password or nats_auth_token, not both")
+            }
+        }
+    }
 }
 
 /// Prometheus metrics (`aspen_metrics::voice`), served on a listener of their own.
@@ -59,6 +96,12 @@ pub struct LimitSettings {
     pub max_suspension_seconds: u64,
     pub max_message_bytes: usize,
     pub max_pending_sockets_per_ip: u32,
+    /// Connections the HTTP listener holds at once, signalling sockets included.
+    pub max_connections: usize,
+    /// Calls one user may be in at once on this server (`rooms::Rooms::join`).
+    pub max_seats_per_user: usize,
+    /// People one call on this server may hold at once.
+    pub max_participants_per_call: usize,
     /// By route: `health`, `signalling`.
     #[serde(default)]
     pub http: HashMap<String, RuleTable>,
@@ -78,6 +121,9 @@ pub struct LimitOverrides {
     pub max_suspension_seconds: Option<u64>,
     pub max_message_bytes: Option<usize>,
     pub max_pending_sockets_per_ip: Option<u32>,
+    pub max_connections: Option<usize>,
+    pub max_seats_per_user: Option<usize>,
+    pub max_participants_per_call: Option<usize>,
     #[serde(default)]
     pub http: HashMap<String, RuleTable>,
     #[serde(default)]
@@ -115,6 +161,15 @@ impl LimitSettings {
         }
         if let Some(sockets) = overrides.max_pending_sockets_per_ip {
             self.max_pending_sockets_per_ip = sockets;
+        }
+        if let Some(connections) = overrides.max_connections {
+            self.max_connections = connections;
+        }
+        if let Some(seats) = overrides.max_seats_per_user {
+            self.max_seats_per_user = seats;
+        }
+        if let Some(people) = overrides.max_participants_per_call {
+            self.max_participants_per_call = people;
         }
         aspen_limits::overlay_tables(&mut self.http, overrides.http);
         aspen_limits::overlay_tables(&mut self.frames, overrides.frames);

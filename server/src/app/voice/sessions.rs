@@ -12,13 +12,14 @@ use crate::api::voice::VoiceSessionEndReason;
 use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
-use crate::app::permissions::{Permissions, channel_access, missing};
+use crate::app::permissions::{Permissions, channel_access, community_access, missing};
 use crate::app::{
     CategoryId, ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId,
     publish_event,
 };
 use crate::database::schema::user as user_table;
 use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
+use crate::t;
 use chrono::{DateTime, Duration, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -34,7 +35,8 @@ use voice_protocol::signal::KickReason;
 
 /// Server-mutes or unmutes someone in a channel's call. The voice server holding the call
 /// applies it and reports the new state, which becomes the participant's `update` event; the
-/// record returned is the state as recorded before the command lands. Takes Manage calls.
+/// record returned is the state as recorded before the command lands. Takes Manage calls and
+/// ranking above them, who may not be the owner.
 pub async fn mute_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -51,7 +53,8 @@ pub async fn mute_participant(
 }
 
 /// Removes someone from a channel's call. The voice server disconnects them, telling them
-/// why, and reports their leaving, which deletes their participant row. Takes Manage calls.
+/// why, and reports their leaving, which deletes their participant row. Takes Manage calls and
+/// ranking above them, who may not be the owner.
 pub async fn kick_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -109,8 +112,24 @@ async fn command_participant(
     let mut conn = state.connection_pool.get().await?;
     let access = channel_access(state, conn.as_mut(), caller, channel).await?;
     // A DM's call has no moderators.
-    if !access.community_has(Permissions::MANAGE_CALLS) {
+    let Some(community) = access
+        .community
+        .as_ref()
+        .filter(|community| community.has(Permissions::MANAGE_CALLS))
+    else {
         return Err(missing(Permissions::MANAGE_CALLS));
+    };
+    // As with removing or banning, a moderator acts only on members ranking below them, and
+    // never on the owner; a participant who is no member (a deployment moderator) ranks as
+    // nobody.
+    if user != caller {
+        match community_access(conn.as_mut(), user, community.community).await? {
+            Some(theirs) if theirs.owner => {
+                return Err(app::Error::Forbidden(t!("permissionRank")));
+            }
+            Some(theirs) if theirs.member => community.require_above(theirs.role_rank())?,
+            _ => {}
+        }
     }
     let session = session_on_channel(conn.as_mut(), channel)
         .await?
@@ -290,11 +309,20 @@ async fn recheck_seat(
 pub(super) async fn apply_report(
     state: &GlobalServerContext,
     report: VoiceReport,
+    from: VoiceServerId,
     published: DateTime<Utc>,
 ) -> app::Result<()> {
     let mut conn = state.connection_pool.get().await?;
+    if !reported_by(conn.as_mut(), &report, from).await? {
+        warn!(
+            server = %from.0,
+            report = <&'static str>::from(&report),
+            "a voice report about what is not that server's was dropped"
+        );
+        return Ok(());
+    }
     // A speaking change is only passed on: it writes nothing, so it needs no transaction, and
-    // it names its channel, so it needs no lookup either.
+    // the lookup of its session (`reported_by`) is all it reads.
     if let VoiceReport::Speaking {
         channel,
         user,
@@ -514,6 +542,9 @@ pub(super) async fn apply_report(
             .first(conn.as_mut())
             .await
             .optional_not_found()?;
+        if let Some(server) = server {
+            super::servers::note_joined(state, server, user).await;
+        }
         let file_transfers = state.settings().file_transfers;
         if let Some(server) = server
             && let Err(e) = recheck_seat(
@@ -534,6 +565,58 @@ pub(super) async fn apply_report(
         }
     }
     Ok(())
+}
+
+/// Whether `report`, which came from voice server `from`, is about what that server holds: a
+/// report naming a server must name `from`; one about a recorded session must be about one on
+/// `from`, in the channel it names, a speaking change needing the session recorded; and one
+/// about a file must be about a channel whose call, if one is recorded, is on `from`, an offer
+/// needing one there. So a voice server, limited by its NATS user to its own subjects, cannot
+/// report on another's calls or channels.
+async fn reported_by(
+    conn: &mut AsyncPgConnection,
+    report: &VoiceReport,
+    from: VoiceServerId,
+) -> app::Result<bool> {
+    let (session, channel) = match report {
+        VoiceReport::Load { server, .. }
+        | VoiceReport::SessionStarted { server, .. }
+        | VoiceReport::SessionSnapshot { server, .. }
+        | VoiceReport::SessionsHeld { server, .. } => {
+            return Ok(VoiceServerId::from(*server) == from);
+        }
+        VoiceReport::ParticipantJoined {
+            session, channel, ..
+        }
+        | VoiceReport::ParticipantLeft {
+            session, channel, ..
+        }
+        | VoiceReport::ParticipantState {
+            session, channel, ..
+        }
+        | VoiceReport::Speaking {
+            session, channel, ..
+        }
+        | VoiceReport::SessionEnded { session, channel } => (Some(*session), *channel),
+        VoiceReport::FileOffered { channel, .. }
+        | VoiceReport::TransferStarted { channel, .. }
+        | VoiceReport::TransferEnded { channel, .. } => (None, *channel),
+    };
+    let channel = ChannelId::from(channel);
+    match session {
+        // A session not recorded (ended, or never recorded) is ignored by the report's own
+        // handling, except a speaking change, which is passed on without a lookup of its own.
+        Some(session) => Ok(
+            match find_session(conn, VoiceSessionId::from(session)).await? {
+                Some(recorded) => recorded.voice_server == from && recorded.channel == channel,
+                None => !matches!(report, VoiceReport::Speaking { .. }),
+            },
+        ),
+        None => Ok(match session_on_channel(conn, channel).await? {
+            Some(recorded) => recorded.voice_server == from,
+            None => !matches!(report, VoiceReport::FileOffered { .. }),
+        }),
+    }
 }
 
 /// Whether a session a voice server reports replaces the one recorded for its channel, on

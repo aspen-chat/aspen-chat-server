@@ -29,7 +29,14 @@ pub struct AspenConfig {
     #[serde(default = "default_database_pool_wait_seconds")]
     pub database_pool_wait_seconds: u64,
     pub nats_url: String,
-    pub nats_auth_token: String,
+    /// The token NATS was started with, when it signs everyone in by one token. Exactly one of
+    /// this and `[nats]` is given (`AspenConfig::nats_options`).
+    #[serde(default)]
+    pub nats_auth_token: Option<String>,
+    /// A NATS user for the API servers, when NATS has users: so that each voice server signs
+    /// in as a user allowed only its own subjects (`docs/operators/installing.md`).
+    #[serde(default)]
+    pub nats: Option<NatsUser>,
     pub valkey_url: String,
     #[serde(default)]
     pub media: MediaConfig,
@@ -316,8 +323,10 @@ pub struct PluginsConfig {
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct VoiceConfig {
-    /// Shared with every voice server; signs the join tokens they verify.
-    #[default = "aspen_dev_voice_secret"]
+    /// Shared with every voice server; signs the join tokens they verify. The default is
+    /// public, for development: a deployment at an `https` address refuses to start with it or
+    /// with any secret shorter than `MIN_TOKEN_SECRET_BYTES` (`VoiceConfig::check_secret`).
+    #[default(DEVELOPMENT_TOKEN_SECRET.to_string())]
     pub token_secret: String,
     /// Distinct users whose session creation failed within `failure_window_seconds` before a
     /// server is disabled.
@@ -345,6 +354,74 @@ pub struct VoiceConfig {
     /// voice server slot indefinitely.
     #[default(24 * 60 * 60)]
     pub idle_session_seconds: u64,
+}
+
+/// A NATS user and its password.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatsUser {
+    pub user: String,
+    pub password: String,
+}
+
+impl AspenConfig {
+    /// How to sign in to NATS: as the `[nats]` user or with `nats_auth_token`, whichever is
+    /// given (`load_config` refuses both or neither).
+    pub fn nats_options(&self) -> async_nats::ConnectOptions {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(NatsUser { user, password }), _) => {
+                async_nats::ConnectOptions::with_user_and_password(user.clone(), password.clone())
+            }
+            (None, token) => {
+                async_nats::ConnectOptions::with_token(token.clone().unwrap_or_default())
+            }
+        }
+    }
+
+    fn check_nats(&self) -> Result<(), config::ConfigError> {
+        match (&self.nats, &self.nats_auth_token) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (None, None) => Err(config::ConfigError::Message(
+                "give nats_auth_token, or [nats] user and password".to_string(),
+            )),
+            (Some(_), Some(_)) => Err(config::ConfigError::Message(
+                "give either nats_auth_token or [nats] user and password, not both".to_string(),
+            )),
+        }
+    }
+}
+
+/// The `[voice] token_secret` a development server takes when none is given. It is in the
+/// source, so anyone could sign join tokens with it.
+const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
+
+/// The shortest `[voice] token_secret` an `https` deployment accepts: as long as the HMAC-SHA256
+/// key it is, so it cannot be guessed more easily than the signature forged.
+const MIN_TOKEN_SECRET_BYTES: usize = 32;
+
+impl VoiceConfig {
+    /// Refuses, at an `https` address, the development secret or one shorter than
+    /// `MIN_TOKEN_SECRET_BYTES`: whoever knows or guesses it signs their own way into any call.
+    /// An `http` address is development's, and keeps the default for convenience.
+    fn check_secret(&self, https: bool) -> Result<(), config::ConfigError> {
+        if !https {
+            return Ok(());
+        }
+        if self.token_secret == DEVELOPMENT_TOKEN_SECRET {
+            return Err(config::ConfigError::Message(
+                "[voice] token_secret is the public development value; set it to a long random \
+                 string, the same on every voice server"
+                    .to_string(),
+            ));
+        }
+        if self.token_secret.len() < MIN_TOKEN_SECRET_BYTES {
+            return Err(config::ConfigError::Message(format!(
+                "[voice] token_secret is shorter than {MIN_TOKEN_SECRET_BYTES} bytes; set it to a \
+                 long random string (`openssl rand -base64 48`), the same on every voice server"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The web client this server serves at `public_url` (`api::web_client`).
@@ -532,6 +609,10 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded.rate_limits =
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.derive_from_public_url()?;
+    loaded.check_nats()?;
+    loaded
+        .voice
+        .check_secret(loaded.public_url.starts_with("https:"))?;
     if let Some(email) = &loaded.email {
         email.validate()?;
     }
@@ -688,6 +769,48 @@ mod tests {
         assert_eq!(
             config.voice.token_secret,
             VoiceConfig::default().token_secret
+        );
+    }
+
+    /// An `https` deployment needs a voice token secret of its own, long enough; development
+    /// at an `http` address may keep the default.
+    #[test]
+    fn an_https_deployment_needs_its_own_voice_secret() {
+        let voice = |secret: &str| VoiceConfig {
+            token_secret: secret.to_string(),
+            ..VoiceConfig::default()
+        };
+        assert!(VoiceConfig::default().check_secret(false).is_ok());
+        assert!(VoiceConfig::default().check_secret(true).is_err());
+        assert!(voice("short").check_secret(true).is_err());
+        assert!(voice(&"x".repeat(32)).check_secret(true).is_ok());
+    }
+
+    /// NATS signs the server in by token or as a user, and the settings give exactly one.
+    #[test]
+    fn nats_takes_a_token_or_a_user() {
+        let config = |auth: &str| -> AspenConfig {
+            config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = \"http://localhost\"\ndatabase_url = \"postgres://x\"\n\
+                         nats_url = \"nats://x\"\nvalkey_url = \"redis://x\"\n{auth}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap()
+        };
+        let user = "[nats]\nuser = \"aspen\"\npassword = \"p\"";
+        assert!(config("nats_auth_token = \"t\"").check_nats().is_ok());
+        assert!(config(user).check_nats().is_ok());
+        assert!(config("").check_nats().is_err());
+        assert!(
+            config(&format!("nats_auth_token = \"t\"\n{user}"))
+                .check_nats()
+                .is_err()
         );
     }
 

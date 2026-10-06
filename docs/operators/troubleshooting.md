@@ -107,7 +107,11 @@ make` is off everywhere, or every maker is stuck), so each message waits out its
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
 enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet
 tab shows each voice server's last report. Check that the voice server is running, reaches
-NATS with the same token, and has the `id` the registry gave it.
+NATS (with the token, or as its own user with the permissions [Installing](installing.md#6-voice-servers)
+lists; NATS logs a `Permissions Violation` for anything else), and has the `id` the registry gave
+it. An API server logs `a voice report on a subject it does not belong on was dropped`, or `a
+voice report about what is not that server's was dropped`, for a report from a voice server
+configured with another's `id`.
 
 **The log warns that a voice server's snapshot repaired the record of a call**, or that a voice
 server no longer holds a call recorded on it. Some of that voice server's reports never reached
@@ -129,10 +133,15 @@ month than its tier with that relay allows, and pushes resume next month or when
 raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
 channel, or by someone they blocked.
 
-**A voice server was disabled.** `failure_threshold` people failed to start a call on it within
-`failure_window_seconds`, each of them sent to it by a join offer moments before (a report from
-anyone else, or from a bot, does not count). Fix the cause (usually its TLS proxy or its ports), then enable it
-again in the dashboard.
+**A voice server was suspended** (the log says `voice server suspended after failures from
+distinct users`, and the dashboard shows it suspended). `failure_threshold` of this deployment's
+people failed to start a call on it within `failure_window_seconds`, each of them sent to it by a
+join offer moments before and none of them having joined a call there lately (a report from
+anyone else, a bot, or someone from another deployment does not count). It takes calls again
+on its own after `failure_window_seconds`; fix the cause (usually its TLS proxy or its ports)
+meanwhile, and enabling it in the dashboard (or `voice-servers set <name> --enabled true`) ends
+the suspension at once. The last server taking calls is never suspended: the log says `voice
+server left taking calls despite failures` instead.
 
 **The server will not start.** It says why on standard error: a setting it cannot read, no
 built web client in `[web_client] dir`, a rate limit naming an endpoint that does not exist, a

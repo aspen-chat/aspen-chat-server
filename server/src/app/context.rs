@@ -4,7 +4,6 @@
 use crate::app;
 use crate::app::ASPEN_NATS_STREAM_NAME;
 use crate::aspen_config::{AspenConfig, load_config};
-use async_nats::ConnectOptions;
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
 use diesel_async::{
     AsyncPgConnection,
@@ -73,11 +72,8 @@ impl GlobalServerContext {
         );
         let rate_limiter = app::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
             .map_err(|message| app::Error::Config(config::ConfigError::Message(message)))?;
-        let client = async_nats::connect_with_options(
-            &config.nats_url,
-            ConnectOptions::new().token(config.nats_auth_token.clone()),
-        )
-        .await?;
+        let client =
+            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
         aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
         let context = async_nats::jetstream::new(client);
         context

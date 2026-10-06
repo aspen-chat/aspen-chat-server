@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import signal
 import ssl
 import subprocess
@@ -191,6 +192,9 @@ def write_config(deployment: Deployment) -> None:
         f'listen_addr = "127.0.0.1:{deployment.metrics_port}"\n'
         "[web_client]\n"
         f"dir = {json.dumps(str(web_client))}\n"
+        # An https deployment refuses the development voice secret.
+        "[voice]\n"
+        f'token_secret = "{secrets.token_urlsafe(32)}"\n'
         # Checks run back to back, registering and contacting more often than a person would.
         "[rate_limits]\n"
         "enabled = false\n"

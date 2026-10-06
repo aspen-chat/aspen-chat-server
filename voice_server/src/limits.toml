@@ -25,6 +25,16 @@ max_suspension_seconds = 86400
 max_message_bytes = 262144
 # Sockets one address may hold open before they identify.
 max_pending_sockets_per_ip = 8
+# Connections the HTTP listener holds at once, signalling sockets included; past it, new ones
+# wait to be accepted. Each is a file descriptor, so the process's limit (`ulimit -n`) must
+# allow this many and mediasoup's own besides.
+max_connections = 10000
+# Calls one user may be in at once on this server, each holding transports and so ports from
+# the media range: a second leaves room for a device joining one call while another leaves.
+# Joining the same call again from another socket replaces the first and takes no more.
+max_seats_per_user = 2
+# People one call may hold at once, so no single call takes the whole media range.
+max_participants_per_call = 500
 
 [rate_limits.http.health]
 # Clients probe every candidate when they join a call; a whole office may share the address.
@@ -51,6 +61,10 @@ user = { requests = 30, per_seconds = 60, burst = 12 }
 # transports rather than piling them up.
 [rate_limits.frames.createTransport]
 user = { requests = 60, per_seconds = 60, burst = 24 }
+# A whole office may share an address. The server's own limit bounds how fast the range can be
+# churned whatever the number of accounts.
+ip = { requests = 240, per_seconds = 60, burst = 96 }
+global = { requests = 6000, per_seconds = 60, burst = 1200 }
 
 [rate_limits.frames.connectTransport]
 user = { requests = 60, per_seconds = 60, burst = 24 }
@@ -60,10 +74,14 @@ user = { requests = 40, per_seconds = 60, burst = 20 }
 
 [rate_limits.frames.produceRtp]
 user = { requests = 10, per_seconds = 60, burst = 4 }
+ip = { requests = 40, per_seconds = 60, burst = 16 }
+global = { requests = 1200, per_seconds = 60, burst = 300 }
 
 # Each takes a port from the media range too.
 [rate_limits.frames.consumeRtp]
 user = { requests = 10, per_seconds = 60, burst = 4 }
+ip = { requests = 40, per_seconds = 60, burst = 16 }
+global = { requests = 1200, per_seconds = 60, burst = 300 }
 
 [rate_limits.frames.closeProducer]
 user = { requests = 30, per_seconds = 60, burst = 10 }

@@ -12,6 +12,7 @@ use crate::media::{media_codecs, media_kind, wire_kind};
 use crate::reporter::Reporter;
 use crate::transfer::Relay;
 use mediasoup::prelude::*;
+use mediasoup::types::data_structures::{DtlsState, TransportTuple};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
@@ -39,6 +40,12 @@ const INITIAL_OUTGOING_BITRATE: u64 = 10_000_000;
 const SPEAKING_THRESHOLD_DBVO: i8 = -50;
 /// How often the observer reports volumes; speaking flips at most this often.
 const SPEAKING_INTERVAL_MS: u16 = 300;
+
+/// How long a transport has to connect (its DTLS handshake done, or a plain transport's sender
+/// heard from) before it is closed, so a client cannot hold ports from the media range with
+/// transports it never uses. ICE and DTLS take a few seconds on the worst networks a call works
+/// over.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RoomError {
@@ -70,6 +77,19 @@ pub enum RoomError {
     UnknownOffer,
     #[error("no such transfer")]
     UnknownTransfer,
+    /// The user is already in as many calls on this server as they may be.
+    #[error("you are already in {0} calls on this voice server; leave one first")]
+    TooManySeats(usize),
+    /// The call holds as many people as it may.
+    #[error("this call is full ({0} people)")]
+    CallFull(usize),
+    /// A producer's kind does not match its source (`MediaSource::kind`).
+    #[error("a {of:?} producer carries {expected:?}, not {kind:?}")]
+    WrongKind {
+        of: MediaSource,
+        kind: WireKind,
+        expected: WireKind,
+    },
 }
 
 /// Where a participant's frames go: their socket's outbox.
@@ -138,6 +158,48 @@ struct Participant {
     speaking: bool,
     /// What they may send and offer, from their join token and then the API server.
     grants: Grants,
+    /// Their place among the calls their user is in on this server. Passed on to whoever
+    /// replaces them from another socket, and given back as they leave.
+    seat: Option<SeatClaim>,
+}
+
+/// How many calls each user is in on this server, so none can be in more than
+/// `max_seats_per_user` (each takes transports, and so ports from the media range).
+#[derive(Default)]
+struct SeatCounts(Mutex<HashMap<Uuid, usize>>);
+
+/// One of a user's places in a call, counted in `SeatCounts` until it is dropped.
+struct SeatClaim {
+    counts: Arc<SeatCounts>,
+    user: Uuid,
+}
+
+impl SeatCounts {
+    /// A place for `user`, unless they already hold `max`.
+    fn claim(self: &Arc<Self>, user: Uuid, max: usize) -> Option<SeatClaim> {
+        let mut counts = self.0.lock().expect("seat counts lock");
+        let held = counts.entry(user).or_default();
+        if *held >= max {
+            return None;
+        }
+        *held += 1;
+        Some(SeatClaim {
+            counts: Arc::clone(self),
+            user,
+        })
+    }
+}
+
+impl Drop for SeatClaim {
+    fn drop(&mut self) {
+        let mut counts = self.counts.0.lock().expect("seat counts lock");
+        if let Some(held) = counts.get_mut(&self.user) {
+            *held -= 1;
+            if *held == 0 {
+                counts.remove(&self.user);
+            }
+        }
+    }
 }
 
 /// A participant leaving the call, by any path, hangs their socket up: it may send nothing more
@@ -266,6 +328,22 @@ impl ReceiveTransport {
     }
 }
 
+/// A transport that must connect within `CONNECT_TIMEOUT`.
+#[derive(Clone, Copy)]
+enum Unconnected {
+    /// A browser's send or receive transport.
+    WebRtc(TransportId),
+    /// A plain receive transport (`consumeRtp`).
+    PlainReceive(TransportId),
+    /// The plain transport feeding an external sender's producer (`produceRtp`).
+    PlainSend(ProducerId),
+}
+
+/// Whether a plain transport has heard from its sender, which is when it learns where to send.
+fn heard_from(transport: &PlainTransport) -> bool {
+    matches!(transport.tuple(), TransportTuple::WithRemote { .. })
+}
+
 /// What a voice server carries at one moment.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Census {
@@ -287,6 +365,9 @@ pub struct Rooms {
     relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
     next_connection: AtomicU64,
+    seats: Arc<SeatCounts>,
+    max_seats_per_user: usize,
+    max_participants_per_call: usize,
 }
 
 impl Rooms {
@@ -297,6 +378,7 @@ impl Rooms {
         announced_address: Option<String>,
         reporter: Reporter,
         relay: Arc<Relay>,
+        limits: &crate::config::LimitSettings,
     ) -> Arc<Self> {
         Arc::new(Self {
             server,
@@ -308,6 +390,9 @@ impl Rooms {
             relay,
             rooms: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(0),
+            seats: Arc::default(),
+            max_seats_per_user: limits.max_seats_per_user,
+            max_participants_per_call: limits.max_participants_per_call,
         })
     }
 
@@ -420,7 +505,8 @@ impl Rooms {
 
     /// Puts `user` in `channel`'s call, starting the call if it has none, and replies with
     /// `ready`. A user already in the call from another socket is replaced. Returns the seat
-    /// the socket's frames act through.
+    /// the socket's frames act through. Refused when the user is already in
+    /// `max_seats_per_user` other calls here, or the call holds `max_participants_per_call`.
     pub async fn join(
         self: &Arc<Self>,
         channel: Uuid,
@@ -440,7 +526,16 @@ impl Rooms {
                 Some(room) => room,
                 None => self.start_room(channel).await?,
             };
-            if let Some(replaced) = self.enter(&room, user, connection, &outbox, grants) {
+            let entered = match self.enter(&room, user, connection, &outbox, grants) {
+                Ok(entered) => entered,
+                Err(e) => {
+                    // A room this join started holds no one; it ends as though its last
+                    // participant left.
+                    self.end_if_empty(&room);
+                    return Err(e);
+                }
+            };
+            if let Some(replaced) = entered {
                 if !replaced {
                     self.reporter.report(VoiceReport::ParticipantJoined {
                         session: room.session,
@@ -474,11 +569,24 @@ impl Rooms {
         connection: Connection,
         outbox: &Outbox,
         grants: Grants,
-    ) -> Option<bool> {
+    ) -> Result<Option<bool>, RoomError> {
         let mut participants = room.participants.lock().expect("room lock");
         if room.closed.load(Ordering::Relaxed) {
-            return None;
+            return Ok(None);
         }
+        let seat = match participants.get_mut(&user) {
+            Some(old) => old.seat.take(),
+            None => {
+                if participants.len() >= self.max_participants_per_call {
+                    return Err(RoomError::CallFull(self.max_participants_per_call));
+                }
+                Some(
+                    self.seats
+                        .claim(user, self.max_seats_per_user)
+                        .ok_or(RoomError::TooManySeats(self.max_seats_per_user))?,
+                )
+            }
+        };
         let replaced = participants.remove(&user);
         if let Some(old) = &replaced {
             old.send(ServerMessage::Kicked {
@@ -510,6 +618,7 @@ impl Rooms {
             deafened: false,
             speaking: false,
             grants,
+            seat,
         };
         participant.send(ServerMessage::Ready {
             session: room.session,
@@ -522,7 +631,7 @@ impl Rooms {
             transfers: self.relay.policy(),
         });
         participants.insert(user, participant);
-        Some(replaced.is_some())
+        Ok(Some(replaced.is_some()))
     }
 
     async fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
@@ -651,7 +760,7 @@ impl Rooms {
     }
 
     pub async fn create_transport(
-        &self,
+        self: &Arc<Self>,
         seat: Seat,
         direction: TransportDirection,
     ) -> Result<(), RoomError> {
@@ -677,6 +786,7 @@ impl Rooms {
         options.prefer_udp = true;
         options.initial_available_outgoing_bitrate = INITIAL_OUTGOING_BITRATE;
         let transport = room.router.create_webrtc_transport(options).await?;
+        self.expire_unconnected(&room, seat, Unconnected::WebRtc(transport.id()));
         let message = ServerMessage::TransportCreated {
             direction,
             id: transport.id().to_string(),
@@ -699,6 +809,108 @@ impl Rooms {
             self.ensure_consumers(&room, seat.user).await;
         }
         Ok(())
+    }
+
+    /// Closes the transport `pending` names, after `CONNECT_TIMEOUT`, if it has not connected
+    /// by then and is still the participant's.
+    fn expire_unconnected(self: &Arc<Self>, room: &Arc<Room>, seat: Seat, pending: Unconnected) {
+        let rooms = Arc::clone(self);
+        let room = Arc::downgrade(room);
+        tokio::spawn(async move {
+            tokio::time::sleep(CONNECT_TIMEOUT).await;
+            if let Some(room) = room.upgrade() {
+                rooms.close_unconnected(&room, seat, pending).await;
+            }
+        });
+    }
+
+    /// Closes a transport of the participant `seat` made that has not connected, with what it
+    /// carries: a send transport's producers, a receive transport's consumers (a new receive
+    /// transport gets them again), or an external sender's producer. The client is told.
+    async fn close_unconnected(&self, room: &Room, seat: Seat, pending: Unconnected) {
+        let (closing, state) = {
+            let mut participants = room.participants.lock().expect("room lock");
+            let Ok(participant) = seated_mut(&mut participants, seat) else {
+                return;
+            };
+            let mut closing: Vec<ProducerId> = Vec::new();
+            match pending {
+                Unconnected::WebRtc(id) => {
+                    let unconnected = |t: &WebRtcTransport| {
+                        t.id() == id && t.dtls_state() != DtlsState::Connected
+                    };
+                    if participant.send_transport.as_ref().is_some_and(unconnected) {
+                        participant.send_transport = None;
+                        // Every producer not fed over a plain transport is on the send one.
+                        closing = participant
+                            .producers
+                            .keys()
+                            .filter(|producer| !participant.rtp_transports.contains_key(producer))
+                            .copied()
+                            .collect();
+                    } else if matches!(
+                        &participant.recv_transport,
+                        Some(ReceiveTransport::WebRtc(t)) if unconnected(t)
+                    ) {
+                        participant.recv_transport = None;
+                        participant.consumers.clear();
+                    } else {
+                        return;
+                    }
+                }
+                Unconnected::PlainReceive(id) => {
+                    if matches!(
+                        &participant.recv_transport,
+                        Some(ReceiveTransport::Plain(t)) if t.id() == id && !heard_from(t)
+                    ) {
+                        participant.recv_transport = None;
+                        participant.consumers.clear();
+                    } else {
+                        return;
+                    }
+                }
+                Unconnected::PlainSend(producer) => {
+                    if participant
+                        .rtp_transports
+                        .get(&producer)
+                        .is_some_and(|t| !heard_from(t))
+                    {
+                        participant.rtp_transports.remove(&producer);
+                        participant.own_preview.remove(&producer);
+                        closing.push(producer);
+                    } else {
+                        return;
+                    }
+                }
+            }
+            let mut screen = false;
+            let closing: Vec<Producer> = closing
+                .into_iter()
+                .filter_map(|id| participant.producers.remove(&id))
+                .map(|(producer, source)| {
+                    screen |= source == MediaSource::Screen;
+                    producer
+                })
+                .collect();
+            participant.send(ServerMessage::Error {
+                detail: format!(
+                    "a transport did not connect within {} seconds and was closed",
+                    CONNECT_TIMEOUT.as_secs()
+                ),
+                fatal: false,
+                retry_after_seconds: None,
+            });
+            (
+                closing,
+                screen.then(|| Self::state_report(room, participant)),
+            )
+        };
+        for producer in closing {
+            self.drop_producer(room, producer).await;
+        }
+        if let Some(report) = state {
+            self.reporter.report(report);
+        }
     }
 
     fn transport(
@@ -751,6 +963,13 @@ impl Rooms {
         rtp_parameters: Value,
     ) -> Result<(), RoomError> {
         let user = seat.user;
+        if kind != source.kind() {
+            return Err(RoomError::WrongKind {
+                of: source,
+                kind,
+                expected: source.kind(),
+            });
+        }
         let room = self.room(seat.channel)?;
         let rtp_parameters: RtpParameters = serde_json::from_value(rtp_parameters)
             .map_err(|e| RoomError::BadParameters(format!("rtpParameters: {e}")))?;
@@ -1236,22 +1455,39 @@ impl Rooms {
             "left the call"
         );
         if empty {
-            // The room leaves the channel's place as its end is reported, so every snapshot
-            // either lists it before its end or follows the end without it.
-            self.reporter.report_with(|| {
-                self.forget(&room);
-                vec![VoiceReport::SessionEnded {
-                    session: room.session,
-                    channel,
-                }]
-            });
-            room.ended.send_replace(true);
-            info!(
-                channel = channel.to_string(),
-                session = room.session.to_string(),
-                "call ended"
-            );
+            self.end_room(&room);
         }
+    }
+
+    /// Ends `room` if it holds no one and has not closed: one a refused join started.
+    fn end_if_empty(&self, room: &Arc<Room>) {
+        {
+            let participants = room.participants.lock().expect("room lock");
+            if !participants.is_empty() || room.closed.swap(true, Ordering::Relaxed) {
+                return;
+            }
+        }
+        self.end_room(room);
+    }
+
+    /// Reports the end of `room`, closed and empty, and lets whoever waits on it start the
+    /// channel's next call.
+    fn end_room(&self, room: &Arc<Room>) {
+        // The room leaves the channel's place as its end is reported, so every snapshot either
+        // lists it before its end or follows the end without it.
+        self.reporter.report_with(|| {
+            self.forget(room);
+            vec![VoiceReport::SessionEnded {
+                session: room.session,
+                channel: room.channel,
+            }]
+        });
+        room.ended.send_replace(true);
+        info!(
+            channel = room.channel.to_string(),
+            session = room.session.to_string(),
+            "call ended"
+        );
     }
 
     /// A command from the API server, addressed by session.
@@ -1331,5 +1567,24 @@ impl Rooms {
         for room in rooms {
             self.close_room(&room, KickReason::ServerStopping).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_user_holds_at_most_their_seats_and_gets_each_back_on_leaving() {
+        let counts = Arc::new(SeatCounts::default());
+        let (alice, bob) = (Uuid::now_v7(), Uuid::now_v7());
+        let first = counts.claim(alice, 2).unwrap();
+        let second = counts.claim(alice, 2).unwrap();
+        assert!(counts.claim(alice, 2).is_none());
+        assert!(counts.claim(bob, 2).is_some());
+        drop(first);
+        let third = counts.claim(alice, 2).unwrap();
+        drop((second, third));
+        assert!(counts.0.lock().unwrap().get(&alice).is_none());
     }
 }

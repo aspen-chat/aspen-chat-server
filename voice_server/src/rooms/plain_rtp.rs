@@ -2,13 +2,14 @@
 //! game capture's helper and the benchmark's simulated participants (`produceRtp`,
 //! `consumeRtp`).
 
-use super::{ReceiveTransport, Room, RoomError, Rooms, Seat, seated, seated_mut};
+use super::{ReceiveTransport, Room, RoomError, Rooms, Seat, Unconnected, seated, seated_mut};
 use crate::media::{h264_parameters, local_tuple};
 use mediasoup::prelude::*;
 use mediasoup::types::srtp_parameters::SrtpParameters;
 use std::num::{NonZeroU8, NonZeroU32};
+use std::sync::Arc;
 use uuid::Uuid;
-use voice_protocol::signal::{MediaSource, ServerMessage};
+use voice_protocol::signal::{MediaKind as WireKind, MediaSource, ServerMessage};
 
 impl Rooms {
     /// A plain transport for a client that sends or receives SRTP itself: RTP and RTCP on one
@@ -51,7 +52,7 @@ impl Rooms {
     /// Moves the participant's consumers onto a plain SRTP transport (`consumeRtp`). Consumers
     /// already made on a WebRTC transport are left where they are; the participant, not being a
     /// browser, has none.
-    pub async fn consume_rtp(&self, seat: Seat) -> Result<(), RoomError> {
+    pub async fn consume_rtp(self: &Arc<Self>, seat: Seat) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
         {
             let participants = room.participants.lock().expect("room lock");
@@ -64,6 +65,7 @@ impl Rooms {
         }
         let (transport, srtp) = self.plain_transport(&room).await?;
         let (local_address, local_port) = local_tuple(&transport);
+        self.expire_unconnected(&room, seat, Unconnected::PlainReceive(transport.id()));
         {
             let mut participants = room.participants.lock().expect("room lock");
             let participant = seated_mut(&mut participants, seat)?;
@@ -82,7 +84,11 @@ impl Rooms {
     /// Makes a producer fed by SRTP the client sends itself, on a plain transport that learns
     /// the sender's address from its first packet, and tells the client where to send. The
     /// client consumes the producer too, as its own preview.
-    pub async fn produce_rtp(&self, seat: Seat, source: MediaSource) -> Result<(), RoomError> {
+    pub async fn produce_rtp(
+        self: &Arc<Self>,
+        seat: Seat,
+        source: MediaSource,
+    ) -> Result<(), RoomError> {
         let user = seat.user;
         let room = self.room(seat.channel)?;
         let muted = {
@@ -96,8 +102,8 @@ impl Rooms {
         // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
         // simulated participant's); the payload types are the producer's own and need only be
         // distinct from each other.
-        let (kind, payload_type, codec) = match source {
-            MediaSource::ScreenAudio | MediaSource::Microphone => (
+        let (kind, payload_type, codec) = match source.kind() {
+            WireKind::Audio => (
                 MediaKind::Audio,
                 100,
                 RtpCodecParameters::Audio {
@@ -114,7 +120,7 @@ impl Rooms {
                     rtcp_feedback: vec![],
                 },
             ),
-            _ => (
+            WireKind::Video => (
                 MediaKind::Video,
                 96,
                 RtpCodecParameters::Video {
@@ -195,6 +201,7 @@ impl Rooms {
                 }
             }
         };
+        self.expire_unconnected(&room, seat, Unconnected::PlainSend(producer_id));
         if source == MediaSource::Microphone {
             Self::settle_microphone(&room, seat, &producer, paused).await;
         }

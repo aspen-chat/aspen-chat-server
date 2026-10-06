@@ -399,6 +399,12 @@ def calls(world: World, check: Checks) -> None:
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
+    # The join is noted just after its record is made; the failure reports are limited, so wait
+    # once rather than asking over and over.
+    time.sleep(1)
+    joined = stack.api("POST", f"/voice-servers/{server}/failures", None, world.member["token"])
+    check("a failure report from someone who joined a call there counts for nothing",
+          joined.get("counted") is False, joined)
     stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": True},
               world.owner["token"], expect=(202,))
     muted = frame_of(call, "participantState")
@@ -410,6 +416,14 @@ def calls(world: World, check: Checks) -> None:
               world.owner["token"], expect=(202,))
     lifted = frame_of(call, "participantState")
     check("until the moderator unmutes them", lifted is not None and lifted["muted"] is False, lifted)
+    callers = world.role("Call moderators", ["manageCalls"])
+    world.give(callers)
+    owner_seat = f"/channels/{room}/voice/participants/{world.owner['id']}"
+    check("Manage calls does not let a member mute the owner",
+          stack.status("PATCH", owner_seat, {"muted": True}, token=world.member["token"]) == 403)
+    check("nor remove the owner from a call",
+          stack.status("DELETE", owner_seat, token=world.member["token"]) == 403)
+    world.as_owner("DELETE", f"/roles/{callers}")
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["speak"]})
     changed = frame_of(call, "grantsChanged")
     check("taking Speak away reaches the call at once", changed is not None and not changed["grants"]["speak"], changed)

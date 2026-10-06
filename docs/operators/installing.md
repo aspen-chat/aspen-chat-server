@@ -226,14 +226,66 @@ dashboard registers servers too. Its id is then in the database
 id = "…"
 token_secret = "the same string as [voice] token_secret"
 nats_url = "nats.internal:4222"
-nats_auth_token = "…"
 listen_addr = "127.0.0.1:9000"
+
+[nats]
+user = "voice-1"
+password = "…"
 
 [rtc]
 announced_address = "203.0.113.10"
 min_port = 40000
 max_port = 40999
 ```
+
+A voice server runs on a machine people send media to, so give it a NATS user of its own that
+may do no more than a voice server does, rather than the token the API servers use, which lets
+whoever holds it read and write every event of the deployment. NATS then signs everyone in as a
+user, so the API servers get one too: replace their `nats_auth_token` with
+
+```toml
+[nats]
+user = "aspen"
+password = "…"
+```
+
+and start NATS with a configuration naming both (one entry like `voice-1` for each voice server,
+with its own id in place of `VOICE_SERVER_ID`):
+
+```
+jetstream {}
+authorization {
+  users = [
+    { user: "aspen", password: "…" }
+    { user: "voice-1", password: "…", permissions: {
+        publish: { allow: [
+          "aspen.voice.report.*.VOICE_SERVER_ID",
+          "aspen.voice.speaking.*.VOICE_SERVER_ID",
+          "$JS.API.INFO",
+          "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
+          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
+          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits.>",
+          "$JS.API.CONSUMER.DELETE.KV_aspen_rate_limits.>",
+          "$JS.API.DIRECT.GET.KV_aspen_rate_limits.>",
+          "$JS.API.STREAM.MSG.GET.KV_aspen_rate_limits",
+          "$JS.FC.KV_aspen_rate_limits.>"
+        ] }
+        subscribe: { allow: [
+          "aspen.voice.command.VOICE_SERVER_ID",
+          "_INBOX_voice.VOICE_SERVER_ID.>"
+        ] }
+    } }
+  ]
+}
+```
+
+That lets the voice server publish its own reports (`aspen.voice.report.{lane}.{id}` and
+`aspen.voice.speaking.{lane}.{id}`), receive its own commands, follow a suspension of rate limits
+(the key-value bucket `aspen_rate_limits`), and receive the replies to its own requests, which it
+asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The API servers apply a
+report only when it came on a subject naming the server it is about, and only when the call or
+channel it is about is that server's, so a voice server taken over can misreport its own calls and
+no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
 
 Clients reach a voice server in two ways, and both must be open to them:
 
@@ -250,8 +302,8 @@ Clients reach a voice server in two ways, and both must be open to them:
   transfers at all.
 
 A voice server that stops reporting for a minute is no longer offered to people joining calls;
-one that people fail to reach is disabled after `failure_threshold` of them try in
-`failure_window_seconds`, until an administrator enables it again in the dashboard.
+one that people fail to reach is suspended for `failure_window_seconds` after `failure_threshold`
+of them try in that time, unless it is the last one taking calls.
 
 ## 7. The first administrator
 

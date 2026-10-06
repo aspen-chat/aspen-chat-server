@@ -40,7 +40,8 @@ by each API server, at the same origin.
 | `database_pool_size` | two per logical CPU | The most PostgreSQL connections this server holds at once. Every write holds one until NATS acknowledges its event, so a busy server may run out of connections before PostgreSQL runs out of CPU; the database connections metric shows requests waiting. Keep the total over every API server below PostgreSQL's `max_connections`. |
 | `database_pool_wait_seconds` | `10` | How long a request or background task waits for one of those connections before it is refused with `serverBusy`. A pool that runs dry, because NATS is slow to acknowledge or the server has more work than connections, then refuses work rather than holding it until it frees. |
 | `nats_url` | required | NATS with JetStream, as `host:4222`. |
-| `nats_auth_token` | required | The token NATS was started with. |
+| `nats_auth_token` | | The token NATS was started with, when NATS takes one token from everyone. |
+| `[nats] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |
 
 ## Event delivery
@@ -134,9 +135,9 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string.** |
-| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, disable it until an administrator enables it again. Only people a join offer sent to that server within the token's lifetime and a minute count, and bots never do. |
-| `failure_window_seconds` | `3600` | |
+| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
+| `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it for `failure_window_seconds`, after which it takes calls again on its own (an administrator enabling it ends the suspension sooner). Only this deployment's people whom a join offer sent to that server within the token's lifetime and a minute count, and not those who joined a call there within the window; bots and people from other deployments never do. The last server taking calls is never suspended. |
+| `failure_window_seconds` | `3600` | How long failures are counted, and how long a suspension lasts. |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
 | `candidate_limit` | `10` | The most voice servers one person is offered to choose the nearest from. |
 | `offer_silence_seconds` | `60` | A voice server that has not reported for this long is not offered to people joining. |
@@ -286,8 +287,10 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | Setting | Default | |
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
-| `token_secret` | required | The API servers' `[voice] token_secret`. |
-| `nats_url`, `nats_auth_token` | required | The same NATS as the API servers. |
+| `token_secret` | required | The API servers' `[voice] token_secret`. The server warns at startup when it is the development value or shorter than 32 bytes. |
+| `nats_url` | required | The same NATS as the API servers. |
+| `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
+| `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |
 | `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front. |
 | `workers` | one per CPU | Media worker processes, each using at most one core. |
 
@@ -317,4 +320,16 @@ calls, never to the rest of the internet, and sees only ciphertext.
 
 As the API server's, with `listen_addr` defaulting to `127.0.0.1:9465`. The voice server's
 built-in limits are `voice_server/src/limits.toml`, which documents each, including
-`max_message_bytes` and `max_pending_sockets_per_ip`.
+`max_message_bytes` and `max_pending_sockets_per_ip`, and these, which bound how much of the
+media port range one account can hold:
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max_connections` | `10000` | Connections the listener holds at once; more wait to be accepted. Raise the process's file limit (`ulimit -n`, `LimitNOFILE=`) above it. Every connection must send each request's headers within ten seconds. |
+| `max_seats_per_user` | `2` | Calls one account may be in at once on this server. Joining the same call again from another device replaces the first and takes no more. |
+| `max_participants_per_call` | `500` | People one call on this server may hold at once. |
+
+A transport that has not connected within thirty seconds of being made is closed, so ports are
+not held by transports nobody uses. `createTransport`, `produceRtp`, and `consumeRtp` are limited
+per address and for the whole server as well as per account; a load test from a few addresses
+suspends the limits (`limits suspend`).
