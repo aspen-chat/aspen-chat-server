@@ -57,7 +57,7 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -214,6 +214,93 @@ pub struct EventFeed {
     unregister: mpsc::UnboundedSender<u64>,
     next_id: Arc<AtomicU64>,
     queue_size: usize,
+    /// How many streams each user and each client address hold open here, against the caps.
+    pub caps: StreamCaps,
+}
+
+/// How many event streams each user and each client address hold open on this server, and the
+/// most either may (`[limits] max_event_streams_per_user` and `max_event_streams_per_address`).
+/// Counted in this process alone: a count kept elsewhere would outlive a server that stopped
+/// without giving its streams back, while this one cannot, and a client holding streams on every
+/// API server is still bounded by their number.
+#[derive(Clone)]
+pub struct StreamCaps {
+    counts: Arc<Mutex<StreamCounts>>,
+    per_user: usize,
+    per_address: usize,
+}
+
+#[derive(Default)]
+struct StreamCounts {
+    users: HashMap<UserId, usize>,
+    addresses: HashMap<String, usize>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum StreamHolder {
+    User(UserId),
+    Address(String),
+}
+
+/// One stream's place under a cap, given back when dropped.
+pub struct StreamHold {
+    counts: Arc<Mutex<StreamCounts>>,
+    holder: StreamHolder,
+}
+
+impl StreamCaps {
+    pub fn new(limits: &crate::aspen_config::LimitsConfig) -> Self {
+        Self {
+            counts: Arc::default(),
+            per_user: limits.max_event_streams_per_user.max(1),
+            per_address: limits.max_event_streams_per_address.max(1),
+        }
+    }
+
+    /// A place for one more stream of `user`'s, or `None` when they hold as many as they may.
+    pub fn hold_user(&self, user: UserId) -> Option<StreamHold> {
+        self.hold(StreamHolder::User(user), self.per_user)
+    }
+
+    /// A place for one more stream from the client address `address` (as the rate limits count
+    /// it, `aspen_limits::ClientAddresses::key`), or `None` when it holds as many as it may.
+    pub fn hold_address(&self, address: String) -> Option<StreamHold> {
+        self.hold(StreamHolder::Address(address), self.per_address)
+    }
+
+    fn hold(&self, holder: StreamHolder, cap: usize) -> Option<StreamHold> {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        let count = match &holder {
+            StreamHolder::User(user) => counts.users.entry(*user).or_default(),
+            StreamHolder::Address(address) => counts.addresses.entry(address.clone()).or_default(),
+        };
+        if *count >= cap {
+            return None;
+        }
+        *count += 1;
+        Some(StreamHold {
+            counts: self.counts.clone(),
+            holder,
+        })
+    }
+}
+
+impl Drop for StreamHold {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        fn give_back<K: std::hash::Hash + Eq>(map: &mut HashMap<K, usize>, key: &K) {
+            if let Some(count) = map.get_mut(key) {
+                *count -= 1;
+                if *count == 0 {
+                    map.remove(key);
+                }
+            }
+        }
+        match &self.holder {
+            StreamHolder::User(user) => give_back(&mut counts.users, user),
+            StreamHolder::Address(address) => give_back(&mut counts.addresses, address),
+        }
+    }
 }
 
 struct Register {
@@ -271,12 +358,19 @@ impl EventFeed {
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
             queue_size: 1,
+            caps: StreamCaps::new(&Default::default()),
         }
     }
 
     /// Starts the dispatcher on `context`'s event stream, routing through `shards` tasks.
-    /// `queue_size` bounds each connection's queue.
-    pub fn start(context: jetstream::Context, queue_size: usize, shards: usize) -> Self {
+    /// `queue_size` bounds each connection's queue, and `caps` how many each user and address
+    /// may hold.
+    pub fn start(
+        context: jetstream::Context,
+        queue_size: usize,
+        shards: usize,
+        caps: StreamCaps,
+    ) -> Self {
         let (registrations, registrations_rx) = mpsc::channel(REGISTRATION_QUEUE);
         let (unregister, unregister_rx) = mpsc::unbounded_channel();
         let shards = (0..shards.max(1))
@@ -292,6 +386,7 @@ impl EventFeed {
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
             queue_size: queue_size.max(1),
+            caps,
         }
     }
 }
@@ -1431,6 +1526,29 @@ mod tests {
         let (missed, caught_up) = retained.catch_up(user, "", reading(), 4, &none).unwrap();
         assert_eq!(sequences(&missed), vec![5, 6]);
         assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
+    }
+
+    #[test]
+    fn streams_are_capped_per_user_and_per_address() {
+        let caps = StreamCaps::new(&crate::aspen_config::LimitsConfig {
+            max_event_streams_per_user: 2,
+            max_event_streams_per_address: 3,
+            ..Default::default()
+        });
+        let (user, other) = (UserId::new(), UserId::new());
+        let first = caps.hold_user(user).unwrap();
+        let _second = caps.hold_user(user).unwrap();
+        assert!(caps.hold_user(user).is_none());
+        assert!(caps.hold_user(other).is_some());
+        drop(first);
+        assert!(caps.hold_user(user).is_some());
+        let address = || "192.0.2.1".to_string();
+        let held: Vec<_> = (0..3)
+            .map(|_| caps.hold_address(address()).unwrap())
+            .collect();
+        assert!(caps.hold_address(address()).is_none());
+        drop(held);
+        assert!(caps.counts.lock().unwrap().addresses.is_empty());
     }
 
     #[test]

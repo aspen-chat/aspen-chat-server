@@ -24,6 +24,7 @@
 
 use crate::api::extract::Query;
 use crate::api::message_enum::server_event::ServerEvent;
+use crate::api::rate_limit::ClientIp;
 use crate::app;
 use crate::app::UserId;
 use crate::app::context::GlobalServerContext;
@@ -32,6 +33,7 @@ use crate::app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, Subscripti
 use crate::app::two_factor::Caller;
 use crate::app::user::UserPg;
 use crate::t;
+use axum::Extension;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
@@ -115,6 +117,13 @@ pub enum EventStreamErrorCode {
     /// The account was banned from the deployment, which the `accountBanned` event before
     /// this frame tells of. Close code 4410.
     Banned,
+    /// The account already holds as many event streams on this server as it may (`[limits]
+    /// max_event_streams_per_user`). Close code 4429; the client keeps trying, and connects once
+    /// one of its others closes.
+    TooManyStreams,
+    /// The client's network address already holds as many event streams on this server as it
+    /// may (`[limits] max_event_streams_per_address`). Close code 4429.
+    TooManyStreamsFromAddress,
     /// The server failed while setting up or serving the stream. Close code 1011.
     Internal,
 }
@@ -128,6 +137,8 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::EmailVerificationRequired => 4428,
             EventStreamErrorCode::IdentifyTimeout => 4408,
             EventStreamErrorCode::Banned => 4410,
+            EventStreamErrorCode::TooManyStreams
+            | EventStreamErrorCode::TooManyStreamsFromAddress => 4429,
             EventStreamErrorCode::Internal => 1011,
         }
     }
@@ -144,6 +155,8 @@ impl EventStreamErrorCode {
             }
             EventStreamErrorCode::IdentifyTimeout => t!("eventStreamIdentifyTimeout"),
             EventStreamErrorCode::Banned => t!("eventStreamBanned"),
+            EventStreamErrorCode::TooManyStreams => t!("eventStreamTooMany"),
+            EventStreamErrorCode::TooManyStreamsFromAddress => t!("eventStreamTooManyFromAddress"),
             EventStreamErrorCode::Internal => t!("eventStreamError"),
         }
     }
@@ -202,8 +215,15 @@ pub struct EventStreamQuery {
 pub async fn event_stream(
     ws: WebSocketUpgrade,
     State(state): State<GlobalServerContext>,
+    client: Option<Extension<ClientIp>>,
     Query(query): Query<EventStreamQuery>,
 ) -> Response {
+    // Counted from the upgrade, so sockets that never identify are bounded too. A request with
+    // no address (none reaches here without one) is counted by user alone.
+    let address = client.and_then(|Extension(ClientIp(ip))| ip).map(|ip| {
+        let key = state.rate_limiter.addresses().key(ip);
+        state.event_feed.caps.hold_address(key)
+    });
     let locale = query
         .locale
         .as_deref()
@@ -216,7 +236,21 @@ pub async fn event_stream(
         .max_write_buffer_size(MAX_WRITE_BUFFER_BYTES)
         .max_message_size(MAX_CLIENT_MESSAGE_BYTES)
         .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
-        .on_upgrade(move |socket| app::locale::scope(locale, handle_socket_conn(socket, state)))
+        .on_upgrade(move |socket| {
+            app::locale::scope(locale, async move {
+                let mut socket = socket;
+                // Held until the socket ends.
+                let _address = match address {
+                    Some(None) => {
+                        count_connect("rejected");
+                        reject(&mut socket, EventStreamErrorCode::TooManyStreamsFromAddress).await;
+                        return;
+                    }
+                    held => held.flatten(),
+                };
+                handle_socket_conn(socket, state).await;
+            })
+        })
 }
 
 struct Rejection(EventStreamErrorCode);
@@ -278,6 +312,11 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
             reject(&mut socket, code).await;
             return;
         }
+    };
+    let Some(_held) = state.event_feed.caps.hold_user(session.user.id) else {
+        count_connect("rejected");
+        reject(&mut socket, EventStreamErrorCode::TooManyStreams).await;
+        return;
     };
     let subscription = match app::event_feed::subscribe(
         &state,

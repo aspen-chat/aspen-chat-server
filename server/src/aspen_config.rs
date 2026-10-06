@@ -233,6 +233,17 @@ pub struct LimitsConfig {
     /// stream connection reads and how many copies of a profile change are published.
     #[default = 500]
     pub max_communities_per_user: u32,
+    /// The most event streams one user may hold open on one API server at once
+    /// (`app::event_feed::StreamCaps`); one more is closed with `tooManyStreams`. Each person's
+    /// app holds one per window or device, and a bot one per process.
+    #[default = 20]
+    pub max_event_streams_per_user: usize,
+    /// The most event streams one client address (an IPv6 one by its `[rate_limits]
+    /// ipv6_prefix` network) may hold open on one API server at once, counted from the upgrade,
+    /// before it identifies; one more is closed with `tooManyStreamsFromAddress`. Many people may
+    /// share an address behind one NAT, so it is well above the cap per user.
+    #[default = 200]
+    pub max_event_streams_per_address: usize,
 }
 
 /// Federation: this deployment's name among deployments and how it checks on the users of

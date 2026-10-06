@@ -360,6 +360,8 @@ deploymentBannedUntilWithReason: "This account is banned from this server until 
 banSystemAccount: "The server's own account cannot be banned."
 banOwnerNoBot: "Only a bot has an owner to ban with it. Ban this account by itself."
 eventStreamBanned: "This account was banned from this server, so the live connection has closed."
+eventStreamTooMany: "This account already has as many live connections open to this server as it may. Close the app in a window or on a device you are not using, and this one connects by itself."
+eventStreamTooManyFromAddress: "Your network already has as many live connections open to this server as it may. Close the app where it is not in use, and this one connects by itself; if many people share your network, its administrators can ask this server's to raise the limit."
 
 # Reports
 reportOwn: "You can't report your own messages, profile, or nickname."
