@@ -2,7 +2,7 @@
 # `pnpm package:dir` for an unpacked directory to inspect.
 appId: org.aspenchat.client
 productName: Aspen
-copyright: "GPL-3.0-or-later"
+copyright: "MPL-2.0"
 directories:
   output: release
   buildResources: build

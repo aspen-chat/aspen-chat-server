@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Capacitor shell for Android and iOS. Wraps the @aspen/app build; both native projects are kept here.",
-  "license": "GPL-3.0-or-later",
+  "license": "MPL-2.0",
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @aspen/app build:shell",

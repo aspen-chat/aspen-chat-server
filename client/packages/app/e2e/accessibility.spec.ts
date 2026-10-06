@@ -116,7 +116,7 @@ for (const { palette, scheme, contrast } of combinations) {
       await expectAccessible(page, "DM");
     });
 
-    test("profile cards and settings", async ({ page }) => {
+    test("profile cards, settings, and about", async ({ page }) => {
       await openChannel(page, "general");
       await page
         .locator("article")
@@ -138,6 +138,12 @@ for (const { palette, scheme, contrast } of combinations) {
       await settings.getByRole("button", { name: "Your bots" }).click();
       await expect(page.getByRole("dialog", { name: "Your bots" })).toBeVisible();
       await expectAccessible(page, "bots");
+      await page.keyboard.press("Escape");
+      await settings.getByRole("button", { name: "About Aspen" }).click();
+      await expect(
+        page.getByRole("dialog", { name: "About Aspen" }).getByText(/^You're on /),
+      ).toBeVisible();
+      await expectAccessible(page, "about");
     });
 
     test("open source attributions", async ({ page }) => {

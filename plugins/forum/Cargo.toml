@@ -2,7 +2,7 @@
 name = "aspen_forum"
 version = "1.0.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "An example Aspen plugin: forum boards, a kind of channel whose posts and replies the plugin keeps and its view shows"
 publish = false
 

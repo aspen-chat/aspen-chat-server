@@ -2,7 +2,7 @@
 name = "aspen_metrics"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "The Prometheus metrics the API and voice servers export, by name, and the exporter they share."
 
 [dependencies]

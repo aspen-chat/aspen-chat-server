@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Electron shell for Windows, macOS, and Linux. Renders the @aspen/app build; contains no UI of its own.",
-  "license": "GPL-3.0-or-later",
+  "license": "MPL-2.0",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {

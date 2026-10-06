@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "The Aspen user interface: a React + React Aria web app that every shell (browser, Electron, Capacitor) renders.",
-  "license": "GPL-3.0-or-later",
+  "license": "MPL-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

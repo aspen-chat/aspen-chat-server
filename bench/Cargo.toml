@@ -2,7 +2,7 @@
 name = "aspen_bench"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "Aspen's benchmark: drives a deployment with a described workload and says whether it holds up."
 
 [[bin]]

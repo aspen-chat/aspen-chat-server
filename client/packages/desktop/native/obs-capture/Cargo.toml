@@ -2,7 +2,7 @@
 name = "aspen_obs_capture"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "MPL-2.0"
 description = "Helper process for the Aspen desktop shell: captures a game or window with libobs on Windows, and a game's sound from PipeWire on Linux or ScreenCaptureKit on macOS, and streams it to the voice server"
 publish = false
 
