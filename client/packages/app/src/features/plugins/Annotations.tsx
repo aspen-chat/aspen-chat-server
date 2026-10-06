@@ -5,6 +5,7 @@ import { Button, Dialog, DialogTrigger, Popover } from "react-aria-components";
 import { useAnnotations, usePlugin, usePlugins, useUserAnnotations } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { webPageUrl } from "@/features/layout/safeUrl";
 
 /** How each severity is drawn: its colours and its icon. */
 const SEVERITY: Record<Severity, { className: string; Icon: typeof InfoIcon }> = {
@@ -36,6 +37,7 @@ function AnnotationChip({
   const m = useMessages();
   const { className, Icon } = SEVERITY[annotation.severity];
   const label = pluginText(plugin, annotation.label);
+  const link = webPageUrl(annotation.link);
   return (
     <li>
       <DialogTrigger>
@@ -57,9 +59,9 @@ function AnnotationChip({
             <p className="text-xs text-ink-faint">
               {format(m.plugins.noteFrom, { plugin: plugin.name })}
             </p>
-            {annotation.link != null && (
+            {link !== undefined && (
               <a
-                href={annotation.link}
+                href={link}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1 text-xs text-accent hover:underline"

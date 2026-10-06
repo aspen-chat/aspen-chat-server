@@ -17,9 +17,16 @@ export const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
 export const customEmojiId = "0190f0a0-0000-7000-8000-0000000000e1";
 export const customEmojiName = "partyparrot";
 export const customEmojiIcon = "0190f0a0-0000-7000-8000-0000000000e2";
-/** A one-pixel PNG, which stands for every emoji's picture. */
-const PIXEL_PNG =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/**
+ * Where the world's media storage keeps a one-pixel PNG, which stands for every icon's and
+ * preview's picture; `signInToWorld` answers it with `PIXEL_PNG_BYTES`. The app loads pictures
+ * only from addresses a deployment may serve (`mediaUrl`), so it is an `https:` one.
+ */
+export const PIXEL_PNG = "https://media.test/world/pixel.png";
+export const PIXEL_PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
 const channelPermissions = [
   "viewChannel",
   "sendMessages",
@@ -185,7 +192,10 @@ export function organiserRoleWith(extra: readonly string[]): Record<string, unkn
 
 /** A share page named like a gif, which is a page; its preview's picture is the gif. */
 export const gifPageLink = "https://tenor.com/view/ghost-12345.gif";
-/** A link to a picture that no longer exists, which the tests answer with nothing. */
+/**
+ * A link to a picture the server made no preview of, which the app must never load; the tests
+ * answer it with nothing.
+ */
 export const missingPictureLink = "https://pictures.example.com/missing-picture.png";
 /** Where the missing picture's link is posted in #general. */
 const missingPictureMessage = 199;
@@ -221,7 +231,7 @@ export const generalMessages = [
   message(202, bob, `Morning all! <:${customEmojiId}>`, 90),
   message(201, me, "Welcome to the family server.", 120),
   // A share page named like a gif, whose preview carries the gif itself; and, by the caller,
-  // so Bob's messages make one run for the blocking tests, a link to a picture that is gone.
+  // so Bob's messages make one run for the blocking tests, a link to a picture without a preview.
   message(200, bob, gifPageLink, 130, {
     linkPreviews: [
       {

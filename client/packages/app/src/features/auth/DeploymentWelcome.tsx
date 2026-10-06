@@ -5,6 +5,7 @@ import { format } from "@/i18n/messages";
 import { AspenIcon, ICON_PX, iconSizeClass } from "./AspenIcon";
 import { useDeploymentProfile } from "./deploymentProfile";
 import { linkButtonClass } from "./styles";
+import { mediaUrl } from "@/features/layout/safeUrl";
 
 /**
  * What the signed-out screens open with: the deployment's icon, or Aspen's when it has none or
@@ -30,7 +31,7 @@ export function DeploymentWelcome({
     <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
       {own !== null ? (
         <img
-          src={own.downloadUrl}
+          src={mediaUrl(own.downloadUrl)}
           alt=""
           width={ICON_PX}
           height={ICON_PX}

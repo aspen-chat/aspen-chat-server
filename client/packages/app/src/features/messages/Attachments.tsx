@@ -21,27 +21,26 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
 
 const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
 /**
  * What a message carries besides its text: uploaded attachments, shown inline when they are
  * images, as their posters when they are videos the server took one of, and as download chips
- * otherwise, then links in the text that point straight at an image, then links the server
- * found to be images. Up to three pictures show inline; with more, a button in their place
+ * otherwise, then the pictures the server found behind links in the text, each from its copy
+ * in storage. An attachment whose address is not one a deployment may serve (`mediaUrl`) is
+ * unavailable. Up to three pictures show inline; with more, a button in their place
  * opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
  * smaller copy the server made of it where there is one; the gallery shows the original. With
  * `onRemove`, each attachment shown carries a control that takes it off the message.
  */
 export function MessageMedia({
   attachmentIds,
-  linkedImages,
   previewImages,
   onRemove,
 }: {
   attachmentIds: readonly string[];
-  /** Links in the text that point straight at an image, from `imageUrls`. */
-  linkedImages: readonly string[];
   /** Pictures the server found behind links, as `{ src, name }` with the link as the name. */
   previewImages: readonly Picture[];
   /** Takes an attachment off the message, for its author and those who manage messages. */
@@ -51,7 +50,7 @@ export function MessageMedia({
   const attachments = useAttachments(attachmentIds);
   const store = useStore();
   const [gallery, setGallery] = useState<number | null>(null);
-  if (attachmentIds.length === 0 && linkedImages.length === 0 && previewImages.length === 0) {
+  if (attachmentIds.length === 0 && previewImages.length === 0) {
     return null;
   }
   const pictures: Picture[] = [];
@@ -59,11 +58,19 @@ export function MessageMedia({
   const videos: Attachment[] = [];
   const unavailable: string[] = [];
   const coming: string[] = [];
-  attachments.forEach((attachment, i) => {
+  attachments.forEach((record, i) => {
     const id = attachmentIds[i] ?? "";
-    if (attachment === undefined) {
+    if (record === undefined) {
       (store.missing("attachment", id) ? unavailable : coming).push(id);
-    } else if (isImageType(attachment.mimeType)) {
+      return;
+    }
+    const downloadUrl = mediaUrl(record.downloadUrl);
+    if (downloadUrl === undefined) {
+      unavailable.push(id);
+      return;
+    }
+    const attachment = { ...record, downloadUrl };
+    if (isImageType(attachment.mimeType)) {
       pictures.push({
         src: attachment.downloadUrl,
         name: attachment.fileName,
@@ -79,9 +86,6 @@ export function MessageMedia({
       files.push(attachment);
     }
   });
-  for (const url of linkedImages) {
-    pictures.push({ src: url, name: url });
-  }
   pictures.push(...previewImages);
   const { shown, hidden } = splitInline(pictures);
   return (
@@ -229,12 +233,12 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
   useLayoutEffect(() => {
     keepStill();
   }, [arrived, failed, keepStill]);
-  // A link named like a picture that is not one (a page, or one gone) shows as the link it
-  // is, not as a broken picture; a stored picture that fails is said to be unavailable.
+  // A link's picture that cannot be loaded shows as the link it came from, not as a broken
+  // picture; an attachment that fails is said to be unavailable.
   if (failed.has(picture.src)) {
     return picture.attachmentId === undefined ? (
       <a
-        href={picture.src}
+        href={webPageUrl(picture.name)}
         target="_blank"
         rel="noreferrer"
         className="text-sm break-all text-accent underline-offset-2 hover:underline"

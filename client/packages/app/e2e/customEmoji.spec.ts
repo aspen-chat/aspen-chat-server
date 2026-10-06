@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { customEmojiId, customEmojiName, ownText, signInToWorld } from "./world";
+import { PIXEL_PNG as PIXEL_PNG_URL } from "./world/fixtures";
 
 /** A one-pixel PNG, as a file to upload. */
 const PIXEL_PNG = Buffer.from(
@@ -24,7 +25,7 @@ test("a custom emoji in a message renders as its picture, named for a screen rea
   const morning = page.locator("article").filter({ hasText: "Morning all!" }).last();
   const glyph = morning.getByRole("img", { name: `:${customEmojiName}:` });
   await expect(glyph).toBeVisible();
-  await expect(glyph).toHaveAttribute("src", /^data:image\/png/);
+  await expect(glyph).toHaveAttribute("src", PIXEL_PNG_URL);
   // The reference itself never shows as text.
   await expect(morning).not.toContainText("<:");
 });

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
 
 /**
  * A link to a video on an allowlisted provider: the thumbnail from our own store with a play
@@ -19,7 +20,9 @@ export function VideoCard({ preview, player }: { preview: LinkPreview; player: s
     return null;
   }
   const title = preview.title ?? preview.url;
-  const site = preview.siteName ?? new URL(preview.url).hostname;
+  const href = webPageUrl(preview.url);
+  const site = preview.siteName ?? (href === undefined ? "" : new URL(href).hostname);
+  const poster = mediaUrl(preview.imageUrl);
   return (
     <div className="mt-1 w-full max-w-lg overflow-hidden rounded-md border border-line bg-surface-raised">
       <div
@@ -43,9 +46,9 @@ export function VideoCard({ preview, player }: { preview: LinkPreview; player: s
             aria-label={format(m.playVideo, { title })}
             className="group absolute inset-0 flex h-full w-full items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-inset"
           >
-            {preview.imageUrl != null && (
+            {poster !== undefined && (
               <img
-                src={preview.imageUrl}
+                src={poster}
                 alt=""
                 loading="lazy"
                 className="absolute inset-0 h-full w-full object-cover"
@@ -59,7 +62,7 @@ export function VideoCard({ preview, player }: { preview: LinkPreview; player: s
       </div>
       <div className="flex flex-col gap-0.5 px-3 py-2 text-sm">
         <a
-          href={preview.url}
+          href={href}
           target="_blank"
           rel="noreferrer noopener"
           className="font-medium wrap-anywhere text-accent hover:underline"

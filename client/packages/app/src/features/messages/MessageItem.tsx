@@ -565,7 +565,7 @@ function EchoedReply({
         <Markdown content={reply.content} mentions={reply.mentions} communityId={home.community} />
         {reply.editedAt != null && <span className="text-xs text-ink-faint">{m.edited}</span>}
       </div>
-      <MessageMedia attachmentIds={reply.attachments} linkedImages={[]} previewImages={[]} />
+      <MessageMedia attachmentIds={reply.attachments} previewImages={[]} />
       <Link
         {...threadLink(home, channelId, reply.channelId)}
         className="w-fit text-xs text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"

@@ -42,6 +42,7 @@ import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
 import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
+import { mediaUrl } from "@/features/layout/safeUrl";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -108,7 +109,9 @@ export function Composer({
       name: attachment.fileName,
       mimeType: attachment.mimeType,
       description: attachment.description ?? "",
-      thumbnail: isImageType(attachment.mimeType) ? attachment.downloadUrl : null,
+      thumbnail: isImageType(attachment.mimeType)
+        ? (mediaUrl(attachment.downloadUrl) ?? null)
+        : null,
       state: { kind: "ready", attachment },
     })),
   );

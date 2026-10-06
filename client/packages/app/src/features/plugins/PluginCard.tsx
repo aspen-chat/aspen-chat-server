@@ -11,6 +11,7 @@ import { PersonName } from "@/features/users/PersonName";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat, useNumberFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { webPageUrl } from "@/features/layout/safeUrl";
 
 type Card = NonNullable<Message["card"]>;
 type CardField = Card["fields"][number];
@@ -80,10 +81,14 @@ function Value({ plugin, value }: { plugin: PluginInfo; value: CardField["value"
       return <>{numbers.format(value.count)}</>;
     case "person":
       return <PersonName id={value.user} />;
-    case "link":
+    case "link": {
+      const href = webPageUrl(value.url);
+      if (href === undefined) {
+        return <>{pluginText(plugin, value.text)}</>;
+      }
       return (
         <a
-          href={value.url}
+          href={href}
           target="_blank"
           rel="noreferrer"
           className="text-accent underline underline-offset-2 hover:decoration-2"
@@ -91,6 +96,7 @@ function Value({ plugin, value }: { plugin: PluginInfo; value: CardField["value"
           {pluginText(plugin, value.text)}
         </a>
       );
+    }
   }
 }
 
