@@ -70,6 +70,13 @@ pub enum RoomError {
     UnknownOffer,
     #[error("no such transfer")]
     UnknownTransfer,
+    /// A producer's kind does not match its source (`MediaSource::kind`).
+    #[error("a {of:?} producer carries {expected:?}, not {kind:?}")]
+    WrongKind {
+        of: MediaSource,
+        kind: WireKind,
+        expected: WireKind,
+    },
 }
 
 /// Where a participant's frames go: their socket's outbox.
@@ -751,6 +758,13 @@ impl Rooms {
         rtp_parameters: Value,
     ) -> Result<(), RoomError> {
         let user = seat.user;
+        if kind != source.kind() {
+            return Err(RoomError::WrongKind {
+                of: source,
+                kind,
+                expected: source.kind(),
+            });
+        }
         let room = self.room(seat.channel)?;
         let rtp_parameters: RtpParameters = serde_json::from_value(rtp_parameters)
             .map_err(|e| RoomError::BadParameters(format!("rtpParameters: {e}")))?;

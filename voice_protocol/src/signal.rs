@@ -48,6 +48,18 @@ pub enum MediaSource {
     Camera,
 }
 
+impl MediaSource {
+    /// The kind of media a producer of this source carries. A producer of any other kind is
+    /// refused: what a participant may send, and what a mute pauses, is decided by source, so a
+    /// source must mean what it says.
+    pub fn kind(self) -> MediaKind {
+        match self {
+            MediaSource::Microphone | MediaSource::ScreenAudio => MediaKind::Audio,
+            MediaSource::Screen | MediaSource::Camera => MediaKind::Video,
+        }
+    }
+}
+
 /// The kind of media, as WebRTC names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

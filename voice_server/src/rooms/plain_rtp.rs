@@ -8,7 +8,7 @@ use mediasoup::prelude::*;
 use mediasoup::types::srtp_parameters::SrtpParameters;
 use std::num::{NonZeroU8, NonZeroU32};
 use uuid::Uuid;
-use voice_protocol::signal::{MediaSource, ServerMessage};
+use voice_protocol::signal::{MediaKind as WireKind, MediaSource, ServerMessage};
 
 impl Rooms {
     /// A plain transport for a client that sends or receives SRTP itself: RTP and RTCP on one
@@ -96,8 +96,8 @@ impl Rooms {
         // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
         // simulated participant's); the payload types are the producer's own and need only be
         // distinct from each other.
-        let (kind, payload_type, codec) = match source {
-            MediaSource::ScreenAudio | MediaSource::Microphone => (
+        let (kind, payload_type, codec) = match source.kind() {
+            WireKind::Audio => (
                 MediaKind::Audio,
                 100,
                 RtpCodecParameters::Audio {
@@ -114,7 +114,7 @@ impl Rooms {
                     rtcp_feedback: vec![],
                 },
             ),
-            _ => (
+            WireKind::Video => (
                 MediaKind::Video,
                 96,
                 RtpCodecParameters::Video {
