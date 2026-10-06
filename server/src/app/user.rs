@@ -182,12 +182,24 @@ pub(crate) fn validate_username(name: &str) -> Result<(), app::Error> {
     Ok(())
 }
 
-/// Rejects a bad username, and passwords that fail the same length rule `try_change_password`
-/// enforces.
+/// Rejects a bad username, passwords that fail the same length rule `try_change_password`
+/// enforces, and a profile `update_user` would refuse.
 fn validate_registration(command: &UserCreateRequest) -> Result<(), app::Error> {
     validate_username(&command.name)?;
     if command.password.len() < PASSWORD_MIN_LENGTH {
         return Err(app::Error::PasswordRequirement(PasswordRequirement::Length));
+    }
+    validate_profile(&UserUpdateRequest {
+        display_name: Some(command.display_name.clone()),
+        pronouns: Some(command.pronouns.clone()),
+        bio: Some(command.bio.clone()),
+        status: Some(command.status.clone()),
+        ..Default::default()
+    })?;
+    // A picture must be one the account uploaded itself (`app::icon::require_own`), and an
+    // account being made has uploaded none.
+    if command.icon.is_some() {
+        return Err(app::Error::Validation(t!("iconMissing")));
     }
     Ok(())
 }
@@ -681,3 +693,4 @@ pub async fn user_for_token(
         },
     ))
 }
+
