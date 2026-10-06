@@ -1,6 +1,7 @@
 use crate::api::error::{ApiError, ProblemCode};
 use crate::app;
 use crate::app::context::{GlobalServerContext, Role};
+use crate::aspen_config::AspenConfig;
 use axum::http::Method;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use axum::routing::any;
@@ -51,6 +52,7 @@ pub(crate) mod user;
 pub mod voice;
 pub(crate) mod web_client;
 
+use std::sync::Arc;
 use std::time::Duration;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi, openapi};
@@ -540,7 +542,7 @@ async fn settle_after_request(
 pub(crate) async fn start(
     write_schema: bool,
     role: Role,
-) -> Result<Option<axum::Router>, app::Error> {
+) -> Result<Option<(axum::Router, Arc<AspenConfig>)>, app::Error> {
     if write_schema {
         schema::write_schemas_and_exit()?;
     }
@@ -625,10 +627,12 @@ pub(crate) async fn start(
         .merge(web);
     // Every other path is the web client's: a file of it, or its page.
     let files = web_client::files(context.clone());
-    Ok(Some(
+    let config = context.config.clone();
+    Ok(Some((
         axum::Router::from(router.with_state(context))
             .fallback_service(files)
             .layer(axum::middleware::from_fn(app::locale::layer))
             .layer(cors_layer()),
-    ))
+        config,
+    )))
 }

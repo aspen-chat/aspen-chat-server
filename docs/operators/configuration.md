@@ -50,6 +50,20 @@ by each API server, at the same origin.
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
 
+## `[connections]`
+
+What the server's listener admits, so clients that open connections and then send nothing, or
+send it a byte at a time, cannot hold every socket the server has. A connection over a limit is
+closed as soon as it is accepted, and the server logs that it is closing new connections at
+most once a minute. An event stream's connection counts for as long as it is open.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max` | `100000` | The most connections the server holds open at once. Keep it below the process's open file limit (`LimitNOFILE` under systemd, `--ulimit nofile` in Docker), with room for its connections to PostgreSQL, NATS, Valkey, and storage. |
+| `max_per_ip` | `512` | The most one address holds open at once; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network. A browser holds one or two, so this suits a few hundred people behind one address; raise it if a school's or an office's network sends many more. Reverse proxies listed in `[rate_limits] trusted_proxies` count only toward `max`, so when every client arrives through one, limit connections per client there. |
+| `handshake_seconds` | `10` | How long a client has to finish its TLS handshake. |
+| `header_read_seconds` | `30` | How long an HTTP/1.1 client has to send a request's headers, which is also how long a kept-alive connection may sit idle. An idle HTTP/2 connection is pinged every 30 seconds and closed when a ping goes 20 seconds unanswered. |
+
 ## `[media]`
 
 | Setting | Default | |

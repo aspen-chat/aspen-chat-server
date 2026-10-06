@@ -44,6 +44,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
+    pub connections: ConnectionsConfig,
+    #[serde(default)]
     pub federation: FederationConfig,
     #[serde(default)]
     pub push: PushConfig,
@@ -186,6 +188,29 @@ pub struct MetricsConfig {
     /// deployment's inside, so expose them only to whatever scrapes them.
     #[default(std::net::SocketAddr::from(([127, 0, 0, 1], 9464)))]
     pub listen_addr: std::net::SocketAddr,
+}
+
+/// What the API server's listener admits (`connections`), so connections held open slowly or
+/// in numbers cannot take every socket.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct ConnectionsConfig {
+    /// The most connections this server holds open at once, event streams included; one more
+    /// is closed as soon as it is accepted. Keep it below the process's open file limit.
+    #[default = 100_000]
+    pub max: usize,
+    /// The most one address holds open at once (an IPv6 address by its `[rate_limits]
+    /// ipv6_prefix` network). Reverse proxies in `[rate_limits] trusted_proxies` count only
+    /// toward `max`.
+    #[default = 512]
+    pub max_per_ip: usize,
+    /// How long a client has to finish its TLS handshake.
+    #[default = 10]
+    pub handshake_seconds: u64,
+    /// How long an HTTP/1.1 client has to send a request's headers, counted from when the
+    /// server starts waiting for them, so an idle connection kept alive closes after this too.
+    #[default = 30]
+    pub header_read_seconds: u64,
 }
 
 /// Whether people show as online, away, or offline (`app::user_status`).

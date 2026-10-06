@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use hyper::{Request, body::Incoming};
 use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
+    rt::{TokioExecutor, TokioIo, TokioTimer},
     server,
 };
 use rand::SeedableRng as _;
@@ -38,6 +38,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 mod api;
 mod app;
 mod aspen_config;
+mod connections;
 mod database;
 mod operator;
 
@@ -51,6 +52,15 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// allocates, and a server gone idle after a busy hour keeps its peak resident size.
 #[unsafe(export_name = "malloc_conf")]
 pub static MALLOC_CONF: &[u8; 23] = b"background_thread:true\0";
+
+/// How often an idle HTTP/2 connection is pinged, and how long its answer may take before the
+/// connection is closed.
+const HTTP2_PING_INTERVAL: Duration = Duration::from_secs(30);
+const HTTP2_PING_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The first and longest waits before accepting again after accepting failed.
+const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(10);
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 #[derive(Parser, Debug)]
 #[clap(name = "server")]
@@ -258,7 +268,7 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
-    let Some(app) = app else {
+    let Some((app, config)) = app else {
         info!("running as a private worker: serving nothing, doing the background work");
         let _ = exit_rx.await;
         return Ok(());
@@ -348,14 +358,42 @@ async fn run(options: Opt) -> Result<()> {
         warn!("--no-https enabled, server is not encrypting anything in transit");
     }
 
+    let limits = &config.connections;
+    let addresses = aspen_limits::ClientAddresses::new(
+        &config.rate_limits.trusted_proxies,
+        config.rate_limits.ipv6_prefix,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let gate = connections::Gate::new(limits, addresses);
+    let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
+    // Without a timer hyper keeps no time at all: a client could take forever over its headers.
+    // HTTP/2 connections are pinged while idle, and closed when a ping goes unanswered.
+    let mut http = server::conn::auto::Builder::new(TokioExecutor::new());
+    http.http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(Duration::from_secs(limits.header_read_seconds));
+    http.http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(Some(HTTP2_PING_INTERVAL))
+        .keep_alive_timeout(HTTP2_PING_TIMEOUT);
+    let http = Arc::new(http);
+    let mut accept_backoff = ACCEPT_BACKOFF_MIN;
+
     loop {
         let mut listeners = FuturesUnordered::from_iter(listeners.iter().map(|l| l.accept()));
         let (socket, remote_addr) = tokio::select! {
             maybe_socket = listeners.next() => {
                 match maybe_socket {
-                    Some(Ok((socket, remote_addr))) => (socket, remote_addr),
+                    Some(Ok((socket, remote_addr))) => {
+                        accept_backoff = ACCEPT_BACKOFF_MIN;
+                        (socket, remote_addr)
+                    }
                     Some(Err(e)) => {
+                        // Out of file descriptors or memory, accepting again at once fails
+                        // again at once; waiting lets connections close first.
                         error!("TCP I/O error {e}");
+                        tokio::time::sleep(accept_backoff).await;
+                        accept_backoff = (accept_backoff * 2).min(ACCEPT_BACKOFF_MAX);
                         continue;
                     }
                     None => {
@@ -367,13 +405,21 @@ async fn run(options: Opt) -> Result<()> {
                 break Ok(());
             }
         };
+        // Closed at once, by dropping it, when over a limit.
+        let Some(admitted) = gate.admit(remote_addr.ip()) else {
+            continue;
+        };
         // Event frames are small and each is flushed as it is written; without this, one written
         // while the previous is still unacknowledged waits for the client's delayed ACK.
         if let Err(e) = socket.set_nodelay(true) {
             warn!("could not turn off Nagle's algorithm for {remote_addr}: {e}");
         }
+        // The socket holds its place within the limits until it closes, through an upgrade to
+        // a WebSocket too, which keeps it.
+        let socket = connections::Counted::new(socket, admitted);
         let tls_acceptor = tls_acceptor.clone();
         let service = app.clone();
+        let http = http.clone();
         tokio::spawn(async move {
             let hyper_service =
                 hyper::service::service_fn(move |mut request: Request<Incoming>| {
@@ -389,7 +435,7 @@ async fn run(options: Opt) -> Result<()> {
                 ($stream:expr) => {{
                     let socket = TokioIo::new($stream);
 
-                    if let Err(e) = server::conn::auto::Builder::new(TokioExecutor::new())
+                    if let Err(e) = http
                         .serve_connection_with_upgrades(socket, hyper_service)
                         .await
                     {
@@ -399,14 +445,20 @@ async fn run(options: Opt) -> Result<()> {
             }
 
             match &tls_acceptor {
-                Some(tls_acceptor) => match tls_acceptor.accept(socket).await {
-                    Ok(tls_stream) => {
-                        handle_stream!(tls_stream)
+                Some(tls_acceptor) => {
+                    match tokio::time::timeout(handshake_timeout, tls_acceptor.accept(socket)).await
+                    {
+                        Ok(Ok(tls_stream)) => {
+                            handle_stream!(tls_stream)
+                        }
+                        Ok(Err(e)) => {
+                            error!("error establishing TLS {e}");
+                        }
+                        Err(_) => {
+                            info!("{remote_addr} took too long over its TLS handshake");
+                        }
                     }
-                    Err(e) => {
-                        error!("error establishing TLS {e}");
-                    }
-                },
+                }
                 None => {
                     // no_https enabled, send unencrypted.
                     handle_stream!(socket)
