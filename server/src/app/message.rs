@@ -266,7 +266,8 @@ async fn post(
     };
     let mut conn = state.connection_pool.get().await?;
     // Plugins decide text before the transaction that saves it opens, so a slow one holds no
-    // lock; what the author may not post never reaches them. Commands and warnings are not
+    // lock; what the author may not post, and attachments that are not theirs to post, never
+    // reach them. Commands and warnings are not
     // theirs to decide, nor the system account's notices.
     let (content, altered_by) = if command.is_none() && warning.is_none() {
         let running = intercept::wanted(
@@ -279,8 +280,17 @@ async fn post(
         if running.is_empty() || system_account::is(conn.as_mut(), author).await? {
             (content, Vec::new())
         } else {
-            let access = channel_access(state, conn.as_mut(), author, channel_id).await?;
-            access.require(access.send_permission())?;
+            // Checked as the saving transaction checks again: the right to post, and that
+            // every attachment is the author's own upload, so no plugin is shown another's.
+            let (_, access) = check_posting(
+                state,
+                conn.as_mut(),
+                author,
+                channel_id,
+                &attachments,
+                echo_to_parent,
+            )
+            .await?;
             // The plugins' host calls take connections of their own, so this one goes back to
             // the pool while they run: a task holding one while it waits for another can leave
             // every connection waiting.
@@ -619,30 +629,43 @@ pub async fn update_message(
             return Err(app::Error::Validation(t!("messageNotEditable")));
         }
     }
-    // Plugins decide new text as they decide a new message's, and the edit records who
-    // rewrote it.
+    // New attachments must be the author's, or already this message's, before any plugin is
+    // shown them; the saving transaction checks again.
+    if let Some(new_attachments) = &command.attachments {
+        ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments).await?;
+    }
+    // Plugins decide an edit as they decide a new message, whether it changes the text, the
+    // attachments, or both, shown the text as it will stand; the edit records who rewrote it.
     let mut command = command;
     let mut altered_by = None;
-    if let Some(content) = command.content.take() {
+    if command.content.is_some() || command.attachments.is_some() {
         let running =
             intercept::wanted(state, conn.as_mut(), InterceptHook::MessageEdit, channel_id).await?;
-        let attachments = match &command.attachments {
-            Some(attachments) => attachments.clone(),
-            None => {
-                message_attachment::table
-                    .select(message_attachment::attachment_id)
-                    .filter(message_attachment::message_id.eq(id))
-                    .load(conn.as_mut())
-                    .await?
-            }
-        };
-        // As on create, the connection goes back to the pool while the plugins run.
-        let decided = if running.is_empty() {
-            intercept::Decided {
-                content,
-                altered_by: Vec::new(),
-            }
-        } else {
+        if !running.is_empty() {
+            let attachments = match &command.attachments {
+                Some(attachments) => attachments.clone(),
+                None => {
+                    message_attachment::table
+                        .select(message_attachment::attachment_id)
+                        .filter(message_attachment::message_id.eq(id))
+                        .load(conn.as_mut())
+                        .await?
+                }
+            };
+            // With only its attachments changing, a message keeps its text, and the plugins
+            // that rewrote it before, unless one rewrites it now.
+            let (content, kept_text) = match command.content.take() {
+                Some(content) => (content, None),
+                None => {
+                    let (content, by): (String, Vec<Option<String>>) = message::table
+                        .select((message::content, message::altered_by))
+                        .filter(message::id.eq(id))
+                        .first(conn.as_mut())
+                        .await?;
+                    (content.clone(), Some((content, by)))
+                }
+            };
+            // As on create, the connection goes back to the pool while the plugins run.
             drop(conn);
             let decided = intercept::decide(
                 state,
@@ -658,10 +681,26 @@ pub async fn update_message(
             )
             .await?;
             conn = state.connection_pool.get().await?;
-            decided
-        };
-        command.content = Some(decided.content);
-        altered_by = Some(decided.altered_by);
+            match kept_text {
+                Some((before, _)) if decided.content == before => {}
+                Some((_, mut by)) => {
+                    // Its earlier rewriters' changes are still in the text, so they stay named.
+                    for plugin in decided.altered_by {
+                        if !by.contains(&Some(plugin.clone())) {
+                            by.push(Some(plugin));
+                        }
+                    }
+                    command.content = Some(decided.content);
+                    altered_by = Some(by.into_iter().flatten().collect());
+                }
+                None => {
+                    command.content = Some(decided.content);
+                    altered_by = Some(decided.altered_by);
+                }
+            }
+        } else if command.content.is_some() {
+            altered_by = Some(Vec::new());
+        }
     }
     let content_changed = command.content.is_some();
     let new_content_for_refetch = command.content.clone();
