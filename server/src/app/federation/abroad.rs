@@ -421,6 +421,14 @@ async fn arrive(
             if existing.deleted_at.is_some() {
                 return Err(app::Error::FederationRefused(t!("federationAccountClosed")));
             }
+            // The gate checked was the one for the kind of account the assertion claims, and
+            // an account is a bot or a person for good.
+            if existing.bot != profile.bot {
+                return Err(invalid(
+                    Some(home),
+                    t!("statementInconsistent", domain = home.as_str()),
+                ));
+            }
             let banned: bool = user::table
                 .select(user::banned_at.is_not_null())
                 .find(existing.id)
