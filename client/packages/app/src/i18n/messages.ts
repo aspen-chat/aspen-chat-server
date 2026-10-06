@@ -237,6 +237,9 @@ export const en = {
   jumpingToLatest: "Loading the latest…",
   newMessages: "New Messages",
   messageLabel: "Message",
+  messageTooLong:
+    "A message can be at most {max} characters, and this one is {over} over. Shorten it, or split it into more than one, to send it.",
+  messageLengthCount: "{count} / {max}",
   messagePlaceholder: "Message #{channel}",
   send: "Send",
   unknownUser: "Unknown user",
