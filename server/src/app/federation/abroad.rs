@@ -13,7 +13,7 @@ use crate::api::message_enum::request::UserUpdateRequest;
 use crate::api::message_enum::server_event::{ServerEvent, UserEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::received::{Received, Statement, invalid, receive, refused};
+use crate::app::federation::received::{Received, Senders, Statement, invalid, receive, refused};
 use crate::app::federation::{Direction, Domain, Subject, admits, jws, lists_of, own_domain};
 use crate::app::login::{Session, SignInMethod, issue_session};
 use crate::app::two_factor::Caller;
@@ -246,7 +246,7 @@ pub async fn sign_in(
         from: home,
         lists,
         ..
-    } = receive::<Assertion>(state, token, &[Direction::Immigration]).await?;
+    } = receive::<Assertion>(state, token, Senders::Admitted(&[Direction::Immigration])).await?;
     let subject = if claims.profile.bot {
         Subject::Bots
     } else {

@@ -18,7 +18,7 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
 use crate::app::federation::keys::signing_key;
-use crate::app::federation::received::{Received, Statement, receive};
+use crate::app::federation::received::{Received, Senders, Statement, receive};
 use crate::app::federation::{
     Direction, Domain, FederationPolicy, Subject, admits, jws, lists_of, own_domain,
 };
@@ -141,7 +141,8 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> app::Result<Str
         claims,
         from,
         lists,
-    } = receive::<StandingRequest>(state, token, &[Direction::Emigration]).await?;
+    } = receive::<StandingRequest>(state, token, Senders::Admitted(&[Direction::Emigration]))
+        .await?;
     let here = own_domain(&state.config.federation)
         .ok_or_else(|| app::Error::FederationRefused(crate::t!("federationOff")))?;
     // A request asking about more users is answered for the first of them, so the answer fits
@@ -401,8 +402,12 @@ async fn ask(
         .await?
         .ok_or_else(unreachable)?;
     let Answer { standing } = serde_json::from_slice(&body).map_err(|_| unreachable())?;
-    let Received { claims, from, .. } =
-        receive::<StandingAnswer>(state, &standing, &[Direction::Immigration]).await?;
+    let Received { claims, from, .. } = receive::<StandingAnswer>(
+        state,
+        &standing,
+        Senders::Admitted(&[Direction::Immigration]),
+    )
+    .await?;
     if from != *home {
         return Err(unreachable());
     }

@@ -30,7 +30,8 @@ deployments use too, are described by those two.
       with them added. The home passes it on to the user's devices only while the user still
       uses the sender.
     - `accountDeleted`: sent by a home to every deployment its user used; the account is gone,
-      and each retires its user.
+      and each retires its user. Since it only takes away, a deployment takes it from any home
+      whose key it has pinned, whatever its gates now say of that home.
   - `aspen-standing-request+jwt`: a deployment asks one home, POSTing `{"request": "…"}` to
     `https://{home}/api/v1/federation/standing`, about that home's users signed in to it (by
     their ids at home, at most 128, so that the request and its answer each fit in a
