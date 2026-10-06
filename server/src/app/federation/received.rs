@@ -1,9 +1,9 @@
 //! Statements other deployments sign and send here: an assertion that one of their users is who
 //! they say, a notice about one of this deployment's users. Each is believed only once it
-//! verifies against the key pinned for its issuer, is addressed to this deployment, is within
-//! its lifetime, has not been seen before, and comes from a deployment this one federates with
-//! in the direction concerned (or, for a statement that only takes away, one whose key is pinned
-//! here) and shares a protocol version with.
+//! verifies against the key pinned for its issuer, which has offered no other key since, is
+//! addressed to this deployment, is within its lifetime, has not been seen before, and comes
+//! from a deployment this one federates with in the direction concerned (or, for a statement
+//! that only takes away, one whose key is pinned here) and shares a protocol version with.
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
@@ -121,6 +121,15 @@ pub async fn receive<T: Statement>(
         .await
         .optional()?;
     drop(conn);
+    // A deployment that presented a key nothing vouches for is suspended until an
+    // administrator accepts it: the key pinned may be the one that leaked, so nothing it signs
+    // is believed any more, and the new key is not believed yet.
+    if known.as_ref().is_some_and(|d| d.offered_key.is_some()) {
+        return Err(invalid(
+            Some(&from),
+            t!("statementKeyPending", domain = from.as_str()),
+        ));
+    }
     let verified = known
         .as_ref()
         .and_then(|d| d.public_key.as_deref())

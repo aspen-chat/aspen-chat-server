@@ -480,3 +480,4 @@ unsubscribeDone: "You are unsubscribed. You can subscribe again in your account 
 unsubscribeUnknown: "This link no longer works: the address it was sent to has changed, or the link is incomplete. You can change what you receive in your account settings."
 heldMessageNotPosted: "This message could not be posted. Check that you may still post in this channel, then send it again."
 federationRemoveBlocked: "%{domain} is on the list %{list}, and forgetting it would take it off and let it in wherever a gate blocks only those listed. Take it off its block lists first if you mean to admit it."
+statementKeyPending: "%{domain} now presents a different key from the one this server trusts, with nothing vouching for it, so this server refuses everything from %{domain} until its administrators accept the new key. They should confirm the new key with %{domain}'s administrators and accept it under Administration, Federation, or with aspen-chat-server federation accept-key."

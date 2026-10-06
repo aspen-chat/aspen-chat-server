@@ -157,7 +157,8 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
         let document = federation::fetch_document(&config.federation, &client, domain)
             .await
             .map_err(fail)?;
-        let (listed, outcome) = federation::record_contact(conn, domain, &document)
+        let publisher = publisher(config).await?;
+        let (listed, outcome) = federation::record_contact(&publisher, conn, domain, &document)
             .await
             .map_err(fail)?;
         tracing::info!(%domain, ?outcome, operator = operator(), "contacted a deployment");
@@ -167,9 +168,10 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             ContactOutcome::HandedOver => {
                 println!("{domain} handed over to a new key, which is now pinned")
             }
-            ContactOutcome::KeyChanged => {
-                println!("{domain} presented a different key, which is refused until accepted")
-            }
+            ContactOutcome::KeyChanged => println!(
+                "{domain} presented a different key; everything from it is refused, and its users \
+                 signed out here, until the new key is accepted"
+            ),
         }
         print_deployment(&policy, &listed);
         Ok(())

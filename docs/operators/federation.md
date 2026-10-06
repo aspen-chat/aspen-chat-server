@@ -96,11 +96,18 @@ From then on:
 
 - The same key: nothing to do.
 - A new key the old one handed over to: followed on its own.
-- **A new key nothing vouches for: refused.** Everything from that deployment is refused until
-  an administrator accepts the new key. Ask its administrators, by some other way than Aspen,
-  whether they replaced their key, and compare fingerprints before accepting it, in the
-  dashboard or with `aspen-chat-server federation accept-key <domain> --fingerprint SHA256:…`.
-  A key that changes unannounced can mean someone else is answering at that domain.
+- **A new key nothing vouches for: refused.** The deployment is suspended until an
+  administrator accepts the new key: everything from it is refused, even what its old key
+  signs, since the old key may be the one that leaked, and its people signed in here are signed
+  out at once. Ask its administrators, by some other way than Aspen, whether they replaced their
+  key, and compare fingerprints before accepting it, in the dashboard or with
+  `aspen-chat-server federation accept-key <domain> --fingerprint SHA256:…`. Its people then
+  sign in again. A key that changes unannounced can mean someone else is answering at that
+  domain.
+
+While any gate is open, this deployment reads again, about every `[federation]
+standing_interval_seconds`, the document of each deployment it federates with, so it notices a
+replaced key within about that long even when nothing else contacts that deployment.
 
 To replace your own key:
 
@@ -110,7 +117,12 @@ To replace your own key:
 - `aspen-chat-server federation rotate-key --compromised` when the old key may be in someone
   else's hands. It vouches for nothing, so every deployment that knew you refuses the new key
   until its administrators accept it: tell them, and give them the new fingerprint
-  (`federation status` prints it).
+  (`federation status` prints it). Each notices the change at its next check (about every
+  `standing_interval_seconds`, an hour by default) or sooner, and from then on refuses
+  everything signed as you, old key or new, and signs your people out, until it accepts the new
+  key. Until a deployment notices, whoever holds the old key can sign as you there, so tell
+  their administrators at once: one who runs `aspen-chat-server federation contact
+  <your domain>` notices straight away.
 
 ## What people see
 

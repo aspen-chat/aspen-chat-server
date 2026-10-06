@@ -298,6 +298,7 @@ def check_abroad(admin: str) -> None:
     api(ALPHA, "POST", f"/icons/{upload['id']}/confirm", token=traveller)
     api(ALPHA, "PATCH", "/users/@me", {"icon": upload["id"]}, token=traveller)
     status, again = sign_in_abroad(assertion_for(traveller))
+    abroad = again["sessionToken"]
     me2 = api(BETA, "GET", "/users/@me", token=abroad)
     expect(status == 200 and again["userId"] == session["userId"] and me2["displayName"] == "Traveller Two",
            "signing in again is the same user, with the profile as it is at home")
@@ -349,10 +350,12 @@ def check_abroad(admin: str) -> None:
     status, again = sign_in_abroad(assertion_for(traveller))
     expect(status == 200 and planned in terminal(BETA, "federation", "list"),
            "after alpha hands over to a new key, beta follows the handover on its own")
+    abroad = again["sessionToken"]
     compromised = terminal(ALPHA, "federation", "rotate-key", "--compromised").split()[-1]
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "401 assertionInvalid"
            and f"offers a new key {compromised}" in terminal(BETA, "federation", "list"),
            "after alpha replaces a compromised key, beta refuses it and holds it as offered")
+    expect(not abroad_alive(abroad), "and signs alpha's users out until the new key is accepted")
     terminal(BETA, "federation", "accept-key", ALPHA.domain, "--fingerprint", compromised)
     status, _ = sign_in_abroad(assertion_for(traveller))
     expect(status == 200, "once beta's operator accepts the new key, alpha's users sign in again")
