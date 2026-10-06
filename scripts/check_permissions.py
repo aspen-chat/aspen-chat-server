@@ -275,6 +275,24 @@ def poll_votes(world: World, check: Checks) -> None:
     check("which still counts", world.as_owner("GET", f"/polls/{poll}")["data"]["results"][0]["count"] == 1)
 
 
+def deleted_parents(world: World, check: Checks) -> None:
+    say("a thread whose channel is deleted")
+    stack, member = world.stack, world.member["token"]
+    doomed = world.channel("doomed")
+    starter = world.post(doomed, "start a thread here")
+    thread = stack.api("PUT", f"/messages/{starter}/thread", token=member)["id"]
+    reply = stack.api("POST", f"/channels/{thread}/messages", {"content": "a reply", "attachments": []}, member)["id"]
+    world.as_owner("DELETE", f"/channels/{doomed}")
+    world.stream.gather(0.8)
+    check("goes with it: the thread is not found",
+          stack.status("GET", f"/channels/{thread}", token=member) == 404
+          and stack.status("GET", f"/channels/{thread}/messages", token=member) == 404)
+    check("nor is a reply in it", stack.status("GET", f"/messages/{reply}", token=member) == 404)
+    check("and nobody posts in it",
+          stack.status("POST", f"/channels/{thread}/messages", {"content": "still here?", "attachments": []},
+                       member) == 404)
+
+
 def thread_echoes(world: World, check: Checks) -> None:
     say("a thread reply echoed to its channel after it was posted")
     member = world.member["token"]
@@ -1285,7 +1303,7 @@ def invite_previews(world: World, check: Checks) -> None:
 
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
-             poll_votes, thread_echoes, calls, attachments,
+             poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews]

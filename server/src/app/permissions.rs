@@ -808,16 +808,17 @@ async fn access_to_channel(
             .ok_or_else(not_found)?;
         (parent, category, parent.is_some())
     };
-    // A thread's permissions are its parent channel's.
+    // A thread's permissions are its parent channel's, and it goes with its parent: a thread
+    // of a deleted channel is not found.
     let governing = parent.unwrap_or(channel_id);
     let category = if parent.is_some() {
         channel::table
             .select(channel::parent_category)
-            .filter(channel::id.eq(governing))
+            .filter(channel::id.eq(governing).and(channel::deleted_at.is_null()))
             .first(conn)
             .await
             .optional()?
-            .flatten()
+            .ok_or_else(not_found)?
     } else {
         category
     };
