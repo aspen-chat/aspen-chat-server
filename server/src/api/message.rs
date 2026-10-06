@@ -184,7 +184,7 @@ async fn sideload_messages(
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect();
-                app::user::read_users(state, &users).await.map(Some)
+                app::user::read_users(state, caller, &users).await.map(Some)
             } else {
                 Ok(None)
             }

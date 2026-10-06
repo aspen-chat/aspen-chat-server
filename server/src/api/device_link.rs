@@ -6,6 +6,7 @@ use crate::api::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::api::extract::{Created, Json, NoContent, Path};
 use crate::api::{API_PREFIX, TAG_AUTH};
 use crate::app;
+use crate::app::Loadable;
 use crate::app::context::GlobalServerContext;
 use crate::app::device_link::{self, Claim, Progress};
 use crate::app::two_factor::Caller;
@@ -167,7 +168,7 @@ pub async fn scan_device_link(
     )
     .await?;
     let user = match scanned.user {
-        Some(user) => Some(app::user::read_user(&state, user).await?.user_pg),
+        Some(user) => Some(app::user::User::load_from_db(&state, user).await?.user_pg),
         None => None,
     };
     Ok(Json(DeviceLinkScan {

@@ -239,7 +239,7 @@ pub async fn create(
             .scope_boxed()
         })
         .await?;
-    let bot = with_online_status(state, vec![bot]).await?.remove(0);
+    let bot = with_online_status(state, owner, vec![bot]).await?.remove(0);
     Ok((bot, token))
 }
 
@@ -252,7 +252,7 @@ pub async fn list_owned(state: &GlobalServerContext, owner: UserId) -> app::Resu
         .order_by(user::created_at.asc())
         .load(conn.as_mut())
         .await?;
-    with_online_status(state, bots).await
+    with_online_status(state, owner, bots).await
 }
 
 /// A bot `caller` owns.
@@ -263,7 +263,9 @@ pub async fn read_owned(
 ) -> app::Result<User> {
     let mut conn = state.connection_pool.get().await?;
     let row = owned_bot(conn.as_mut(), caller, bot).await?;
-    Ok(with_online_status(state, vec![row]).await?.remove(0))
+    Ok(with_online_status(state, caller, vec![row])
+        .await?
+        .remove(0))
 }
 
 /// Issues a new token for a bot `caller` owns; the old one stops working at once, and the event
@@ -339,7 +341,9 @@ pub async fn transfer(
             .scope_boxed()
         })
         .await?;
-    Ok(with_online_status(state, vec![row]).await?.remove(0))
+    Ok(with_online_status(state, caller, vec![row])
+        .await?
+        .remove(0))
 }
 
 /// Deletes a bot: its owner may, and so may a holder of Manage deployment settings once its
@@ -419,7 +423,9 @@ pub async fn set_public(
             .scope_boxed()
         })
         .await?;
-    Ok(with_online_status(state, vec![row]).await?.remove(0))
+    Ok(with_online_status(state, caller, vec![row])
+        .await?
+        .remove(0))
 }
 
 /// Adds a bot to a community, as its link offers: `caller` must be allowed to add bots there,

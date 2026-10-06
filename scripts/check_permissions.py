@@ -706,6 +706,35 @@ def removal(world: World, check: Checks) -> None:
     check("nor hear them", not world.hears_message(open_channel))
 
 
+def presence(world: World, check: Checks) -> None:
+    say("presence, told only to those who share a community and are not blocked")
+    stranger = world.account("stranger")
+
+    def status_of(token: str, user: str) -> str:
+        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)[0]["onlineStatus"]
+
+    def profile_status(token: str, user: str) -> str:
+        return world.stack.api("GET", f"/users/{user}", token=token)["onlineStatus"]
+
+    # The owner's requests mark them connected.
+    world.as_owner("GET", "/users/@me")
+    check("a member sees the owner connected",
+          status_of(world.member["token"], world.owner["id"]) != "offline"
+          and profile_status(world.member["token"], world.owner["id"]) != "offline")
+    check("someone who shares nothing with them sees them offline",
+          status_of(stranger["token"], world.owner["id"]) == "offline"
+          and profile_status(stranger["token"], world.owner["id"]) == "offline")
+    world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
+    check("once the owner blocks the member, the member sees them offline",
+          status_of(world.member["token"], world.owner["id"]) == "offline")
+    world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
+    check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+    world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
+    world.stream.gather(0.5)
+    check("removed from the community, the member sees the owner offline",
+          status_of(world.member["token"], world.owner["id"]) == "offline")
+
+
 def dual_invites(world: World, check: Checks) -> None:
     say("dual invites: an account made and joined at once, and both parts revoked")
     stack = world.stack
@@ -1383,7 +1412,7 @@ def invite_previews(world: World, check: Checks) -> None:
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
+             operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons, uploads]
 

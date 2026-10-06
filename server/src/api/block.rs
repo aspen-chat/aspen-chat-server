@@ -80,7 +80,7 @@ pub async fn list_blocks(
     let users = if query.include.contains(BlockInclude::Users) {
         let ids: Vec<UserId> = blocks.iter().map(|b| b.blocked).collect();
         Some(
-            app::user::read_users(&state, &ids)
+            app::user::read_users(&state, user.id, &ids)
                 .await?
                 .into_iter()
                 .map(User::from)

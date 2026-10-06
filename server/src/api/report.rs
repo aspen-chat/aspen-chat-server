@@ -265,6 +265,7 @@ pub struct ReportCaseList {
 /// name.
 async fn named_by(
     state: &GlobalServerContext,
+    viewer: UserId,
     messages: &[ReviewedMessage],
     people: impl IntoIterator<Item = UserId>,
     communities: impl IntoIterator<Item = CommunityId>,
@@ -283,7 +284,7 @@ async fn named_by(
         .flat_map(|m| m.message.attachments.iter().copied())
         .collect();
     let (users, mut channels, attachments) = tokio::try_join!(
-        app::user::read_users(state, &users),
+        app::user::read_users(state, viewer, &users),
         app::channel::read_channels(state, &channel_ids),
         app::attachment::read_attachments(state, &attachment_ids),
     )?;
@@ -314,7 +315,11 @@ async fn named_by(
 }
 
 impl ReportCaseList {
-    async fn of(state: &GlobalServerContext, page: app::report::CasePage) -> ApiResult<Self> {
+    async fn of(
+        state: &GlobalServerContext,
+        viewer: UserId,
+        page: app::report::CasePage,
+    ) -> ApiResult<Self> {
         let people = page.people();
         let case_communities = page.communities();
         let messages: Vec<ReviewedMessage> = page
@@ -323,7 +328,7 @@ impl ReportCaseList {
             .map(ReviewedMessage::from)
             .collect();
         let (users, channels, communities, attachments) =
-            named_by(state, &messages, people, case_communities).await?;
+            named_by(state, viewer, &messages, people, case_communities).await?;
         Ok(Self {
             cases: page.cases,
             messages,
@@ -380,7 +385,7 @@ pub async fn list_report_cases(
         query.limit.unwrap_or(15),
     )
     .await?;
-    Ok(Json(ReportCaseList::of(&state, page).await?))
+    Ok(Json(ReportCaseList::of(&state, access.user, page).await?))
 }
 
 /// How many cases are open, and how many dismissed. Takes Review reports.
@@ -424,7 +429,7 @@ pub async fn get_report_case(
     Path(case): Path<ReportCaseId>,
 ) -> ApiResult<Json<ReportCaseList>> {
     let page = app::report::read_case(&state, &access, case).await?;
-    Ok(Json(ReportCaseList::of(&state, page).await?))
+    Ok(Json(ReportCaseList::of(&state, access.user, page).await?))
 }
 
 /// Where a context window starts: around the reported message when neither is given.
@@ -492,8 +497,14 @@ pub async fn get_report_context(
         .into_iter()
         .map(ReviewedMessage::from)
         .collect();
-    let (users, channels, communities, attachments) =
-        named_by(&state, &messages, std::iter::empty(), std::iter::empty()).await?;
+    let (users, channels, communities, attachments) = named_by(
+        &state,
+        access.user,
+        &messages,
+        std::iter::empty(),
+        std::iter::empty(),
+    )
+    .await?;
     Ok(Json(ReportContext {
         channel: window.channel,
         messages,
@@ -571,7 +582,7 @@ pub async fn resolve_report_case(
         },
     )
     .await?;
-    Ok(Json(ReportCaseList::of(&state, page).await?))
+    Ok(Json(ReportCaseList::of(&state, access.user, page).await?))
 }
 
 /// Dismisses an open case: it leaves review but is kept, and comes back if restored or reported
@@ -597,7 +608,7 @@ pub async fn dismiss_report_case(
     Path(case): Path<ReportCaseId>,
 ) -> ApiResult<Json<ReportCaseList>> {
     let page = app::report::dismiss(&state, &access, case).await?;
-    Ok(Json(ReportCaseList::of(&state, page).await?))
+    Ok(Json(ReportCaseList::of(&state, access.user, page).await?))
 }
 
 /// Restores a dismissed case to review. Takes Review reports, and a case the caller may act on.
