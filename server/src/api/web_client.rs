@@ -8,6 +8,11 @@
 //!
 //! Everything is read from the directory on each request, so a new release of the web client is
 //! served as soon as it is in place. The server does not start without it (`check`).
+//!
+//! Every file and page goes out with the headers that keep the page to itself
+//! (`security_headers`): a Content Security Policy that runs only the web client's own scripts,
+//! keeps any other page from framing it, and lets it reach only what it uses, and `nosniff`, no
+//! referrer, and, over `https`, HSTS.
 
 use crate::api::error::{ApiError, ApiResult, ProblemCode};
 use crate::api::extract::Path;
@@ -16,13 +21,16 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::icon::Icon;
 use crate::app::open_graph::Preview;
-use crate::aspen_config::AspenConfig;
+use crate::aspen_config::{AspenConfig, MediaS3Config};
 use crate::t;
 use askama::Template;
 use axum::Extension;
 use axum::extract::Request;
 use axum::extract::State;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY,
+    STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use axum::http::{HeaderMap, HeaderValue, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -103,16 +111,23 @@ pub fn files(
 + Sync
 + 'static {
     let dir = state.config.web_client.dir.clone();
+    let config = state.config.clone();
     let page = axum::routing::get(page).with_state(state);
     let served = ServeDir::new(dir)
         .append_index_html_on_directories(false)
         .fallback(page);
-    axum::middleware::from_fn(cache_control).layer(served)
+    axum::middleware::from_fn_with_state(config, file_headers).layer(served)
 }
 
-async fn cache_control(request: Request, next: Next) -> Response {
+/// Each file's caching, and the headers every response of the web client carries.
+async fn file_headers(
+    State(config): State<std::sync::Arc<AspenConfig>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let immutable = request.uri().path().starts_with(ASSETS);
     let mut response = next.run(request).await;
+    security_headers(&config, response.headers_mut());
     if response.status().is_success() || response.status().is_redirection() {
         let value = if immutable {
             "public, max-age=31536000, immutable"
@@ -232,7 +247,7 @@ async fn respond(
         );
         index.clone()
     });
-    Ok((
+    let mut response = (
         [
             (CONTENT_TYPE, "text/html; charset=utf-8"),
             // Revalidated on every load, like the file it is made from, so a new release and a
@@ -241,7 +256,87 @@ async fn respond(
         ],
         page,
     )
-        .into_response())
+        .into_response();
+    security_headers(&state.config, response.headers_mut());
+    Ok(response)
+}
+
+/// The headers on every file and page of the web client: its Content Security Policy
+/// (`content_security_policy`), `nosniff`, so no file is run as anything but its type, no
+/// referrer, so the deployment's paths reach no one the page links to or loads from, framing
+/// refused (for browsers that predate `frame-ancestors` too), and, over `https`, HSTS, without
+/// `includeSubDomains`, since other names under the deployment's may be served otherwise.
+fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
+    let policy = content_security_policy(&config.public_url, &config.media.s3);
+    match HeaderValue::from_str(&policy) {
+        Ok(value) => {
+            headers.insert(CONTENT_SECURITY_POLICY, value);
+        }
+        Err(error) => {
+            tracing::error!(%error, %policy, "The web client's Content Security Policy is no header value");
+        }
+    }
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if config.public_url.starts_with("https://") {
+        headers.insert(
+            STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
+}
+
+/// The web client's Content Security Policy. Scripts are its own files alone (and WebAssembly,
+/// which the QR code reader is); styles may be inline, since React Aria and the emoji picker
+/// write `<style>` elements and style attributes. Pictures, videos, requests, and frames reach
+/// this deployment, its storage (`[media.s3] public_base_url` to read, `public_endpoint` to
+/// upload), and any `https:` and `wss:` address: the client holds sessions on other
+/// deployments, whose APIs, storage, voice servers, and plugin views are anywhere, and plays
+/// videos in the players of the providers the server previews. An `http:` deployment, which is
+/// a development one, also reaches `http:` and `ws:` addresses, as its storage and voice servers
+/// are. Nothing may frame the page.
+fn content_security_policy(public_url: &str, s3: &MediaS3Config) -> String {
+    let development = public_url.starts_with("http://");
+    let origin = |url: &str| {
+        url::Url::parse(url)
+            .ok()
+            .map(|url| url.origin())
+            .filter(url::Origin::is_tuple)
+            .map(|origin| origin.ascii_serialization())
+    };
+    let storage = origin(&s3.public_base_url);
+    let uploads = origin(s3.public_endpoint.as_deref().unwrap_or(&s3.endpoint));
+    let own_socket = url::Url::parse(public_url).ok().and_then(|mut url| {
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        url.set_scheme(scheme).ok()?;
+        origin(url.as_str()).or_else(|| Some(url.as_str().trim_end_matches('/').to_string()))
+    });
+    let plain = if development { " http:" } else { "" };
+    let join = |sources: &[Option<&str>]| {
+        sources
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let media = join(&[Some("'self' data: blob: https:"), storage.as_deref()]);
+    let connect = join(&[
+        Some("'self'"),
+        own_socket.as_deref(),
+        Some("https: wss:"),
+        storage.as_deref(),
+        uploads.as_deref(),
+        development.then_some("http: ws:"),
+    ]);
+    format!(
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; img-src {media}{plain}; media-src {media}{plain}; \
+         font-src 'self' data:; connect-src {connect}; frame-src 'self' https:{plain}; \
+         worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; \
+         form-action 'self'; frame-ancestors 'none'"
+    )
 }
 
 fn tags(state: &GlobalServerContext, base: &str, uri: &Uri, preview: Preview) -> Tags {
@@ -378,6 +473,37 @@ mod tests {
         let page = render(&tags(r#""/><script>alert(1)</script>"#));
         assert!(!page.contains("<script>alert"));
         assert!(page.contains("<title>&#34;/&#62;&#60;script&#62;"));
+    }
+
+    #[test]
+    fn the_policy_runs_only_own_scripts_and_names_storage() {
+        let s3 = MediaS3Config {
+            public_endpoint: Some("https://s3.example.org/upload-path".to_string()),
+            public_base_url: "https://media.example.org/aspen-media".to_string(),
+            ..MediaS3Config::default()
+        };
+        let policy = content_security_policy("https://chat.example.org", &s3);
+        assert!(policy.contains("script-src 'self' 'wasm-unsafe-eval';"));
+        assert!(policy.contains("frame-ancestors 'none'"));
+        assert!(policy.contains("object-src 'none'"));
+        assert!(policy.contains("img-src 'self' data: blob: https: https://media.example.org;"));
+        assert!(policy.contains(
+            "connect-src 'self' wss://chat.example.org https: wss: https://media.example.org \
+             https://s3.example.org;"
+        ));
+        assert!(!policy.contains("http:"));
+        assert!(!policy.contains("ws:"));
+        assert!(HeaderValue::from_str(&policy).is_ok());
+    }
+
+    #[test]
+    fn a_development_policy_reaches_plain_http() {
+        let policy = content_security_policy("http://localhost:5173", &MediaS3Config::default());
+        assert!(policy.contains("http://127.0.0.1:3902"));
+        assert!(policy.contains("http://127.0.0.1:3900"));
+        assert!(policy.contains("ws://localhost:5173"));
+        assert!(policy.contains("http: ws:"));
+        assert!(policy.contains("frame-src 'self' https: http:;"));
     }
 
     #[test]

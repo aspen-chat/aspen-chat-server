@@ -13,8 +13,8 @@
     "build:native": "cargo build --release --manifest-path native/obs-capture/Cargo.toml && node scripts/copy-native.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test 'src/**/*.test.ts'",
-    "package": "pnpm --filter @aspen/app build:shell && pnpm build:native && electron-vite build && electron-builder --config electron-builder.yml",
-    "package:dir": "pnpm --filter @aspen/app build:shell && pnpm build:native && electron-vite build && electron-builder --config electron-builder.yml --dir"
+    "package": "pnpm --filter @aspen/app build:desktop && pnpm build:native && electron-vite build && electron-builder --config electron-builder.yml",
+    "package:dir": "pnpm --filter @aspen/app build:desktop && pnpm build:native && electron-vite build && electron-builder --config electron-builder.yml --dir"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
