@@ -32,17 +32,22 @@ export async function uploadAttachment(
   /** Told how many of the file's bytes have reached storage, as they go. */
   onProgress?: (sent: number, total: number) => void,
 ): Promise<Attachment> {
+  const mimeType = file.type || "application/octet-stream";
   const init = await target.client.api.POST("/api/v1/attachments", {
     body: {
       fileName: file.name,
-      mimeType: file.type || "application/octet-stream",
+      mimeType,
+      byteSize: file.size,
       ...(size === undefined ? {} : { width: size.width, height: size.height }),
     },
   });
   if (init.data === undefined) {
     throw new ApiProblemError(problemOf(init.error, init.response));
   }
-  const contentType = file.type || "application/octet-stream";
+  // The type the upload URL is signed for: the file's own, or, for a kind a browser could run
+  // were it opened from storage, one that has it saved instead. A deployment that does not say
+  // signs for the file's own.
+  const contentType = init.data.contentType ?? mimeType;
   const put =
     onProgress !== undefined && !target.customUpload && typeof XMLHttpRequest !== "undefined"
       ? await putWithProgress(init.data.uploadUrl, file, contentType, onProgress)
@@ -104,13 +109,15 @@ export async function uploadIcon(
   bytes: Blob,
   mimeType: string,
 ): Promise<Icon> {
-  const init = await target.client.api.POST("/api/v1/icons", { body: { mimeType } });
+  const init = await target.client.api.POST("/api/v1/icons", {
+    body: { mimeType, byteSize: bytes.size },
+  });
   if (init.data === undefined) {
     throw new ApiProblemError(problemOf(init.error, init.response));
   }
   const put = await target.uploadFetch(init.data.uploadUrl, {
     method: "PUT",
-    headers: { "content-type": mimeType },
+    headers: { "content-type": init.data.contentType ?? mimeType },
     body: bytes,
   });
   if (!put.ok) {

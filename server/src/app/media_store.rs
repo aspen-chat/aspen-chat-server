@@ -15,7 +15,11 @@
 //!    [`promote`] what arrived there, copying it within the store to its own
 //!    key and deleting the staging object, so the bytes readers see are
 //!    written by the server alone, and the URL, which stays valid until it
-//!    expires, can write only to a key nothing reads. What a URL writes after
+//!    expires, can write only to a key nothing reads. The URL is signed for
+//!    one `Content-Type`, which the server chooses, and, where the client
+//!    declares the upload's size, for that `Content-Length`; promoting refuses
+//!    an object over the caller's limit, and gives the copy the type and
+//!    `Content-Disposition` it is served with ([`Served`]). What a URL writes after
 //!    its upload was promoted, and what was uploaded and never confirmed, the
 //!    sweeper deletes once the URL has expired ([`spawn_upload_sweeper`]).
 //!
@@ -37,7 +41,7 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, MetadataDirective};
 use aws_types::region::Region;
 use chrono::{DateTime, Duration, Utc};
 use std::time::Duration as StdDuration;
@@ -74,6 +78,25 @@ pub struct PresignedUpload {
     pub url: String,
     /// Wall-clock time at which the URL stops being accepted by S3.
     pub expires_at: DateTime<Utc>,
+}
+
+/// How an object a client uploaded is served from `public_base_url`, as [`promote`] writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Served {
+    pub content_type: String,
+    /// The `Content-Disposition` it is served with, if any.
+    pub disposition: Option<String>,
+}
+
+/// What became of a client's upload when it was promoted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Promotion {
+    /// It is at its own key, and holds this many bytes.
+    Promoted(u64),
+    /// Nothing was uploaded.
+    NotUploaded,
+    /// It held more than the limit, and was deleted.
+    TooLarge,
 }
 
 #[derive(Clone)]
@@ -148,13 +171,14 @@ impl MediaStore {
     /// Mint a short-lived presigned `PUT` URL for what becomes `key` once [`promote`]d: it
     /// writes the staging key ([`upload_key`]), never `key` itself.
     ///
-    /// The client is expected to upload with `Content-Type: <content_type>`;
-    /// S3 enforces the value because it was part of the canonical request
-    /// that produced the signature.
+    /// The client must upload with `Content-Type: <content_type>`, and, when `length` is
+    /// given, exactly that many bytes: both are part of the canonical request the signature
+    /// covers, so the store refuses anything else.
     pub async fn presign_upload(
         &self,
         key: &str,
         content_type: &str,
+        length: Option<u64>,
     ) -> app::error::Result<PresignedUpload> {
         let presigning = PresigningConfig::expires_in(self.upload_url_ttl)?;
         let presigned = self
@@ -163,6 +187,7 @@ impl MediaStore {
             .bucket(&self.bucket)
             .key(upload_key(key))
             .content_type(content_type)
+            .set_content_length(length.and_then(|length| i64::try_from(length).ok()))
             .presigned(presigning)
             .await
             .map_err(Box::new)?;
@@ -233,16 +258,28 @@ impl MediaStore {
         Ok((written <= limit).then_some(written))
     }
 
-    /// Moves a client's upload of `key` from its staging key to `key`, answering its size in
-    /// bytes, or `None` when nothing was uploaded. The copy is the store's own, so no byte passes
-    /// through this process, and the staging object is deleted after it. An upload promoted
-    /// already, by a confirm that then failed, is answered as it is, since only the server
-    /// writes `key`.
-    pub async fn promote(&self, key: &str) -> app::error::Result<Option<u64>> {
+    /// Moves a client's upload of `key` from its staging key to `key`, served as `served` says.
+    /// The copy is the store's own, so no byte passes through this process, and the staging
+    /// object is deleted after it. An upload of more than `max_bytes` is deleted instead. An
+    /// upload promoted already, by a confirm that then failed, is answered as it is, since only
+    /// the server writes `key`.
+    pub async fn promote(
+        &self,
+        key: &str,
+        max_bytes: u64,
+        served: &Served,
+    ) -> app::error::Result<Promotion> {
         let staging = upload_key(key);
         let Some(size) = self.head_object(&staging).await? else {
-            return self.head_object(key).await;
+            return Ok(match self.head_object(key).await? {
+                Some(size) => Promotion::Promoted(size),
+                None => Promotion::NotUploaded,
+            });
         };
+        if size > max_bytes {
+            self.delete(&staging).await?;
+            return Ok(Promotion::TooLarge);
+        }
         let source = format!("{}/{}", self.bucket, staging);
         if size <= MAX_SINGLE_COPY_BYTES {
             self.client
@@ -250,26 +287,37 @@ impl MediaStore {
                 .bucket(&self.bucket)
                 .key(key)
                 .copy_source(&source)
+                .metadata_directive(MetadataDirective::Replace)
+                .content_type(&served.content_type)
+                .set_content_disposition(served.disposition.clone())
                 .send()
                 .await
                 .map_err(request_error)?;
         } else {
-            self.copy_in_parts(&source, key, size).await?;
+            self.copy_in_parts(&source, key, size, served).await?;
         }
         if let Err(e) = self.delete(&staging).await {
             tracing::warn!(error = %e, key = staging, "could not delete a promoted upload");
         }
-        Ok(Some(size))
+        Ok(Promotion::Promoted(size))
     }
 
     /// Copies `size` bytes of `source` to `key` in parts, as `CopyObject` copies at most
     /// [`MAX_SINGLE_COPY_BYTES`].
-    async fn copy_in_parts(&self, source: &str, key: &str, size: u64) -> app::error::Result<()> {
+    async fn copy_in_parts(
+        &self,
+        source: &str,
+        key: &str,
+        size: u64,
+        served: &Served,
+    ) -> app::error::Result<()> {
         let upload = self
             .client
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
+            .content_type(&served.content_type)
+            .set_content_disposition(served.disposition.clone())
             .send()
             .await
             .map_err(request_error)?;
@@ -448,7 +496,7 @@ mod tests {
         };
         let store = MediaStore::from_s3(&internal).await.unwrap();
         let url = store
-            .presign_upload("attachments/a", "text/plain")
+            .presign_upload("attachments/a", "text/plain", None)
             .await
             .unwrap()
             .url;
@@ -462,10 +510,46 @@ mod tests {
         };
         let store = MediaStore::from_s3(&public).await.unwrap();
         let url = store
-            .presign_upload("attachments/a", "text/plain")
+            .presign_upload("attachments/a", "text/plain", None)
             .await
             .unwrap()
             .url;
         assert!(url.starts_with("https://media.example.org/"), "{url}");
+    }
+
+    #[tokio::test]
+    async fn upload_urls_are_signed_for_their_type_and_declared_size() {
+        let store = MediaStore::from_s3(&MediaS3Config::default())
+            .await
+            .unwrap();
+        let signed_headers = |url: &str| {
+            url::Url::parse(url)
+                .unwrap()
+                .query_pairs()
+                .find(|(name, _)| name == "X-Amz-SignedHeaders")
+                .map(|(_, value)| value.into_owned())
+                .unwrap_or_default()
+        };
+        let sized = store
+            .presign_upload("attachments/a", "application/octet-stream", Some(1234))
+            .await
+            .unwrap()
+            .url;
+        let headers = signed_headers(&sized);
+        assert!(
+            headers.split(';').any(|h| h == "content-length"),
+            "{headers}"
+        );
+        assert!(headers.split(';').any(|h| h == "content-type"), "{headers}");
+        let unsized_url = store
+            .presign_upload("attachments/a", "image/png", None)
+            .await
+            .unwrap()
+            .url;
+        let headers = signed_headers(&unsized_url);
+        assert!(
+            !headers.split(';').any(|h| h == "content-length"),
+            "{headers}"
+        );
     }
 }

@@ -25,6 +25,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import zlib
 from pathlib import Path
@@ -459,6 +460,38 @@ def attachments(world: World, check: Checks) -> None:
           stack.status("PATCH", path, {"description": "changed"}, world.owner["token"]) == 404)
     world.as_owner("PUT", f"/channels/{general}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     check("and nobody once they may not", stack.status("GET", path, token=world.member["token"]) == 404)
+
+
+def uploads(world: World, check: Checks) -> None:
+    say("uploads: their size, and what a browser opening one may run")
+    stack = world.stack
+    page = b"<html><script>alert(document.domain)</script></html>"
+    handle = world.as_owner("POST", "/attachments",
+                            {"fileName": "page.html", "mimeType": "text/html", "byteSize": len(page)})
+    check("a page is uploaded as a file to save", handle.get("contentType") == "application/octet-stream", handle)
+
+    def put(data: bytes, content_type: str) -> int:
+        request = urllib.request.Request(handle["uploadUrl"], data=data, method="PUT",
+                                         headers={"content-type": content_type})
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            return error.code
+    check("storage refuses it sent as a page", put(page, "text/html") == 403)
+    check("or longer than declared", put(page + b" ", "application/octet-stream") == 403)
+    check("and takes it as declared", put(page, "application/octet-stream") == 200)
+    confirmed = world.as_owner("POST", f"/attachments/{handle['id']}/confirm")
+    check("its record keeps the type its sender gave", confirmed["mimeType"] == "text/html")
+    with urllib.request.urlopen(confirmed["downloadUrl"], timeout=15) as read:
+        check("and it is served as a file, not a page",
+              read.headers.get_content_type() == "application/octet-stream")
+    check("a file over the deployment's limit is refused before it is sent",
+          stack.status("POST", "/attachments", {"fileName": "huge.bin", "mimeType": "application/zip",
+                                                "byteSize": 1 << 40}, world.owner["token"]) == 400)
+    check("as is an icon over 8 MiB",
+          stack.status("POST", "/icons", {"mimeType": "image/png", "byteSize": 9 << 20},
+                       world.owner["token"]) == 400)
 
 
 def picture(width: int = 1600, height: int = 1200) -> bytes:
@@ -1352,7 +1385,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons]
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews, icons, uploads]
 
 
 def main() -> None:

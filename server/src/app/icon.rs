@@ -18,7 +18,7 @@
 
 use crate::app;
 use crate::app::context::GlobalServerContext;
-use crate::app::media_store::PresignedUpload;
+use crate::app::media_store::{PresignedUpload, Promotion, Served};
 use crate::app::{IconId, Loadable, UserId};
 use crate::database::schema::icon;
 use crate::t;
@@ -35,6 +35,9 @@ use tracing::warn;
 /// unfurls links shows, none of which can carry script, as an SVG or an HTML page could when
 /// opened from storage or from [`crate::api::federation`]'s avatars.
 pub const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+/// The largest icon, in bytes: room for a large photo as a profile picture.
+pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = icon)]
@@ -70,19 +73,35 @@ pub struct IconUpload {
     pub id: IconId,
     pub upload_url: String,
     pub expires_at: DateTime<Utc>,
+    /// The `Content-Type` the upload must be sent with: its declared type.
+    pub content_type: String,
 }
 
 pub fn storage_key(id: IconId) -> String {
     format!("icons/{}", id.0)
 }
 
+/// How an icon is served: as its type, shown in place.
+fn served(mime_type: &str) -> Served {
+    Served {
+        content_type: mime_type.to_owned(),
+        disposition: None,
+    }
+}
+
+/// Reserves an icon of `mime_type`, one of [`IMAGE_TYPES`], and mints a presigned `PUT` URL for
+/// it, for exactly `byte_size` bytes when the client declares them, at most [`MAX_BYTES`].
 pub async fn init_upload(
     state: &GlobalServerContext,
     uploader: UserId,
     mime_type: String,
+    byte_size: Option<u64>,
 ) -> app::Result<IconUpload> {
     if !IMAGE_TYPES.contains(&mime_type.as_str()) {
         return Err(app::Error::Validation(t!("iconImageType")));
+    }
+    if byte_size.is_some_and(|bytes| bytes > MAX_BYTES) {
+        return Err(too_large());
     }
     let id = IconId::new();
     let key = storage_key(id);
@@ -98,11 +117,16 @@ pub async fn init_upload(
         .values((&row, icon::uploaded_by.eq(Some(uploader))))
         .execute(conn.as_mut())
         .await?;
-    match state.media_store.presign_upload(&key, &mime_type).await {
+    match state
+        .media_store
+        .presign_upload(&key, &mime_type, byte_size)
+        .await
+    {
         Ok(PresignedUpload { url, expires_at }) => Ok(IconUpload {
             id,
             upload_url: url,
             expires_at,
+            content_type: mime_type,
         }),
         Err(e) => {
             if let Err(rollback_err) = diesel::delete(icon::table)
@@ -121,7 +145,15 @@ pub async fn init_upload(
     }
 }
 
-/// Confirms an upload `caller` started; anyone else's is not found.
+fn too_large() -> app::Error {
+    app::Error::Validation(t!(
+        "iconTooLarge",
+        max = app::attachment::size_text(MAX_BYTES)
+    ))
+}
+
+/// Confirms an upload `caller` started; anyone else's is not found. One of more than
+/// [`MAX_BYTES`] is deleted and refused.
 pub async fn confirm_upload(
     state: &GlobalServerContext,
     caller: UserId,
@@ -138,8 +170,14 @@ pub async fn confirm_upload(
         )
         .first(conn.as_mut())
         .await?;
-    if state.media_store.promote(&row.storage_key).await?.is_none() {
-        return Err(app::Error::Validation(t!("iconUploadNotFound")));
+    match state
+        .media_store
+        .promote(&row.storage_key, MAX_BYTES, &served(&row.mime_type))
+        .await?
+    {
+        Promotion::Promoted(_) => {}
+        Promotion::NotUploaded => return Err(app::Error::Validation(t!("iconUploadNotFound"))),
+        Promotion::TooLarge => return Err(too_large()),
     }
     let confirmed = Utc::now();
     let updated: usize = diesel::update(icon::table)

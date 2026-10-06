@@ -802,12 +802,18 @@ describe("AspenSync", () => {
       {
         ...bootstrapResponses(),
         "/api/v1/attachments": async (_url, request) => {
-          reservations.push(await request.json());
+          const reservation = (await request.json()) as { mimeType: string };
+          reservations.push(reservation);
           return json(
             {
               id: record.id,
               uploadUrl: "http://store.test/put/900?sig=1",
               expiresAt: "2026-09-25T13:00:00Z",
+              // A page is uploaded as a file to save; a deployment that predates the field
+              // leaves it out for everything else.
+              ...(reservation.mimeType === "text/html"
+                ? { contentType: "application/octet-stream" }
+                : {}),
             },
             201,
           );
@@ -841,9 +847,12 @@ describe("AspenSync", () => {
       height: 480,
     });
     expect(reservations).toEqual([
-      { fileName: "note.txt", mimeType: "text/plain" },
-      { fileName: "pic.png", mimeType: "image/png", width: 640, height: 480 },
+      { fileName: "note.txt", mimeType: "text/plain", byteSize: 5 },
+      { fileName: "pic.png", mimeType: "image/png", byteSize: 3, width: 640, height: 480 },
     ]);
+    // The upload is sent as the type the deployment signed its URL for.
+    await sync.uploadAttachment(new File(["<p>hi</p>"], "page.html", { type: "text/html" }));
+    expect(uploads.at(-1)?.type).toBe("application/octet-stream");
   });
 
   it("fetches an attachment record a message names but the cache lacks, once", async () => {

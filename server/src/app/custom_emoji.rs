@@ -25,6 +25,9 @@ use tracing::warn;
 pub const NAME_MIN_CHARS: usize = 2;
 pub const NAME_MAX_CHARS: usize = 32;
 
+/// The largest picture an emoji may be, in bytes, as small as it is shown.
+pub const MAX_BYTES: u64 = 256 * 1024;
+
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = custom_emoji)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -115,7 +118,8 @@ pub async fn read_emoji(
 }
 
 /// Adds an emoji to a community from an icon the caller uploaded, which must be a picture format
-/// and not yet another emoji's, under the community's limit. Takes Manage custom emoji.
+/// of at most [`MAX_BYTES`] and not yet another emoji's, under the community's limit. Takes
+/// Manage custom emoji.
 pub async fn create_emoji(
     state: &GlobalServerContext,
     caller: UserId,
@@ -125,6 +129,20 @@ pub async fn create_emoji(
 ) -> app::Result<message_enum::CustomEmoji> {
     let name = validate_name(name)?;
     let limit = i64::from(state.settings().custom_emoji_limit);
+    match state
+        .media_store
+        .head_object(&app::icon::storage_key(icon_id))
+        .await?
+    {
+        None => return Err(app::Error::Validation(t!("customEmojiIconMissing"))),
+        Some(bytes) if bytes > MAX_BYTES => {
+            return Err(app::Error::Validation(t!(
+                "customEmojiTooLarge",
+                max = app::attachment::size_text(MAX_BYTES)
+            )));
+        }
+        Some(_) => {}
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {

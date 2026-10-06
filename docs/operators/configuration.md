@@ -50,6 +50,19 @@ by each API server, at the same origin.
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
 
+## `[media]`
+
+| Setting | Default | |
+| --- | --- | --- |
+| `max_attachment_bytes` | `268435456` (256 MiB) | The largest file anyone may attach. Apps declare a file's size when they ask to upload it, and the upload URL is signed for exactly that size, so storage refuses more; an upload that declared none and holds more is deleted when it is confirmed. Icons are held to 8 MiB and custom emoji to 256 KiB whatever this says. |
+
+Attachments are served from `public_base_url` as what they are only when they are pictures,
+video, or sound in the formats browsers play, plain text, or PDF. Anything else (an HTML page, an
+SVG, XML, a script, an archive) is uploaded and stored as `application/octet-stream`, with
+`Content-Disposition: attachment` where the store keeps it, so a browser saves it rather than
+running what it holds at your media address; apps still show the type its sender's system gave
+it. Icons may only be PNG, JPEG, WebP, or GIF.
+
 ## `[media.s3]`
 
 Where attachments, icons, avatars, and link preview images are kept. Clients upload straight to

@@ -38,7 +38,7 @@ const ASSERTION_LIFETIME: Duration = Duration::minutes(2);
 /// Where a home serves its users' avatars to the deployments they sign in to, under the API.
 pub const HOME_ICON_PATH: &str = "/federation/icons";
 /// The largest avatar copied from a home.
-const MAX_AVATAR_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AVATAR_BYTES: u64 = app::icon::MAX_BYTES;
 
 /// What a home says of one of its users to one other deployment.
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -614,7 +614,7 @@ async fn fetch_avatar(
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| unreachable())?;
-        if bytes.len() + chunk.len() > MAX_AVATAR_BYTES {
+        if (bytes.len() + chunk.len()) as u64 > MAX_AVATAR_BYTES {
             return Err(unreachable());
         }
         bytes.extend_from_slice(&chunk);
