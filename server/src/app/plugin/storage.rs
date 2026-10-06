@@ -90,87 +90,209 @@ pub async fn set(
     key: &str,
     value: &[u8],
 ) -> Result<(), wit::Error> {
+    write(
+        conn,
+        plugin_id,
+        quota,
+        scope,
+        key,
+        Expect::Anything,
+        Some(value),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Writes `value` under `key`, or deletes it when `value` is `None`, only while it holds
+/// `expected` (is absent, when `expected` is `None`), answering whether it did. Two calls that
+/// read the same value and swap it cannot both succeed, so a plugin answering requests on several
+/// servers at once can change what it keeps without losing either change.
+pub async fn swap(
+    conn: &mut AsyncPgConnection,
+    plugin_id: &str,
+    quota: u64,
+    scope: &Scope,
+    key: &str,
+    expected: Option<&[u8]>,
+    value: Option<&[u8]>,
+) -> Result<bool, wit::Error> {
+    write(
+        conn,
+        plugin_id,
+        quota,
+        scope,
+        key,
+        Expect::Value(expected),
+        value,
+    )
+    .await
+}
+
+/// What a write requires `key` to hold.
+#[derive(Clone, Copy)]
+enum Expect<'a> {
+    Anything,
+    /// This value, or no value at all.
+    Value(Option<&'a [u8]>),
+}
+
+/// Why a write's transaction is rolled back.
+enum Abort {
+    /// The key does not hold what the write expected.
+    Stale,
+    /// Another write made the key while this one found it absent; trying again finds it.
+    Raced,
+    /// The plugin's storage has no room for it.
+    Full,
+    App(app::Error),
+}
+
+impl From<diesel::result::Error> for Abort {
+    fn from(error: diesel::result::Error) -> Self {
+        Abort::App(error.into())
+    }
+}
+
+/// How many times a write is tried when another keeps making its key first.
+const WRITE_ATTEMPTS: usize = 3;
+
+async fn write(
+    conn: &mut AsyncPgConnection,
+    plugin_id: &str,
+    quota: u64,
+    scope: &Scope,
+    key: &str,
+    expect: Expect<'_>,
+    value: Option<&[u8]>,
+) -> Result<bool, wit::Error> {
     check_key(key)?;
-    if value.len() > MAX_VALUE {
+    if value.is_some_and(|value| value.len() > MAX_VALUE) {
         return Err(wit::Error::Limit(format!(
             "a value is at most {MAX_VALUE} bytes"
         )));
     }
     let quota = i64::try_from(quota).unwrap_or(i64::MAX);
-    let written = conn
-        .transaction(|conn| {
-            async move {
-                let previous: Option<i32> = plugin_storage::table
-                    .select(diesel::dsl::sql::<diesel::sql_types::Integer>(
-                        "octet_length(value)",
-                    ))
-                    .filter(
-                        plugin_storage::plugin
-                            .eq(plugin_id)
-                            .and(plugin_storage::scope_kind.eq(scope.kind()))
-                            .and(plugin_storage::scope.eq(scope.id()))
-                            .and(plugin_storage::key.eq(key)),
-                    )
-                    .for_update()
-                    .first(conn)
-                    .await
-                    .optional()?;
-                let key_bytes = key.len() as i64;
-                let delta = value.len() as i64
-                    - match previous {
-                        Some(length) => i64::from(length),
-                        None => -key_bytes,
-                    };
-                // A value rewritten at the same length, as a count usually is, leaves the
-                // plugin's row alone, so writes of one plugin seldom wait on each other.
-                if delta != 0 {
-                    // Growing takes room under the quota; shrinking always fits.
-                    let ceiling = if delta > 0 { quota - delta } else { i64::MAX };
-                    let counted = diesel::update(
-                        plugin::table.filter(
-                            plugin::id
-                                .eq(plugin_id)
-                                .and(plugin::storage_bytes.le(ceiling)),
-                        ),
-                    )
-                    .set(plugin::storage_bytes.eq(plugin::storage_bytes + delta))
-                    .execute(conn)
-                    .await?;
-                    if counted == 0 {
-                        return Ok(false);
-                    }
-                }
-                diesel::insert_into(plugin_storage::table)
-                    .values((
-                        plugin_storage::plugin.eq(plugin_id),
-                        plugin_storage::scope_kind.eq(scope.kind()),
-                        plugin_storage::scope.eq(scope.id()),
-                        plugin_storage::key.eq(key),
-                        plugin_storage::value.eq(value),
-                    ))
-                    .on_conflict((
-                        plugin_storage::plugin,
-                        plugin_storage::scope_kind,
-                        plugin_storage::scope,
-                        plugin_storage::key,
-                    ))
-                    .do_update()
-                    .set(plugin_storage::value.eq(value))
-                    .execute(conn)
-                    .await?;
-                Ok::<_, app::Error>(true)
-            }
-            .scope_boxed()
-        })
-        .await
-        .map_err(|e| super::host::from_app(plugin_id, e))?;
-    if written {
-        Ok(())
-    } else {
-        Err(wit::Error::Limit(format!(
-            "the plugin's storage is full ({quota} bytes)"
-        )))
+    for _ in 0..WRITE_ATTEMPTS {
+        let result = conn
+            .transaction(|conn| {
+                async move { write_once(conn, plugin_id, quota, scope, key, expect, value).await }
+                    .scope_boxed()
+            })
+            .await;
+        return match result {
+            Ok(()) => Ok(true),
+            Err(Abort::Stale) => Ok(false),
+            Err(Abort::Raced) => continue,
+            Err(Abort::Full) => Err(wit::Error::Limit(format!(
+                "the plugin's storage is full ({quota} bytes)"
+            ))),
+            Err(Abort::App(error)) => Err(super::host::from_app(plugin_id, error)),
+        };
     }
+    Err(wit::Error::Unavailable(
+        "other writes kept making this key first; try again".into(),
+    ))
+}
+
+/// One attempt at `write`, inside its transaction: the key's row, when it has one, is locked
+/// until the transaction ends, so the value compared is the value replaced.
+async fn write_once(
+    conn: &mut AsyncPgConnection,
+    plugin_id: &str,
+    quota: i64,
+    scope: &Scope,
+    key: &str,
+    expect: Expect<'_>,
+    value: Option<&[u8]>,
+) -> Result<(), Abort> {
+    let row = plugin_storage::table.filter(
+        plugin_storage::plugin
+            .eq(plugin_id)
+            .and(plugin_storage::scope_kind.eq(scope.kind()))
+            .and(plugin_storage::scope.eq(scope.id()))
+            .and(plugin_storage::key.eq(key)),
+    );
+    // The previous value's length, having checked it is what the write expects.
+    let previous: Option<i64> = match expect {
+        Expect::Anything => row
+            .select(diesel::dsl::sql::<diesel::sql_types::Integer>(
+                "octet_length(value)",
+            ))
+            .for_update()
+            .first::<i32>(conn)
+            .await
+            .optional()?
+            .map(i64::from),
+        Expect::Value(expected) => {
+            let current: Option<Vec<u8>> = row
+                .select(plugin_storage::value)
+                .for_update()
+                .first(conn)
+                .await
+                .optional()?;
+            if current.as_deref() != expected {
+                return Err(Abort::Stale);
+            }
+            current.map(|current| current.len() as i64)
+        }
+    };
+    let key_bytes = key.len() as i64;
+    let delta = match (previous, value) {
+        (None, None) => return Ok(()),
+        (Some(previous), None) => {
+            diesel::delete(row).execute(conn).await?;
+            -(key_bytes + previous)
+        }
+        (Some(previous), Some(value)) => {
+            diesel::update(row)
+                .set(plugin_storage::value.eq(value))
+                .execute(conn)
+                .await?;
+            value.len() as i64 - previous
+        }
+        (None, Some(value)) => {
+            let made = diesel::insert_into(plugin_storage::table)
+                .values((
+                    plugin_storage::plugin.eq(plugin_id),
+                    plugin_storage::scope_kind.eq(scope.kind()),
+                    plugin_storage::scope.eq(scope.id()),
+                    plugin_storage::key.eq(key),
+                    plugin_storage::value.eq(value),
+                ))
+                .on_conflict_do_nothing()
+                .execute(conn)
+                .await?;
+            if made == 0 {
+                // Another write made the key after this one found it absent. A swap expecting
+                // it absent has lost; anything else tries again, finding (and locking) it.
+                return Err(match expect {
+                    Expect::Value(_) => Abort::Stale,
+                    Expect::Anything => Abort::Raced,
+                });
+            }
+            key_bytes + value.len() as i64
+        }
+    };
+    // A value rewritten at the same length, as a count usually is, leaves the plugin's row
+    // alone, so writes of one plugin seldom wait on each other.
+    if delta != 0 {
+        // Growing takes room under the quota; shrinking always fits.
+        let ceiling = if delta > 0 { quota - delta } else { i64::MAX };
+        let counted = diesel::update(
+            plugin::table.filter(
+                plugin::id
+                    .eq(plugin_id)
+                    .and(plugin::storage_bytes.le(ceiling)),
+            ),
+        )
+        .set(plugin::storage_bytes.eq(plugin::storage_bytes + delta))
+        .execute(conn)
+        .await?;
+        if counted == 0 {
+            return Err(Abort::Full);
+        }
+    }
+    Ok(())
 }
 
 pub async fn delete(

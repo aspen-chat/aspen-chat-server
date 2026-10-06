@@ -243,7 +243,10 @@ A key-value store per plugin (`storage`), in the database so every API server se
 within `storageQuota`. Each value lives in a scope: the deployment, a community, a channel, or a
 user, so that what a plugin keeps about a place goes with it: deleting a channel, community, or
 account deletes what plugins kept in its scope, and removing a plugin deletes all of its data
-once the operator purges it.
+once the operator purges it. Every API server may be answering the plugin at once, so besides
+reading and writing a value, a plugin may swap it (`storage-swap`): write it, or delete it, only
+while it still holds what the plugin read. Of two calls that read the same value and swap it, one
+succeeds and the other is told so, and reads again, so neither change is lost.
 
 ### Routes
 

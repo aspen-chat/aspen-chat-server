@@ -851,6 +851,29 @@ impl Call {
             .map_err(|e| self.fail(e))
     }
 
+    async fn storage_swap(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        expected: Option<Vec<u8>>,
+        value: Option<Vec<u8>>,
+    ) -> Result<bool, wit::Error> {
+        self.require(PluginPermission::Storage)?;
+        let scope = self.scope(scope).await?;
+        let quota = self.plugin.manifest.storage_quota.unwrap_or(0);
+        let mut conn = self.conn().await?;
+        storage::swap(
+            conn.as_mut(),
+            &self.plugin.id,
+            quota,
+            &scope,
+            &key,
+            expected.as_deref(),
+            value.as_deref(),
+        )
+        .await
+    }
+
     async fn storage_list(
         &mut self,
         scope: wit::Scope,
@@ -1240,6 +1263,16 @@ impl aspen::plugin::host::Host for CallState {
 
     async fn storage_delete(&mut self, scope: wit::Scope, key: String) -> Result<(), wit::Error> {
         self.call.storage_delete(scope, key).await
+    }
+
+    async fn storage_swap(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        expected: Option<Vec<u8>>,
+        value: Option<Vec<u8>>,
+    ) -> Result<bool, wit::Error> {
+        self.call.storage_swap(scope, key, expected, value).await
     }
 
     async fn storage_list(

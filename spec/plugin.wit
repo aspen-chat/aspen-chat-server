@@ -316,6 +316,11 @@ interface host {
     storage-delete: func(scope: scope, key: string) -> result<_, error>;
     /// The keys after `after` that begin with `prefix`, in order, at most `limit` (100 at most).
     storage-list: func(scope: scope, prefix: string, after: option<string>, limit: u32) -> result<list<tuple<string, list<u8>>>, error>;
+    /// Writes `value` under `key`, or deletes it when `value` is none, only while it holds
+    /// `expected` (is absent, when `expected` is none), and answers whether it did. Of two calls
+    /// that read the same value and swap it, one succeeds and the other is answered false, so it
+    /// can read again and decide again.
+    storage-swap: func(scope: scope, key: string, expected: option<list<u8>>, value: option<list<u8>>) -> result<bool, error>;
 
     /// Publishes a `pluginEvent` with this kind and JSON payload (`events`).
     publish: func(audience: audience, kind: string, payload: string) -> result<_, error>;
