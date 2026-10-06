@@ -4,6 +4,7 @@
 
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
+use crate::app::visibility::Visibility;
 use crate::app::{self, CategoryId, CommunityId, EventScope, UserId, publish_event};
 use crate::database::schema::{category, category_collapse};
 use diesel::prelude::*;
@@ -38,18 +39,8 @@ async fn set(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let exists: bool = diesel::select(diesel::dsl::exists(
-                category::table.filter(
-                    category::id
-                        .eq(category_id)
-                        .and(category::deleted_at.is_null()),
-                ),
-            ))
-            .get_result(conn.as_mut())
-            .await?;
-            if !exists {
-                return Err(app::Error::Diesel(diesel::result::Error::NotFound));
-            }
+            // Only a category the user may learn of; any other is not found.
+            app::category::viewed_category(conn.as_mut(), user, category_id).await?;
             let changed = if collapsed {
                 diesel::insert_into(category_collapse::table)
                     .values((
@@ -91,19 +82,24 @@ async fn set(
     .await
 }
 
-/// The categories of `communities` the user has collapsed.
+/// The categories of the communities `visible` covers that its user has collapsed and may
+/// still learn of (`Visibility::can_view_category`).
 pub async fn read_collapsed(
     state: &GlobalServerContext,
-    user: UserId,
-    communities: &[CommunityId],
+    visible: &Visibility,
 ) -> app::Result<Vec<CategoryId>> {
     let mut conn = state.connection_pool.get().await?;
-    Ok(category_collapse::table
+    let rows: Vec<(CategoryId, CommunityId)> = category_collapse::table
         .inner_join(category::table)
-        .select(category_collapse::category)
-        .filter(category_collapse::user.eq(user))
-        .filter(category::community.eq_any(communities.to_vec()))
+        .select((category_collapse::category, category::community))
+        .filter(category_collapse::user.eq(visible.user()))
+        .filter(category::community.eq_any(visible.communities().to_vec()))
         .filter(category::deleted_at.is_null())
         .load(conn.as_mut())
-        .await?)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter(|(category, community)| visible.can_view_category(*community, *category))
+        .map(|(category, _)| category)
+        .collect())
 }

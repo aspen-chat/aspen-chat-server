@@ -166,8 +166,8 @@ pub async fn read_roles(
         .collect())
 }
 
-/// Every override of the categories of `visible`'s communities, and of the channels in them its
-/// user may view.
+/// Every override of the categories of `visible`'s communities that its user may learn of, and
+/// of the channels in them its user may view.
 pub async fn read_communities_overrides(
     state: &GlobalServerContext,
     visible: &app::visibility::Visibility,
@@ -189,18 +189,21 @@ pub async fn read_communities_overrides(
         .filter(channel::deleted_at.is_null())
         .load(conn.as_mut())
         .await?;
-    let categories: Vec<(CategoryId, RoleId, Permissions, Permissions)> = category_override::table
-        .inner_join(category::table)
-        .select((
-            category_override::category,
-            category_override::role,
-            category_override::allow,
-            category_override::deny,
-        ))
-        .filter(category::community.eq_any(communities.to_vec()))
-        .filter(category::deleted_at.is_null())
-        .load(conn.as_mut())
-        .await?;
+    let categories: Vec<(CategoryId, RoleId, Permissions, Permissions, CommunityId)> =
+        category_override::table
+            .inner_join(category::table)
+            .select((
+                category_override::category,
+                category_override::role,
+                category_override::allow,
+                category_override::deny,
+                category::community,
+            ))
+            .filter(category::community.eq_any(communities.to_vec()))
+            .filter(category::deleted_at.is_null())
+            .load(conn.as_mut())
+            .await?;
+
     Ok((
         channels
             .into_iter()
@@ -216,8 +219,9 @@ pub async fn read_communities_overrides(
             .collect(),
         categories
             .into_iter()
+            .filter(|(category, .., community)| visible.can_view_category(*community, *category))
             .map(
-                |(category, role, allow, deny)| message_enum::CategoryOverride {
+                |(category, role, allow, deny, _)| message_enum::CategoryOverride {
                     category,
                     role,
                     allow: to_names(allow),

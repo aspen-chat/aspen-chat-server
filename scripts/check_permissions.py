@@ -200,6 +200,45 @@ def moves_and_categories(world: World, check: Checks) -> None:
           any(e.get("parentCategory", "unset") is None for e in of(got, "channel", id=lounge)) and world.member_sees(lounge))
 
 
+def hidden_categories(world: World, check: Checks) -> None:
+    say("a category hidden by its own overrides, then shown, then hidden again")
+    stack, member = world.stack, world.member["token"]
+
+    def listed(category: str) -> bool:
+        read = stack.api("GET", f"/communities/{world.community}?include=categories,roles", token=member)
+        included = read.get("included", {})
+        return any(c["id"] == category for c in included.get("categories", [])) or any(
+            o["category"] == category for o in included.get("categoryOverrides", []))
+
+    hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Secret", "sortIndex": 9})["id"]
+    world.stream.gather(0.5)
+    world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    got = world.stream.gather(1.0)
+    check("hiding it reaches the member once, so they can let it go",
+          len(of(got, "categoryOverride", category=hidden)) == 1, [e["serverEvent"] for e in got])
+    world.as_owner("PATCH", f"/categories/{hidden}", {"name": "Secret plans"})
+    check("and nothing about it after", not of(world.stream.gather(0.8), "category"))
+    check("they do not find it, or its overrides, in the community's read", not listed(hidden))
+    check("nor read it, its channels, or fold it",
+          stack.status("GET", f"/categories/{hidden}", token=member) == 404
+          and stack.status("GET", f"/categories/{hidden}/channels", token=member) == 404
+          and stack.status("PUT", f"/categories/{hidden}/collapses/@me", token=member) == 404)
+    inside = world.channel("let-in", category=hidden,
+                           overrides=[{"role": world.everyone, "allow": ["viewChannel"], "deny": []}])
+    world.stream.gather(0.8)
+    check("a channel in it whose own override lets them view it is theirs, the category still not",
+          world.member_sees(inside) and not listed(hidden))
+    world.as_owner("DELETE", f"/categories/{hidden}/overrides/{world.everyone}")
+    got = world.stream.gather(1.0)
+    check("showing it reaches the member, about a category they did not have",
+          len(of(got, "categoryOverride", category=hidden)) == 1 and listed(hidden))
+    world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    world.as_owner("DELETE", f"/categories/{hidden}")
+    got = world.stream.gather(1.0)
+    check("deleting it while hidden does not tell them of it", not of(got, "category", id=hidden))
+
+
 def hidden_managers(world: World, check: Checks) -> None:
     say("managing channels and categories hidden from the manager")
     member = world.member["token"]
@@ -220,11 +259,11 @@ def hidden_managers(world: World, check: Checks) -> None:
     world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     inside = world.channel("inside-hidden", category=hidden)
     world.stream.gather(0.8)
-    check("Manage categories does not reach the overrides of a category that hides its channels from its holder",
-          world.stack.status("PUT", f"/categories/{hidden}/overrides/{world.everyone}", unhide, member) == 403
-          and world.stack.status("DELETE", f"/categories/{hidden}/overrides/{world.everyone}", token=member) == 403)
+    check("Manage categories does not reach the overrides of a category that hides itself from its holder",
+          world.stack.status("PUT", f"/categories/{hidden}/overrides/{world.everyone}", unhide, member) == 404
+          and world.stack.status("DELETE", f"/categories/{hidden}/overrides/{world.everyone}", token=member) == 404)
     check("nor delete that category, which would move its channels into view",
-          world.stack.status("DELETE", f"/categories/{hidden}", token=member) == 403)
+          world.stack.status("DELETE", f"/categories/{hidden}", token=member) == 404)
     check("whose channels stay hidden from them", not world.member_sees(inside))
     open_channel = world.channel("for-managers")
     check("while a channel they may view is theirs to manage",
@@ -1441,7 +1480,8 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
+SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_categories, hidden_managers,
+             role_grants,
              poll_votes, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, ban_deletions, dm_reads,

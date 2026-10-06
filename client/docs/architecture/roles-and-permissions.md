@@ -17,7 +17,13 @@
   anyway; hiding only keeps the UI honest. When the caller loses sight of a channel the store
   lets it go at once (as `channelRemoved`); when they may gain some, `AspenSync` reads the
   community again after a random pause of at most `ACCESS_RELOAD_SPREAD_MS`, since the server
-  sends nothing about channels a member could not see. The same holds for invites: without
+  sends nothing about channels a member could not see. Categories follow the same rule by
+  their own overrides alone: the store lets go of one (and its overrides) once they no longer
+  leave the caller View channel, keeping its channels the caller may still view filed under
+  it, which the sidebar shows at the top level; a `categoryOverride` about a category the
+  store does not hold reads the community again. A category the store does not hold counts in
+  `channelAccess` as denying View channel, which a channel's own overrides may grant again.
+  The same holds for invites: without
   Manage invites the server sends only the caller's own, and the store lets the rest go when
   the permission is lost. `UserCommunity.sortIndex` is `null` on everyone's membership but the
   caller's. A join offer says whether the caller

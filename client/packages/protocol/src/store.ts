@@ -25,6 +25,7 @@ import {
   dmAccess,
   memberAccess,
   type CommunityPermissions,
+  type OverrideGrant,
   type PermissionSet,
 } from "./permissions";
 import type {
@@ -567,7 +568,10 @@ export class RecordStore {
 
   /**
    * What `userId` may do in a channel, given what they may do across its community: its
-   * category's overrides and then its own, or its parent's for a thread.
+   * category's overrides and then its own, or its parent's for a thread. A category the store
+   * does not hold is one whose own overrides hide it from the caller (the server sends no
+   * other), so it counts as denying View channel, which the channel's own overrides may grant
+   * again; what else it denies or allows is not known here, and the server decides.
    */
   permissionsIn(channelId: string, access: CommunityPermissions): PermissionSet {
     const channel = this.#channels.get(channelId);
@@ -577,10 +581,21 @@ export class RecordStore {
       return NO_PERMISSIONS;
     }
     const category = governing.parentCategory;
-    return access.inChannel(
-      category == null ? EMPTY_OVERRIDES : this.categoryOverrides(category),
-      this.channelOverrides(governing.id),
-    );
+    let categoryLayer: readonly OverrideGrant[] = EMPTY_OVERRIDES;
+    if (category != null) {
+      if (this.#categories.has(category)) {
+        categoryLayer = this.categoryOverrides(category);
+      } else {
+        const everyone =
+          governing.community == null
+            ? undefined
+            : this.roles(governing.community).find((r) => r.everyone);
+        if (everyone !== undefined) {
+          categoryLayer = [{ role: everyone.id, allow: [], deny: ["viewChannel"] }];
+        }
+      }
+    }
+    return access.inChannel(categoryLayer, this.channelOverrides(governing.id));
   }
 
   /**
@@ -2736,6 +2751,19 @@ export class RecordStore {
           this.#removeChannel(channel.id);
         }
       }
+      // A category is the caller's to know while its own overrides leave them View channel
+      // there; the server sends nothing more of one they lose, so it is let go here. Its
+      // channels they may still view stay, under a category they do not know.
+      const access = this.access(communityId);
+      for (const category of Array.from(this.#categories.values())) {
+        if (
+          category.community === communityId &&
+          access !== null &&
+          !access.inChannel(this.categoryOverrides(category.id), EMPTY_OVERRIDES).has("viewChannel")
+        ) {
+          this.#forgetCategory(category.id);
+        }
+      }
       // Without Manage invites, only the caller's own invites are theirs to see.
       if (this.access(communityId)?.has("manageInvites") !== true) {
         for (const invite of Array.from(this.#invites.values())) {
@@ -2993,20 +3021,43 @@ export class RecordStore {
     this.#touch(`categories:${category.community}`);
   }
 
+  /** Removes a deleted category, whose overrides went with it. */
   #removeCategory(id: string): void {
-    const category = this.#categories.get(id);
-    if (category === undefined) {
+    if (!this.#forgetCategory(id)) {
       return;
     }
-    this.#categories.delete(id);
-    this.#touch(`category:${id}`);
-    this.#touch(`categories:${category.community}`);
     // Channels filed under the category become top-level rather than disappearing.
     for (const channel of this.#channels.values()) {
       if (channel.parentCategory === id) {
         this.#putChannel({ ...channel, parentCategory: null });
       }
     }
+  }
+
+  /**
+   * Lets go of a category and its overrides, leaving the channels filed under it as they are.
+   * Returns whether it was held.
+   */
+  #forgetCategory(id: string): boolean {
+    const category = this.#categories.get(id);
+    if (category === undefined) {
+      return false;
+    }
+    this.#categories.delete(id);
+    for (const [key, o] of Array.from(this.#categoryOverrides)) {
+      if (o.category === id) {
+        this.#categoryOverrides.delete(key);
+      }
+    }
+    this.#touch(`overrides:${id}`);
+    this.#touch(`category:${id}`);
+    this.#touch(`categories:${category.community}`);
+    for (const channel of this.#channels.values()) {
+      if (channel.parentCategory === id) {
+        this.#touch(`channelAccess:${channel.id}`);
+      }
+    }
+    return true;
   }
 
   #setMyOrder(communityId: string, sortIndex: number): void {

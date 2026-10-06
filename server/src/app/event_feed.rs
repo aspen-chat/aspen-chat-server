@@ -44,11 +44,14 @@
 
 use crate::app::context::GlobalServerContext;
 use crate::app::events::{
-    CHANNEL_HEADER, CREATOR_HEADER, REQUIRES_HEADER, SubjectOwner, memberships, subject_owner,
+    CATEGORY_HEADER, CHANNEL_HEADER, CREATOR_HEADER, REQUIRES_HEADER, SubjectOwner, memberships,
+    subject_owner,
 };
 use crate::app::permissions::{Permission, Permissions};
 use crate::app::visibility::{CommunityModel, ModelChange, member_roles};
-use crate::app::{self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, RoleId, UserId};
+use crate::app::{
+    self, ASPEN_NATS_STREAM_NAME, CategoryId, ChannelId, CommunityId, RoleId, UserId,
+};
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
 use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};
@@ -99,6 +102,8 @@ pub struct FeedEvent {
     moderator: Option<bool>,
     /// The community channel whose View channel permission decides who receives the event.
     channel: Option<ChannelId>,
+    /// The category whose own overrides decide who receives the event (`CATEGORY_HEADER`).
+    category: Option<CategoryId>,
     /// A community permission the event needs besides membership (Manage invites for an
     /// invite's), and the member who receives it without that permission (the invite's creator).
     requires: Option<Permissions>,
@@ -109,9 +114,9 @@ pub struct FeedEvent {
     /// as the event is followed, or for one retained before the dispatcher held the model, as
     /// the model is adopted.
     access: OnceLock<Arc<CommunityModel>>,
-    /// For an event that changes who may view the channel it names, the model as it stood
-    /// before: those who could view the channel then receive it too, so they learn they no
-    /// longer can.
+    /// For an event that changes who may view the channel or category it names, the model as it
+    /// stood before: those who could view it then receive it too, so they learn they no longer
+    /// can.
     before: OnceLock<Arc<CommunityModel>>,
     /// When it was published, on this process's clock.
     published: Instant,
@@ -510,9 +515,9 @@ fn moderation_change(kind: Option<&str>, payload: &str) -> Option<bool> {
 /// Whether `event`, of a community's, may reach `user` holding `roles` there: they hold the
 /// permission it requires, if any, or made what it is about; and it names no channel, or they
 /// may view the one it names, by `model` or, for an event that changes who may, by the model
-/// before it (`event.before`). A channel a model does not know (one not yet made, or deleted)
-/// nobody views by it. A deployment moderator reads everything. Anything restricted reaches no
-/// one without a model.
+/// before it (`event.before`); and likewise for the category it names. A channel a model does
+/// not know (one not yet made, or deleted) nobody views by it. A deployment moderator reads
+/// everything. Anything restricted reaches no one without a model.
 fn may_read(
     event: &FeedEvent,
     model: Option<&CommunityModel>,
@@ -520,7 +525,9 @@ fn may_read(
     roles: Option<&Vec<RoleId>>,
     moderator: bool,
 ) -> bool {
-    if moderator || (event.requires.is_none() && event.channel.is_none()) {
+    if moderator
+        || (event.requires.is_none() && event.channel.is_none() && event.category.is_none())
+    {
         return true;
     }
     let none = Vec::new();
@@ -537,12 +544,24 @@ fn may_read(
     let views = |model: &CommunityModel, channel: ChannelId| {
         model.knows(channel) && model.can_view(user, roles, channel)
     };
+    let views_category = |model: &CommunityModel, category: CategoryId| {
+        model.can_view_category(user, roles, category)
+    };
+    // A deleted category's overrides are gone from the model after it, which would show the
+    // deletion to everyone; it reaches those who could view the category before.
+    let deleted = matches!(event.change, Some(ModelChange::CategoryDeleted(_)));
     event.channel.is_none_or(|channel| {
         views(model, channel)
             || event
                 .before
                 .get()
                 .is_some_and(|before| views(before, channel))
+    }) && event.category.is_none_or(|category| {
+        (!deleted && views_category(model, category))
+            || event
+                .before
+                .get()
+                .is_some_and(|before| views_category(before, category))
     })
 }
 
@@ -812,7 +831,7 @@ impl Routes {
                 continue;
             }
             if let SubjectOwner::Community(community) = event.owner
-                && (event.channel.is_some() || event.requires.is_some())
+                && (event.channel.is_some() || event.category.is_some() || event.requires.is_some())
             {
                 let model = event.access.get().map(Arc::as_ref);
                 let roles = connection.roles.get(&community);
@@ -1046,6 +1065,12 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         .and_then(|headers| headers.get(CHANNEL_HEADER))
         .and_then(|value| value.as_str().parse().ok())
         .map(ChannelId);
+    let category = message
+        .headers
+        .as_ref()
+        .and_then(|headers| headers.get(CATEGORY_HEADER))
+        .and_then(|value| value.as_str().parse().ok())
+        .map(CategoryId);
     let header = |name: &str| {
         message
             .headers
@@ -1081,6 +1106,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             roles,
             moderator,
             channel,
+            category,
             requires,
             creator,
             change,
@@ -1228,11 +1254,11 @@ impl Models {
 }
 
 /// Applies `event`'s change to `model` and attaches the model to the event as it then stands,
-/// and, when the change concerns the channel the event names, as it stood before. Events
-/// already given models keep them.
+/// and, when the change concerns the channel or category the event names, as it stood before.
+/// Events already given models keep them.
 fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) {
     if let Some(change) = &event.change {
-        if event.channel.is_some() {
+        if event.channel.is_some() || event.category.is_some() {
             let _ = event.before.set(model.clone());
         }
         Arc::make_mut(model).apply(change);
@@ -1415,6 +1441,7 @@ mod tests {
             roles: None,
             moderator: None,
             channel: None,
+            category: None,
             requires: None,
             creator: None,
             change: None,
@@ -1877,6 +1904,71 @@ mod tests {
             sequences.push(e.sequence);
         }
         assert_eq!(sequences, vec![1, 6]);
+    }
+
+    #[test]
+    fn a_categorys_events_reach_those_its_own_overrides_let_view_it() {
+        let member = UserId::new();
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let everyone = RoleId::new();
+        let mut models = Models::default();
+        models.models.insert(
+            community,
+            Arc::new(two_channels_with(
+                community, open, hidden, moderator, everyone,
+            )),
+        );
+        models.readers.insert(community, 1);
+        let mut routes = Routes::default();
+        let (tx, mut rx) = mpsc::channel(16);
+        routes.add(
+            1,
+            Connection {
+                user: member,
+                sign_in: String::new(),
+                communities: HashSet::from([community]),
+                roles: HashMap::new(),
+                moderator: false,
+                deliveries: tx,
+            },
+        );
+        let mut followed = |sequence: u64, category: CategoryId, change: Option<ModelChange>| {
+            let mut e = plain(sequence, SubjectOwner::Community(community), None);
+            e.category = Some(category);
+            e.change = change;
+            models.follow(&mut e);
+            Arc::new(e)
+        };
+        let set = |category, set| ModelChange::CategoryOverride {
+            category,
+            role: everyone,
+            set,
+        };
+        let hide = Some((Permissions::empty(), Permissions::VIEW_CHANNEL));
+        let (kept, other) = (CategoryId::new(), CategoryId::new());
+        let events = [
+            // Made with no overrides, everyone may learn of it.
+            followed(1, kept, None),
+            // Hiding it reaches those who could view it, and then nothing more of it does.
+            followed(2, kept, Some(set(kept, hide))),
+            followed(3, kept, None),
+            // Showing it again reaches them, about a category they did not have.
+            followed(4, kept, Some(set(kept, None))),
+            followed(5, kept, Some(set(kept, hide))),
+            // Deleting a hidden category, whose overrides go with it, does not show it.
+            followed(6, kept, Some(ModelChange::CategoryDeleted(kept))),
+            // Deleting one they could view reaches them.
+            followed(7, other, Some(ModelChange::CategoryDeleted(other))),
+        ];
+        for e in &events {
+            routes.route(e);
+        }
+        let mut sequences = Vec::new();
+        while let Ok(Delivery::Live(e)) = rx.try_recv() {
+            sequences.push(e.sequence);
+        }
+        assert_eq!(sequences, vec![1, 2, 4, 5, 7]);
     }
 
     #[test]

@@ -52,6 +52,10 @@ pub const EVENT_ID_HEADER: &str = "Aspen-Event-Id";
 /// The header naming the community channel an event is about or happens in: the channel whose
 /// View channel permission decides who receives it, which for a thread is its parent's.
 pub const CHANNEL_HEADER: &str = "Aspen-Channel";
+/// The header naming the category an event is about (its own events and its overrides'): the
+/// category whose own overrides decide who receives it, by whether they leave the reader View
+/// channel there (`app::visibility::CommunityModel::can_view_category`).
+pub const CATEGORY_HEADER: &str = "Aspen-Category";
 /// The header naming the community permission an event needs besides membership, as its wire
 /// name (`manageInvites`); with it, `CREATOR_HEADER` may name one member who receives it anyway.
 pub const REQUIRES_HEADER: &str = "Aspen-Requires";
@@ -417,6 +421,27 @@ async fn to_channel(conn: &mut AsyncPgConnection, scope: EventScope) -> app::Res
 
 /// The community channel whose View channel permission decides who receives an event with
 /// this scope, if it is about one.
+/// The category whose own overrides decide who receives `event` (`CATEGORY_HEADER`): the one a
+/// category's own event, or one of its overrides', is about.
+fn governing_category(event: &ServerEvent) -> Option<CategoryId> {
+    use crate::api::message_enum::server_event::{CategoryEvent, CategoryOverrideEvent};
+    match event {
+        ServerEvent::Category(CategoryEvent::Create(category)) => Some(category.id),
+        ServerEvent::Category(CategoryEvent::Update { id, .. } | CategoryEvent::Delete { id }) => {
+            Some(*id)
+        }
+        ServerEvent::CategoryOverride(
+            CategoryOverrideEvent::Create(crate::api::message_enum::CategoryOverride {
+                category,
+                ..
+            })
+            | CategoryOverrideEvent::Update { category, .. }
+            | CategoryOverrideEvent::Delete { category, .. },
+        ) => Some(*category),
+        _ => None,
+    }
+}
+
 async fn governing_channel(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
@@ -1024,6 +1049,9 @@ pub async fn publish_event(
     headers.insert(EVENT_ID_HEADER, event_id.as_str());
     if let Some(channel) = governing {
         headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+    }
+    if let Some(category) = governing_category(event) {
+        headers.insert(CATEGORY_HEADER, category.0.to_string().as_str());
     }
     if let Some((permission, creator)) = &audience {
         headers.insert(REQUIRES_HEADER, permission.to_string().as_str());

@@ -68,6 +68,8 @@ pub enum ModelChange {
         role: RoleId,
         set: Option<(Permissions, Permissions)>,
     },
+    /// A category deleted, and its overrides with it, which its deletion's event alone tells of.
+    CategoryDeleted(CategoryId),
 }
 
 /// Deserializes a list of permission names, leaving out any this version does not know, so a
@@ -93,10 +95,11 @@ impl ModelChange {
     /// The change a community event makes, if any, read from its payload. Only the few kinds
     /// that can change one are parsed; the rest are passed over by their tag.
     pub fn read(payload: &str) -> Option<ModelChange> {
-        const KINDS: [&str; 5] = [
+        const KINDS: [&str; 6] = [
             r#""serverEvent":"community""#,
             r#""serverEvent":"role""#,
             r#""serverEvent":"channel""#,
+            r#""serverEvent":"category""#,
             r#""serverEvent":"channelOverride""#,
             r#""serverEvent":"categoryOverride""#,
         ];
@@ -168,6 +171,9 @@ impl ModelChange {
                     _ => None,
                 }
             }
+            "category" if g.kind == "delete" => {
+                Some(ModelChange::CategoryDeleted(CategoryId(g.id?)))
+            }
             "channelOverride" => Some(ModelChange::ChannelOverride {
                 channel: g.channel?,
                 role: g.role?,
@@ -236,6 +242,9 @@ impl CommunityModel {
             ModelChange::ChannelDeleted(channel) => {
                 self.categories.remove(channel);
                 self.channel_overrides.remove(channel);
+            }
+            ModelChange::CategoryDeleted(category) => {
+                self.category_overrides.remove(category);
             }
             ModelChange::ChannelCategory { channel, category } => {
                 self.categories.insert(*channel, *category);
@@ -307,6 +316,19 @@ impl CommunityModel {
         let own = self.channel_overrides.get(&channel).unwrap_or(&none);
         access
             .in_channel(category, own)
+            .contains(Permissions::VIEW_CHANNEL)
+    }
+
+    /// Whether `user`, holding `roles` besides everyone's, may learn of `category`: whether its
+    /// own overrides, applied to what they may do across the community, leave them View channel
+    /// there. A category the model holds no overrides of is decided by the community's
+    /// permissions alone. What its channels' own overrides allow does not reveal it: a channel
+    /// one may view in a category one may not is listed under no category they know.
+    pub fn can_view_category(&self, user: UserId, roles: &[RoleId], category: CategoryId) -> bool {
+        let none = Vec::new();
+        let overrides = self.category_overrides.get(&category).unwrap_or(&none);
+        self.access_of(user, roles)
+            .in_channel(overrides, &none)
             .contains(Permissions::VIEW_CHANNEL)
     }
 
@@ -520,6 +542,23 @@ impl Visibility {
             .collect()
     }
 
+    /// Whether the user may learn of `category`, a category of `community`, one of the
+    /// communities it covers (`CommunityModel::can_view_category`); a deployment moderator
+    /// learns of every one.
+    pub fn can_view_category(&self, community: CommunityId, category: CategoryId) -> bool {
+        if self.moderator {
+            return true;
+        }
+        let none = Vec::new();
+        self.models.get(&community).is_some_and(|model| {
+            model.can_view_category(
+                self.user,
+                self.roles.get(&community).unwrap_or(&none),
+                category,
+            )
+        })
+    }
+
     /// Whether the user may view `channel`. A channel of none of the communities (a DM, or a
     /// thread, which is answered by its parent where it is read) is not this struct's to
     /// refuse.
@@ -652,6 +691,21 @@ mod tests {
                 user.0
             )),
             Some(ModelChange::Owner(Some(user)))
+        );
+        let category = CategoryId(id(10));
+        assert_eq!(
+            ModelChange::read(&format!(
+                r#"{{"serverEvent":"category","type":"delete","id":"{}"}}"#,
+                category.0
+            )),
+            Some(ModelChange::CategoryDeleted(category))
+        );
+        assert_eq!(
+            ModelChange::read(&format!(
+                r#"{{"serverEvent":"category","type":"update","id":"{}","name":"n"}}"#,
+                category.0
+            )),
+            None
         );
         assert_eq!(
             ModelChange::read(r#"{"serverEvent":"message","type":"create","id":"x"}"#),

@@ -103,6 +103,8 @@ pub async fn sideload_communities(
     // its readers take.
     let visible = if [
         CommunityInclude::Channels,
+        CommunityInclude::Categories,
+        CommunityInclude::Collapses,
         CommunityInclude::Voice,
         CommunityInclude::ReadStates,
         CommunityInclude::Mutes,
@@ -140,12 +142,13 @@ pub async fn sideload_communities(
             }
         },
         async {
-            if include.contains(CommunityInclude::Categories) {
-                app::category::read_communities_categories(state, communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Categories) => {
+                    app::category::read_communities_categories(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
@@ -198,12 +201,13 @@ pub async fn sideload_communities(
             }
         },
         async {
-            if include.contains(CommunityInclude::Collapses) {
-                app::category_collapse::read_collapsed(state, caller, communities)
-                    .await
-                    .map(Some)
-            } else {
-                Ok(None)
+            match visible {
+                Some(visible) if include.contains(CommunityInclude::Collapses) => {
+                    app::category_collapse::read_collapsed(state, visible)
+                        .await
+                        .map(Some)
+                }
+                _ => Ok(None),
             }
         },
         async {
