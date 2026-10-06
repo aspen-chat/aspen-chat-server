@@ -295,6 +295,10 @@ function ChannelGroup({
   useReorderGlide(list, channels.map((c) => c.id).join(" "));
   return (
     <GridList
+      // The list calls more hooks while it has drag and drop hooks, so it is a new list when
+      // they come or go (the sidebar moving to a community where the reader may arrange
+      // channels, or leaving one) rather than one whose hook order changes.
+      key={arrange ? "arrange" : "view"}
       ref={list}
       aria-label={label}
       items={channels}
