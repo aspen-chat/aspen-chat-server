@@ -138,6 +138,9 @@ function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
       )}
       <span className="min-w-0">
         <span className="block font-medium wrap-anywhere text-accent">{title}</span>
+        {preview.title != null && preview.siteName != null && (
+          <span className="block wrap-anywhere text-ink-muted">{preview.siteName}</span>
+        )}
         {preview.description != null && (
           <span className="mt-0.5 line-clamp-2 block text-ink-muted">{preview.description}</span>
         )}

@@ -20,7 +20,9 @@
 //!    `message_link_preview` rows, and (e) broadcasts a message `Update`
 //!    carrying the new `link_previews` so connected clients can swap the
 //!    empty-preview card stack on the message for the populated one without
-//!    reloading the channel.
+//!    reloading the channel. Reddit gives an unrecognised crawler a script
+//!    challenge rather than its pages, so its posts are read from its oEmbed
+//!    endpoint and embed page instead (`reddit`).
 //! 3. [`load_previews`] batches preview rows back out for REST reads,
 //!    templating each row's `image_id` into a public download URL via
 //!    [`MediaStore::public_url`].
@@ -40,6 +42,7 @@
 
 mod fetch;
 mod html_meta;
+mod reddit;
 mod urls;
 mod video;
 

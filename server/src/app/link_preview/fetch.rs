@@ -2,6 +2,7 @@
 //! and fetching a page's metadata under byte and time limits.
 
 use super::html_meta::{ParsedMetadata, parse_html_metadata};
+use super::reddit;
 use super::video::{fetch_video_embed, video_provider_for};
 use futures_util::stream::StreamExt;
 use lru::LruCache;
@@ -78,6 +79,22 @@ fn cache_put(url: String, value: Option<ParsedMetadata>) {
 // Metadata fetching
 // ---------------------------------------------------------------------------
 
+/// A lookup's metadata, and whether it may be cached. A lookup cut short by the other side's
+/// rate limit may not, so a later mention of the link gets the whole preview.
+pub(super) struct Lookup {
+    pub(super) metadata: Option<ParsedMetadata>,
+    pub(super) lasting: bool,
+}
+
+impl Lookup {
+    pub(super) fn lasting(metadata: Option<ParsedMetadata>) -> Self {
+        Self {
+            metadata,
+            lasting: true,
+        }
+    }
+}
+
 /// Fetch + parse metadata for `url`, going through the process-local cache.
 ///
 /// Returns `None` if the fetch failed or the response wasn't preview-worthy.
@@ -88,9 +105,15 @@ pub(super) async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
     if let Some(cached) = cache_get(&cache_key) {
         return cached;
     }
-    let parsed = fetch_metadata_uncached(url).await;
-    cache_put(cache_key, parsed.clone());
-    parsed
+    let lookup = if reddit::is_reddit(url) {
+        reddit::fetch_metadata(url).await
+    } else {
+        Lookup::lasting(fetch_metadata_uncached(url).await)
+    };
+    if lookup.lasting {
+        cache_put(cache_key, lookup.metadata.clone());
+    }
+    lookup.metadata
 }
 
 /// Page metadata, plus a player when the link is a video on an allowlisted provider. The
