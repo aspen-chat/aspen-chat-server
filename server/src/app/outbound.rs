@@ -86,6 +86,17 @@ pub fn is_public_address(ip: IpAddr) -> bool {
     }
 }
 
+/// Whether `url` names its host by an address that is not public. A client connects to an
+/// address it is given without asking its resolver, so `PublicResolver` never sees one; what
+/// takes a URL from someone else checks it here.
+pub fn names_inside_address(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(v4)) => !is_public_address(IpAddr::V4(v4)),
+        Some(url::Host::Ipv6(v6)) => !is_public_address(IpAddr::V6(v6)),
+        Some(url::Host::Domain(_)) | None => false,
+    }
+}
+
 /// Why `PublicResolver` found no address to connect to, which callers tell apart for the
 /// people they report to.
 #[derive(Debug, thiserror::Error)]
@@ -133,6 +144,26 @@ impl Resolve for PublicResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn urls_naming_inside_addresses_are_told_apart() {
+        for (url, inside) in [
+            ("https://127.0.0.1/", true),
+            ("https://[::1]:8443/push", true),
+            ("https://[::ffff:169.254.169.254]/", true),
+            ("https://10.0.0.1:443/", true),
+            // Forms a URL parser reads as an IPv4 address.
+            ("https://2130706433/", true),
+            ("https://0x7f.1/", true),
+            ("https://127.0x1/", true),
+            ("https://1.1.1.1/", false),
+            ("https://[2606:4700::1111]/", false),
+            ("https://push.example.org/v1/push/abc", false),
+            ("https://localhost/", false),
+        ] {
+            assert_eq!(names_inside_address(&url.parse().unwrap()), inside, "{url}");
+        }
+    }
 
     #[test]
     fn only_public_addresses_are_public() {

@@ -308,6 +308,7 @@ searchCommunityAndChannel: "Search one community or one channel, not both: a cha
 pushOff: "This server does not wake phones: its administrators have turned push off ([push] enabled in its aspen.toml)."
 pushBots: "Bots have no phones to wake; they read the event stream instead."
 pushEndpoint: "A push endpoint must be an https:// URL of at most %{max} characters, as the app's push service gave it."
+pushEndpointInside: "%{host} is an address inside a network, and pushes go only to public addresses. Register the endpoint the app's push service gave."
 pushKeys: "The push keys must be a P-256 public key (65 bytes, uncompressed) and a 16-byte secret, each base64url."
 notificationSettingKind: "Only text channels, DMs, and channels a plugin shows have notification settings; a thread follows its channel, and a voice channel has no messages."
 botCommandsTooLarge: "This command list is larger than the %{max} bytes a bot may publish. Shorten its descriptions, or offer fewer commands."

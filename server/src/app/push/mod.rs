@@ -66,6 +66,8 @@ const TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_BADGED: usize = 100;
 /// The longest endpoint URL taken.
 const MAX_ENDPOINT_CHARS: usize = 2048;
+/// How much of a push service's refusal is read, for the log.
+const MAX_REFUSAL_BYTES: usize = 4096;
 
 /// The key this server signs with, loaded once it exists.
 static KEY: OnceCell<(PushKeyId, Arc<PushKey>)> = OnceCell::const_new();
@@ -147,10 +149,16 @@ pub async fn subscribe(
             && url.host_str().is_some()
             && new.endpoint.len() <= MAX_ENDPOINT_CHARS
     });
-    if endpoint.is_none() {
+    let Some(endpoint) = endpoint else {
         return Err(app::Error::Validation(t!(
             "pushEndpoint",
             max = MAX_ENDPOINT_CHARS
+        )));
+    };
+    if reaches_inside(state, &endpoint) {
+        return Err(app::Error::Validation(t!(
+            "pushEndpointInside",
+            host = endpoint.host_str().unwrap_or_default().to_string()
         )));
     }
     if new.p256dh.len() != 65 || new.p256dh[0] != 4 || new.auth.len() != 16 {
@@ -350,6 +358,9 @@ async fn send(
     let body = webpush::encrypt(&payload, &subscription.p256dh, &subscription.auth)?;
     let url = reqwest::Url::parse(&subscription.endpoint)
         .map_err(|_| SendError::Refused(reqwest::StatusCode::BAD_REQUEST, "endpoint".into()))?;
+    if reaches_inside(state, &url) {
+        return Ok(Delivery::Gone);
+    }
     let audience = url.origin().ascii_serialization();
     let subject = state
         .config
@@ -379,11 +390,29 @@ async fn send(
     if matches!(status.as_u16(), 403 | 404 | 410) {
         return Ok(Delivery::Gone);
     }
-    let detail = response.text().await.unwrap_or_default();
+    // A push service is a host a client chose, so only the start of what it says is read.
+    let mut detail = Vec::new();
+    let mut body = response.bytes_stream();
+    while detail.len() < MAX_REFUSAL_BYTES {
+        match body.next().await {
+            Some(Ok(chunk)) => detail.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    detail.truncate(MAX_REFUSAL_BYTES);
     Err(SendError::Refused(
         status,
-        detail.chars().take(500).collect(),
+        String::from_utf8_lossy(&detail).chars().take(500).collect(),
     ))
+}
+
+/// Whether `endpoint` names an address inside a network, which pushes never go to unless
+/// `[federation.development]` allows private addresses. A name is checked as it is connected to
+/// (`app::outbound::PublicResolver`); an address is connected to without being resolved, so it is
+/// checked here, when a subscription is made and again before each push.
+fn reaches_inside(state: &GlobalServerContext, endpoint: &reqwest::Url) -> bool {
+    !state.config.federation.development.allow_private_addresses
+        && crate::app::outbound::names_inside_address(endpoint)
 }
 
 /// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now, as
