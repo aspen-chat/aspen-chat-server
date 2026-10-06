@@ -162,7 +162,7 @@ impl GlobalServerContext {
             rate_limiter: Arc::new(rate_limiter),
             federation_client,
             settings: app::deployment_settings::SettingsCache::new(settings),
-            plugins: Arc::new(app::plugin::Plugins::new()?),
+            plugins: Arc::new(app::plugin::Plugins::new(&config.plugins)?),
             mailer,
             config: config.into(),
         })

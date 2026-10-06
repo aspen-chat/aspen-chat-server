@@ -217,7 +217,7 @@ async fn run(
                 }
                 None => Vec::new(),
             };
-            crate::app::plugin::Plugins::new()
+            crate::app::plugin::Plugins::new(&Default::default())
                 .map_err(|e| anyhow!("{e}"))?
                 .check_component(&component)
                 .map_err(|e| anyhow!("the component is not a plugin this Aspen runs: {e}"))?;

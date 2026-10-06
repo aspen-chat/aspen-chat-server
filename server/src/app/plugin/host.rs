@@ -1,10 +1,12 @@
 //! The sandbox a plugin's calls run in, and the host calls it may make (`spec/plugin.wit`).
 //!
 //! Each call runs in a fresh instance in a store of its own, so nothing survives from one call
-//! to the next but what the plugin keeps through the host. A store has a memory ceiling
-//! (`[plugins] memory_mib`) and a deadline: the engine's epoch ticks every millisecond, and at
-//! each tick a call past its deadline traps, while one within it yields to the runtime, so a
-//! plugin that spins neither overruns nor holds a worker thread. The WASI interfaces a
+//! to the next but what the plugin keeps through the host. A call first waits for a place among
+//! the calls running (`[plugins] concurrency` and `concurrency_per_plugin`). A store has a
+//! memory ceiling (`[plugins] memory_mib`, for all its memories together), bounded instances,
+//! tables, and table elements (`CallLimits`), and a deadline: the engine's epoch ticks every
+//! millisecond, and at each tick a call past its deadline traps, while one within it yields to
+//! the runtime, so a plugin that spins neither overruns nor holds a worker thread. The WASI interfaces a
 //! component's standard library imports are provided with nothing behind them: no files,
 //! sockets, environment, or arguments.
 //!
@@ -28,7 +30,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
+use wasmtime::{Engine, Store, UpdateDeadline};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 /// The bindings `spec/plugin.wit` generates, in a module of their own so that nothing imported
@@ -55,6 +57,62 @@ const MAX_EVENT_PAYLOAD: usize = 16 << 10;
 const MAX_COUNTER_KEY: usize = 200;
 /// The longest a counter's window may be, in seconds.
 const MAX_COUNTER_WINDOW: u32 = 7 * 24 * 60 * 60;
+/// The most core and component instances one call's component may make. The examples, built
+/// for `wasm32-wasip2`, make three.
+const MAX_INSTANCES: usize = 16;
+/// The most tables one call may hold; the examples hold two.
+const MAX_TABLES: usize = 8;
+/// The most memories one call may hold, whose sizes together are what `[plugins] memory_mib`
+/// bounds; the examples hold one.
+const MAX_MEMORIES: usize = 4;
+/// The most elements one table may grow to.
+const MAX_TABLE_ELEMENTS: usize = 50_000;
+
+/// What one call may take: its memories' bytes together at most `[plugins] memory_mib`, and a
+/// bounded number of instances, tables, and table elements.
+struct CallLimits {
+    /// The bytes its memories may still grow by.
+    memory_left: usize,
+}
+
+impl wasmtime::ResourceLimiter for CallLimits {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let more = desired.saturating_sub(current);
+        if more > self.memory_left {
+            return Ok(false);
+        }
+        // Counted before the memory grows; a growth that then fails stays counted, which only
+        // errs toward less.
+        self.memory_left -= more;
+        Ok(true)
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        Ok(desired <= MAX_TABLE_ELEMENTS)
+    }
+
+    fn instances(&self) -> usize {
+        MAX_INSTANCES
+    }
+
+    fn tables(&self) -> usize {
+        MAX_TABLES
+    }
+
+    fn memories(&self) -> usize {
+        MAX_MEMORIES
+    }
+}
 
 /// The engine every plugin of this server runs on.
 pub(super) fn engine() -> wasmtime::Result<Engine> {
@@ -143,12 +201,14 @@ pub(super) enum Deferred {
     },
 }
 
-/// What one call's store holds: the empty WASI context, its limits, and what host calls need.
+/// What one call's store holds: the empty WASI context, its limits, what host calls need, and
+/// its places among the calls running (`Plugins::admit`).
 pub(super) struct CallState {
     wasi: WasiCtx,
     table: ResourceTable,
-    limits: StoreLimits,
+    limits: CallLimits,
     pub(super) call: Call,
+    _permit: super::registry::CallPermit,
 }
 
 /// What a call's host calls need: whose call it is, whom it serves, and what it was shown.
@@ -200,6 +260,13 @@ impl Instance {
     ) -> Result<Self, CallFailed> {
         let memory = usize::try_from(state.config.plugins.memory_mib << 20).unwrap_or(usize::MAX);
         let deadline = Instant::now() + budget;
+        // Waiting for a place counts against the call's time, so a crowd of calls fails as
+        // each one's manifest says rather than queueing without end.
+        let permit = state
+            .plugins
+            .admit(&plugin.id, deadline)
+            .await
+            .ok_or_else(|| CallFailed("too many plugin calls were running to start".into()))?;
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
             .allow_tcp(false)
             .allow_udp(false)
@@ -211,12 +278,9 @@ impl Instance {
             CallState {
                 wasi,
                 table: ResourceTable::new(),
-                limits: StoreLimitsBuilder::new()
-                    .memory_size(memory)
-                    .instances(16)
-                    .tables(64)
-                    .memories(16)
-                    .build(),
+                limits: CallLimits {
+                    memory_left: memory,
+                },
                 call: Call {
                     server: state.clone(),
                     plugin,
@@ -224,6 +288,7 @@ impl Instance {
                     shown,
                     deferred: Vec::new(),
                 },
+                _permit: permit,
             },
         );
         store.limiter(|call| &mut call.limits);
@@ -1374,6 +1439,59 @@ impl From<wit::Text> for PluginText {
         PluginText {
             key: text.key,
             args: text.args.into_iter().collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime::ResourceLimiter;
+
+    #[test]
+    fn a_calls_memories_share_one_ceiling() {
+        let mut limits = CallLimits { memory_left: 100 };
+        assert!(limits.memory_growing(0, 60, None).unwrap());
+        // A second memory draws on what the first left.
+        assert!(!limits.memory_growing(0, 60, None).unwrap());
+        assert!(limits.memory_growing(0, 40, None).unwrap());
+        assert!(!limits.memory_growing(40, 41, None).unwrap());
+        assert!(
+            !limits
+                .table_growing(0, MAX_TABLE_ELEMENTS + 1, None)
+                .unwrap()
+        );
+    }
+
+    /// The example plugins, once built for `wasm32-wasip2` (as CI builds them), instantiate
+    /// within a call's limits; a plugin not built is passed over.
+    #[tokio::test]
+    async fn the_example_plugins_fit_a_calls_limits() {
+        let engine = engine().unwrap();
+        for name in ["word_filter", "forum", "calendar"] {
+            let path = format!(
+                "{}/../plugins/{name}/target/wasm32-wasip2/release/aspen_{name}.wasm",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let Ok(bytes) = std::fs::read(&path) else {
+                eprintln!("{name} is not built; passing it over");
+                continue;
+            };
+            let component = Component::new(&engine, &bytes).unwrap();
+            let mut linker: Linker<CallLimits> = Linker::new(&engine);
+            linker.define_unknown_imports_as_traps(&component).unwrap();
+            let mut store = Store::new(
+                &engine,
+                CallLimits {
+                    memory_left: 64 << 20,
+                },
+            );
+            store.limiter(|limits| limits);
+            store.set_epoch_deadline(u64::MAX / 2);
+            linker
+                .instantiate_async(&mut store, &component)
+                .await
+                .unwrap_or_else(|e| panic!("{name} does not fit a call's limits: {e:#}"));
         }
     }
 }
