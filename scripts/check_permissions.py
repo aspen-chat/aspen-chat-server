@@ -260,6 +260,21 @@ def role_grants(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def poll_votes(world: World, check: Checks) -> None:
+    say("a vote withdrawn after the poll's channel is hidden")
+    stack, member = world.stack, world.member
+    ballot = world.channel("ballot")
+    poll = world.as_owner("POST", f"/channels/{ballot}/polls", {
+        "question": "Which?", "options": [{"label": "this"}, {"label": "that"}], "multipleChoice": False,
+        "allowWriteIns": False, "anonymous": False, "durationSeconds": 3600})["id"]
+    vote = f"/polls/{poll}/votes/0/@me"
+    check("the member votes", stack.status("PUT", vote, token=member["token"]) == 201)
+    world.as_owner("PUT", f"/channels/{ballot}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    check("hidden from the poll's channel, they cannot withdraw their vote",
+          stack.status("DELETE", vote, token=member["token"]) == 404)
+    check("which still counts", world.as_owner("GET", f"/polls/{poll}")["data"]["results"][0]["count"] == 1)
+
+
 def thread_echoes(world: World, check: Checks) -> None:
     say("a thread reply echoed to its channel after it was posted")
     member = world.member["token"]
@@ -1270,7 +1285,7 @@ def invite_previews(world: World, check: Checks) -> None:
 
 
 SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_managers, role_grants,
-             thread_echoes, calls, attachments,
+             poll_votes, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, email, invite_previews, previews]

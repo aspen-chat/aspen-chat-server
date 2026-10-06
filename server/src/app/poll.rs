@@ -826,7 +826,8 @@ pub async fn read_own_write_ins(
         .collect())
 }
 
-/// Withdraws `user`'s vote for `option`, if they had one.
+/// Withdraws `user`'s vote for `option`, if they had one, on the terms voting takes: a poll in a
+/// channel they may not view is not found, and one in a blocked DM refused.
 pub async fn remove_vote(
     state: &GlobalServerContext,
     user: UserId,
@@ -837,6 +838,9 @@ pub async fn remove_vote(
     conn.transaction(|conn| {
         async move {
             let row = lock_poll(conn.as_mut(), id).await?;
+            channel_access(state, conn.as_mut(), user, row.channel)
+                .await?
+                .ensure_unblocked()?;
             ensure_open(&row, Utc::now())?;
             let Ok(option_index) = i32::try_from(option) else {
                 return Ok(());
