@@ -471,6 +471,10 @@ pub struct PreviewConfig {
     /// The largest video, in bytes, a poster is taken of (2 GiB).
     #[default = 2_147_483_648]
     pub max_video_bytes: u64,
+    /// The most memory, in MiB, `ffmpeg` or `ffprobe` may map while taking one poster (its
+    /// address space, `RLIMIT_AS`); 3 GiB, room for a frame of 8K video.
+    #[default = 3072]
+    pub ffmpeg_memory_mib: u64,
 }
 
 /// Object-storage configuration.

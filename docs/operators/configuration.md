@@ -128,6 +128,16 @@ so point that at a disk with room for `max_video_bytes` times `concurrency` (not
 | `max_picture_pixels` | `100000000` | The most pixels a picture may have for a preview to be made of it. |
 | `ffmpeg`, `ffprobe` | `"ffmpeg"`, `"ffprobe"` | The programs that take videos' posters, by path or by name on `PATH`. An empty `ffmpeg` takes none. |
 | `max_video_bytes` | `2147483648` (2 GiB) | The largest video a poster is taken of. |
+| `ffmpeg_memory_mib` | `3072` (3 GiB) | The most memory `ffmpeg` or `ffprobe` may map while taking one poster. A frame of 8K video needs about 2 GiB. |
+
+`ffmpeg` and `ffprobe` run with none of the server's environment, may read only the video they
+are given, decode only the codecs phones, cameras, and screen recorders write and frames of at
+most `max_picture_pixels`, on one thread, for at most a minute of CPU time, and may write no
+file; a frame larger than `max_picture_bytes` is not read. A decoder is still a large body of C
+reading files anyone can send, so run the server as a user that cannot read anything it does
+not need (not `aspen.toml`'s secrets beyond what the server reads at startup, nor other
+services' files), or in a container or sandbox of its own, so a flaw in `ffmpeg` reaches as
+little as possible. Leaving `ffmpeg` empty takes no posters at all.
 
 The metrics `aspen_attachment_previews_made_total`, `aspen_attachment_previews_failed_total`,
 and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`, `video`).
