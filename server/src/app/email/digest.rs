@@ -45,6 +45,8 @@ pub const MAX_PLACES: i64 = 20;
 const MAX_COUNTED: i64 = 10_000;
 /// The longest excerpt of one message, in characters.
 const EXCERPT_CHARS: usize = 300;
+/// The longest tag or custom emoji reference in a message's text, in bytes: `<@&`, a UUID, `>`.
+const TOKEN_MAX_BYTES: usize = 40;
 /// How often each server looks for digests that are due.
 const TICK: Duration = Duration::from_secs(60);
 /// How many digests one look claims.
@@ -610,8 +612,12 @@ impl Names {
         while let Some(start) = rest.find('<') {
             out.push_str(&rest[..start]);
             rest = &rest[start..];
-            let Some(end) = rest.find('>') else {
-                break;
+            // A tag or an emoji's reference is at most `<@&`, an id, and `>`; only that much
+            // is read for its end, so text of many `<` is read once.
+            let Some(end) = rest.bytes().take(TOKEN_MAX_BYTES).position(|b| b == b'>') else {
+                out.push('<');
+                rest = &rest[1..];
+                continue;
             };
             let token = &rest[..=end];
             let named = if let Some(id) = token
