@@ -68,4 +68,38 @@ describe("Markdown", () => {
     expect(html).toContain(">a cat</a>");
     expect(html).not.toContain('href="//attacker');
   });
+
+  it("shows a body nesting too deeply to render as its plain text", () => {
+    for (const content of [">".repeat(10000), "1. ".repeat(1400), "- ".repeat(5000)]) {
+      const html = render(content);
+      expect(html).not.toContain("<blockquote");
+      expect(html).not.toContain("<li");
+      expect(html).toContain(content.trim().slice(0, 40).replaceAll(">", "&gt;"));
+    }
+    // Nesting built by indenting is caught once parsed.
+    const indented = Array.from({ length: 40 }, (_, i) => `${"  ".repeat(i)}- a`).join("\n");
+    expect(render(indented)).not.toContain("<li");
+    // Nesting a person writes is drawn as Markdown.
+    expect(render("> > > quoted\n\n- a\n  - b\n    - c")).toContain("<blockquote>");
+    expect((render("- a\n  - b\n    - c").match(/<li>/g) ?? []).length).toBe(3);
+  });
+
+  it("draws a table's rows as written, and a table too large to draw as its source", () => {
+    const small = render("| a | b | c |\n| - | :-: | - |\n| 1 |\n| 1 | 2 | 3 |");
+    expect(small).toContain("<th>a</th>");
+    expect(small).toContain('<th style="text-align:center">b</th>');
+    expect(small).toContain("<tr><td>1</td></tr>");
+    expect((small.match(/<td/g) ?? []).length).toBe(4);
+
+    // A wide header over many short rows would otherwise be padded to millions of cells.
+    const wide = "a|".repeat(1600) + "\n" + "-|".repeat(1600) + "\n" + "a\n".repeat(1690);
+    const wideHtml = render(wide);
+    expect(wideHtml).not.toContain("<table");
+    expect(wideHtml).toContain("<pre><code>a|a|");
+
+    const row = "|" + " a |".repeat(10) + "\n";
+    const big = row + "|" + " - |".repeat(10) + "\n" + row.repeat(500);
+    expect(render(big)).not.toContain("<table");
+    expect(render(row + "|" + " - |".repeat(10) + "\n" + row.repeat(400))).toContain("<table");
+  });
 });

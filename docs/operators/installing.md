@@ -181,8 +181,10 @@ else is revalidated on each load.
 ### Security headers
 
 The server sends the web client with a Content Security Policy and the other headers that keep
-it to itself (`nosniff`, no referrer, framing refused, and, when `public_url` is `https`,
-HSTS for a year: once a browser has seen it, it reaches your deployment over HTTPS only). The
+it to itself (`nosniff`, no referrer, framing refused, no window shared with another page, and,
+when `public_url` is `https`, HSTS for a year: once a browser has seen it, it reaches your
+deployment over HTTPS only), and every API answer with `nosniff` and, but for the few meant to
+be kept, `Cache-Control: no-store`, so no cache between keeps one user's answers. The
 policy is built from your configuration: it allows your storage's
 [`public_base_url`](configuration.md#medias3) for pictures and videos and its `public_endpoint`
 (or `endpoint`) for uploads, so nothing needs adding by hand. Let your reverse proxy pass these

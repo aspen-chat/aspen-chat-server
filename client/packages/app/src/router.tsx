@@ -16,6 +16,7 @@ import { InviteScreen } from "@/features/invites/InviteScreen";
 import { RootLayout } from "@/features/layout/RootLayout";
 import { ChannelScreen } from "@/features/messages/ChannelScreen";
 import { NotFound } from "@/features/layout/NotFound";
+import { RouteError } from "@/features/layout/RouteError";
 import { ForeignScope } from "@/api/deployments";
 import { BotAddScreen } from "@/features/bots/BotAddScreen";
 import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
@@ -320,6 +321,8 @@ export const router = createRouter({
   routeTree,
   history: detectShell() === "web" ? createBrowserHistory() : createHashHistory(),
   defaultPreload: false,
+  // A route that throws while drawing shows this in its place, leaving the layout around it.
+  defaultErrorComponent: RouteError,
 });
 
 declare module "@tanstack/react-router" {

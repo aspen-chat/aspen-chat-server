@@ -22,18 +22,50 @@ const EXTENSION_LIKE_TLDS: ReadonlySet<string> = new Set(["rs", "py", "sh", "md"
 const CANDIDATE =
   /(https?:\/\/[^\s<>]+)|(?<![\w@./-])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,63}))(:\d{1,5})?((?:\/[^\s<>]*)?)/gi;
 /** Punctuation that usually belongs to the sentence rather than the link when it ends one. */
-const TRAILING = /[.,;:!?'"]+$/;
+const TRAILING: ReadonlySet<string> = new Set([".", ",", ";", ":", "!", "?", "'", '"']);
+
+/**
+ * The longest candidate that becomes a link; a longer one is left as text. The server's preview
+ * extractor (`server/app/src/link_preview/urls.rs`) skips longer ones too, so what renders as a
+ * link is what gets a preview.
+ */
+export const MAX_LINK_LENGTH = 2048;
+
+/** How many texts' runs `linkify` keeps, so a message drawn again is not scanned again. */
+const CACHE_SIZE = 512;
+const cache = new Map<string, readonly TextRun[]>();
 
 /**
  * Splits message text into plain runs and links. Explicit URLs and bare domains with a known
  * TLD both link, the latter over `https`. Sentence punctuation after a link is left as text,
  * and a closing bracket is only kept when the link itself opened one, so a parenthesised URL
- * such as `(see https://example.org/a_(b))` ends at the right place.
+ * such as `(see https://example.org/a_(b))` ends at the right place. A candidate longer than
+ * `MAX_LINK_LENGTH` stays text. The runs of the last `CACHE_SIZE` texts are kept and shared, so
+ * they must not be changed.
  */
-export function linkify(content: string): TextRun[] {
+export function linkify(content: string): readonly TextRun[] {
+  const cached = cache.get(content);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const runs = scan(content);
+  if (cache.size >= CACHE_SIZE) {
+    const oldest = cache.keys().next();
+    if (oldest.done !== true) {
+      cache.delete(oldest.value);
+    }
+  }
+  cache.set(content, runs);
+  return runs;
+}
+
+function scan(content: string): readonly TextRun[] {
   const runs: TextRun[] = [];
   let last = 0;
   for (const match of content.matchAll(CANDIDATE)) {
+    if (match[0].length > MAX_LINK_LENGTH) {
+      continue;
+    }
     const [, explicit, domain, tld, port, path] = match;
     let text: string;
     if (explicit !== undefined) {
@@ -83,20 +115,29 @@ function isLinkableDomain(
   return explicitEnough;
 }
 
+/**
+ * `text` without the sentence punctuation that ends it, nor a closing bracket it did not open
+ * (with the punctuation before that), in one pass from each end.
+ */
 function trimTrailing(text: string): string {
-  let trimmed = text.replace(TRAILING, "");
-  while (trimmed.endsWith(")") && count(trimmed, "(") < count(trimmed, ")")) {
-    trimmed = trimmed.slice(0, -1).replace(TRAILING, "");
-  }
-  return trimmed;
-}
-
-function count(text: string, char: string): number {
-  let n = 0;
+  let unmatched = 0;
   for (const c of text) {
-    if (c === char) {
-      n += 1;
+    if (c === ")") {
+      unmatched += 1;
+    } else if (c === "(") {
+      unmatched -= 1;
     }
   }
-  return n;
+  let end = text.length;
+  for (;;) {
+    while (end > 0 && TRAILING.has(text.charAt(end - 1))) {
+      end -= 1;
+    }
+    if (end > 0 && text.charAt(end - 1) === ")" && unmatched > 0) {
+      unmatched -= 1;
+      end -= 1;
+    } else {
+      return text.slice(0, end);
+    }
+  }
 }

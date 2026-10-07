@@ -12,15 +12,25 @@ function loadHighlighter(): Promise<Highlighter> {
 }
 
 /**
+ * The longest block, in UTF-16 code units, that is highlighted. Some grammars take most of a
+ * second over a block of a few kilobytes written to slow them, and highlighting runs on the one
+ * thread the page has.
+ */
+export const MAX_HIGHLIGHT_LENGTH = 4096;
+
+/**
  * A fenced code block. Renders the code as plain text at once and swaps in highlighted markup
  * once the highlighter, and the block's grammar if it is not in the eager set, have loaded.
- * A fence without a language, or with one highlight.js does not know, stays plain.
+ * A fence without a language, with one highlight.js does not know, or longer than
+ * `MAX_HIGHLIGHT_LENGTH` stays plain.
  */
 export function CodeBlock({ code, language }: { code: string; language: string | null }) {
-  const [html, setHtml] = useState<string | null>(null);
+  // The markup made, with the code and language it was made for, so a block whose code
+  // changed shows the new code plainly until its own markup is made.
+  const [made, setMade] = useState<{ code: string; language: string; html: string } | null>(null);
 
   useEffect(() => {
-    if (language === null) {
+    if (language === null || code.length > MAX_HIGHLIGHT_LENGTH) {
       return;
     }
     let cancelled = false;
@@ -31,9 +41,9 @@ export function CodeBlock({ code, language }: { code: string; language: string |
         }
         return highlighter.highlight(code, language);
       })
-      .then((result) => {
-        if (!cancelled) {
-          setHtml(result);
+      .then((html) => {
+        if (!cancelled && html !== null) {
+          setMade({ code, language, html });
         }
       })
       .catch(() => {
@@ -44,6 +54,7 @@ export function CodeBlock({ code, language }: { code: string; language: string |
     };
   }, [code, language]);
 
+  const html = made?.code === code && made.language === language ? made.html : null;
   return (
     <pre>
       {html === null ? (

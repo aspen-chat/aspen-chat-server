@@ -19,43 +19,54 @@ const defaultDevProxyTarget = "http://127.0.0.1:8000";
 const serverPaths = ["/api", "/auth/passkey", "/.well-known/aspen", "/email/unsubscribe"];
 
 /**
- * The desktop app's Content Security Policy, written into its page by `build:desktop` (a page
- * loaded from a file has no headers to carry one; the web client's comes from the server,
- * `api::web_client`). Scripts are the app's own files alone; nothing is loaded from a file but
- * the app's scripts, styles, and fonts, so a `file:` address (another machine's share, on
- * Windows) can never be a picture, a video, or a request; pictures and videos come from
- * deployments over `https:`, or `http:` on this machine for a development one, and requests go
- * to any deployment, over `http:` too, since the person picks the server; frames are video
- * players and plugin views, wherever their deployment is.
+ * The Content Security Policy of the desktop and mobile apps' page, written into it by
+ * `build:desktop` and `build:shell` (a page loaded from a file or from the app itself has no
+ * headers to carry one; the web client's comes from the server, `api::web_client`). Scripts are
+ * the app's own files alone; nothing is loaded from the app's own origin but its scripts,
+ * styles, and fonts (and, on a phone, whose origin is the app's bundle, its pictures), so a
+ * `file:` address (another machine's share, on Windows) can never be a picture, a video, or a
+ * request; pictures and videos come from deployments over `https:`, or `http:` on this machine
+ * for a development one, and requests go to any deployment, over `http:` too, since the person
+ * picks the server; frames are video players and plugin views, wherever their deployment is.
+ *
+ * Capacitor's bridge script on Android is injected ahead of the policy, where an old web view
+ * cannot inject it otherwise, and a policy in the page governs only what follows it.
  */
-const DESKTOP_POLICY = [
-  "default-src 'none'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self' data:",
-  "img-src data: blob: https: http://localhost:* http://127.0.0.1:* http://*.localhost:*",
-  "media-src data: blob: https: http://localhost:* http://127.0.0.1:* http://*.localhost:*",
-  "connect-src https: wss: http: ws:",
-  "frame-src https: http://localhost:* http://127.0.0.1:* http://*.localhost:*",
-  "worker-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join("; ");
+function shellPolicy(shell: "desktop" | "mobile"): string {
+  const own = shell === "mobile" ? "'self' " : "";
+  const loopback = "http://localhost:* http://127.0.0.1:* http://*.localhost:*";
+  return [
+    "default-src 'none'",
+    "script-src 'self' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    `img-src ${own}data: blob: https: ${loopback}`,
+    `media-src ${own}data: blob: https: ${loopback}`,
+    "connect-src https: wss: http: ws:",
+    `frame-src https: ${loopback}`,
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
+}
 
 /**
- * Puts `DESKTOP_POLICY` first in the page's head, and takes out the page's icons, which a
- * window does not show and the policy would refuse to load from a file.
+ * Puts the shell's policy (`shellPolicy`) first in the page's head. The desktop app's page also
+ * loses its icons, which a window does not show and the policy would refuse to load from a file.
  */
-function desktopPolicy(): Plugin {
+function writtenPolicy(shell: "desktop" | "mobile"): Plugin {
   return {
-    name: "aspen-desktop-policy",
+    name: "aspen-shell-policy",
     transformIndexHtml: (html) => ({
-      html: html.replace(/\s*<link rel="(?:icon|apple-touch-icon)"[^>]*>/g, ""),
+      html:
+        shell === "desktop"
+          ? html.replace(/\s*<link rel="(?:icon|apple-touch-icon)"[^>]*>/g, "")
+          : html,
       tags: [
         {
           tag: "meta",
-          attrs: { "http-equiv": "Content-Security-Policy", content: DESKTOP_POLICY },
+          attrs: { "http-equiv": "Content-Security-Policy", content: shellPolicy(shell) },
           injectTo: "head-prepend",
         },
       ],
@@ -73,7 +84,7 @@ export default defineConfig(({ mode }) => {
       attributions(),
       react(),
       tailwindcss(),
-      ...(mode === "desktop" ? [desktopPolicy()] : []),
+      ...(mode === "desktop" || mode === "mobile" ? [writtenPolicy(mode)] : []),
     ],
     resolve: {
       alias: {
@@ -83,8 +94,8 @@ export default defineConfig(({ mode }) => {
     // The web build is served from a site root, where absolute asset URLs let a deep link such
     // as `/communities/{id}/channels/{id}` load after a reload. Electron loads the bundle from
     // `file://` and Capacitor from an app-local origin, where only relative URLs resolve, so
-    // `build:shell` (Capacitor's) and `build:desktop` (Electron's, which also writes
-    // `DESKTOP_POLICY` into the page) pass `--base ./` and route after a `#` instead.
+    // `build:shell` (Capacitor's) and `build:desktop` (Electron's), which also write
+    // `shellPolicy` into the page, pass `--base ./` and route after a `#` instead.
     build: {
       outDir: "dist",
       sourcemap: true,

@@ -49,7 +49,10 @@
   File offers from silenced people are hidden the same way (`FilesPanel`). File transfers in
   calls are `FileTransfers` (`packages/protocol/src/transfers.ts`), which `VoiceCall` feeds its
   signalling frames and whose state it carries as `files`; its peer connections are injected
-  (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. The
+  (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. An
+  offered file's name is shown and saved without format and control characters
+  (`plainFileName`, `packages/protocol/src/fileNames.ts`), so a bidirectional override cannot
+  make `gpj.exe` read as `exe.jpg`; attachments' names are shown the same way. The
   repository's `docs/architecture/file-transfers.md` describes the flow. In the mobile apps a receiver chooses
   where a file goes through `AspenFilesPlugin` (Android's `android/.../files/`, iOS's
   `ios/App/App/AspenFilesPlugin.swift`, where the user picks a folder and the file is made in

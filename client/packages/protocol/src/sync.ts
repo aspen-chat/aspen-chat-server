@@ -966,20 +966,10 @@ export class AspenSync {
 
   /**
    * Presses a button of a message's card, which calls its plugin as the user. Answers the
-   * plugin's status.
+   * status, which is the plugin's to choose, so it says only whether the press worked.
    */
-  async pressCardButton(messageId: string, button: string): Promise<number> {
-    const result = await this.#client.api.POST("/api/v1/messages/{message}/card/buttons/{button}", {
-      params: { path: { message: messageId, button } },
-      parseAs: "text",
-    });
-    if (
-      result.response.status >= 400 &&
-      result.response.headers.get("content-type")?.includes("problem")
-    ) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-    return result.response.status;
+  pressCardButton(messageId: string, button: string): Promise<number> {
+    return this.#client.pressCardButton(messageId, button);
   }
 
   /** Calls a plugin's route as the user, for a plugin's view. */

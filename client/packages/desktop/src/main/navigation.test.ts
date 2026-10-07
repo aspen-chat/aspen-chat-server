@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { externalUrl, isAppPage } from "./navigation.ts";
+import { externalUrl, isAppPage, permitted } from "./navigation.ts";
 
 void describe("externalUrl", () => {
   void it("passes web and mail links on", () => {
@@ -49,5 +49,49 @@ void describe("isAppPage", () => {
     assert.ok(!isAppPage("http://localhost:5174/", development));
     assert.ok(!isAppPage("http://localhost:5173.attacker.example/", development));
     assert.ok(!isAppPage("file:///etc/passwd", development));
+  });
+});
+
+void describe("permitted", () => {
+  const app = { indexUrl: "file:///opt/Aspen/resources/app/index.html" };
+  const page = "file:///opt/Aspen/resources/app/index.html#/communities/x";
+
+  void it("grants the app's page what it uses", () => {
+    for (const permission of ["media", "display-capture", "notifications", "fileSystem"]) {
+      assert.equal(permitted(permission, { requestingUrl: page }, app), true, permission);
+    }
+  });
+
+  void it("grants other frames nothing but fullscreen and web and mail links", () => {
+    for (const requestingUrl of ["https://player.example/embed", "about:srcdoc", "null"]) {
+      for (const permission of ["media", "display-capture", "notifications", "fileSystem"]) {
+        assert.equal(permitted(permission, { requestingUrl }, app), false, permission);
+      }
+      assert.equal(permitted("fullscreen", { requestingUrl }, app), true);
+    }
+    assert.equal(
+      permitted(
+        "openExternal",
+        { requestingUrl: "about:srcdoc", externalURL: "https://a.example/" },
+        app,
+      ),
+      true,
+    );
+    for (const externalURL of ["ms-officecmd:{}", "search-ms:query=x", "file:///etc/passwd"]) {
+      assert.equal(permitted("openExternal", { requestingUrl: page, externalURL }, app), false);
+    }
+  });
+
+  void it("refuses what the app does not use, even to its page", () => {
+    for (const permission of [
+      "geolocation",
+      "midi",
+      "clipboard-read",
+      "hid",
+      "serial",
+      "unknown",
+    ]) {
+      assert.equal(permitted(permission, { requestingUrl: page }, app), false, permission);
+    }
   });
 });

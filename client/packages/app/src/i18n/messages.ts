@@ -114,6 +114,7 @@ export const en = {
   loading: "Loading…",
   retry: "Retry",
   notFoundHeading: "There is nothing here.",
+  routeErrorHeading: "This could not be shown. Try again, or go back to your communities.",
   backHome: "Back to your communities",
   communitiesLabel: "Communities",
   unreadLabel: "{name}, unread",
