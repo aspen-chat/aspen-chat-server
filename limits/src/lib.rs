@@ -192,6 +192,27 @@ impl ClientAddresses {
     }
 }
 
+/// The network a sign-in's per-username limit counts an address by (`network_key`): an IPv4
+/// address's /24, an IPv6 address's /48 (or the coarser `ipv6_prefix`, when one is set). Wide
+/// enough that one subscriber, or one attacker's handful of neighbouring addresses, shares one
+/// count; narrow enough that guesses from one network do not lock a user out everywhere else.
+pub const NETWORK_IPV4_PREFIX: u8 = 24;
+pub const NETWORK_IPV6_PREFIX: u8 = 48;
+
+impl ClientAddresses {
+    /// An address's network as the per-username sign-in limit counts it: its IPv4 /24 or
+    /// IPv6 /48 ([`NETWORK_IPV4_PREFIX`], [`NETWORK_IPV6_PREFIX`]).
+    pub fn network_key(&self, ip: IpAddr) -> String {
+        let (ip, prefix) = match canonical(ip) {
+            v4 @ IpAddr::V4(_) => (v4, NETWORK_IPV4_PREFIX),
+            v6 => (v6, NETWORK_IPV6_PREFIX.min(self.ipv6_prefix)),
+        };
+        IpNet::new(ip, prefix)
+            .map(|net| net.trunc().to_string())
+            .unwrap_or_else(|_| ip.to_string())
+    }
+}
+
 /// The address an `X-Forwarded-For` entry names: a bare address, an address with a port, or a
 /// bracketed IPv6 address with or without one.
 fn forwarded_address(entry: &str) -> Option<IpAddr> {
@@ -297,6 +318,20 @@ mod tests {
             burst,
             bucket: None,
         }
+    }
+
+    #[test]
+    fn networks_are_ipv4_slash_24_and_ipv6_slash_48() {
+        let addresses = ClientAddresses::new(&[], 64).unwrap();
+        let key = |ip: &str| addresses.network_key(ip.parse().unwrap());
+        assert_eq!(key("192.0.2.77"), "192.0.2.0/24");
+        assert_eq!(key("::ffff:192.0.2.77"), "192.0.2.0/24");
+        assert_eq!(key("2001:db8:1:2::9"), "2001:db8:1::/48");
+        let coarse = ClientAddresses::new(&[], 32).unwrap();
+        assert_eq!(
+            coarse.network_key("2001:db8:1:2::9".parse().unwrap()),
+            "2001:db8::/32"
+        );
     }
 
     #[test]
