@@ -59,6 +59,61 @@ pub fn live() -> diesel::dsl::Filter<
         .filter(community::deleted_at.is_null())
 }
 
+/// The most roles a community holds, everyone's and bots' included.
+pub const MAX_ROLES: i64 = 250;
+/// The most channels and categories a community holds together, threads aside.
+pub const MAX_CHANNELS_AND_CATEGORIES: i64 = 500;
+
+/// Holds `community`'s row until the caller's transaction ends, refusing a deleted community,
+/// so a count of what it holds checked against a cap stays true until what is added commits:
+/// two additions at once take turns rather than both passing the count.
+pub async fn hold_for_count(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+) -> crate::Result<()> {
+    community::table
+        .select(community::id)
+        .filter(
+            community::id
+                .eq(community)
+                .and(community::deleted_at.is_null()),
+        )
+        .for_no_key_update()
+        .first::<CommunityId>(conn)
+        .await?;
+    Ok(())
+}
+
+/// Refuses another channel or category in `community` once it holds
+/// `MAX_CHANNELS_AND_CATEGORIES` live ones, inside the transaction that adds it.
+pub async fn ensure_room_for_channel(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+) -> crate::Result<()> {
+    use aspen_schema::{category, channel};
+    hold_for_count(conn, community).await?;
+    let channels: i64 = channel::table
+        .filter(channel::community.eq(Some(community)))
+        .filter(channel::parent_channel.is_null())
+        .filter(channel::deleted_at.is_null())
+        .count()
+        .get_result(conn)
+        .await?;
+    let categories: i64 = category::table
+        .filter(category::community.eq(community))
+        .filter(category::deleted_at.is_null())
+        .count()
+        .get_result(conn)
+        .await?;
+    if channels + categories >= MAX_CHANNELS_AND_CATEGORIES {
+        return Err(crate::Error::Validation(t!(
+            "channelLimit",
+            max = MAX_CHANNELS_AND_CATEGORIES
+        )));
+    }
+    Ok(())
+}
+
 impl Loadable for Community {
     type Id = CommunityId;
 

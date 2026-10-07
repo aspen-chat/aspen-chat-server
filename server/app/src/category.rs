@@ -67,6 +67,7 @@ pub async fn create_category(
             require_member(conn.as_mut(), caller, community)
                 .await?
                 .require(Permissions::MANAGE_CATEGORIES)?;
+            crate::community::ensure_room_for_channel(conn.as_mut(), community).await?;
             let category = Category {
                 id,
                 community: MaybeLoaded::NotLoaded(community),

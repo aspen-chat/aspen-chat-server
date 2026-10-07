@@ -357,9 +357,14 @@ class EventStream:
         if not ready or ready.get("type") != "ready":
             raise Failed(f"the event stream answered {ready}, closed {self.socket.closed}")
         self.events: list[dict] = []
+        self.ephemeral: list[dict] = []
+
+    def send(self, message: dict) -> None:
+        self.socket.send(message)
 
     def gather(self, seconds: float = 1.0) -> list[dict]:
-        """Everything that arrives within `seconds`, added to `events` and returned."""
+        """Every event that arrives within `seconds`, added to `events` and returned. What happens
+        and is never kept (`ephemeral` frames: who is typing) is added to `ephemeral`."""
         got = []
         deadline = time.monotonic() + seconds
         while (left := deadline - time.monotonic()) > 0:
@@ -370,6 +375,8 @@ class EventStream:
                 continue
             if frame.get("type") == "event":
                 got.append(frame["event"])
+            elif frame.get("type") == "ephemeral":
+                self.ephemeral.append(frame["event"])
         self.events.extend(got)
         return got
 

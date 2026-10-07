@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { PALETTES } from "../src/theme/palettes";
-import { helper, signInToWorld, settleAnimations } from "./world";
+import { bob, general, helper, signInToWorld, settleAnimations, type Publish } from "./world";
 
 /**
  * Every screen and dialog of the app, checked with axe against the WCAG rules it knows (ARIA,
@@ -62,6 +62,7 @@ const combinations = [
 
 for (const { palette, scheme, contrast } of combinations) {
   test.describe(`${palette}, ${scheme}${contrast === "more" ? ", more contrast" : ""}`, () => {
+    let publish: Publish;
     test.beforeEach(async ({ page }, testInfo) => {
       test.skip(
         (palette !== "aspen" || scheme !== "light" || contrast !== "standard") &&
@@ -76,7 +77,15 @@ for (const { palette, scheme, contrast } of combinations) {
         },
         [palette, contrast] as const,
       );
-      await signInToWorld(page);
+      publish = await signInToWorld(page);
+    });
+
+    test("someone typing", async ({ page }) => {
+      await openChannel(page, "general");
+      publish.ephemeral?.({ type: "typing", channelId: general, userId: bob, typing: true });
+      await expect(page.locator("p", { hasText: /is typing…$/ })).toBeVisible();
+      await settleAnimations(page);
+      await expectAccessible(page, "someone typing");
     });
 
     test("channels, threads, and calls", async ({ page }) => {

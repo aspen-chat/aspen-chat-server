@@ -27,6 +27,7 @@ import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
+  TYPING_NOTICES,
   VIDEO_INPUT,
   PreferenceStore,
   effectiveStreamVolume,
@@ -142,6 +143,17 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
  */
 export const ACTIVITY_INTERVAL_MS = 60_000;
 
+/**
+ * How often the server is told again that the user is still typing in a channel, while they
+ * type; mirrors the server's `TYPING_REFRESH_SECONDS`.
+ */
+export const TYPING_REFRESH_MS = 3_000;
+/**
+ * How long someone is shown typing after the last word that they are; mirrors the server's
+ * `TYPING_EXPIRY_SECONDS`.
+ */
+export const TYPING_EXPIRY_MS = 8_000;
+
 /** The most users one presence request names; mirrors the server's limit. */
 export const PRESENCE_BATCH = 100;
 
@@ -255,11 +267,16 @@ export class AspenSync {
   /** The read of the plugin catalogue in flight, which every ask shares. */
   #pluginLoad: Promise<void> | null = null;
   readonly #userLoads = new Map<string, Promise<void>>();
+  readonly #channelLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the user last did something in the app, and when the server was last told. */
   #lastActivityAt = Number.NEGATIVE_INFINITY;
   #activityReportedAt = Number.NEGATIVE_INFINITY;
+  /** The channels the server was told the user is typing in, and when it was last told. */
+  readonly #typingSent = new Map<string, number>();
+  /** When the next of those shown typing runs out. */
+  #typingTimer: ReturnType<typeof setTimeout> | null = null;
   /** Users the server said do not exist; asked once, not again. */
   readonly #attachmentLoads = new Map<string, Promise<void>>();
   readonly #pollLoads = new Map<string, Promise<void>>();
@@ -345,6 +362,14 @@ export class AspenSync {
     };
     this.preferences.subscribe(applyDevices);
     applyDevices();
+    // Turning typing notices off says at once that the user stopped wherever they were typing.
+    this.preferences.subscribe(() => {
+      if (!this.preferences.get(TYPING_NOTICES)) {
+        for (const channelId of Array.from(this.#typingSent.keys())) {
+          this.stopTyping(channelId);
+        }
+      }
+    });
     const streamOptions: EventStreamOptions = {
       url: eventStreamUrl(options.client.baseUrl),
       authenticate: (o) => options.client.freshSessionToken(o),
@@ -354,10 +379,26 @@ export class AspenSync {
       onEvent: (event) => {
         this.#onEvent(event);
       },
+      onEphemeral: (event) => {
+        // A newer server may tell of what this client does not know, which changes nothing.
+        const kind: string = event.type;
+        if (kind !== "typing") {
+          return;
+        }
+        this.store.noteTyping(
+          event.channelId,
+          event.userId,
+          event.typing ? this.#now() + TYPING_EXPIRY_MS : null,
+        );
+        this.#expireTyping();
+      },
       onResyncRequired: () => {
         void this.#resync();
       },
       onConnectionLost: () => {
+        // Nobody will say when those shown typing stop, and the server let go of what this
+        // connection said.
+        this.#forgetTyping();
         if (this.#status === "live" || this.#status === "connecting") {
           this.#setStatus("reconnecting");
         }
@@ -479,9 +520,11 @@ export class AspenSync {
     if (this.#ownsPreferences) {
       this.preferences.clearAccount();
     }
+    this.#forgetTyping();
     this.#held = null;
     this.#windowLoads.clear();
     this.#userLoads.clear();
+    this.#channelLoads.clear();
     this.#pollLoads.clear();
     this.#iconLoads.clear();
     this.#unreported.clear();
@@ -887,6 +930,37 @@ export class AspenSync {
     }
     this.store.ingest({ channels: [result.data] });
     return result.data;
+  }
+
+  /**
+   * Reads one channel into the store in the background when it is not there and has not been
+   * refused, as a link naming a DM from before the last listing does to show its people. A
+   * channel the caller may not see, or that is gone, is marked missing.
+   */
+  ensureChannel(channelId: string): void {
+    if (
+      this.store.channel(channelId) !== undefined ||
+      this.store.missing("channel", channelId) ||
+      this.#channelLoads.has(channelId)
+    ) {
+      return;
+    }
+    const load = this.#client.api
+      .GET("/api/v1/channels/{channel}", { params: { path: { channel: channelId } } })
+      .then(({ data, response }) => {
+        if (data !== undefined) {
+          this.store.ingest({ channels: [data] });
+        } else if (response.status === 403 || response.status === 404) {
+          this.store.markMissing("channel", channelId);
+        }
+      })
+      .catch(() => {
+        // Transient; the next render that needs the channel asks again.
+      })
+      .finally(() => {
+        this.#channelLoads.delete(channelId);
+      });
+    this.#channelLoads.set(channelId, load);
   }
 
   /**
@@ -2874,6 +2948,63 @@ export class AspenSync {
   noteActivity(): void {
     this.#lastActivityAt = this.#now();
     this.#reportActivity();
+  }
+
+  /**
+   * The user wrote in a channel's message box. The server hears that they are typing there at
+   * most every `TYPING_REFRESH_MS`, and not at all while the user has turned typing notices off
+   * (`TYPING_NOTICES`).
+   */
+  noteTyping(channelId: string): void {
+    if (!this.preferences.get(TYPING_NOTICES)) {
+      return;
+    }
+    const now = this.#now();
+    const sent = this.#typingSent.get(channelId);
+    if (sent !== undefined && now - sent < TYPING_REFRESH_MS) {
+      return;
+    }
+    if (this.#stream.sendTyping(channelId, true)) {
+      this.#typingSent.set(channelId, now);
+    }
+  }
+
+  /**
+   * The user stopped typing in a channel: they sent the message, emptied the box, or left it.
+   * Said only where the server was told they were typing.
+   */
+  stopTyping(channelId: string): void {
+    if (this.#typingSent.delete(channelId)) {
+      this.#stream.sendTyping(channelId, false);
+    }
+  }
+
+  /** Lets go of those whose typing ran out, and waits for the next to. */
+  #expireTyping(): void {
+    if (this.#typingTimer !== null) {
+      clearTimeout(this.#typingTimer);
+      this.#typingTimer = null;
+    }
+    const now = this.#now();
+    const next = this.store.expireTyping(now);
+    if (next !== null) {
+      this.#typingTimer = this.#setTimeout(
+        () => {
+          this.#typingTimer = null;
+          this.#expireTyping();
+        },
+        Math.min(next - now, MAX_TIMER_MS),
+      );
+    }
+  }
+
+  #forgetTyping(): void {
+    if (this.#typingTimer !== null) {
+      clearTimeout(this.#typingTimer);
+      this.#typingTimer = null;
+    }
+    this.#typingSent.clear();
+    this.store.forgetTyping();
   }
 
   #reportActivity(): void {

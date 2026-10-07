@@ -179,6 +179,22 @@ def granting_and_revoking(world: World, check: Checks) -> None:
     check("nor hear it", not world.hears_message(secret))
 
 
+def edits_after_send(world: World, check: Checks) -> None:
+    say("editing a message once Send messages is taken away")
+    stack, member = world.stack, world.member
+    quiet = world.channel("quiet")
+    said = stack.api("POST", f"/channels/{quiet}/messages", {"content": "before", "attachments": []},
+                     member["token"])["id"]
+    world.as_owner("PUT", f"/channels/{quiet}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("the member cannot put new words in their message",
+          stack.status("PATCH", f"/messages/{said}", {"content": "after"}, member["token"]) == 403)
+    check("but may clear what it said",
+          stack.status("PATCH", f"/messages/{said}", {"content": ""}, member["token"]) == 200)
+    world.as_owner("DELETE", f"/channels/{quiet}/overrides/{world.everyone}")
+    check("and with Send messages back, edits it again",
+          stack.status("PATCH", f"/messages/{said}", {"content": "again"}, member["token"]) == 200)
+
+
 def moves_and_categories(world: World, check: Checks) -> None:
     say("a channel moved into a hidden category and out, and the category deleted")
     hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Mods", "sortIndex": 9})["id"]
@@ -933,6 +949,67 @@ def presence(world: World, check: Checks) -> None:
           status_of(world.member["token"], world.owner["id"]) == "offline")
 
 
+def typing(world: World, check: Checks) -> None:
+    say("typing, told only to those who may view the channel, and only by those who may send there")
+    owner = world.stack.events(world.owner["token"])
+    hidden = world.channel("typing-hidden", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    quiet = world.channel("typing-quiet", overrides=[{"role": world.everyone, "allow": [], "deny": ["sendMessages"]}])
+    general = world.channel("typing-open")
+    world.stream.gather(0.5)
+    owner.gather(0.2)
+
+    def heard(stream, channel: str, user: str, seconds: float = 1.0) -> list[bool]:
+        stream.ephemeral.clear()
+        stream.gather(seconds)
+        return [e["typing"] for e in stream.ephemeral
+                if e.get("type") == "typing" and e.get("channelId") == channel and e.get("userId") == user]
+
+    def type_in(stream, channel: str, typing: bool = True) -> None:
+        stream.send({"type": "typing" if typing else "stoppedTyping", "channelId": channel})
+
+    type_in(owner, general)
+    check("a member hears the owner typing", heard(world.stream, general, world.owner["id"]) == [True])
+    check("the owner is not told of their own typing", heard(owner, general, world.owner["id"], 0.3) == [])
+    type_in(owner, general, False)
+    check("and hears them stop", heard(world.stream, general, world.owner["id"]) == [False])
+    type_in(owner, hidden)
+    check("typing in a channel the member may not view does not reach them",
+          heard(world.stream, hidden, world.owner["id"]) == [])
+    type_in(owner, hidden, False)
+    type_in(world.stream, general)
+    check("the owner hears the member typing where they may send",
+          heard(owner, general, world.member["id"]) == [True])
+    type_in(world.stream, general, False)
+    type_in(world.stream, quiet)
+    check("but typing where the member may not send is not passed on",
+          heard(owner, quiet, world.member["id"]) == [])
+    dm = world.as_owner("POST", "/users/@me/dms", {"recipients": [world.member["id"]]})
+    dm = dm.get("id") or dm["data"]["id"]
+    world.stream.gather(0.5)
+    type_in(owner, dm)
+    check("the other person of a DM hears the owner typing there", heard(world.stream, dm, world.owner["id"]) == [True])
+    type_in(owner, dm, False)
+    world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
+    world.stream.gather(0.3)
+    type_in(owner, general)
+    check("someone the owner blocks does not hear them typing", heard(world.stream, general, world.owner["id"]) == [])
+    type_in(owner, general, False)
+    world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
+    owner.gather(0.3)
+    type_in(owner, general)
+    world.stream.gather(0.5)
+    owner.close()
+    check("the owner's connection closing says at once that they stopped",
+          heard(world.stream, general, world.owner["id"], 2.0) == [False])
+    again = world.stack.events(world.owner["token"])
+    world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
+    world.stream.gather(0.5)
+    type_in(again, general)
+    check("removed from the community, the member no longer hears the owner typing",
+          heard(world.stream, general, world.owner["id"]) == [])
+    again.close()
+
+
 def dual_invites(world: World, check: Checks) -> None:
     say("dual invites: an account made and joined at once, and both parts revoked")
     stack = world.stack
@@ -1286,6 +1363,13 @@ def banned_owners_bots(world: World, check: Checks) -> None:
     check("and refuses its token", stack.status("GET", "/users/@me", token=bot_token) == 401)
     world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
     check("lifting the ban restores it", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_id = stack.api("GET", "/users/@me", token=bot_token)["id"]
+    plain = world.as_owner("POST", "/admin/roles", {"name": f"Plain{world.run}", "permissions": []})["id"]
+    check("a bot is given no deployment role",
+          stack.status("PUT", f"/admin/users/{bot_id}/roles/{plain}", token=world.owner["token"]) == 400)
+    check("and its token never opens the dashboard",
+          stack.status("GET", "/admin/overview", token=bot_token) == 403)
+    world.as_owner("DELETE", f"/admin/roles/{plain}")
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
 
@@ -1867,10 +1951,10 @@ def blackjack_tables(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", BLACKJACK_ID)
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_categories, hidden_managers,
+SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
+             operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, banned_owners_bots, moderator_ranks, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]

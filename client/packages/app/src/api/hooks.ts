@@ -102,6 +102,26 @@ export function useChannel(id: string): Channel | undefined {
 }
 
 /**
+ * A channel by id, read on demand when the store lacks it (`AspenSync.ensureChannel`), such as
+ * a DM from before the last listing.
+ */
+export function useChannelOnDemand(id: string): Channel | undefined {
+  const sync = useSync();
+  const channel = useChannel(id);
+  useEffect(() => {
+    if (channel === undefined) {
+      sync.ensureChannel(id);
+    }
+  }, [sync, id, channel]);
+  return channel;
+}
+
+/** Whether a channel read on demand is still on its way: neither arrived nor refused. */
+export function useChannelLoading(id: string): boolean {
+  return useTopic(`channel:${id}`, (s) => s.channel(id) === undefined && !s.missing("channel", id));
+}
+
+/**
  * Several users at once, in the order of `ids`, each `undefined` until it is cached; missing
  * ones are fetched on demand. One subscription per id, one re-render per change.
  */
@@ -420,6 +440,14 @@ export function useBlocked(userId: string | undefined): boolean {
   const here = useTopic(`block:${userId ?? ""}`, (s) => userId !== undefined && s.blocked(userId));
   const elsewhere = useBlockedAnywhere(userId);
   return here || elsewhere;
+}
+
+/**
+ * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
+ * they block.
+ */
+export function useTypers(channelId: string): readonly string[] {
+  return useTopic(`typing:${channelId}`, (s) => s.typers(channelId));
 }
 
 /**
