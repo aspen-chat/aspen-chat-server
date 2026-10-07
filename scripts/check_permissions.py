@@ -285,6 +285,26 @@ def role_grants(world: World, check: Checks) -> None:
     world.give(powerful)
     check("and takes one away by rank alone", stack.status("DELETE", f"{mine}/{powerful}", token=member["token"]) == 204)
     stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+    mods = world.as_owner("POST", "/admin/roles", {"name": f"Mods{world.run}",
+                                                   "permissions": ["moderateCommunities"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{mods}")
+    deleters = world.role("Deleters", ["manageMessages"])
+    check("moderating the deployment hands on none of its powers through a role",
+          stack.status("PUT", f"{mine}/{deleters}", token=member["token"]) == 403)
+    third = world.account("third")
+    invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+    stack.api("PUT", f"/communities/{world.community}/members/@me",
+              {"inviteCode": invite.get("code") or invite.get("id")}, third["token"])
+    roles = world.as_owner("GET", f"/communities/{world.community}/roles")
+    moderator = next(r["id"] for r in roles if r["name"] == "Moderator")
+    world.as_owner("PUT", f"/communities/{world.community}/members/{third['id']}/roles/{moderator}")
+    check("nor ranks its holder above roles for taking them away",
+          stack.status("DELETE", f"/communities/{world.community}/members/{third['id']}/roles/{moderator}",
+                       token=member["token"]) == 403)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{mods}")
+    stack.command("admin", "deny", "moderateCommunities")
     keepers = world.as_owner("POST", "/admin/roles", {"name": f"Keepers{world.run}",
                                                       "permissions": ["manageDeploymentRoles"]})["id"]
     settings = world.as_owner("POST", "/admin/roles", {"name": f"Settings{world.run}",

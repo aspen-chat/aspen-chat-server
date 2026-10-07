@@ -168,10 +168,21 @@ impl CommunityAccess {
         }
     }
 
-    /// Refuses unless they hold every one of `permissions`, for giving them to a role or an
-    /// override.
+    /// Refuses unless `position` ranks below their own in the community alone (`role_rank`):
+    /// for managing, giving, and taking roles and setting overrides, which hand on what roles
+    /// allow, so moderating the deployment, which takes things away, does not reach them.
+    pub fn require_role_above(&self, position: i32) -> crate::Result<()> {
+        if position < self.role_rank() {
+            Ok(())
+        } else {
+            Err(crate::Error::Forbidden(t!("permissionRank")))
+        }
+    }
+
+    /// Refuses unless their roles allow every one of `permissions`, for giving them to a role
+    /// or an override. What moderating the deployment adds is theirs to use, not to hand on.
     pub fn require_holds(&self, permissions: Permissions) -> crate::Result<()> {
-        if self.permissions.contains(permissions) {
+        if self.member_permissions.contains(permissions) {
             Ok(())
         } else {
             Err(crate::Error::Forbidden(t!("permissionNotHeld")))
@@ -854,6 +865,23 @@ mod tests {
         assert!(access.require_above(3).is_err());
         assert!(access.require_holds(Permissions::MANAGE_ROLES).is_ok());
         assert!(access.require_holds(Permissions::ASSIGN_ROLES).is_err());
+    }
+
+    #[test]
+    fn moderating_the_deployment_hands_nothing_on() {
+        let access = member(vec![
+            role(EVERYONE, 0, Permissions::MEMBER_TEMPLATE, true),
+            role(MODERATOR, 3, Permissions::ASSIGN_ROLES, false),
+        ])
+        .with_moderation();
+        // A moderator acts on anyone below the owner, yet gives and manages roles only below
+        // their own, and hands on only what their roles allow.
+        assert!(access.require_above(5).is_ok());
+        assert!(access.require_role_above(2).is_ok());
+        assert!(access.require_role_above(3).is_err());
+        assert!(access.has(Permissions::MANAGE_MESSAGES));
+        assert!(access.require_holds(Permissions::MANAGE_MESSAGES).is_err());
+        assert!(access.require_holds(Permissions::ASSIGN_ROLES).is_ok());
     }
 
     #[test]
