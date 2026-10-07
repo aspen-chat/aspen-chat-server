@@ -974,6 +974,17 @@ def device_links(world: World, check: Checks) -> None:
     check("nor one approved before a password change elsewhere", claim(link) == 404)
     stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
               world.member["token"])
+    stale = world.sign_in(world.member["name"])
+    psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'",
+         stack.database)
+    refused = stack.request("POST", "/auth/device-links", {}, stale["token"])
+    check("a sign-in not verified lately cannot offer itself to another device",
+          refused[0] == 403 and "reauthenticationRequired" in refused[1], refused)
+    asked = stack.api("POST", "/auth/device-links", {"deviceName": "Computer", "codeChallenge": challenge})["id"]
+    scanned = stack.request("POST", f"/auth/device-links/{asked}/scan", {}, stale["token"])
+    check("nor give itself to a computer that asks",
+          scanned[0] == 403 and "reauthenticationRequired" in scanned[1], scanned)
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, world.member["token"])
     link = offered(world.member)
     got = stack.api("POST", f"/auth/device-links/{link}/claim", {"codeVerifier": verifier})
     check("one whose giver stands signs in", got.get("status") == "signedIn", got)

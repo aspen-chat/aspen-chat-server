@@ -13,7 +13,8 @@
 //! holding the code, gets no session out of it. The new sign-in proves what the giver's did
 //! (`method`, `verified_at`), so it is no stronger than the giver's and no more recently
 //! verified; and the giver's sign-in must still stand when it is claimed, so signing out
-//! everywhere or changing the password between the tap and the claim stops it.
+//! everywhere or changing the password between the tap and the claim stops it. Giving a sign-in
+//! (starting an offer, scanning a request) takes a recently verified sign-in.
 
 use crate::CHACHA_RNG;
 use crate::UserId;
@@ -141,15 +142,18 @@ fn code_challenge(given: Option<String>) -> crate::Result<String> {
     Ok(challenge)
 }
 
-/// Refuses a caller who cannot give a sign-in away: a bot, whose token is its sign-in, and a
-/// user of another deployment, whose sign-ins their home makes.
-fn giver(caller: &Caller) -> crate::Result<Giver> {
+/// Refuses a caller who cannot give a sign-in away: a bot, whose token is its sign-in, a user
+/// of another deployment, whose sign-ins their home makes, and a sign-in not verified recently
+/// (`reauthenticationRequired`), since giving a sign-in away is a security change: a stolen
+/// session must not mint another, longer-lived one on a device of the thief's.
+fn giver(state: &GlobalServerContext, caller: &Caller) -> crate::Result<Giver> {
     if caller.bot {
         return Err(crate::Error::Forbidden(t!("deviceLinkBot")));
     }
     if caller.foreign {
         return Err(crate::Error::Forbidden(t!("deviceLinkForeign")));
     }
+    caller.ensure_recently_verified(&state.config.auth)?;
     Ok(Giver {
         user: caller.user,
         sign_in: caller.sign_in(),
@@ -218,7 +222,7 @@ pub async fn start(
         Some(caller) => Link {
             kind: Kind::Offer,
             receiver: None,
-            giver: Some(giver(caller)?),
+            giver: Some(giver(state, caller)?),
             scanned: false,
             approved: false,
         },
@@ -258,7 +262,7 @@ pub async fn scan(
     let (giver, receiver) = match link.kind {
         Kind::Request => {
             let caller = caller.ok_or(crate::Error::Unauthenticated)?;
-            (Some(giver(caller)?), None)
+            (Some(giver(state, caller)?), None)
         }
         Kind::Offer if caller.is_some() => {
             return Err(crate::Error::Validation(t!("deviceLinkAlreadySignedIn")));
