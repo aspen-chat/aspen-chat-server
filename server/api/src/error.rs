@@ -67,6 +67,10 @@ pub enum ProblemCode {
     /// Too many requests to this endpoint recently. `Retry-After` says how many seconds to
     /// wait.
     RateLimited,
+    /// The upload would take the caller past the deployment's daily upload quota. `detail`
+    /// names the quota and when there will be room, which `Retry-After` gives in seconds,
+    /// absent when the file alone is larger than the quota.
+    UploadQuotaExceeded,
     /// The server requires a second factor, so the account's last one cannot be removed.
     LastSecondFactor,
     /// The authenticator's response to a passkey ceremony did not verify.
@@ -151,9 +155,9 @@ impl ProblemCode {
             | ProblemCode::Blocked
             | ProblemCode::Banned
             | ProblemCode::DeploymentBanned => StatusCode::FORBIDDEN,
-            ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
-                StatusCode::TOO_MANY_REQUESTS
-            }
+            ProblemCode::TooManyAttempts
+            | ProblemCode::RateLimited
+            | ProblemCode::UploadQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
             ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
@@ -201,6 +205,7 @@ impl ProblemCode {
             ProblemCode::PasswordResetExpired => t!("problemPasswordResetExpired"),
             ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
             ProblemCode::RateLimited => t!("problemRateLimited"),
+            ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
@@ -404,6 +409,16 @@ impl From<app::Error> for ApiError {
             }
             app::Error::PluginUnavailable(detail) => {
                 Self::new(ProblemCode::PluginUnavailable).with_detail(detail)
+            }
+            app::Error::UploadQuotaExceeded {
+                detail,
+                retry_after,
+            } => {
+                let problem = Self::new(ProblemCode::UploadQuotaExceeded).with_detail(detail);
+                match retry_after {
+                    Some(wait) => problem.with_retry_after(wait),
+                    None => problem,
+                }
             }
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)

@@ -28,13 +28,13 @@ type Toggle =
   | "emailRequired"
   | "emailVerificationRequired"
   | "newsletterEnabled";
-type Count = "botsMaxPerUser" | "everyoneMentionLimit" | "customEmojiLimit";
+type Count = "botsMaxPerUser" | "everyoneMentionLimit" | "customEmojiLimit" | "uploadQuotaGib";
 
 /**
  * The deployment's policies, for holders of Manage deployment settings: whether registering
  * takes an invite, whether every account needs a second factor, email (an address to register, a
  * verified one to use the server, and a newsletter, each offered only where the server can send
- * mail), bots, the limits on communities, and files in calls. A change reaches every server at
+ * mail), bots, the limits on communities and on uploads, and files in calls. A change reaches every server at
  * once.
  */
 export function DeploymentSettingsSection() {
@@ -165,6 +165,7 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
           m.admin.everyoneMentionLimitHint,
         )}
         {count("customEmojiLimit", m.admin.customEmojiLimit)}
+        {count("uploadQuotaGib", m.admin.uploadQuotaGib, m.admin.uploadQuotaGibHint)}
       </div>
       {error !== null && (
         <p role="alert" className={alertClass}>

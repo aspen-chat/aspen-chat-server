@@ -161,6 +161,9 @@ pub struct DeploymentSettings {
     pub everyone_mention_limit: u32,
     /// The most custom emoji one community may hold.
     pub custom_emoji_limit: u32,
+    /// How many GiB one person may upload, attachments and pictures together, in any 24 hours;
+    /// 0 sets no limit.
+    pub upload_quota_gib: u32,
     /// Whether people may offer files to one another in calls. Off, no one may, whatever a
     /// channel's permissions say.
     pub file_transfers: bool,
@@ -189,6 +192,7 @@ impl DeploymentSettings {
             bots_max_per_user: settings.bots_max_per_user,
             everyone_mention_limit: settings.everyone_mention_limit,
             custom_emoji_limit: settings.custom_emoji_limit,
+            upload_quota_gib: settings.upload_quota_gib,
             file_transfers: settings.file_transfers,
             email_required: settings.email_required,
             email_verification_required: settings.email_verification_required,
@@ -209,6 +213,7 @@ pub struct DeploymentSettingsUpdateRequest {
     pub bots_max_per_user: Option<u32>,
     pub everyone_mention_limit: Option<u32>,
     pub custom_emoji_limit: Option<u32>,
+    pub upload_quota_gib: Option<u32>,
     pub file_transfers: Option<bool>,
     pub email_required: Option<bool>,
     pub email_verification_required: Option<bool>,
@@ -224,6 +229,7 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             bots_max_per_user: request.bots_max_per_user,
             everyone_mention_limit: request.everyone_mention_limit,
             custom_emoji_limit: request.custom_emoji_limit,
+            upload_quota_gib: request.upload_quota_gib,
             file_transfers: request.file_transfers,
             email_required: request.email_required,
             email_verification_required: request.email_verification_required,
