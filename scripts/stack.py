@@ -35,7 +35,7 @@ from web_client import stand_in
 REPO = Path(__file__).resolve().parent.parent
 # The NATS docker-compose.yaml runs, which a stack runs one of its own of.
 NATS_IMAGE = "nats:2.11-alpine"
-TOKEN_SECRET = "throwaway-stack-voice-secret"
+TOKEN_SECRET = "throwaway-stack-voice-secret-at-least-32-bytes"
 # The S3 credentials docker-compose.yaml gives SeaweedFS.
 S3_ACCESS_KEY = "GK484e56c38fb7e14b182bf47a"
 S3_SECRET_KEY = "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027"
