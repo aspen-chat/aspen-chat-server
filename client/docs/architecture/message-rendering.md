@@ -41,7 +41,9 @@
   from the URL's staging key to where readers fetch them, so the URL can change nothing after) and are named by id in
   `sendMessage`. A picture's reservation carries its size, which the composer measures first
   (`measurePicture`), and its record gives it back as `width` and `height`. A message event carries only ids, so `useAttachment` fetches records on
-  demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
+  demand. An attachment's name is shown without format and control characters
+  (`plainFileName`), which could make it read as another name. Images render inline
+  (`src/features/messages/Attachments.tsx`): image attachments,
   and the pictures of link previews, from links whose path has an image extension or that the
   server found to be images (previews with a picture and no text). Every picture is loaded
   from a deployment's storage, never from the address a message links to, which would tell

@@ -41,6 +41,7 @@ export {
   type PasskeyPurpose,
   type PasskeyTransport,
 } from "./passkeys";
+export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,
   isProblem,
