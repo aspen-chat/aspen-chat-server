@@ -246,9 +246,23 @@ fn toggle(channel: &str, mut event: Event, who: &str) -> Response {
     json(200, &event)
 }
 
+/// The kind of channel a calendar is, as the manifest names it beneath the plugin's id.
+const CALENDAR: &str = "org.aspenchat.calendar:calendar";
+
+/// Whether `channel` is a calendar. Read as the caller, a channel they may not view is none.
+fn is_calendar(channel: &str) -> bool {
+    host::kind_of(channel).is_ok_and(|kind| kind.plugin_type.as_deref() == Some(CALENDAR))
+}
+
 fn route(request: &Request) -> Response {
     let parts: Vec<&str> = request.path.split('/').collect();
     let caller = request.caller.as_str();
+    // Events are kept only on calendars, not on any other channel the plugin runs beside.
+    if let ["calendars", channel, ..] = parts.as_slice()
+        && !is_calendar(channel)
+    {
+        return problem(404, "notFound");
+    }
     let may =
         |channel: &str, permission: &str| host::caller_may(channel, permission).unwrap_or(false);
     match (request.method.as_str(), parts.as_slice()) {
@@ -351,7 +365,7 @@ fn route(request: &Request) -> Response {
             }
         }
         ("GET", ["aspen", "capabilities", name]) => {
-            let Some(channel) = name.strip_prefix("feed:") else {
+            let Some(channel) = name.strip_prefix("feed:").filter(|c| is_calendar(c)) else {
                 return problem(404, "notFound");
             };
             let Some(events) = events(channel) else {

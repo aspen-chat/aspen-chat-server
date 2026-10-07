@@ -45,6 +45,14 @@ function remember(role: FontRole, family: string | null): void {
   }
 }
 
+/** The aliases of the user's families drawn now, for text and for code (`applyFont`). */
+export function chosenAliases(): string[] {
+  const style = document.documentElement.style;
+  return FONT_ROLES.map((role) =>
+    style.getPropertyValue(VARIABLES[role]).trim().replace(/^"|"$/g, ""),
+  ).filter((alias) => alias !== "");
+}
+
 /** A `font-family` value for showing a family by its alias, as Settings lists them. */
 export function aliasStack(alias: string, role: FontRole): string {
   return `"${alias}", ${role === "text" ? "sans-serif" : "monospace"}`;

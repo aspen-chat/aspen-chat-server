@@ -57,7 +57,7 @@ jobs:
       # The example plugins are workspaces of their own, built for WebAssembly components.
       - name: Example plugins
         run: |
-          for plugin in word_filter forum calendar; do
+          for plugin in word_filter forum calendar blackjack; do
             cargo fmt --manifest-path plugins/$plugin/Cargo.toml --check
             cargo clippy --locked --manifest-path plugins/$plugin/Cargo.toml --target wasm32-wasip2 -- -D warnings
             cargo test --locked --manifest-path plugins/$plugin/Cargo.toml

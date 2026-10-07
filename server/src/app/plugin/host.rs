@@ -16,6 +16,7 @@
 
 use super::registry::LoadedPlugin;
 use super::{PluginPermission, PluginText, annotation, principal, storage};
+use crate::app::channel::ChannelType;
 use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::message::Message as MessageRow;
@@ -931,6 +932,29 @@ impl Call {
             .map_err(|e| self.fail(e))
     }
 
+    async fn storage_swap(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        expected: Option<Vec<u8>>,
+        value: Option<Vec<u8>>,
+    ) -> Result<bool, wit::Error> {
+        self.require(PluginPermission::Storage)?;
+        let scope = self.scope(scope).await?;
+        let quota = self.plugin.manifest.storage_quota.unwrap_or(0);
+        let mut conn = self.conn().await?;
+        storage::swap(
+            conn.as_mut(),
+            &self.plugin.id,
+            quota,
+            &scope,
+            &key,
+            expected.as_deref(),
+            value.as_deref(),
+        )
+        .await
+    }
+
     async fn storage_list(
         &mut self,
         scope: wit::Scope,
@@ -1086,6 +1110,27 @@ impl Call {
         place(conn.as_mut(), channel_id)
             .await
             .map_err(|e| self.fail(e))
+    }
+
+    async fn kind_of(&mut self, channel_id: String) -> Result<wit::ChannelKind, wit::Error> {
+        let channel_id = ChannelId(parse_id(&channel_id)?);
+        let mut conn = self.conn().await?;
+        self.running_at(conn.as_mut(), channel_id).await?;
+        if let Phase::Route { caller } = self.phase {
+            channel_access(&self.server, conn.as_mut(), caller, channel_id)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        let (ty, plugin_type): (ChannelType, Option<String>) = channel::table
+            .select((channel::ty, channel::plugin_type))
+            .filter(channel::id.eq(channel_id))
+            .first(conn.as_mut())
+            .await
+            .map_err(|e| self.fail(e.into()))?;
+        Ok(wit::ChannelKind {
+            ty: ty.to_string(),
+            plugin_type,
+        })
     }
 
     async fn community_settings(&mut self, community: String) -> Result<String, wit::Error> {
@@ -1330,6 +1375,16 @@ impl aspen::plugin::host::Host for CallState {
         self.call.storage_delete(scope, key).await
     }
 
+    async fn storage_swap(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        expected: Option<Vec<u8>>,
+        value: Option<Vec<u8>>,
+    ) -> Result<bool, wit::Error> {
+        self.call.storage_swap(scope, key, expected, value).await
+    }
+
     async fn storage_list(
         &mut self,
         scope: wit::Scope,
@@ -1389,6 +1444,10 @@ impl aspen::plugin::host::Host for CallState {
 
     async fn place_of(&mut self, channel: String) -> Result<wit::Place, wit::Error> {
         self.call.place_of(channel).await
+    }
+
+    async fn kind_of(&mut self, channel: String) -> Result<wit::ChannelKind, wit::Error> {
+        self.call.kind_of(channel).await
     }
 
     async fn community_settings(&mut self, community: String) -> Result<String, wit::Error> {

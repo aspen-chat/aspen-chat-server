@@ -1,9 +1,9 @@
 [package]
-name = "aspen_forum"
-version = "1.1.0"
+name = "aspen_blackjack"
+version = "1.0.0"
 edition = "2024"
 license = "MPL-2.0"
-description = "An example Aspen plugin: forum boards, a kind of channel whose posts and replies the plugin keeps and its view shows"
+description = "An example Aspen plugin: blackjack tables, a kind of channel where members play for chips that are not money"
 publish = false
 
 # Its own workspace, built for `wasm32-wasip2`, as the word filter is.

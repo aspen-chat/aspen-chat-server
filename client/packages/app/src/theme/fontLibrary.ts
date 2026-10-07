@@ -187,6 +187,14 @@ export async function removeFamily(family: string): Promise<void> {
   forget(family);
 }
 
+/** The weight and style a face says it has, as a `FontFace` takes them. */
+function descriptors(face: StoredFace): { weight: string; style: string } {
+  return {
+    weight: typeof face.weight === "number" ? String(face.weight) : face.weight.join(" "),
+    style: face.style,
+  };
+}
+
 interface Registered {
   alias: string;
   faces: Promise<FontFace[]>;
@@ -225,11 +233,7 @@ export async function loadFamily(family: string): Promise<string | undefined> {
             if (data === undefined) {
               return undefined;
             }
-            const face = new FontFace(alias, data, {
-              weight:
-                typeof stored.weight === "number" ? String(stored.weight) : stored.weight.join(" "),
-              style: stored.style,
-            });
+            const face = new FontFace(alias, data, descriptors(stored));
             try {
               await face.load();
             } catch {
@@ -248,4 +252,42 @@ export async function loadFamily(family: string): Promise<string | undefined> {
   }
   const faces = await entry.faces;
   return faces.length > 0 ? entry.alias : undefined;
+}
+
+/** A face of the user's, as a page that cannot read the library registers it. */
+export interface FaceFile {
+  /** The alias its family is drawn under. */
+  family: string;
+  weight: string;
+  style: string;
+  data: ArrayBuffer;
+}
+
+/**
+ * The files of the families registered under `aliases`, each named by its alias, for a page
+ * that cannot read the library and registers them itself: a plugin's view, which is in an origin
+ * of its own.
+ */
+export async function facesUnder(aliases: readonly string[]): Promise<FaceFile[]> {
+  const families = new Map(
+    [...registered]
+      .filter(([, entry]) => aliases.includes(entry.alias))
+      .map(([family, entry]) => [family, entry.alias]),
+  );
+  if (families.size === 0) {
+    return [];
+  }
+  const files = await Promise.all(
+    (await allFaces()).flatMap((stored) => {
+      const alias = families.get(stored.family);
+      return alias === undefined
+        ? []
+        : [
+            fileOf(stored.id).then((data) =>
+              data === undefined ? undefined : { family: alias, ...descriptors(stored), data },
+            ),
+          ];
+    }),
+  );
+  return files.filter((file) => file !== undefined);
 }

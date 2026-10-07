@@ -120,7 +120,7 @@ test("text Aspen's own faces lack is drawn in the bundled Noto faces", async ({ 
         "Noto Sans Ethiopic Variable",
         "Noto Serif Tibetan Variable",
         "Noto Sans SC Variable",
-        "Noto Color Emoji",
+        "Aspen Noto Color Emoji",
         "Noto Sans Variable",
       ]),
     );
@@ -132,7 +132,7 @@ test("text Aspen's own faces lack is drawn in the bundled Noto faces", async ({ 
 test("emoji are drawn in colour, sequences whole", async ({ page }) => {
   await signInToWorld(page);
   const drawn = await page.evaluate(async () => {
-    const font = '64px "Noto Color Emoji"';
+    const font = '64px "Aspen Noto Color Emoji"';
     const family = "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}";
     await document.fonts.load(font, `\u{1F600}${family}`);
     const canvas = document.createElement("canvas");

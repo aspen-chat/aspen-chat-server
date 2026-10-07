@@ -7,7 +7,8 @@
 //!   warns of someone posting more than five messages in ten seconds, and counts each channel's
 //!   messages in storage scoped to the channel.
 //! - Its principal answers the command `/wordcount` with the channel's count, and its route
-//!   `GET channels/{channel}/count` answers the same to anyone who may view the channel.
+//!   `GET channels/{channel}/count` answers the same to anyone who may view the channel, for any
+//!   channel but one of a plugin's kind, which holds no messages.
 //!
 //! `aspen-plugin.json` beside this crate is its manifest.
 
@@ -207,7 +208,11 @@ impl Guest for WordFilter {
         let parts: Vec<&str> = request.path.split('/').collect();
         match (request.method.as_str(), parts.as_slice()) {
             ("GET", ["channels", channel, "count"]) => {
-                // Read as the caller: someone who may not view the channel finds nothing.
+                // A channel of a plugin's kind holds no messages to count. Read as the caller,
+                // someone who may not view the channel finds nothing.
+                if host::kind_of(channel).map_or(true, |kind| kind.ty == "plugin") {
+                    return json(404, "{\"error\":\"notFound\"}".into());
+                }
                 match host::storage_get(&Scope::Channel(channel.to_string()), &count_key()) {
                     Ok(value) => {
                         let count: u64 = value

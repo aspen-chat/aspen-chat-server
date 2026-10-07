@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { attributions } from "./attributions/plugin";
 import { fallbackFonts } from "./fallbackFonts";
+import { viewFonts } from "./viewFonts";
 
 /**
  * Development proxy target. A deployment is one origin, its API and web client together, so in
@@ -68,6 +69,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       fallbackFonts(),
+      viewFonts(),
       attributions(),
       react(),
       tailwindcss(),

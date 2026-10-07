@@ -2,6 +2,7 @@ import type { Channel, PluginInfo } from "@aspen/protocol";
 import {
   CalendarBlankIcon,
   ChatsCircleIcon,
+  GameControllerIcon,
   ListBulletsIcon,
   NotebookIcon,
   PuzzlePieceIcon,
@@ -15,6 +16,9 @@ import { secondaryButtonClass } from "@/features/invites/dialog";
 import { channelLink, messageLink, useDomain } from "@/features/messages/links";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { facesUnder, type FaceFile } from "@/theme/fontLibrary";
+import { chosenAliases } from "@/theme/fonts";
+import { VIEW_FONTS } from "../../../viewFonts";
 
 type Kind = PluginInfo["channelTypes"][number];
 
@@ -37,7 +41,9 @@ export function PluginGlyph({
           ? ListBulletsIcon
           : glyph === "chat"
             ? ChatsCircleIcon
-            : PuzzlePieceIcon;
+            : glyph === "game"
+              ? GameControllerIcon
+              : PuzzlePieceIcon;
   return <Icon size={size} aria-hidden="true" className={className} />;
 }
 
@@ -101,15 +107,31 @@ const THEME_TOKENS = [
 
 interface BridgeTheme {
   colors: Record<string, string>;
+  fonts: {
+    sans: string;
+    mono: string;
+    /** Every face the app bundles, served by the view's deployment (`viewFonts.ts`). */
+    stylesheet: string;
+    /** The user's own faces drawn now, as files (`fontLibrary.ts`). */
+    faces: FaceFile[];
+  };
+  scheme: "light" | "dark";
+}
+
+/** What `readTheme` reads from the document; the rest of the theme follows from it. */
+interface DrawnTheme {
+  colors: Record<string, string>;
   fonts: { sans: string; mono: string };
   scheme: "light" | "dark";
+  /** The aliases of the user's families in the stacks. */
+  chosen: string[];
 }
 
 /**
  * The theme as drawn now: each token's colour resolved (the palette's `light-dark()` pairs
  * settled by the mode), the font stacks, and whether it is light or dark.
  */
-function readTheme(): BridgeTheme {
+function readTheme(): DrawnTheme {
   const probe = document.createElement("span");
   probe.style.display = "none";
   document.body.append(probe);
@@ -129,16 +151,22 @@ function readTheme(): BridgeTheme {
       mono: root.getPropertyValue("--font-mono").trim(),
     },
     scheme,
+    chosen: chosenAliases(),
   };
 }
 
-/** The theme, read again whenever the palette, mode, fonts, or the system's preference change. */
-function useBridgeTheme(): BridgeTheme {
-  const [theme, setTheme] = useState(readTheme);
+/**
+ * The theme a view of `apiBase`'s deployment is handed, read again whenever the palette, mode,
+ * fonts, or the system's preference change. A view cannot load the app's faces itself, so it is
+ * handed the address of the stylesheet naming them on its own deployment, which serves the web
+ * client's files beside its views, and the files of the user's own faces drawn now.
+ */
+function useBridgeTheme(apiBase: string): BridgeTheme {
+  const [drawn, setDrawn] = useState(readTheme);
   useEffect(() => {
     const update = () => {
       const next = readTheme();
-      setTheme((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
+      setDrawn((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
     };
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, {
@@ -154,7 +182,35 @@ function useBridgeTheme(): BridgeTheme {
       dark.removeEventListener("change", update);
     };
   }, []);
-  return theme;
+  const [faces, setFaces] = useState<FaceFile[]>([]);
+  const chosen = drawn.chosen.join(",");
+  useEffect(() => {
+    let current = true;
+    facesUnder(chosen === "" ? [] : chosen.split(",")).then(
+      (files) => {
+        if (current) setFaces(files);
+      },
+      (error: unknown) => {
+        // The view draws in the stacks' next faces.
+        console.warn("the font library could not be read for a plugin's view", error);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [chosen]);
+  return useMemo(
+    () => ({
+      colors: drawn.colors,
+      fonts: {
+        ...drawn.fonts,
+        stylesheet: new URL(`/${VIEW_FONTS}`, apiBase).href,
+        faces,
+      },
+      scheme: drawn.scheme,
+    }),
+    [drawn, faces, apiBase],
+  );
 }
 
 /** The most people one `users` question may name. */
@@ -193,7 +249,7 @@ function PluginView({
   const domain = useDomain();
   const navigate = useNavigate();
   const { resolved } = useLanguageSetting();
-  const theme = useBridgeTheme();
+  const theme = useBridgeTheme(sync.apiBase);
   const frame = useRef<HTMLIFrameElement>(null);
   const src = `${sync.apiBase}${kind.view}`;
   // Each frame the app makes, by its key: a new one for another page or a reload.

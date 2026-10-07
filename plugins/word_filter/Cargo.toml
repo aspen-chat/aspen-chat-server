@@ -1,6 +1,6 @@
 [package]
 name = "aspen_word_filter"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 license = "MPL-2.0"
 description = "An example Aspen plugin: a word filter that masks or refuses words, flags others, and counts what it sees"

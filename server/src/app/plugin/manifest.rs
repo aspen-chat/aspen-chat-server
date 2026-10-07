@@ -168,6 +168,7 @@ pub enum Glyph {
     Calendar,
     List,
     Chat,
+    Game,
 }
 
 /// A plugin's own account.

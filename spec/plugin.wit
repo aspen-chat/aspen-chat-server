@@ -80,6 +80,16 @@ interface types {
         altered-by: list<string>,
     }
 
+    /// What kind of channel one is.
+    record channel-kind {
+        /// Its type's wire name: `text`, `voice`, `thread`, `dm`, `groupDm`, or `plugin`, or one
+        /// a newer server adds.
+        ty: string,
+        /// For a channel of a plugin's kind, the kind: the plugin's id, a colon, and the name
+        /// its manifest gives the kind (`org.aspenchat.forum:board`).
+        plugin-type: option<string>,
+    }
+
     /// A deleted message.
     record deleted-message {
         id: id,
@@ -276,13 +286,17 @@ interface types {
 /// What the host offers. Each call is checked against the plugin's permissions, and reads are
 /// made as whoever the call serves: the caller of a route, and otherwise the plugin's principal.
 interface host {
-    use types.{id, level, annotation, scope, audience, http-request, http-response, message, error, text, card, place};
+    use types.{id, level, annotation, scope, audience, http-request, http-response, message, error, text, card, place, channel-kind};
 
     /// The deployment's settings for the plugin, as a JSON object.
     settings: func() -> string;
 
     /// Where a channel the plugin runs in is (while answering a route, one the caller may view).
     place-of: func(channel: id) -> result<place, error>;
+
+    /// What kind of channel a channel the plugin runs in is (while answering a route, one the
+    /// caller may view), so a plugin can answer only for the kinds it serves.
+    kind-of: func(channel: id) -> result<channel-kind, error>;
 
     /// A community's settings for the plugin, where it runs, with their defaults, as a JSON
     /// object (while answering a route, a community the caller belongs to).
@@ -319,6 +333,11 @@ interface host {
     storage-delete: func(scope: scope, key: string) -> result<_, error>;
     /// The keys after `after` that begin with `prefix`, in order, at most `limit` (100 at most).
     storage-list: func(scope: scope, prefix: string, after: option<string>, limit: u32) -> result<list<tuple<string, list<u8>>>, error>;
+    /// Writes `value` under `key`, or deletes it when `value` is none, only while it holds
+    /// `expected` (is absent, when `expected` is none), and answers whether it did. Of two calls
+    /// that read the same value and swap it, one succeeds and the other is answered false, so it
+    /// can read again and decide again.
+    storage-swap: func(scope: scope, key: string, expected: option<list<u8>>, value: option<list<u8>>) -> result<bool, error>;
 
     /// Publishes a `pluginEvent` with this kind and JSON payload (`events`). While answering a
     /// route, only to a channel the caller may view, a community they belong to, or themself.

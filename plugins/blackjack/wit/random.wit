@@ -1,0 +1,9 @@
+/// The one function of WASI's secure random interface the plugin uses to shuffle, which every
+/// Aspen server links (`app::plugin::host`). Its outputs are unpredictable to anyone, as a
+/// shuffle's must be; the standard library's `RandomState` is seeded from WASI's insecure seed
+/// instead, which suits ids but not cards.
+package wasi:random@0.2.0;
+
+interface random {
+    get-random-u64: func() -> u64;
+}

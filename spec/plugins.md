@@ -68,7 +68,7 @@ together with a manifest, a JSON file beside it:
   are installed with it and served as its views' files, with `views`.
 - `channelTypes`: the kinds of channel it adds, with `channelTypes`, by name: each one's name (a
   key of its `messages`), its `view` (a page among its assets), and its `glyph` (`board`,
-  `calendar`, `list`, or `chat`), which clients draw it with.
+  `calendar`, `list`, `chat`, or `game`), which clients draw it with.
 - `retention`: a key of its `messages` saying what it keeps of what it sees and for how long,
   which the operator reads before installing, since deleting a message cannot reach a copy a
   plugin keeps.
@@ -151,7 +151,11 @@ or memory, or traps, has failed (below), and is logged with the plugin's id.
 
 Every call is told its context: the community it runs for (if any) and that community's settings,
 and the locale of the person it serves, when there is one. The deployment settings are read with
-`settings`. `log` writes to the server's log under the plugin's id.
+`settings`. `log` writes to the server's log under the plugin's id. Of a channel where it runs
+(in a route, one the caller may view), `place-of` says where it is (its community, the channel a
+thread is in, whether it is direct) and `kind-of` what kind it is (`text`, `voice`, `plugin`, and
+so on, and for a plugin's kind its name), so a plugin keeps and answers for only the channels it
+serves: a forum's posts on its boards and nowhere else.
 
 **Counters** are what a plugin counts across calls and across the deployment's servers, in
 Valkey: `counter-add(key, window-seconds, amount)` adds to the key's count in the current window
@@ -250,7 +254,10 @@ A key-value store per plugin (`storage`), in the database so every API server se
 within `storageQuota`. Each value lives in a scope: the deployment, a community, a channel, or a
 user, so that what a plugin keeps about a place goes with it: deleting a channel, community, or
 account deletes what plugins kept in its scope, and removing a plugin deletes all of its data
-once the operator purges it.
+once the operator purges it. Every API server may be answering the plugin at once, so besides
+reading and writing a value, a plugin may swap it (`storage-swap`): write it, or delete it, only
+while it still holds what the plugin read. Of two calls that read the same value and swap it, one
+succeeds and the other is told so, and reads again, so neither change is lost.
 
 ### Routes
 
@@ -301,8 +308,13 @@ it loads the view again, in a new frame, with a new port.
   shows, the person (`id`, `name`, `displayName`), their `locale` and text direction (`dir`), the plugin's
   `messages` in that language, `apiBase` (where the deployment's API is, for the capability URLs
   it hands out), and the app's `theme`: its colours by token name
-  (`surface`, `ink`, `accent`, and the rest), its two font stacks, and whether it is light or
-  dark. It says `theme` again when any of that changes.
+  (`surface`, `ink`, `accent`, and the rest), its fonts, and whether it is light or dark. It
+  says `theme` again when any of that changes. The fonts are the two stacks (`sans`, `mono`), a
+  `stylesheet` naming every face the app bundles, on the view's own deployment, which serves it
+  as `view-fonts.css` beside the web client and its faces' files to any origin, and the person's
+  own faces drawn now (`faces`: each a `family`, `weight`, `style`, and the file as `data`),
+  which only the app can read. A page that links the stylesheet and registers the faces with
+  `FontFace` draws in exactly the app's fonts.
 - The frame asks `request` (`id`, `method`, `path`, `query`, `body`), which the app makes to
   the plugin's route as the person and answers `response` (`id`, `status`, `contentType`,
   `body` as text; `status` 0 when the deployment could not be reached). A path that would leave

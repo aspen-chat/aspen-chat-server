@@ -1,0 +1,9 @@
+/* Aspen's own typefaces, upright and italic, each a variable font split by script so a page
+   fetches only the scripts it shows (`--font-sans` and `--font-mono` in `styles.css`). The app
+   loads them with the page (`main.tsx`) and plugins' views through `viewFonts.css`. */
+@import "@fontsource-variable/inclusive-sans/index.css";
+@import "@fontsource-variable/inclusive-sans/wght-italic.css";
+@import "@fontsource-variable/noto-sans/index.css";
+@import "@fontsource-variable/noto-sans/wght-italic.css";
+@import "@fontsource-variable/intel-one-mono/index.css";
+@import "@fontsource-variable/intel-one-mono/wght-italic.css";

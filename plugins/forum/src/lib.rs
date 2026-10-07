@@ -11,7 +11,8 @@
 //! - `DELETE boards/{channel}/posts/{post}`: deletes a post and its replies, for its author and
 //!   whoever may manage messages.
 //!
-//! Reading as the caller, the host answers nothing of a board they may not view. Each change is
+//! Each answers only for a channel that is a board (`kind-of`), and, reading as the caller, the
+//! host answers nothing of a board they may not view. Each change is
 //! published to the channel as the event `changed`, so every view of the board refreshes.
 
 wit_bindgen::generate!({
@@ -130,6 +131,14 @@ fn changed(channel: &str) {
     let _ = host::publish(&Audience::Channel(channel.to_string()), "changed", "{}");
 }
 
+/// The kind of channel a board is, as the manifest names it beneath the plugin's id.
+const BOARD: &str = "org.aspenchat.forum:board";
+
+/// Whether `channel` is a board. Read as the caller, a channel they may not view is none.
+fn is_board(channel: &str) -> bool {
+    host::kind_of(channel).is_ok_and(|kind| kind.plugin_type.as_deref() == Some(BOARD))
+}
+
 fn may(channel: &str, permission: &str) -> bool {
     host::caller_may(channel, permission).unwrap_or(false)
 }
@@ -137,6 +146,12 @@ fn may(channel: &str, permission: &str) -> bool {
 fn route(request: &Request) -> Response {
     let parts: Vec<&str> = request.path.split('/').collect();
     let caller = request.caller.clone();
+    // Posts are kept only on boards, not on any other channel the plugin runs beside.
+    if let ["boards", channel, ..] = parts.as_slice()
+        && !is_board(channel)
+    {
+        return problem(404, "notFound");
+    }
     match (request.method.as_str(), parts.as_slice()) {
         ("GET", ["boards", channel, "posts"]) => {
             if !may(channel, "viewChannel") {
