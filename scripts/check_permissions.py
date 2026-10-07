@@ -179,6 +179,22 @@ def granting_and_revoking(world: World, check: Checks) -> None:
     check("nor hear it", not world.hears_message(secret))
 
 
+def edits_after_send(world: World, check: Checks) -> None:
+    say("editing a message once Send messages is taken away")
+    stack, member = world.stack, world.member
+    quiet = world.channel("quiet")
+    said = stack.api("POST", f"/channels/{quiet}/messages", {"content": "before", "attachments": []},
+                     member["token"])["id"]
+    world.as_owner("PUT", f"/channels/{quiet}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("the member cannot put new words in their message",
+          stack.status("PATCH", f"/messages/{said}", {"content": "after"}, member["token"]) == 403)
+    check("but may clear what it said",
+          stack.status("PATCH", f"/messages/{said}", {"content": ""}, member["token"]) == 200)
+    world.as_owner("DELETE", f"/channels/{quiet}/overrides/{world.everyone}")
+    check("and with Send messages back, edits it again",
+          stack.status("PATCH", f"/messages/{said}", {"content": "again"}, member["token"]) == 200)
+
+
 def moves_and_categories(world: World, check: Checks) -> None:
     say("a channel moved into a hidden category and out, and the category deleted")
     hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Mods", "sortIndex": 9})["id"]
@@ -1318,6 +1334,13 @@ def banned_owners_bots(world: World, check: Checks) -> None:
     check("and refuses its token", stack.status("GET", "/users/@me", token=bot_token) == 401)
     world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
     check("lifting the ban restores it", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_id = stack.api("GET", "/users/@me", token=bot_token)["id"]
+    plain = world.as_owner("POST", "/admin/roles", {"name": f"Plain{world.run}", "permissions": []})["id"]
+    check("a bot is given no deployment role",
+          stack.status("PUT", f"/admin/users/{bot_id}/roles/{plain}", token=world.owner["token"]) == 400)
+    check("and its token never opens the dashboard",
+          stack.status("GET", "/admin/overview", token=bot_token) == 403)
+    world.as_owner("DELETE", f"/admin/roles/{plain}")
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
 
@@ -1899,7 +1922,7 @@ def blackjack_tables(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", BLACKJACK_ID)
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_categories, hidden_managers,
+SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,

@@ -206,7 +206,11 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "call" &&
     message.kind !== "missedCall";
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
-  const editable = own && message.kind === "standard";
+  // Rewriting puts new words in it, which takes what posting here takes; deleting it does not.
+  const editable =
+    own &&
+    message.kind === "standard" &&
+    permissions.has(inThread ? "sendInThreads" : "sendMessages");
   // Its author may show a reply in the parent channel later, as the message box offers to as
   // it is sent, while it has no echo there.
   const echoParent =

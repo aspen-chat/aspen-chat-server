@@ -682,7 +682,32 @@ pub async fn update_message(
         return Err(crate::Error::Forbidden(t!("editOthersMessage")));
     }
     access.ensure_unblocked()?;
-    if command.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+    // Adding to a message is posting, so it takes what posting here takes: Send messages (Send
+    // messages in threads in a thread) for new text, and Attach files besides for a new file.
+    // An edit that only takes away does not: clearing the text (`content` given as empty),
+    // removing attachments (`attachments` naming only some of those it has), or both, so
+    // someone who may no longer post can still withdraw what they said.
+    let adds_files = match &command.attachments {
+        None => false,
+        Some(wanted) => {
+            let held: std::collections::HashSet<AttachmentId> = message_attachment::table
+                .select(message_attachment::attachment_id)
+                .filter(message_attachment::message_id.eq(id))
+                .load::<AttachmentId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .collect();
+            wanted.iter().any(|attachment| !held.contains(attachment))
+        }
+    };
+    let adds_text = command
+        .content
+        .as_deref()
+        .is_some_and(|text| !text.is_empty());
+    if adds_text || adds_files {
+        access.require(access.send_permission())?;
+    }
+    if adds_files {
         access.require(Permissions::ATTACH_FILES)?;
     }
     // Only text its author wrote is theirs to edit. An echo shows its reply's content; a

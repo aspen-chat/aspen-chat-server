@@ -17,6 +17,8 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::RngExt;
 
 const INVITE_CODE_LENGTH: usize = 16;
+/// The most invites a community holds that are neither revoked nor expired.
+pub const MAX_ACTIVE_INVITES: i64 = 1000;
 /// How long after it stops working an invite, a community's or a registration invite, is still
 /// listed; after that only the terminal lists it (registration invites) or nothing does.
 pub const STALE_AFTER_DAYS: i64 = 7;
@@ -115,6 +117,24 @@ pub async fn insert(
         }
         None => generate_invite_code(),
     };
+    crate::community::hold_for_count(conn, community).await?;
+    let active: i64 = invite::table
+        .filter(invite::community.eq(community))
+        .filter(invite::deleted_at.is_null())
+        .filter(
+            invite::expires_at
+                .is_null()
+                .or(invite::expires_at.gt(Utc::now())),
+        )
+        .count()
+        .get_result(conn)
+        .await?;
+    if active >= MAX_ACTIVE_INVITES {
+        return Err(crate::Error::Validation(t!(
+            "inviteLimit",
+            max = MAX_ACTIVE_INVITES
+        )));
+    }
 
     let invite = Invite {
         code,
