@@ -195,7 +195,7 @@ pub async fn list(
         .offset(offset.clamp(0, crate::admin::MAX_OFFSET))
         .limit(limit.clamp(1, crate::admin::MAX_PAGE))
         .into_boxed();
-    if let Some(pattern) = crate::admin::contains_pattern(search) {
+    if let Some(pattern) = crate::admin::contains_pattern(search)? {
         query = query.filter(federated_deployment::domain.like(pattern));
     }
     let deployments: Vec<FederatedDeployment> = query.load(conn).await?;

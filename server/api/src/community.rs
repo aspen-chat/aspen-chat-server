@@ -391,7 +391,8 @@ pub type MemberList = SideloadedList<User>;
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct MemberListQuery {
-    /// Search: members whose username or display name contains this, ignoring case.
+    /// Search: members whose username or display name contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
