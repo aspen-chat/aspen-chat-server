@@ -41,7 +41,7 @@ export function TypingIndicator({ channelId }: { channelId: string }) {
     );
   }
   return (
-    <div className="message-text flex h-[1lh] items-center px-4 text-base text-ink-muted">
+    <div className="message-text flex h-[1lh] items-center border-t border-line bg-surface-sunken px-4 text-base text-ink-muted">
       {text !== null && (
         <p className="motion-fade flex min-w-0 items-center">
           <TypingDots />

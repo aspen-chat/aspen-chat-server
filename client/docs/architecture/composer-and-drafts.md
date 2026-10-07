@@ -18,7 +18,9 @@
   the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
 - Who else is typing shows on a line of its own just above the message box (`TypingIndicator`,
-  which `Composer` puts there whether or not the caller may write), in message text at the
+  which `Composer` puts there whether or not the caller may write), a sunken band ruled off from
+  the messages above it (`bg-surface-sunken`, `border-t`) so that, empty, it reads as part of the
+  box rather than a gap in the list, in message text at the
   reader's message text size (`message-text`), kept one line tall (`h-[1lh]`) whether or not
   anyone is typing, so nothing moves when someone starts or stops. Up to three people are named,
   through `PersonName` in the channel's community and joined as the language lists things
