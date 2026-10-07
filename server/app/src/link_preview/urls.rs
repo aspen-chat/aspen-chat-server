@@ -7,6 +7,13 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 use url::Url;
 
+/// The longest candidate URL, in bytes, that is parsed; a longer one is skipped.
+const MAX_URL_BYTES: usize = 2048;
+
+/// The most candidate URLs one message's text has parsed; the search stops after them. A
+/// message naming the same long link many times costs this many parses, not one for each.
+const MAX_PARSE_ATTEMPTS: usize = 64;
+
 /// Extract up to [`MAX_LINK_PREVIEWS_PER_MESSAGE`] unique preview-worthy
 /// http(s) URLs from a markdown body. Links to messages of an Aspen
 /// deployment are left out: they are shown as the messages themselves
@@ -31,13 +38,22 @@ pub fn extract_preview_urls(content: &str) -> Vec<Url> {
 ///   delegates (`github.io/pages`) are taken over `https`, under the
 ///   same rule the client uses to render them as links;
 /// - URLs inside `Event::Code` or fenced code blocks are skipped so pasted
-///   example snippets don't count.
+///   example snippets don't count;
+/// - candidates longer than [`MAX_URL_BYTES`] are skipped, and the search stops after
+///   [`MAX_PARSE_ATTEMPTS`] candidates are parsed.
 pub fn extract_urls(content: &str, limit: usize, mut keep: impl FnMut(&Url) -> bool) -> Vec<Url> {
     let mut urls: Vec<Url> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut code_block_depth: u32 = 0;
+    let mut attempts = 0;
+    // Whether the search is over: `limit` URLs found, or as many candidates parsed as it may.
     let mut push = |urls: &mut Vec<Url>, raw: &str| {
-        push_url(urls, &mut seen, raw, &mut keep) && urls.len() >= limit
+        if raw.len() > MAX_URL_BYTES {
+            return false;
+        }
+        attempts += 1;
+        (push_url(urls, &mut seen, raw, &mut keep) && urls.len() >= limit)
+            || attempts >= MAX_PARSE_ATTEMPTS
     };
 
     for event in crate::markdown::parser(content) {
@@ -261,6 +277,21 @@ mod tests {
         assert_eq!(
             bare_domain_url(&many).as_deref(),
             Some("https://example.com/")
+        );
+    }
+
+    #[test]
+    fn long_and_repeated_candidates_are_bounded() {
+        let long = format!("https://example.com/{}", "a".repeat(MAX_URL_BYTES));
+        assert!(urls_from(&long).is_empty());
+        let mut repeated = String::new();
+        for _ in 0..MAX_PARSE_ATTEMPTS {
+            repeated.push_str("https://example.com/same ");
+        }
+        repeated.push_str("https://example.org/late");
+        assert_eq!(
+            urls_from(&repeated),
+            vec!["https://example.com/same".to_string()]
         );
     }
 
