@@ -42,7 +42,6 @@ import {
   modalClass,
   optionClass,
   overlayClass,
-  secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
 } from "@/features/invites/dialog";
@@ -745,9 +744,6 @@ function ListsDialog({
           {error}
         </p>
       )}
-      <Button slot="close" className={secondaryButtonClass + " self-end"}>
-        {m.federation.done}
-      </Button>
     </DeploymentDialog>
   );
 }

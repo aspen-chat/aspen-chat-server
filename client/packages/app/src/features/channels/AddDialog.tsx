@@ -11,7 +11,7 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { InviteManager } from "@/features/invites/InviteDialog";
-import { OptionButton, StepHeading } from "@/features/layout/steps";
+import { OptionButton } from "@/features/layout/steps";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -75,9 +75,9 @@ function Steps({ community, close }: { community: Community; close: () => void }
   if (typeof step === "object") {
     return (
       <>
-        <StepHeading onBack={back}>
+        <DialogHeading onBack={back}>
           {format(m.plugins.newChannelOfKind, { kind: step.kind.name })}
-        </StepHeading>
+        </DialogHeading>
         <CreateChannelForm
           communityId={community.id}
           ty="plugin"
@@ -135,30 +135,30 @@ function Steps({ community, close }: { community: Community; close: () => void }
     case "user":
       return (
         <>
-          <StepHeading onBack={back}>
+          <DialogHeading onBack={back}>
             {format(m.inviteDialogHeading, { community: community.name })}
-          </StepHeading>
+          </DialogHeading>
           <InviteManager communityId={community.id} />
         </>
       );
     case "text":
       return (
         <>
-          <StepHeading onBack={back}>{m.newTextChannel}</StepHeading>
+          <DialogHeading onBack={back}>{m.newTextChannel}</DialogHeading>
           <CreateChannelForm communityId={community.id} ty="text" onDone={close} />
         </>
       );
     case "voice":
       return (
         <>
-          <StepHeading onBack={back}>{m.newVoiceChannel}</StepHeading>
+          <DialogHeading onBack={back}>{m.newVoiceChannel}</DialogHeading>
           <CreateChannelForm communityId={community.id} ty="voice" onDone={close} />
         </>
       );
     case "category":
       return (
         <>
-          <StepHeading onBack={back}>{m.newCategory}</StepHeading>
+          <DialogHeading onBack={back}>{m.newCategory}</DialogHeading>
           <CreateCategoryForm communityId={community.id} onDone={close} />
         </>
       );

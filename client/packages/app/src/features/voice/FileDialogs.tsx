@@ -30,7 +30,6 @@ import {
   modalClass,
   optionClass,
   overlayClass,
-  secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
 } from "@/features/invites/dialog";
@@ -194,9 +193,6 @@ export function OfferFileDialog({
             />
           </RadioGroup>
           <div className="flex justify-end gap-2">
-            <Button onPress={onClose} className={secondaryButtonClass}>
-              {m.cancel}
-            </Button>
             <Button
               isDisabled={file === null || how === null}
               onPress={() => {
@@ -290,9 +286,6 @@ export function ReceiveFileDialog({
           )}
           <p className="text-xs text-ink-muted">{m.files.noResume}</p>
           <div className="flex justify-end gap-2">
-            <Button onPress={onClose} className={secondaryButtonClass}>
-              {m.cancel}
-            </Button>
             <Button
               isDisabled={mode === null}
               onPress={() => {

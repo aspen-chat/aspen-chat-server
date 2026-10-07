@@ -311,6 +311,10 @@ commit, as with comments.
   Administration Dashboard's sections are drawn this way.
   Every modal is titled with `DialogHeading` (`src/features/layout/DialogHeading.tsx`), which
   puts a Phosphor X in its top right that closes it through the `Dialog`'s `close` slot, and
+  on a later step of a stepped dialog (`OptionButton`s first, as Add new) an arrow before the
+  title back to the choice (`onBack`). It lays out every control its row holds, so it is never
+  wrapped in a row of someone else's, where the title would stop taking the width that puts the
+  X in the corner; a control a title needs beside it is a prop of `DialogHeading`. A modal
   has no other button that only closes it (no Cancel, Close, Done, or OK); whatever closing
   must do (answering the screen picker, abandoning a crop) goes in the overlay's
   `onOpenChange`, which the X, Escape, and a click outside all reach. The exceptions are a

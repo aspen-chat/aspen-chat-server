@@ -82,7 +82,7 @@ test("lists decide who may go, and a check says what the deployment presented", 
   await expect(allow).not.toBeChecked();
   await dialog.getByText("Users may go there").click();
   await expect(allow).toBeChecked();
-  await dialog.getByRole("button", { name: "Done" }).click();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(friendly).toContainText("Users go");
 
   await friendly.getByRole("button", { name: `Check ${friendlyDeployment} now` }).click();

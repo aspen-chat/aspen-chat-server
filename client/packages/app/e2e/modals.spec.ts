@@ -58,6 +58,16 @@ test("settings, invites, and new polls close from their X", async ({ page }) => 
   });
 });
 
+test("a stepped dialog keeps its X in the corner on every step", async ({ page }) => {
+  const addNew = () => page.getByRole("button", { name: "Add new…" }).click();
+  await expectClosesFromCorner(page, addNew);
+  await expectClosesFromCorner(page, async () => {
+    await addNew();
+    await page.getByRole("button", { name: /^Text channel/ }).click();
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+  });
+});
+
 test("a modal never scrolls sideways, and settings' planes stand in three columns", async ({
   page,
   isMobile,
