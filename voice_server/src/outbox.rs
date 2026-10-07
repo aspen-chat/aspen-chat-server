@@ -12,9 +12,9 @@ use tokio::sync::{mpsc, watch};
 use tracing::warn;
 use voice_protocol::signal::ServerMessage;
 
-/// The most bytes of frames one socket may have waiting: thirty-odd of the largest transfer
-/// signals, or many thousands of everyday frames, far more than a client that is reading ever
-/// lets build up.
+/// The most bytes of frames one socket may have waiting: over two hundred of the largest
+/// transfer signals (`MAX_SIGNAL_BYTES`), more than one sender's `transferSignal` burst, or many
+/// thousands of everyday frames, far more than a client that is reading ever lets build up.
 pub const OUTBOX_BYTES: usize = 8 * 1024 * 1024;
 
 struct Shared {

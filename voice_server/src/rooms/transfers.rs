@@ -29,6 +29,11 @@ const MAX_NAME_CHARS: usize = 255;
 const MAX_OFFERS: usize = 10;
 /// How many transfers one participant may be part of at once, sending and receiving together.
 const MAX_TRANSFERS: usize = 20;
+/// The largest transfer signal passed on, as JSON: a data channel's offer or answer is a few
+/// kilobytes, a candidate a few hundred bytes. Each is queued on the other side's socket, so
+/// the cap and `transferSignal`'s burst together keep one sender well inside the other's
+/// outbox (`OUTBOX_BYTES`).
+const MAX_SIGNAL_BYTES: usize = 32 * 1024;
 
 pub struct Offer {
     /// The offer's id in the deployment's record (`VoiceReport`), made here.
@@ -403,6 +408,12 @@ impl Rooms {
         peer: Uuid,
         signal: Value,
     ) -> Result<(), RoomError> {
+        let size = serde_json::to_vec(&signal).map_or(usize::MAX, |json| json.len());
+        if size > MAX_SIGNAL_BYTES {
+            return Err(RoomError::BadParameters(format!(
+                "a transfer signal may be at most {MAX_SIGNAL_BYTES} bytes"
+            )));
+        }
         let user = seat.user;
         let room = self.room(seat.channel)?;
         room.require(seat)?;
