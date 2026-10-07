@@ -33,6 +33,12 @@ describe("ServerMessage validator", () => {
     expect(validate({ type: "error", code: "unauthorized", detail: "nope" })).toBe(true);
   });
 
+  it("accepts ephemeral frames, which carry no sequence", () => {
+    const typing = { type: "typing", channelId: uuid, userId: uuid, typing: true };
+    expect(validate({ type: "ephemeral", event: typing })).toBe(true);
+    expect(validate({ type: "ephemeral", event: { ...typing, typing: "yes" } })).toBe(false);
+  });
+
   it("rejects frames that are not part of the protocol", () => {
     expect(validate({ type: "event", sequence: 1, event: { serverEvent: "nope" } })).toBe(false);
     expect(validate({ serverEvent: "react", type: "create" })).toBe(false);

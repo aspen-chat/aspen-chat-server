@@ -176,6 +176,18 @@ export const DEVELOPER_MODE: PreferenceDefinition<boolean> = {
 };
 
 /**
+ * Whether others are told when the user is typing. Turning it off stops telling them; the user
+ * still sees others typing. It follows the account, so it holds on every device and every
+ * deployment they use.
+ */
+export const TYPING_NOTICES: PreferenceDefinition<boolean> = {
+  key: "privacy.typingNotices",
+  scope: "account",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
+/**
  * The ID wizard, a part of developer mode: while both are on, everything with an id offers to
  * copy it, last in whatever shows it. On with developer mode unless turned off.
  */

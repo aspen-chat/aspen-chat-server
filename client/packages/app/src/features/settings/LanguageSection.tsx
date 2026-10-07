@@ -49,7 +49,7 @@ export function LanguageSection() {
   ];
   return (
     <section aria-labelledby="settings-language" className={planeClass}>
-      <h3 id="settings-language" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-language" className="text-lg font-semibold text-ink-muted">
         {m.settings.language}
       </h3>
       <Select
