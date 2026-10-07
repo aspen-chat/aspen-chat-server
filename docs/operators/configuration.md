@@ -259,6 +259,15 @@ once is held too; while it is spent, password sign-in for that name is refused (
 until it refills, and the owner can still sign in with a passkey or from another device, or reset
 the password by email.
 
+Registration (`POST /users`) is limited per address and for everyone together: 600 accounts
+at once, then twenty a second (72000 an hour). That passes a launch's rush; a deployment expecting
+more at once raises it:
+
+```toml
+[rate_limits.endpoints."POST /users"]
+global = { requests = 6000, per_seconds = 60, burst = 3000 }
+```
+
 Limits for one endpoint go under its method and path:
 
 ```toml

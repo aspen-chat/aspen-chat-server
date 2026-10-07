@@ -275,6 +275,10 @@ username_failures = { requests = 30, per_seconds = 600, burst = 20 }
 
 [rate_limits.endpoints."POST /users"]
 ip = { requests = 5, per_seconds = 3600, burst = 3 }
+# Every account made, from everyone together: enough for a launch's rush (600 at once, then
+# twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
+# A deployment expecting more raises it in aspen.toml.
+global = { requests = 1200, per_seconds = 60, burst = 600 }
 
 # Each sends mail: a code to an address the caller says is theirs.
 [rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
