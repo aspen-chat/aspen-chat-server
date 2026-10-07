@@ -343,7 +343,8 @@ pub enum MessageWindow {
     Before { anchor: MessageId, limit: u32 },
     /// Up to `limit` messages newer than `anchor`, excluding `anchor` itself.
     After { anchor: MessageId, limit: u32 },
-    /// `anchor` itself plus up to `radius` messages on either side of it.
+    /// `anchor` itself plus up to `radius` messages on either side of it, `radius` read as at
+    /// most half of [`MAX_MESSAGES_QUERIED`].
     Around { anchor: MessageId, radius: u32 },
 }
 
