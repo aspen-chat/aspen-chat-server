@@ -21,6 +21,9 @@
 #   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
 #   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
 #   ip_per_<param>    one address's, per value of the path parameter
+# A path parameter's value is counted as its endpoint reads it: an id in any spelling the API
+# accepts (with or without hyphens, braces, `urn:uuid:`, any case) is one value. Valkey holds
+# each value, and each username, only as its SHA-256.
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
 # document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,
@@ -28,7 +31,9 @@
 # for the page unsubscribe links open, and `GET /invite/{code}` and `GET /{*path}` for the web
 # client's pages (all but the first served at those paths, outside `/api/v1`). The pages
 # check their own limits and are served, over them, without what they preview as; the web
-# client's files are not limited.
+# client's files are not limited. A request using a method its path does not have, which is
+# refused, still counts toward the `default` limits that need no session or path parameter;
+# a method that is not a standard HTTP one is named `OTHER`.
 
 [rate_limits]
 enabled = true

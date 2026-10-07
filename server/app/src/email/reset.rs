@@ -278,11 +278,7 @@ pub async fn complete(
         return Err(crate::Error::Validation(t!("passwordResetNoCodeYet")));
     };
     // Refused before the code is tried, so a short password costs no attempt.
-    if new_password.len() < crate::login::PASSWORD_MIN_LENGTH {
-        return Err(crate::Error::PasswordRequirement(
-            crate::PasswordRequirement::Length,
-        ));
-    }
+    crate::login::check_new_password(new_password).map_err(crate::Error::PasswordRequirement)?;
     let attempts = attempt(state, id, "code").await?;
     let matches: bool = expected
         .as_bytes()

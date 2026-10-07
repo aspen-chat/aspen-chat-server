@@ -7,6 +7,7 @@ tryAgainLater: "Something went wrong on the server. Try again; if it keeps happe
 # Problem Details titles (see server/api/src/error.rs)
 problemBadRequest: "The request could not be understood."
 problemValidation: "The request is not valid."
+textHasNul: "Text may not contain the null character (U+0000). Remove it and try again."
 problemUnauthorized: "You must be logged in to do that."
 problemForbidden: "You are not allowed to do that."
 problemNotFound: "The requested item does not exist."
@@ -17,6 +18,7 @@ problemInviteCodeTaken: "That invite code is already in use."
 problemOldPasswordIncorrect: "The current password is incorrect."
 problemPasswordRequirementsNotMet: "The new password does not meet the requirements."
 passwordTooShort: "Passwords must be at least %{min} characters long."
+passwordTooLong: "Passwords may be at most %{max} bytes long, which is fewer characters in some scripts. Choose a shorter one."
 notYourAccount: "You can only modify your own account."
 
 # User

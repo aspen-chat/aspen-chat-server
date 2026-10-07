@@ -222,6 +222,11 @@ pub struct ConnectionsConfig {
     /// toward `max`.
     #[default = 512]
     pub max_per_ip: usize,
+    /// The most one network holds open at once: an IPv4 /24 or an IPv6 /48, counted alongside
+    /// `max_per_ip`, so a holder of many addresses cannot spread past it. Reverse proxies in
+    /// `[rate_limits] trusted_proxies` count only toward `max`.
+    #[default = 4096]
+    pub max_per_network: usize,
     /// How long a client has to finish its TLS handshake.
     #[default = 10]
     pub handshake_seconds: u64,
@@ -229,6 +234,12 @@ pub struct ConnectionsConfig {
     /// server starts waiting for them, so an idle connection kept alive closes after this too.
     #[default = 30]
     pub header_read_seconds: u64,
+    /// How long a connection may stay open with no request in it before it is closed. HTTP/2
+    /// clients keep connections open between requests; an HTTP/1.1 connection kept alive closes
+    /// after `header_read_seconds` first. An event stream's WebSocket leaves its HTTP connection
+    /// when it opens, so this does not close it.
+    #[default = 120]
+    pub idle_seconds: u64,
 }
 
 /// Whether people show as online, away, or offline (`app::user_status`).

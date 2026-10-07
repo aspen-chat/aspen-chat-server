@@ -282,11 +282,29 @@ impl ApiError {
         self
     }
 
+    /// `passwordRequirementsNotMet`, naming the rule the password broke and saying what it is.
     pub fn password_requirement(requirement: PasswordRequirement) -> Self {
-        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet);
+        let detail = match requirement {
+            PasswordRequirement::Length => {
+                t!("passwordTooShort", min = app::login::PASSWORD_MIN_LENGTH)
+            }
+            PasswordRequirement::MaxLength => {
+                t!("passwordTooLong", max = app::login::PASSWORD_MAX_BYTES)
+            }
+        };
+        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet).with_detail(detail);
         e.problem.requirement = Some(requirement);
         e
     }
+}
+
+/// Whether PostgreSQL's message refuses text it cannot store: `invalid byte sequence for
+/// encoding` (SQLSTATE 22021, a NUL in text) or `unsupported Unicode escape sequence` (22P05, a
+/// `\u0000` in JSON). The messages are PostgreSQL's English ones, which a server set to report
+/// in another language does not give; such a refusal then answers `internal`.
+fn unstorable_text(message: &str) -> bool {
+    message.starts_with("invalid byte sequence for encoding")
+        || message.starts_with("unsupported Unicode escape sequence")
 }
 
 /// How long a client told `serverBusy` waits before trying again.
@@ -300,14 +318,19 @@ impl From<app::Error> for ApiError {
                 DatabaseErrorKind::UniqueViolation,
                 _,
             )) => Self::new(ProblemCode::Conflict),
+            // Text PostgreSQL cannot store (U+0000, which the extractors refuse, reaching it
+            // another way): the request's fault, not the server's. The database names neither
+            // case by a kind of its own, only by its message.
+            app::Error::Diesel(diesel::result::Error::DatabaseError(
+                DatabaseErrorKind::Unknown,
+                ref info,
+            )) if unstorable_text(info.message()) => {
+                Self::new(ProblemCode::Validation).with_detail(t!("textHasNul"))
+            }
             app::Error::Validation(reason) => {
                 Self::new(ProblemCode::Validation).with_detail(reason)
             }
-            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement)
-                .with_detail(t!(
-                    "passwordTooShort",
-                    min = app::login::PASSWORD_MIN_LENGTH
-                )),
+            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement),
             app::Error::Unauthorized => Self::new(ProblemCode::Forbidden),
             app::Error::Forbidden(reason) => Self::new(ProblemCode::Forbidden).with_detail(reason),
             app::Error::Unauthenticated => Self::new(ProblemCode::Unauthorized),

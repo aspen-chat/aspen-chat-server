@@ -338,6 +338,7 @@ async fn run(options: Opt) -> Result<()> {
     .map_err(anyhow::Error::msg)?;
     let gate = connections::Gate::new(limits, addresses);
     let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
+    let idle_timeout = Duration::from_secs(limits.idle_seconds);
     // Without a timer hyper keeps no time at all: a client could take forever over its headers.
     // HTTP/2 connections are pinged while idle, and closed when a ping goes unanswered.
     let mut http = server::conn::auto::Builder::new(TokioExecutor::new());
@@ -393,24 +394,40 @@ async fn run(options: Opt) -> Result<()> {
         let service = app.clone();
         let http = http.clone();
         tokio::spawn(async move {
-            let hyper_service =
+            let activity = connections::Activity::new();
+            let hyper_service = {
+                let activity = activity.clone();
                 hyper::service::service_fn(move |mut request: Request<Incoming>| {
                     // Rate limits count by the client's address, which starts from the peer's.
                     request
                         .extensions_mut()
                         .insert(api::rate_limit::PeerAddr(remote_addr));
-                    service.clone().call(request)
-                });
+                    let busy = activity.begin();
+                    let response = service.clone().call(request);
+                    async move {
+                        response
+                            .await
+                            .map(|r| r.map(|body| connections::Tracked::new(body, busy)))
+                    }
+                })
+            };
 
             /// Using a macro to do compile time duck typing over TlsStream and TcpStream.
             macro_rules! handle_stream {
                 ($stream:expr) => {{
                     let socket = TokioIo::new($stream);
-
-                    if let Err(e) = http
-                        .serve_connection_with_upgrades(socket, hyper_service)
-                        .await
-                    {
+                    let connection = http.serve_connection_with_upgrades(socket, hyper_service);
+                    tokio::pin!(connection);
+                    // A connection with no request open for the idle time is asked to close:
+                    // HTTP/2 sends GOAWAY and finishes what is in flight.
+                    let served = tokio::select! {
+                        served = connection.as_mut() => served,
+                        () = activity.idle(idle_timeout) => {
+                            connection.as_mut().graceful_shutdown();
+                            connection.await
+                        }
+                    };
+                    if let Err(e) = served {
                         error!("failed to serve connection {e}");
                     }
                 }};
