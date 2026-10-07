@@ -102,5 +102,5 @@
   `retryAfterSeconds`), which the call bar shows under its buttons until they try again,
   dismiss it (`clearStateRefusal`), or the call ends; a
   `kicked` frame with reason `kicked` sets `endedReason: "kicked"` for `VoiceEndedDialog`,
-  `replaced` (another of their own clients took over) ends the call silently, and
+  `replaced` (another of their own clients took over) and `signedOut` (the sign-in it joined with ended, which signs this client out too) end the call silently, and
   `serverStopping` rejoins.

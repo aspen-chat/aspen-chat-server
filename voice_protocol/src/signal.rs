@@ -473,6 +473,9 @@ pub enum KickReason {
     /// The user may no longer be in the call: they lost access to its channel, or left or were
     /// removed from where it is.
     AccessLost,
+    /// The sign-in the user joined with ended: they signed out there, or ended it from another
+    /// device, changed their password, or (for a bot) had its token replaced.
+    SignedOut,
 }
 
 /// The whole protocol, the root of `voice_signal_schema.json`.

@@ -174,10 +174,10 @@ pub struct VoiceServerFailureOutcome {
 )]
 pub async fn join_voice(
     State(state): State<GlobalServerContext>,
-    SessionUser { user, .. }: SessionUser,
+    SessionUser { caller, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<VoiceJoinOffer>> {
-    let offer = app::voice::join_offer(&state, user.id, channel).await?;
+    let offer = app::voice::join_offer(&state, &caller, channel).await?;
     Ok(Json(VoiceJoinOffer {
         channel_id: channel,
         session: offer.session,

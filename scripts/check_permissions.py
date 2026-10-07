@@ -488,6 +488,25 @@ def calls(world: World, check: Checks) -> None:
     check("and is then told it may not speak", changed is not None and not changed["grants"]["speak"], changed)
     world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
     frame_of(late, "grantsChanged", 5)
+    # A sign-in ending takes the participant that joined on its token out of the call.
+    late.close()
+    second = world.sign_in(world.member["name"])
+    stale = stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])
+    elsewhere = join(stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])["token"])
+    check("another sign-in of the member joins the call", frame_of(elsewhere, "ready") is not None)
+    stack.api("POST", "/auth/logout", {"refreshToken": second["refresh"]}, second["token"])
+    kicked = frame_of(elsewhere, "kicked", 10)
+    check("signing out takes that sign-in out of the call, saying why",
+          kicked is not None and kicked.get("reason") == "signedOut", kicked)
+    elsewhere.close()
+    after = join(stale["token"])
+    check("a token issued to the sign-in before it ended still joins", frame_of(after, "ready") is not None)
+    kicked = frame_of(after, "kicked", 15)
+    check("but is taken out once its join is recorded",
+          kicked is not None and kicked.get("reason") == "signedOut", kicked)
+    after.close()
+    late = join(offer()["token"])
+    check("the member's own sign-in joins again", frame_of(late, "ready") is not None)
     world.as_owner("PUT", f"/communities/{world.community}/bans/{world.member['id']}", {})
     kicked = frame_of(late, "kicked", 10)
     check("a ban from the community removes them from its calls",

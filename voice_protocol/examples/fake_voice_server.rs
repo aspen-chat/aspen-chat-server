@@ -12,7 +12,7 @@
 //! Reports: `load <server> <participants>`, `session-started <server> <session> <channel>`,
 //! `snapshot <server> <session> <channel> [<user>[:muted][:deafened][:sharing]...]`, `held
 //! <server> <lane> [<session>...]`, and, sent as the server `--server <server>` names, `joined
-//! <session> <channel> <user>`, `left <session> <channel> <user>`, `speaking <session> <channel>
+//! <session> <channel> <user> [<sign-in>]`, `left <session> <channel> <user>`, `speaking <session> <channel>
 //! <user> <true|false>`, `state <session> <channel> <user> <muted> <deafened>`, `ended <session>
 //! <channel>`. Also `verify <token>
 //! <secret> <server>` checks a join token the way a voice server would, and `command-kick
@@ -188,6 +188,7 @@ async fn main() {
             session: uuid(rest.get(1)),
             channel: uuid(rest.get(2)),
             user: uuid(rest.get(3)),
+            sign_in: rest.get(4).cloned(),
         },
         "left" => VoiceReport::ParticipantLeft {
             session: uuid(rest.get(1)),

@@ -655,6 +655,15 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
             scoped_user.map(Recheck::User).into_iter().collect()
         }
         ServerEvent::User(UserEvent::Delete { id }) => vec![Recheck::User(*id)],
+        // A participant who joined on a token of an ended sign-in leaves the call with it.
+        ServerEvent::SignInsEnded { ended, kept } => scoped_user
+            .map(|user| Recheck::SignIns {
+                user,
+                ended: ended.clone(),
+                kept: kept.clone(),
+            })
+            .into_iter()
+            .collect(),
         ServerEvent::User(UserEvent::Create(_) | UserEvent::Update { .. }) => Vec::new(),
         ServerEvent::Message(_)
         | ServerEvent::Poll(_)
@@ -679,7 +688,6 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::ForeignDmJoined { .. }
         | ServerEvent::BotCommandInvoked { .. }
         | ServerEvent::CategoryCollapseChanged { .. }
-        | ServerEvent::SignInsEnded { .. }
         | ServerEvent::ReportsChanged { .. }
         | ServerEvent::BotCommandsChanged { .. }
         // What plugins say and publish never changes who may see or do anything, and a
@@ -849,7 +857,7 @@ pub async fn settle_in(
         rechecks,
     } = noted;
     for which in rechecks {
-        if let Err(e) = crate::voice::recheck_in(state, conn, which).await {
+        if let Err(e) = crate::voice::recheck_in(state, conn, which.clone()).await {
             tracing::error!(?which, "could not recheck who may stay in calls: {e}");
         }
     }
@@ -1031,7 +1039,7 @@ pub async fn publish_event(
                 None => {}
             }
         }
-        noted.rechecks.extend(rechecks.iter().copied());
+        noted.rechecks.extend(rechecks.iter().cloned());
     });
     if noted.is_err() && !rechecks.is_empty() {
         tracing::error!(
@@ -1155,6 +1163,18 @@ mod tests {
             speaking: true,
         };
         assert!(rechecks_of(&message, &EventScope::Channel(channel)).is_empty());
+        let signed_out = ServerEvent::SignInsEnded {
+            ended: None,
+            kept: Some("kept".to_string()),
+        };
+        assert_eq!(
+            rechecks_of(&signed_out, &EventScope::User(blocker)),
+            vec![Recheck::SignIns {
+                user: blocker,
+                ended: None,
+                kept: Some("kept".to_string()),
+            }]
+        );
     }
 
     #[test]

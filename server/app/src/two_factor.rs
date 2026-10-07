@@ -87,6 +87,11 @@ impl Caller {
         crate::login::sign_in_id(&self.refresh_digest)
     }
 
+    /// The sign-in the session belongs to, or `None` for a bot's token, which belongs to none.
+    pub fn sign_in_held(&self) -> Option<String> {
+        (!self.refresh_digest.is_empty()).then(|| self.sign_in())
+    }
+
     /// Until when the session counts as recently verified.
     pub fn verified_until(&self, config: &AuthConfig) -> DateTime<Utc> {
         self.verified_at + reverify_window(config)

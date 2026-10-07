@@ -158,6 +158,9 @@ struct Participant {
     speaking: bool,
     /// What they may send and offer, from their join token and then the API server.
     grants: Grants,
+    /// The sign-in their join token was issued to (`JoinClaims::sign_in`); none for a bot.
+    /// They leave when it ends (`VoiceCommand::EndSignIns`).
+    sign_in: Option<String>,
     /// Their place among the calls their user is in on this server. Passed on to whoever
     /// replaces them from another socket, and given back as they leave.
     seat: Option<SeatClaim>,
@@ -507,12 +510,15 @@ impl Rooms {
     /// `ready`. A user already in the call from another socket is replaced. Returns the seat
     /// the socket's frames act through. Refused when the user is already in
     /// `max_seats_per_user` other calls here, or the call holds `max_participants_per_call`.
+    /// Every join is reported, a replacement's too, so the API server checks each against what
+    /// its token was issued to.
     pub async fn join(
         self: &Arc<Self>,
         channel: Uuid,
         user: Uuid,
         outbox: Outbox,
         grants: Grants,
+        sign_in: Option<String>,
     ) -> Result<Seat, RoomError> {
         let connection = Connection(self.next_connection.fetch_add(1, Ordering::Relaxed));
         loop {
@@ -526,23 +532,23 @@ impl Rooms {
                 Some(room) => room,
                 None => self.start_room(channel).await?,
             };
-            let entered = match self.enter(&room, user, connection, &outbox, grants) {
-                Ok(entered) => entered,
-                Err(e) => {
-                    // A room this join started holds no one; it ends as though its last
-                    // participant left.
-                    self.end_if_empty(&room);
-                    return Err(e);
-                }
-            };
-            if let Some(replaced) = entered {
-                if !replaced {
-                    self.reporter.report(VoiceReport::ParticipantJoined {
-                        session: room.session,
-                        channel,
-                        user,
-                    });
-                }
+            let entered =
+                match self.enter(&room, user, connection, &outbox, grants, sign_in.clone()) {
+                    Ok(entered) => entered,
+                    Err(e) => {
+                        // A room this join started holds no one; it ends as though its last
+                        // participant left.
+                        self.end_if_empty(&room);
+                        return Err(e);
+                    }
+                };
+            if entered {
+                self.reporter.report(VoiceReport::ParticipantJoined {
+                    session: room.session,
+                    channel,
+                    user,
+                    sign_in,
+                });
                 info!(
                     channel = channel.to_string(),
                     user = user.to_string(),
@@ -560,8 +566,8 @@ impl Rooms {
         }
     }
 
-    /// Adds the participant to `room` and sends them `ready`, returning whether they replaced
-    /// themself from another socket, or `None` when the room has closed.
+    /// Adds the participant to `room`, replacing any of the same user from another socket, and
+    /// sends them `ready`, returning false when the room has closed.
     fn enter(
         &self,
         room: &Room,
@@ -569,10 +575,11 @@ impl Rooms {
         connection: Connection,
         outbox: &Outbox,
         grants: Grants,
-    ) -> Result<Option<bool>, RoomError> {
+        sign_in: Option<String>,
+    ) -> Result<bool, RoomError> {
         let mut participants = room.participants.lock().expect("room lock");
         if room.closed.load(Ordering::Relaxed) {
-            return Ok(None);
+            return Ok(false);
         }
         let seat = match participants.get_mut(&user) {
             Some(old) => old.seat.take(),
@@ -618,6 +625,7 @@ impl Rooms {
             deafened: false,
             speaking: false,
             grants,
+            sign_in,
             seat,
         };
         participant.send(ServerMessage::Ready {
@@ -631,7 +639,7 @@ impl Rooms {
             transfers: self.relay.policy(),
         });
         participants.insert(user, participant);
-        Ok(Some(replaced.is_some()))
+        Ok(true)
     }
 
     async fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
@@ -1542,6 +1550,38 @@ impl Rooms {
             } => {
                 if let Some(room) = self.room_of_session(session) {
                     self.set_grants(&room, user, grants).await;
+                }
+            }
+            VoiceCommand::EndSignIns {
+                session,
+                user,
+                ended,
+                kept,
+            } => {
+                let Some(room) = self.room_of_session(session) else {
+                    return;
+                };
+                let connection = room
+                    .participants
+                    .lock()
+                    .expect("room lock")
+                    .get(&user)
+                    .filter(|participant| {
+                        VoiceCommand::ends_sign_in(
+                            ended.as_deref(),
+                            kept.as_deref(),
+                            participant.sign_in.as_deref(),
+                        )
+                    })
+                    .map(|participant| participant.connection);
+                if let Some(connection) = connection {
+                    self.leave(
+                        room.channel,
+                        user,
+                        Some(connection),
+                        Some(KickReason::SignedOut),
+                    )
+                    .await;
                 }
             }
             VoiceCommand::Close { session } => {
