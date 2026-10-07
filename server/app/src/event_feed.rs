@@ -50,6 +50,7 @@ use crate::events::{
     subject_owner,
 };
 use crate::permissions::{Permission, Permissions};
+use crate::typing::{Audience, Relay, TYPING_SUBJECT};
 use crate::visibility::{CommunityModel, ModelChange, member_roles};
 use crate::{ASPEN_NATS_STREAM_NAME, CategoryId, ChannelId, CommunityId, RoleId, UserId};
 use async_nats::jetstream;
@@ -138,6 +139,11 @@ pub struct FeedEvent {
     /// holds an address it has not verified, which a connection checks against the deployment's
     /// settings.
     email_unverified: Option<bool>,
+    /// That it came from outside the stream (`app::typing`): it has no sequence, is never
+    /// retained, and is skipped rather than dropping a connection whose queue is full.
+    ephemeral: bool,
+    /// Readers it never reaches, although its subject's owner is theirs.
+    unseen_by: Option<Arc<HashSet<UserId>>>,
 }
 
 impl FeedEvent {
@@ -166,6 +172,40 @@ impl FeedEvent {
                 .sign_ins
                 .as_ref()
                 .is_none_or(|ended| ended.covers(&sign_in.id))
+    }
+
+    /// An event from outside the stream, for `owner`'s readers who may view `channel` (when it
+    /// names one) and are not among `unseen_by`.
+    fn ephemeral(
+        payload: Box<RawValue>,
+        owner: SubjectOwner,
+        channel: Option<ChannelId>,
+        unseen_by: Arc<HashSet<UserId>>,
+    ) -> Self {
+        FeedEvent {
+            sequence: 0,
+            event_id: None,
+            payload,
+            owner,
+            membership: None,
+            roles: None,
+            moderator: None,
+            channel,
+            category: None,
+            requires: None,
+            creator: None,
+            change: None,
+            ends_at: None,
+            access: OnceLock::new(),
+            before: OnceLock::new(),
+            published: Instant::now(),
+            ends: None,
+            sign_ins: None,
+            resync: false,
+            email_unverified: None,
+            ephemeral: true,
+            unseen_by: Some(unseen_by),
+        }
     }
 }
 
@@ -211,6 +251,8 @@ pub enum Delivery {
     CatchUp(Vec<Arc<FeedEvent>>),
     /// One event as it happens.
     Live(Arc<FeedEvent>),
+    /// One event from outside the stream (`app::typing`), which has no sequence.
+    Ephemeral(Arc<FeedEvent>),
 }
 
 /// A registered connection's end of the feed. Dropping it unregisters the connection. The
@@ -907,7 +949,12 @@ impl Routes {
             let Some(connection) = self.connections.get(id) else {
                 continue;
             };
-            if !event.reaches(&connection.sign_in) {
+            if !event.reaches(&connection.sign_in)
+                || event
+                    .unseen_by
+                    .as_ref()
+                    .is_some_and(|unseen| unseen.contains(&connection.user))
+            {
                 continue;
             }
             if let SubjectOwner::Community(community) = event.owner
@@ -927,11 +974,15 @@ impl Routes {
                     continue;
                 }
             }
-            match connection
-                .deliveries
-                .try_send(Delivery::Live(event.clone()))
-            {
+            let delivery = if event.ephemeral {
+                Delivery::Ephemeral(event.clone())
+            } else {
+                Delivery::Live(event.clone())
+            };
+            match connection.deliveries.try_send(delivery) {
                 Ok(()) => {}
+                // What happens and is never kept is not worth a connection's resuming.
+                Err(mpsc::error::TrySendError::Full(_)) if event.ephemeral => {}
                 Err(mpsc::error::TrySendError::Full(_)) => slow.push(*id),
                 // The connection is ending; its unregistration is on the way.
                 Err(mpsc::error::TrySendError::Closed(_)) => {}
@@ -1208,6 +1259,8 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             ends_at,
             resync,
             email_unverified,
+            ephemeral: false,
+            unseen_by: None,
         },
         info.pending,
     ))
@@ -1357,6 +1410,68 @@ fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) {
     let _ = event.access.set(model.clone());
 }
 
+/// The events a typing relay (`app::typing::Relay`) makes for this server's readers: one for
+/// the community, carrying its model as it stands, or one for each of a DM's people who read
+/// here. None for an audience nobody here reads, or a relay this server cannot read.
+fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
+    let relay: Relay = match serde_json::from_slice(payload) {
+        Ok(relay) => relay,
+        Err(e) => {
+            warn!("a typing relay could not be read: {e}");
+            return Vec::new();
+        }
+    };
+    let Ok(payload) = serde_json::value::to_raw_value(&relay.event) else {
+        return Vec::new();
+    };
+    let unseen_by = Arc::new(relay.unseen_by.into_iter().collect::<HashSet<_>>());
+    match relay.audience {
+        Audience::Community {
+            community,
+            governing,
+        } => {
+            let Some(model) = models.models.get(&community) else {
+                return Vec::new();
+            };
+            let event = FeedEvent::ephemeral(
+                payload,
+                SubjectOwner::Community(community),
+                Some(governing),
+                unseen_by,
+            );
+            let _ = event.access.set(model.clone());
+            vec![event]
+        }
+        Audience::Direct { recipients } => recipients
+            .into_iter()
+            .filter(|user| models.by_user.contains_key(user) && !unseen_by.contains(user))
+            .map(|user| {
+                FeedEvent::ephemeral(
+                    payload.clone(),
+                    SubjectOwner::User(user),
+                    None,
+                    unseen_by.clone(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Subscribes to typing (`app::typing::TYPING_SUBJECT`), retried until NATS answers.
+async fn subscribe_typing(context: &jetstream::Context) -> async_nats::Subscriber {
+    let mut wait = Duration::from_millis(250);
+    loop {
+        match context.client().subscribe(TYPING_SUBJECT).await {
+            Ok(subscriber) => return subscriber,
+            Err(e) => {
+                error!("could not subscribe to typing, retrying: {e}");
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(5));
+            }
+        }
+    }
+}
+
 async fn dispatch(
     context: jetstream::Context,
     shards: Vec<mpsc::Sender<ShardCommand>>,
@@ -1382,8 +1497,22 @@ async fn dispatch(
         info!("event feed ready");
     }
     let mut evict = tokio::time::interval(EVICT_INTERVAL);
+    let mut typing = subscribe_typing(&context).await;
     loop {
         tokio::select! {
+            message = typing.next() => {
+                let Some(message) = message else {
+                    error!("the typing subscription ended, subscribing again");
+                    typing = subscribe_typing(&context).await;
+                    continue;
+                };
+                for event in typing_events(&message.payload, &models) {
+                    let event = Arc::new(event);
+                    for to in &shards {
+                        tell(to, ShardCommand::Route(event.clone())).await;
+                    }
+                }
+            }
             message = messages.next() => {
                 let message = match message {
                     Some(Ok(message)) => message,
@@ -1548,6 +1677,8 @@ mod tests {
             ends_at: None,
             resync: false,
             email_unverified: None,
+            ephemeral: false,
+            unseen_by: None,
         }
     }
 
@@ -2281,6 +2412,91 @@ mod tests {
         routes.route(&Arc::new(promoted));
         routes.route(&in_channel(6, community, hidden, &model));
         assert_eq!(received(&mut moderator_rx), vec![5, 6]);
+    }
+
+    #[test]
+    fn typing_reaches_who_may_view_but_the_typist_and_whom_they_block() {
+        let (typist, member, blocked, moderator_user) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let model = Arc::new(two_channels(community, open, hidden, moderator));
+        let mut routes = Routes::default();
+        let mut receivers = Vec::new();
+        for (id, user, roles, queue) in [
+            (1, typist, HashMap::new(), 8),
+            (2, member, HashMap::new(), 8),
+            (3, blocked, HashMap::new(), 8),
+            (
+                4,
+                moderator_user,
+                HashMap::from([(community, vec![moderator])]),
+                1,
+            ),
+        ] {
+            let (tx, rx) = mpsc::channel(queue);
+            routes.add(
+                id,
+                Connection {
+                    user,
+                    sign_in: SignIn::default(),
+                    communities: HashSet::from([community]),
+                    roles,
+                    moderator: false,
+                    deliveries: tx,
+                },
+            );
+            receivers.push(rx);
+        }
+        let relay = |channel: ChannelId| Relay {
+            event: crate::typing::EphemeralEvent::Typing {
+                channel_id: channel,
+                user_id: typist,
+                typing: true,
+            },
+            audience: Audience::Community {
+                community,
+                governing: channel,
+            },
+            unseen_by: vec![typist, blocked],
+        };
+        let mut models = Models::default();
+        models.models.insert(community, model);
+        let made = |channel| {
+            let mut events = typing_events(&serde_json::to_vec(&relay(channel)).unwrap(), &models);
+            assert_eq!(events.len(), 1);
+            Arc::new(events.remove(0))
+        };
+        assert!(routes.route(&made(open)).is_empty());
+        assert!(routes.route(&made(hidden)).is_empty());
+        // The moderator's queue of one is full by now; what is never kept is skipped, not
+        // worth their connection.
+        assert!(routes.route(&made(hidden)).is_empty());
+        let received: Vec<usize> = receivers
+            .iter_mut()
+            .map(|rx| {
+                let mut n = 0;
+                while let Ok(delivery) = rx.try_recv() {
+                    assert!(matches!(delivery, Delivery::Ephemeral(_)));
+                    n += 1;
+                }
+                n
+            })
+            .collect();
+        assert_eq!(received, vec![0, 1, 0, 1]);
+        // Nobody here reads a DM whose people read elsewhere.
+        let direct = Relay {
+            audience: Audience::Direct {
+                recipients: vec![typist, member],
+            },
+            ..relay(open)
+        };
+        let payload = serde_json::to_vec(&direct).unwrap();
+        assert!(typing_events(&payload, &models).is_empty());
+        models.register(9, member, HashSet::new());
+        let events = typing_events(&payload, &models);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].owner, SubjectOwner::User(member));
     }
 
     #[test]

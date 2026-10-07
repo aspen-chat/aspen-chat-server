@@ -302,31 +302,55 @@ async fn renumber(
     community_id: CommunityId,
     order: &[RoleRow],
 ) -> crate::Result<()> {
-    for (position, role) in order.iter().enumerate() {
-        let position = i32::try_from(position).unwrap_or(i32::MAX);
-        if role.position == position {
-            continue;
-        }
-        diesel::update(community_role::table.filter(community_role::id.eq(role.id)))
-            .set(community_role::position.eq(position))
-            .execute(conn)
-            .await?;
-        publish_event(
-            state,
-            conn,
-            EventScope::Community(community_id),
-            &ServerEvent::Role(RoleEvent::Update {
-                id: role.id,
-                name: None,
-                position: Some(position),
-                permissions: None,
-                hue: None,
-                hoist: None,
-            }),
-        )
-        .await?;
+    let moved: Vec<(RoleId, i32)> = order
+        .iter()
+        .enumerate()
+        .map(|(position, role)| (role, i32::try_from(position).unwrap_or(i32::MAX)))
+        .filter(|(role, position)| role.position != *position)
+        .map(|(role, position)| (role.id, position))
+        .collect();
+    if moved.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    // One statement moves them all, and their announcements wait for the stream together.
+    diesel::sql_query(
+        "UPDATE community_role SET position = moved.position \
+         FROM unnest($1::uuid[], $2::int[]) AS moved(id, position) \
+         WHERE community_role.id = moved.id AND community_role.community = $3",
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(
+        moved.iter().map(|(id, _)| id.0).collect::<Vec<_>>(),
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Integer>, _>(
+        moved
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>(),
+    )
+    .bind::<diesel::sql_types::Uuid, _>(community_id.0)
+    .execute(conn)
+    .await?;
+    crate::events::publish_events(
+        state,
+        conn,
+        moved
+            .into_iter()
+            .map(|(id, position)| {
+                (
+                    EventScope::Community(community_id),
+                    ServerEvent::Role(RoleEvent::Update {
+                        id,
+                        name: None,
+                        position: Some(position),
+                        permissions: None,
+                        hue: None,
+                        hoist: None,
+                    }),
+                )
+            })
+            .collect(),
+    )
+    .await
 }
 
 /// Makes a role, placed just above everyone's, with permissions the caller holds.
@@ -367,7 +391,14 @@ pub async fn insert_role(
     community_id: CommunityId,
     role: NewRole,
 ) -> crate::Result<message_enum::Role> {
+    crate::community::hold_for_count(conn, community_id).await?;
     let mut roles = load_roles(conn, community_id).await?;
+    if i64::try_from(roles.len()).unwrap_or(i64::MAX) >= crate::community::MAX_ROLES {
+        return Err(crate::Error::Validation(t!(
+            "roleLimit",
+            max = crate::community::MAX_ROLES
+        )));
+    }
     let row = RoleRow {
         id: RoleId::new(),
         community: community_id,

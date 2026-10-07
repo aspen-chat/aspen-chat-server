@@ -14,6 +14,10 @@
 //! and reports `resumed: false`, which tells the client its cached state has a gap it must
 //! repair from REST.
 //!
+//! Besides events, the stream carries what happens and is never kept (`ephemeral` frames: who
+//! is typing, `app::typing`), which has no sequence and is not replayed; the client says what
+//! its user is typing on the same connection, and its closing ends it.
+//!
 //! Errors are written in the language `?locale=` names on the upgrade URL, which the client
 //! sets from its own language setting as it would `Accept-Language` (which a browser does not
 //! let it set on a WebSocket), or else the one the upgrade's `Accept-Language` negotiates
@@ -27,12 +31,13 @@ use crate::message_enum::server_event::ServerEvent;
 use crate::rate_limit::ClientIp;
 use crate::t;
 use aspen_app as app;
-use aspen_app::UserId;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment_settings::DeploymentSettings;
 use aspen_app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, Subscription};
 use aspen_app::two_factor::Caller;
+use aspen_app::typing::{EphemeralEvent, Typist};
 use aspen_app::user::UserPg;
+use aspen_app::{ChannelId, UserId};
 use axum::Extension;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
@@ -86,6 +91,18 @@ pub enum ClientMessage {
     /// while they don't. A connected user shows as away once `[presence] away_after_seconds` pass
     /// without one from any of their devices. Frames closer together than that are ignored.
     Activity,
+    /// The user is typing in a channel: send it when they start, again every
+    /// `TYPING_REFRESH_SECONDS` (3) while they go on, and not while they don't. Those who may
+    /// view the channel are told by `ephemeral` frames, and show it for
+    /// `TYPING_EXPIRY_SECONDS` (8) after the last. Taken only where the user may send messages;
+    /// closer frames for one channel, and frames for more than a few channels at once, are
+    /// ignored. Nothing answers it.
+    #[serde(rename_all = "camelCase")]
+    Typing { channel_id: ChannelId },
+    /// The user stopped typing in a channel: they sent the message, emptied the box, or left
+    /// it. A connection that closes says so on its own for every channel it was typing in.
+    #[serde(rename_all = "camelCase")]
+    StoppedTyping { channel_id: ChannelId },
 }
 
 /// The least time between two `activity` frames that count; clients send them at most this
@@ -187,6 +204,12 @@ pub enum ServerMessage<'a> {
         #[schemars(with = "ServerEvent")]
         event: &'a RawValue,
     },
+    /// Something that happens and is never kept: no sequence, never replayed on resuming, and
+    /// lost with the connection. A client that loses its connection forgets what these told it.
+    Ephemeral {
+        #[schemars(with = "EphemeralEvent")]
+        event: &'a RawValue,
+    },
     /// Sent immediately before the server closes the connection because of a protocol or
     /// authentication failure. Never sent for an orderly shutdown.
     Error {
@@ -228,7 +251,7 @@ pub async fn event_stream(
         .locale
         .as_deref()
         .map_or_else(app::locale::current, app::locale::negotiate);
-    // Client frames are small (`identify`, `activity`), and events are written a few at a
+    // Client frames are small (`identify`, `activity`, `typing`), and events are written a few at a
     // time, so the buffers are a small fraction of tungstenite's defaults, which are sized for
     // bulk transfer and would otherwise dominate each connection's memory.
     ws.read_buffer_size(READ_BUFFER_BYTES)
@@ -483,6 +506,18 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
                 email_unverified: event.email_unverified(),
             })
         }
+        Delivery::Ephemeral(event) => {
+            let frame = ServerMessage::Ephemeral {
+                event: &event.payload,
+            };
+            let text = serde_json::to_string(&frame).map_err(axum::Error::new)?;
+            socket.feed(Message::Text(text.into())).await?;
+            Ok(Fed {
+                written: 1,
+                ends: None,
+                email_unverified: None,
+            })
+        }
     }
 }
 
@@ -528,6 +563,8 @@ async fn pump_events(
         tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
     let mut unanswered_pings: u32 = 0;
     let mut last_activity: Option<tokio::time::Instant> = None;
+    // Dropped with the connection, which says the user stopped wherever they were typing.
+    let typist = Typist::spawn(state.clone(), user);
     loop {
         tokio::select! {
             delivery = subscription.deliveries.recv() => {
@@ -613,7 +650,7 @@ async fn pump_events(
                 }
             },
             // Drive the read side of the socket too. After `identify` the client sends only
-            // `activity` frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
+            // `activity` and typing frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
             // arrive on this same channel. Tungstenite only reacts to them while the stream is
             // being polled, so without this arm a client-initiated close frame would sit unread
             // indefinitely and pongs would never be counted.
@@ -629,8 +666,8 @@ async fn pump_events(
                     Some(Ok(Message::Pong(_))) => {
                         unanswered_pings = 0;
                     }
-                    Some(Ok(Message::Text(text))) => {
-                        if let Ok(ClientMessage::Activity) = serde_json::from_str(text.as_str()) {
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str(text.as_str()) {
+                        Ok(ClientMessage::Activity) => {
                             let now = tokio::time::Instant::now();
                             let due = last_activity.is_none_or(|last| {
                                 now.duration_since(last) + ACTIVITY_GRACE >= ACTIVITY_INTERVAL
@@ -640,9 +677,14 @@ async fn pump_events(
                                 app::user_status::mark_active(state, user);
                             }
                         }
+                        Ok(ClientMessage::Typing { channel_id }) => typist.typing(channel_id),
+                        Ok(ClientMessage::StoppedTyping { channel_id }) => {
+                            typist.stopped(channel_id);
+                        }
                         // Anything else (a second `identify`, an unknown frame) is dropped
                         // rather than tearing the connection down.
-                    }
+                        Ok(ClientMessage::Identify { .. }) | Err(_) => {}
+                    },
                     Some(Ok(_)) => {
                         // Pings are auto-pong'd by tungstenite at the protocol layer; binary
                         // frames are not part of this stream's contract.
@@ -750,6 +792,33 @@ mod tests {
     fn activity_parses() {
         let frame: ClientMessage = serde_json::from_str(r#"{"type":"activity"}"#).unwrap();
         assert!(matches!(frame, ClientMessage::Activity));
+    }
+
+    #[test]
+    fn typing_parses() {
+        let channel = "0199b6a1-0000-7000-8000-000000000001";
+        let frame: ClientMessage =
+            serde_json::from_str(&format!(r#"{{"type":"typing","channelId":"{channel}"}}"#))
+                .unwrap();
+        assert!(
+            matches!(frame, ClientMessage::Typing { channel_id } if channel_id.0.to_string() == channel)
+        );
+        let frame: ClientMessage = serde_json::from_str(&format!(
+            r#"{{"type":"stoppedTyping","channelId":"{channel}"}}"#
+        ))
+        .unwrap();
+        assert!(matches!(frame, ClientMessage::StoppedTyping { .. }));
+    }
+
+    #[test]
+    fn ephemeral_frames_carry_no_sequence() {
+        let payload = r#"{"type":"typing","channelId":"c","userId":"u","typing":true}"#;
+        let event = RawValue::from_string(payload.into()).unwrap();
+        let frame = ServerMessage::Ephemeral { event: &event };
+        assert_eq!(
+            serde_json::to_string(&frame).unwrap(),
+            format!(r#"{{"type":"ephemeral","event":{payload}}}"#)
+        );
     }
 
     #[test]

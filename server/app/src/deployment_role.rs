@@ -384,6 +384,27 @@ pub async fn reorder_roles(
 
 /// Gives `user` a role below the caller's highest, or takes it away; giving it takes holding every
 /// permission it allows. Returns whether anything changed.
+/// Refuses a deployment role to anyone but this deployment's own people: a bot, which acts for
+/// its owner and would carry their powers past their own sign-in, and a user of another
+/// deployment, whose account that deployment controls. `deployment::deployment_access` reads no
+/// role of either, so none could reach them another way.
+pub async fn ensure_may_hold(conn: &mut AsyncPgConnection, target: UserId) -> crate::Result<()> {
+    let (bot, foreign): (bool, bool) = user::table
+        .select((user::bot, user::home_domain.is_not_null()))
+        .filter(user::id.eq(target))
+        .first(conn)
+        .await?;
+    if bot {
+        return Err(crate::Error::Validation(t!("deploymentRoleNotForBots")));
+    }
+    if foreign {
+        return Err(crate::Error::Validation(t!(
+            "deploymentRoleNotForForeignUsers"
+        )));
+    }
+    Ok(())
+}
+
 pub async fn set_user_role(
     state: &GlobalServerContext,
     caller: UserId,
@@ -418,6 +439,9 @@ pub async fn set_user_role(
             .await?;
             if !exists {
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            if held {
+                ensure_may_hold(conn.as_mut(), target).await?;
             }
             let changed = if held {
                 diesel::insert_into(user_deployment_role::table)
@@ -459,6 +483,7 @@ pub async fn grant_top_role(
 ) -> crate::Result<String> {
     conn.transaction(|conn| {
         async move {
+            ensure_may_hold(conn, target).await?;
             let roles = load_roles(conn).await?;
             let top = match roles.last() {
                 Some(top) => top.clone(),

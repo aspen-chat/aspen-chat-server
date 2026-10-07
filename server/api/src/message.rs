@@ -663,6 +663,9 @@ pub async fn get_message(
     Ok(Json(MessageRead::new(m, included)))
 }
 
+/// Edits the caller's own message. New text or a new attachment takes Send messages (Send
+/// messages in threads in a thread), and a new attachment Attach files besides; clearing the
+/// text or removing attachments takes neither.
 #[utoipa::path(
     patch,
     path = "/messages/{message}",

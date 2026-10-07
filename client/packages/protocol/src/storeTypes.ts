@@ -97,7 +97,7 @@ export type Listener = () => void;
 export type Topic = string;
 
 /** The kinds of record fetched on demand whose absence the store remembers. */
-export type MissingKind = "user" | "icon" | "poll" | "attachment";
+export type MissingKind = "user" | "icon" | "poll" | "attachment" | "channel";
 
 /**
  * The loaded portion of a channel's history. Message ids are UUIDv7, so their lexical order is

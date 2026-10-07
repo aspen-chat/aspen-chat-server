@@ -32,6 +32,10 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
             parts, state,
         )
         .await?;
+        // A bot holds no deployment role, and its token never opens the dashboard.
+        if session.caller.bot {
+            return Err(ApiError::new(ProblemCode::AdminRequired));
+        }
         let access = app::deployment::access_of(state, session.user.id).await?;
         if access.permissions == DeploymentPermissions::empty() {
             Err(ApiError::new(ProblemCode::AdminRequired))
