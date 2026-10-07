@@ -1003,13 +1003,11 @@ async fn announce(
         .distinct()
         .load(conn)
         .await?;
-    let mut people = reviewers.clone();
-    people.push(subject);
-    let ranks = ranks(conn, &people).await?;
-    let rank_of = |user: &UserId| ranks.get(user).copied().unwrap_or(0);
+    let ranks = ranks(conn, &reviewers).await?;
+    let standing = standing_of(conn, subject).await?;
     for reviewer in reviewers {
-        let rank = rank_of(&reviewer);
-        if !reviewable(reviewer, rank, subject, rank_of(&subject)) {
+        let rank = ranks.get(&reviewer).copied().unwrap_or(0);
+        if !reviewable(reviewer, rank, subject, standing) {
             continue;
         }
         let open: i64 = report_case::table
@@ -1073,19 +1071,66 @@ async fn ranks(
     Ok(ranks)
 }
 
-/// Whether `access` may act on a case about `subject` of rank `subject_rank`, and so see it at
-/// all: nobody reviews a case about themselves, or about someone whose highest deployment role
-/// is not below theirs.
-fn may_act(access: &DeploymentAccess, subject: UserId, subject_rank: i32) -> bool {
-    reviewable(access.user, access.rank(), subject, subject_rank)
+/// Who answers for a case's subject, for review: a bot's owner, whose bot acts for them, and
+/// the rank it is judged at, the higher of the subject's and its owner's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Standing {
+    owner: Option<UserId>,
+    rank: i32,
+}
+
+/// The `Standing` of each of `subjects`; one a query does not find stands alone at rank 0.
+async fn standings(
+    conn: &mut AsyncPgConnection,
+    subjects: &[UserId],
+) -> crate::Result<HashMap<UserId, Standing>> {
+    let owners: HashMap<UserId, UserId> = user::table
+        .select((user::id, user::bot_owner.assume_not_null()))
+        .filter(user::id.eq_any(subjects))
+        .filter(user::bot_owner.is_not_null())
+        .load::<(UserId, UserId)>(conn)
+        .await?
+        .into_iter()
+        .collect();
+    let people: Vec<UserId> = subjects
+        .iter()
+        .copied()
+        .chain(owners.values().copied())
+        .collect();
+    let ranks = ranks(conn, &people).await?;
+    let rank_of = |user: &UserId| ranks.get(user).copied().unwrap_or(0);
+    Ok(subjects
+        .iter()
+        .map(|subject| {
+            let owner = owners.get(subject).copied();
+            let rank = rank_of(subject).max(owner.as_ref().map_or(0, rank_of));
+            (*subject, Standing { owner, rank })
+        })
+        .collect())
+}
+
+/// The `Standing` of one subject.
+async fn standing_of(conn: &mut AsyncPgConnection, subject: UserId) -> crate::Result<Standing> {
+    Ok(standings(conn, &[subject])
+        .await?
+        .remove(&subject)
+        .unwrap_or_default())
+}
+
+/// Whether `access` may act on a case about `subject`, standing as `standing`, and so see it at
+/// all: nobody reviews a case about themselves or their own bot, or about someone (or a bot of
+/// someone's) whose highest deployment role is not below theirs.
+fn may_act(access: &DeploymentAccess, subject: UserId, standing: Standing) -> bool {
+    reviewable(access.user, access.rank(), subject, standing)
 }
 
 /// Whether `reviewer`, of rank `rank`, may see and act on a case about `subject`.
-fn reviewable(reviewer: UserId, rank: i32, subject: UserId, subject_rank: i32) -> bool {
-    subject != reviewer && subject_rank < rank
+fn reviewable(reviewer: UserId, rank: i32, subject: UserId, standing: Standing) -> bool {
+    subject != reviewer && standing.owner != Some(reviewer) && standing.rank < rank
 }
 
-/// The cases `reviewer`, of rank `rank`, may see: `reviewable` as a filter on `report_case`.
+/// The cases `reviewer`, of rank `rank`, may see: `reviewable` as a filter on `report_case`,
+/// judging a bot's case by its owner's `Standing` as `standings` does.
 fn reviewable_cases(
     reviewer: UserId,
     rank: i32,
@@ -1097,9 +1142,17 @@ fn reviewable_cases(
             diesel::dsl::sql::<Bool>(
                 "NOT EXISTS (SELECT 1 FROM user_deployment_role subject_role \
                  JOIN deployment_role ON deployment_role.id = subject_role.role \
-                 WHERE subject_role.\"user\" = report_case.subject AND deployment_role.position >= ",
+                 WHERE (subject_role.\"user\" = report_case.subject \
+                 OR subject_role.\"user\" = (SELECT subject_bot.bot_owner \
+                 FROM \"user\" subject_bot WHERE subject_bot.id = report_case.subject)) \
+                 AND deployment_role.position >= ",
             )
             .bind::<Integer, _>(rank)
+            .sql(
+                ") AND NOT EXISTS (SELECT 1 FROM \"user\" subject_bot \
+                 WHERE subject_bot.id = report_case.subject AND subject_bot.bot_owner = ",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(reviewer.0)
             .sql(") AND 0 < ")
             .bind::<Integer, _>(rank),
         ),
@@ -1125,7 +1178,7 @@ async fn page_of(
     {
         reports.entry(row.case).or_default().push(Report::from(row));
     }
-    let ranks = ranks(conn, &subjects).await?;
+    let standings = standings(conn, &subjects).await?;
     let banned_now: HashSet<UserId> = user::table
         .select(user::id)
         .filter(user::id.eq_any(&subjects))
@@ -1152,7 +1205,7 @@ async fn page_of(
             may_act: may_act(
                 access,
                 row.subject,
-                ranks.get(&row.subject).copied().unwrap_or(0),
+                standings.get(&row.subject).copied().unwrap_or_default(),
             ),
             subject_banned: banned_now.contains(&row.subject),
             reports: reports.remove(&row.id).unwrap_or_default(),
@@ -1417,12 +1470,8 @@ async fn actionable(
         .for_update()
         .first(conn)
         .await?;
-    let rank = ranks(conn, &[row.subject])
-        .await?
-        .get(&row.subject)
-        .copied()
-        .unwrap_or(0);
-    if !may_act(access, row.subject, rank) {
+    let standing = standing_of(conn, row.subject).await?;
+    if !may_act(access, row.subject, standing) {
         return Err(crate::Error::Forbidden(t!("reportConflictOfInterest")));
     }
     Ok(row)
@@ -1940,8 +1989,28 @@ mod tests {
             positions: vec![2],
             permissions: DeploymentPermissions::REVIEW_REPORTS,
         };
-        assert!(may_act(&access, UserId::new(), 1));
-        assert!(!may_act(&access, UserId::new(), 2));
-        assert!(!may_act(&access, access.user, 0));
+        let at = |rank| Standing { owner: None, rank };
+        assert!(may_act(&access, UserId::new(), at(1)));
+        assert!(!may_act(&access, UserId::new(), at(2)));
+        assert!(!may_act(&access, access.user, at(0)));
+    }
+
+    #[test]
+    fn nobody_acts_on_a_case_about_their_own_bot() {
+        let access = DeploymentAccess {
+            user: UserId::new(),
+            positions: vec![2],
+            permissions: DeploymentPermissions::REVIEW_REPORTS,
+        };
+        let owned = Standing {
+            owner: Some(access.user),
+            rank: 0,
+        };
+        assert!(!may_act(&access, UserId::new(), owned));
+        let others = Standing {
+            owner: Some(UserId::new()),
+            rank: 1,
+        };
+        assert!(may_act(&access, UserId::new(), others));
     }
 }

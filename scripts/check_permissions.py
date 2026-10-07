@@ -1130,6 +1130,12 @@ def review_powers(world: World, check: Checks) -> None:
     cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
     check("a case about the reviewer is not among those they read",
           not any(c["subject"] == reviewer["id"] for c in cases), cases)
+    bot = stack.api("POST", "/users/@me/bots", {"name": f"rbot{world.run}"}, reviewer["token"])["bot"]
+    stack.api("POST", f"/users/{bot['id']}/reports", {"category": category, "aspects": ["username"]},
+              world.member["token"])
+    cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
+    check("nor a case about the reviewer's own bot",
+          not any(c["subject"] == bot["id"] for c in cases), cases)
     stop_review_powers(world, reviewer)
 
 
