@@ -100,17 +100,81 @@ pub struct Plugins {
     /// Serializes reloads, so two announcements close together load in order.
     reloading: tokio::sync::Mutex<()>,
     /// Places for calls of every plugin together (`[plugins] concurrency`).
-    calls: Arc<tokio::sync::Semaphore>,
+    calls: Places,
     /// Places for each plugin's calls, by id (`[plugins] concurrency_per_plugin`), kept across
     /// reloads so an upgrade does not open a second set.
-    calls_per_plugin: Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    calls_per_plugin: Mutex<HashMap<String, Places>>,
     per_plugin: usize,
+}
+
+/// A number of places for calls, of which a share only intercepting calls may take.
+///
+/// A message waits on its intercepting calls, which have milliseconds to answer, while routes
+/// and observers may run for seconds; were all to share one set of places, a crowd of route
+/// requests could hold every place and make each intercepting call fail, which a filter that lets
+/// messages through on failure (`failure: open`) would then wave through. So a call that does not
+/// intercept also takes a place of `others`, which holds `RESERVED_FOR_INTERCEPTS` fewer.
+#[derive(Clone)]
+struct Places {
+    all: Arc<tokio::sync::Semaphore>,
+    others: Arc<tokio::sync::Semaphore>,
+}
+
+/// The share of each set of places that only intercepting calls may take: a quarter, at least
+/// one wherever there are two places or more.
+fn reserved_for_intercepts(places: usize) -> usize {
+    if places < 2 { 0 } else { (places / 4).max(1) }
+}
+
+impl Places {
+    fn new(places: usize) -> Self {
+        let places = places.max(1);
+        Places {
+            all: Arc::new(tokio::sync::Semaphore::new(places)),
+            others: Arc::new(tokio::sync::Semaphore::new(
+                places - reserved_for_intercepts(places),
+            )),
+        }
+    }
+
+    /// A place, for an intercepting call or another, waited for until `deadline`.
+    async fn take(
+        &self,
+        intercepting: bool,
+        deadline: tokio::time::Instant,
+    ) -> Option<(
+        tokio::sync::OwnedSemaphorePermit,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    )> {
+        // Another call's share first, so one waiting for it holds none of the places at all.
+        let other = if intercepting {
+            None
+        } else {
+            Some(
+                tokio::time::timeout_at(deadline, self.others.clone().acquire_owned())
+                    .await
+                    .ok()?
+                    .ok()?,
+            )
+        };
+        let place = tokio::time::timeout_at(deadline, self.all.clone().acquire_owned())
+            .await
+            .ok()?
+            .ok()?;
+        Some((place, other))
+    }
 }
 
 /// One call's places among its plugin's calls and every plugin's, given back when it drops.
 pub(super) struct CallPermit {
-    _own: tokio::sync::OwnedSemaphorePermit,
-    _shared: tokio::sync::OwnedSemaphorePermit,
+    _own: (
+        tokio::sync::OwnedSemaphorePermit,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    ),
+    _shared: (
+        tokio::sync::OwnedSemaphorePermit,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    ),
 }
 
 /// What `CHANGED_SUBJECT` carries: a community whose use of plugins changed, or nothing when
@@ -133,32 +197,32 @@ impl Plugins {
             communities: Mutex::default(),
             observers: Mutex::default(),
             reloading: tokio::sync::Mutex::new(()),
-            calls: Arc::new(tokio::sync::Semaphore::new(config.concurrency.max(1))),
+            calls: Places::new(config.concurrency),
             calls_per_plugin: Mutex::default(),
             per_plugin: config.concurrency_per_plugin.max(1),
         })
     }
 
     /// A place for one call of `plugin`, among its own and among every plugin's, waited for
-    /// until `deadline`; `None` when none came in time. The call holds it until it ends.
-    pub(super) async fn admit(&self, plugin: &str, deadline: Instant) -> Option<CallPermit> {
+    /// until `deadline`; `None` when none came in time. The call holds it until it ends. An
+    /// intercepting call may take the places kept for intercepting (`Places`).
+    pub(super) async fn admit(
+        &self,
+        plugin: &str,
+        intercepting: bool,
+        deadline: Instant,
+    ) -> Option<CallPermit> {
         let own = self
             .calls_per_plugin
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(plugin.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.per_plugin)))
+            .or_insert_with(|| Places::new(self.per_plugin))
             .clone();
         let deadline = tokio::time::Instant::from_std(deadline);
         // Its own place first, so a plugin waiting on itself holds none of the shared ones.
-        let own = tokio::time::timeout_at(deadline, own.acquire_owned())
-            .await
-            .ok()?
-            .ok()?;
-        let shared = tokio::time::timeout_at(deadline, self.calls.clone().acquire_owned())
-            .await
-            .ok()?
-            .ok()?;
+        let own = own.take(intercepting, deadline).await?;
+        let shared = self.calls.take(intercepting, deadline).await?;
         Some(CallPermit {
             _own: own,
             _shared: shared,
@@ -527,4 +591,30 @@ pub async fn announce(
         .await
         .map_err(|e| crate::Error::Plugin(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn routes_and_observers_leave_places_for_intercepting() {
+        let places = Places::new(8);
+        let soon = || tokio::time::Instant::now() + Duration::from_millis(20);
+        let mut held = Vec::new();
+        for _ in 0..6 {
+            held.push(places.take(false, soon()).await.expect("a place"));
+        }
+        assert!(places.take(false, soon()).await.is_none());
+        held.push(places.take(true, soon()).await.expect("a kept place"));
+        held.push(places.take(true, soon()).await.expect("a kept place"));
+        assert!(places.take(true, soon()).await.is_none());
+    }
+
+    #[test]
+    fn a_single_place_is_everyones() {
+        assert_eq!(reserved_for_intercepts(1), 0);
+        assert_eq!(reserved_for_intercepts(2), 1);
+        assert_eq!(reserved_for_intercepts(32), 8);
+    }
 }

@@ -357,11 +357,13 @@ pub struct PluginsConfig {
     /// The most calls of plugins this server runs at once, of every plugin together; two per
     /// logical CPU by default. A call waits for a place within its own time limit, and counts
     /// as failed when none comes in time. With `memory_mib`, it bounds what plugins can take of
-    /// the server's memory.
+    /// the server's memory. A quarter of the places are kept for intercepting calls
+    /// (`plugin::registry::Places`).
     #[default(_code = "2 * default_event_feed_shards()")]
     pub concurrency: usize,
     /// The most calls of any one plugin this server runs at once, so one busy plugin leaves
-    /// room for the rest; one per logical CPU by default.
+    /// room for the rest; one per logical CPU by default. A quarter of these too are kept for
+    /// intercepting calls.
     #[default(_code = "default_event_feed_shards()")]
     pub concurrency_per_plugin: usize,
 }

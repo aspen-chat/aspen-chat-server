@@ -189,8 +189,8 @@ How plugins run; which are installed, and their settings, are in the database (s
 | `observe_millis` | `10000` | How long a plugin has to handle something that happened, such as checking a new message's pictures with another service. |
 | `route_millis` | `3000` | How long a plugin has to answer a request to one of its routes. |
 | `memory_mib` | `64` | The most memory one call of a plugin may use, all its memories together. |
-| `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. With `memory_mib` it bounds what plugins can take of the server's memory. |
-| `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. |
+| `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. A quarter of the places (at least one, from two up) are kept for deciding messages, which routes and observers cannot take. With `memory_mib` it bounds what plugins can take of the server's memory. |
+| `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. A quarter of them are likewise kept for deciding messages. |
 
 ## `[push]`
 

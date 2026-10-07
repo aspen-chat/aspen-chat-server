@@ -2,7 +2,8 @@
 //!
 //! Each call runs in a fresh instance in a store of its own, so nothing survives from one call
 //! to the next but what the plugin keeps through the host. A call first waits for a place among
-//! the calls running (`[plugins] concurrency` and `concurrency_per_plugin`). A store has a
+//! the calls running (`[plugins] concurrency` and `concurrency_per_plugin`, of which a share is
+//! kept for intercepting calls, `registry::Places`). A store has a
 //! memory ceiling (`[plugins] memory_mib`, for all its memories together), bounded instances,
 //! tables, and table elements (`CallLimits`), and a deadline: the engine's epoch ticks every
 //! millisecond, and at each tick a call past its deadline traps, while one within it yields to
@@ -171,7 +172,7 @@ impl Instance {
         // each one's manifest says rather than queueing without end.
         let permit = state
             .plugins
-            .admit(&plugin.id, deadline)
+            .admit(&plugin.id, matches!(phase, Phase::Intercept), deadline)
             .await
             .ok_or_else(|| CallFailed("too many plugin calls were running to start".into()))?;
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
