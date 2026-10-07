@@ -8,6 +8,9 @@ import {
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
   PRESENCE_POLL_MS,
+  TYPING_EXPIRY_MS,
+  TYPING_NOTICES,
+  TYPING_REFRESH_MS,
   type Category,
   type Channel,
   type Community,
@@ -239,6 +242,84 @@ describe("AspenSync", () => {
     again.onopen?.();
     again.frame({ type: "ready", userId: me.id, resumed: true });
     expect(again.sent.filter((f) => (f as { type: string }).type === "activity")).toHaveLength(0);
+    sync.stop();
+  });
+
+  it("says the user is typing at most every refresh, and that they stopped once", async () => {
+    let now = 0;
+    let values: Record<string, unknown> = {};
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/preferences": async (_, request) => {
+          if (request.method === "PATCH") {
+            values = { ...values, ...((await request.json()) as Record<string, unknown>) };
+          }
+          return json({ values, updatedAt: null });
+        },
+      },
+      () => now,
+    );
+    const socket = await goLive(sync);
+    const typing = () =>
+      socket.sent.filter((f) => ["typing", "stoppedTyping"].includes((f as { type: string }).type));
+    sync.noteTyping(general.id);
+    now = TYPING_REFRESH_MS - 1;
+    sync.noteTyping(general.id);
+    expect(typing()).toEqual([{ type: "typing", channelId: general.id }]);
+    now = TYPING_REFRESH_MS;
+    sync.noteTyping(general.id);
+    expect(typing()).toHaveLength(2);
+    sync.stopTyping(general.id);
+    sync.stopTyping(general.id);
+    expect(typing()[2]).toEqual({ type: "stoppedTyping", channelId: general.id });
+    expect(typing()).toHaveLength(3);
+    // Turning the notices off says at once that the user stopped, and says nothing after.
+    sync.noteTyping(general.id);
+    await sync.preferences.set(TYPING_NOTICES, false);
+    expect(typing()).toHaveLength(5);
+    expect(typing()[4]).toEqual({ type: "stoppedTyping", channelId: general.id });
+    now += TYPING_REFRESH_MS;
+    sync.noteTyping(general.id);
+    expect(typing()).toHaveLength(5);
+    sync.stop();
+  });
+
+  it("shows others typing until they stop, post, run out, or the connection goes", async () => {
+    let now = 0;
+    const { sync } = makeSync(bootstrapResponses(), () => now);
+    const socket = await goLive(sync);
+    const typing = (userId: string, on: boolean) => {
+      socket.frame({
+        type: "ephemeral",
+        event: { type: "typing", channelId: general.id, userId, typing: on },
+      });
+    };
+    typing(bob.id, true);
+    typing(me.id, true);
+    expect(sync.store.typers(general.id)).toEqual([bob.id]);
+    typing(bob.id, false);
+    expect(sync.store.typers(general.id)).toEqual([]);
+    // Someone who posts has stopped typing, whether or not they said so.
+    typing(bob.id, true);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "message", type: "create", ...message(3, bob.id) },
+    });
+    expect(sync.store.typers(general.id)).toEqual([]);
+    // Without another word, they run out (which the sync's timer asks of the store then).
+    typing(bob.id, true);
+    now = TYPING_EXPIRY_MS - 1;
+    expect(sync.store.expireTyping(now)).toBe(TYPING_EXPIRY_MS);
+    expect(sync.store.typers(general.id)).toEqual([bob.id]);
+    now = TYPING_EXPIRY_MS;
+    sync.store.expireTyping(now);
+    expect(sync.store.typers(general.id)).toEqual([]);
+    // A lost connection forgets everyone shown.
+    typing(bob.id, true);
+    socket.onclose?.({ code: 1006, reason: "" });
+    expect(sync.store.typers(general.id)).toEqual([]);
     sync.stop();
   });
 

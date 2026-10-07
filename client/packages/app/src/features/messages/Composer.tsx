@@ -33,6 +33,7 @@ import {
 import { describable, isImageType } from "@/features/messages/images";
 import { AttachmentDescriptionButton } from "@/features/messages/AttachmentDescription";
 import { HeldMessages } from "@/features/messages/HeldMessages";
+import { TypingIndicator } from "@/features/messages/TypingIndicator";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -85,17 +86,25 @@ const toolButtonClass =
  * clears after each message. Only what the caller may do here is offered: without sending (or,
  * in a thread, sending in threads) the box gives way to a note saying so, in a DM with
  * someone the caller blocked, to a note offering to unblock them, and in the system account's
- * DM, to a note that its notices are not answered.
+ * DM, to a note that its notices are not answered. Above it, a line kept for who else is
+ * typing there (`TypingIndicator`), whether or not the caller may write.
  */
-export function Composer({
-  channelId,
-  placeholder,
-  echoTarget,
-}: {
+export function Composer(props: ComposerProps) {
+  return (
+    <>
+      <TypingIndicator channelId={props.channelId} />
+      <MessageBox {...props} />
+    </>
+  );
+}
+
+interface ComposerProps {
   channelId: string;
   placeholder: string;
   echoTarget?: string;
-}) {
+}
+
+function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
   const m = useMessages();
   const touchOnly = useMediaQuery(TOUCH_ONLY);
   const sync = useSync();
@@ -175,6 +184,27 @@ export function Composer({
       flush();
     };
   }, []);
+
+  // Others hear the caller is typing as they write, and that they stopped once the box is
+  // empty or gone. A draft the box opens with is not typing; only a change to it is.
+  const typedDraft = useRef(draft);
+  useEffect(() => {
+    if (draft === typedDraft.current) {
+      return;
+    }
+    typedDraft.current = draft;
+    if (draft.trim() === "") {
+      sync.stopTyping(channelId);
+    } else {
+      sync.noteTyping(channelId);
+    }
+  }, [sync, channelId, draft]);
+  useEffect(
+    () => () => {
+      sync.stopTyping(channelId);
+    },
+    [sync, channelId],
+  );
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
   const readyIds = pending.flatMap((p) =>

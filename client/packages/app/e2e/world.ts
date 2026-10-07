@@ -57,27 +57,37 @@ export type { Publish } from "./world/reply";
  */
 async function events(page: Page): Promise<Publish> {
   let send: (frame: string) => void = () => undefined;
+  let drop: () => void = () => undefined;
   let sequence = 0;
+  const sent: Record<string, unknown>[] = [];
   await page.routeWebSocket(/\/api\/v1\/events(\?.*)?$/, (ws) => {
     send = (frame) => {
       ws.send(frame);
     };
+    drop = () => {
+      void ws.close({ code: 1011 });
+    };
     ws.onMessage((frame) => {
-      const parsed: unknown = JSON.parse(String(frame));
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "type" in parsed &&
-        parsed.type === "identify"
-      ) {
+      const parsed = JSON.parse(String(frame)) as Record<string, unknown>;
+      if (parsed.type === "identify") {
         ws.send(JSON.stringify({ type: "ready", userId: me, resumed: false }));
+      } else {
+        sent.push(parsed);
       }
     });
   });
-  return (event) => {
+  const publish: Publish = (event) => {
     sequence += 1;
     send(JSON.stringify({ type: "event", sequence, event }));
   };
+  publish.ephemeral = (event) => {
+    send(JSON.stringify({ type: "ephemeral", event }));
+  };
+  publish.sent = sent;
+  publish.drop = () => {
+    drop();
+  };
+  return publish;
 }
 
 /** Stubs the world and signs in through the form, as a user would. */

@@ -20,7 +20,10 @@
   device lists come from `useAudioDevices`, which asks for the microphone once so devices are
   named and follows `devicechange`. `NAME_COLORS`, whether names are drawn in their roles'
   colours, is device-scoped too, for a reader to whom coloured text on one screen is harder to
-  read (`roles-and-permissions.md`). The palette, light or dark, and the fonts (`fonts.md`) are
+  read (`roles-and-permissions.md`). `TYPING_NOTICES` (`privacy.typingNotices`, account-scoped,
+  on unless turned off under Privacy) is whether others are told when the user is typing;
+  turning it off says at once that they stopped wherever they were, and they still see others
+  typing. The palette, light or dark, and the fonts (`fonts.md`) are
   kept per install outside `PreferenceStore`, since they apply on the sign-in screen too.
 
 ## Zoom and message text size

@@ -24,6 +24,7 @@ pub mod attachment;
 pub mod bot_command;
 pub mod channel;
 pub mod deployment;
+pub mod ephemeral;
 pub mod link_preview;
 pub mod mention;
 pub mod message;
