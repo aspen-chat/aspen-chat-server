@@ -9,7 +9,7 @@
 use super::host::wit;
 use crate::context::GlobalServerContext;
 use crate::{ChannelId, CommunityId, UserId};
-use aspen_schema::{plugin, plugin_storage};
+use aspen_schema::{plugin, plugin_storage, plugin_timer};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -33,7 +33,7 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn kind(&self) -> &'static str {
+    pub(super) fn kind(&self) -> &'static str {
         match self {
             Scope::Deployment => "deployment",
             Scope::Community(_) => "community",
@@ -42,7 +42,7 @@ impl Scope {
         }
     }
 
-    fn id(&self) -> Uuid {
+    pub(super) fn id(&self) -> Uuid {
         match self {
             Scope::Deployment => Uuid::nil(),
             Scope::Community(id) => id.0,
@@ -362,9 +362,9 @@ pub async fn list(
     Ok(query.load(conn).await?)
 }
 
-/// Deletes what every plugin kept in `scope`, as what it names goes, inside the caller's
-/// transaction: for a channel, in its threads too; for a community, in its channels and their
-/// threads too.
+/// Deletes what every plugin kept in `scope`, and the timers it set there, as what it names goes,
+/// inside the caller's transaction: for a channel, in its threads too; for a community, in its
+/// channels and their threads too.
 pub async fn forget(conn: &mut AsyncPgConnection, scope: Scope) -> crate::Result<()> {
     use aspen_schema::channel;
     let channels: Vec<Uuid> = match scope {
@@ -386,6 +386,18 @@ pub async fn forget(conn: &mut AsyncPgConnection, scope: Scope) -> crate::Result
             .collect(),
         Scope::Deployment | Scope::User(_) => Vec::new(),
     };
+    diesel::delete(
+        plugin_timer::table.filter(
+            plugin_timer::scope_kind
+                .eq(scope.kind())
+                .and(plugin_timer::scope.eq(scope.id()))
+                .or(plugin_timer::scope_kind
+                    .eq("channel")
+                    .and(plugin_timer::scope.eq_any(&channels))),
+        ),
+    )
+    .execute(conn)
+    .await?;
     let freed: Vec<(String, i32)> = diesel::delete(
         plugin_storage::table.filter(
             plugin_storage::scope_kind

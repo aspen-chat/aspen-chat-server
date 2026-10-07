@@ -1143,7 +1143,28 @@ impl Call {
     ) -> Result<(), wit::Error> {
         self.require(PluginPermission::Timers)?;
         let mut conn = self.conn().await?;
-        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload).await
+        super::timer::set(
+            conn.as_mut(),
+            &self.plugin.id,
+            &key,
+            &due,
+            &payload,
+            &storage::Scope::Deployment,
+        )
+        .await
+    }
+
+    async fn set_timer_in(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.require(PluginPermission::Timers)?;
+        let scope = self.scope(scope).await?;
+        let mut conn = self.conn().await?;
+        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload, &scope).await
     }
 
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
@@ -1420,6 +1441,16 @@ impl aspen::plugin::host::Host for CallState {
         payload: String,
     ) -> Result<(), wit::Error> {
         self.call.set_timer(key, due, payload).await
+    }
+
+    async fn set_timer_in(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.call.set_timer_in(scope, key, due, payload).await
     }
 
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {

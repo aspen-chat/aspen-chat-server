@@ -336,7 +336,10 @@ it loads the view again, in a new frame, with a new port.
 A plugin holding `timers` sets a timer by key (`set-timer`), due at a time with a payload of its
 own, and cancels it (`cancel-timer`); setting a key again replaces it. When it falls due, any one
 API server calls the plugin's `observe` with `timer-fired`, at least once: a call that fails is
-tried again a minute later, three times at most. A plugin keeps at most 10,000 timers.
+tried again a minute later, three times at most. A plugin keeps at most 10,000 timers. A timer
+set in a scope (`set-timer-in`: a community, a channel, or a user, checked as storage's scopes
+are) goes when that scope does, with what the plugin keeps there, so a reminder about a deleted
+channel's event neither fires nor counts against the plugin's timers.
 
 ### Notices
 

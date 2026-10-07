@@ -352,6 +352,10 @@ interface host {
     /// same key (`timers`).
     set-timer: func(key: string, due: string, payload: string) -> result<_, error>;
     cancel-timer: func(key: string) -> result<_, error>;
+    /// As `set-timer`, for a timer that goes with `scope`: deleting the community, channel, or
+    /// account it names deletes the timer with what the plugin keeps there. The scope is checked
+    /// as storage's is; the deployment's scope is `set-timer`'s.
+    set-timer-in: func(scope: scope, key: string, due: string, payload: string) -> result<_, error>;
 
     /// Tells `user` of something in `channel`, about `message` if given, as Aspen tells them of
     /// a message that tags them (`notify`). Answers whether they were told: not when they may
