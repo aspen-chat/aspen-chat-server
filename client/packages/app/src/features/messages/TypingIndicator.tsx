@@ -3,7 +3,7 @@ import { useLocale } from "react-aria-components";
 import { useChannel, useTypers } from "@/api/hooks";
 import { PersonName } from "@/features/users/PersonName";
 import { useMessages } from "@/i18n/context";
-import { formatNodes, listNodes } from "@/i18n/formatNodes";
+import { typingSentence } from "@/features/messages/typingSentence";
 
 /** The most people named; more are "several people". */
 const MAX_NAMED = 3;
@@ -22,24 +22,30 @@ export function TypingIndicator({ channelId }: { channelId: string }) {
   const community = useChannel(channelId)?.community ?? null;
   let text = null;
   if (typers.length > MAX_NAMED) {
-    text = m.typing.several;
+    text = <span className="min-w-0 truncate">{m.typing.several}</span>;
   } else if (typers.length > 0) {
-    const names = listNodes(
-      locale,
-      typers.map((id) => (
-        <span key={id} className="font-semibold">
-          <PersonName id={id} community={community} width="w-12" />
+    const template = typers.length === 1 ? m.typing.one : m.typing.some;
+    // When the line runs out of room the names share what is left equally, a name that needs
+    // less than its share giving the rest to the others, and each is shortened to fit; the words
+    // between them never are, so the line always says what is happening.
+    text = typingSentence(template, locale, typers.length).map((part, index) =>
+      "name" in part ? (
+        <span key={index} className="max-w-max min-w-0 flex-1 truncate font-semibold">
+          <PersonName id={typers[part.name]} community={community} width="w-12" />
         </span>
-      )),
+      ) : (
+        <span key={index} className="shrink-0 whitespace-pre">
+          {part.text}
+        </span>
+      ),
     );
-    text = formatNodes(typers.length === 1 ? m.typing.one : m.typing.some, { names });
   }
   return (
-    <div className="flex h-[1lh] items-center px-4 text-xs leading-5 text-ink-muted">
+    <div className="message-text flex h-[1lh] items-center px-4 text-base text-ink-muted">
       {text !== null && (
-        <p className="motion-fade flex min-w-0 items-center gap-2">
+        <p className="motion-fade flex min-w-0 items-center">
           <TypingDots />
-          <span className="truncate">{text}</span>
+          {text}
         </p>
       )}
     </div>
@@ -55,7 +61,7 @@ export function TypingDots() {
     <svg
       viewBox="0 0 22 6"
       aria-hidden="true"
-      className="h-[0.6em] w-auto shrink-0 text-accent rtl:-scale-x-100"
+      className="me-2 h-[0.6em] w-auto shrink-0 text-accent rtl:-scale-x-100"
       fill="currentColor"
     >
       {[3, 11, 19].map((cx, index) => (

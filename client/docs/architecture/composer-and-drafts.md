@@ -18,11 +18,13 @@
   the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
 - Who else is typing shows on a line of its own just above the message box (`TypingIndicator`,
-  which `Composer` puts there whether or not the caller may write), kept one line tall at the
-  current text size (`h-[1lh]`) whether or not anyone is typing, so nothing moves when someone
-  starts or stops. Up to three people are named, through `PersonName` in the channel's
-  community and joined as the language lists things (`listNodes`), "is typing…" for one and
-  "are typing…" for more; four or more are "Several people are typing…". Beside the words,
+  which `Composer` puts there whether or not the caller may write), in message text at the
+  reader's message text size (`message-text`), kept one line tall (`h-[1lh]`) whether or not
+  anyone is typing, so nothing moves when someone starts or stops. Up to three people are named,
+  through `PersonName` in the channel's community and joined as the language lists things
+  (`typingSentence`), "is typing…" for one and "are typing…" for more; four or more are
+  "Several people are typing…". When the line runs out of room each name is shortened, never the
+  words around them, so it always says what is happening. Beside the words,
   `TypingDots` draws three dots in the accent's colour, each lit and dimmed again in turn from
   the start of the line (`typing-dot` in `styles.css`, timed by the motion tokens, so it follows
   the animation speed; a fade alone, so it goes on where motion is reduced).

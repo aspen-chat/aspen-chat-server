@@ -17,6 +17,9 @@ async function openGeneral(page: Page) {
 
 const box = (page: Page) => page.getByRole("textbox", { name: "Message" });
 
+/** The typing line whose words end as `ending` does, read whole across its names. */
+const typingLine = (page: Page, ending: RegExp) => page.locator("p", { hasText: ending });
+
 function typing(publish: Publish, userId: string, on = true) {
   publish.ephemeral?.({ type: "typing", channelId: general, userId, typing: on });
 }
@@ -31,16 +34,20 @@ test("others typing are named above the box, which never moves for them", async 
   const top = async () => (await box(page).boundingBox())?.y;
   const before = await top();
   typing(publish, bob);
-  const line = page.getByText(/is typing…$/);
+  const line = typingLine(page, /is typing…$/);
   await expect(line).toHaveText("Bob With A Rather Long Display Name is typing…");
   expect(await top()).toBe(before);
   typing(publish, helper);
-  await expect(page.getByText(/are typing…$/)).toHaveText(
+  await expect(typingLine(page, /are typing…$/)).toHaveText(
     "Bob With A Rather Long Display Name and Helper are typing…",
   );
+  // However narrow the screen, the names are shortened and the words saying what happens are not.
+  await expect(typingLine(page, /are typing…$/).getByText("are typing…")).toBeInViewport({
+    ratio: 1,
+  });
   // The reader is never told of themself.
   typing(publish, me);
-  await expect(page.getByText(/are typing…$/)).toHaveText(
+  await expect(typingLine(page, /are typing…$/)).toHaveText(
     "Bob With A Rather Long Display Name and Helper are typing…",
   );
   for (const n of [1, 2]) {
@@ -54,7 +61,7 @@ test("others typing are named above the box, which never moves for them", async 
   await expect(line).toHaveText("Bob With A Rather Long Display Name is typing…");
   // A connection lost forgets who was typing, since nobody can say they stopped.
   publish.drop?.();
-  await expect(page.getByText(/typing…$/)).toHaveCount(0);
+  await expect(typingLine(page, /typing…$/)).toHaveCount(0);
   expect(await top()).toBe(before);
 });
 
