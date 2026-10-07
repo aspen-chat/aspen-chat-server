@@ -21,6 +21,8 @@
 #   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
 #   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
 #   ip_per_<param>    one address's, per value of the path parameter
+# A path parameter's value is counted as its endpoint reads it: an id in any spelling the API
+# accepts (with or without hyphens, braces, `urn:uuid:`, any case) is one value.
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
 # document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,

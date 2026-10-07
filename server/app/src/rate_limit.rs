@@ -482,7 +482,7 @@ impl RateLimiter {
                 .params
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map(|(_, value)| key_part(value))
+                .map(|(_, value)| key_part(&canonical_param(value)))
         };
         let ip = || identity.ip.map(|ip| self.addresses.key(ip));
         let user = || identity.user.map(|user| user.0.to_string());
@@ -519,6 +519,16 @@ impl RateLimiter {
                 "rate limits unavailable, refusing the endpoints that fail closed and letting other requests through"
             );
         }
+    }
+}
+
+/// A path parameter as its endpoint reads it: a UUID in its one hyphenated lowercase spelling,
+/// since the id extractors accept several (braced, `urn:uuid:`, without hyphens, any case) and
+/// each would otherwise count in a bucket of its own; anything else as given.
+fn canonical_param(value: &str) -> std::borrow::Cow<'_, str> {
+    match uuid::Uuid::try_parse(value) {
+        Ok(id) => id.hyphenated().to_string().into(),
+        Err(_) => value.into(),
     }
 }
 
@@ -945,6 +955,21 @@ mod tests {
             limiter.key(&rule(Dimension::Ip), &mapped).unwrap(),
             "rl:b:ip:192.0.2.7"
         );
+    }
+
+    #[test]
+    fn every_spelling_of_one_uuid_shares_a_bucket() {
+        let id = "0190a4b2-7c1d-7e3f-8a9b-0c1d2e3f4a5b";
+        for spelling in [
+            id.to_string(),
+            id.to_uppercase(),
+            id.replace('-', ""),
+            format!("{{{id}}}"),
+            format!("urn:uuid:{id}"),
+        ] {
+            assert_eq!(canonical_param(&spelling), id);
+        }
+        assert_eq!(canonical_param("SomeInviteCode"), "SomeInviteCode");
     }
 
     #[test]
