@@ -3,6 +3,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import {
+  NOTHING_OFFERED,
+  audioOffered,
+  offeredKinds,
+  startOffered,
+  type Offered,
+} from "./captureKinds";
 
 /**
  * Game capture through libobs, for the renderer. The helper `aspen-obs-capture` (the Rust
@@ -12,7 +19,8 @@ import { createInterface } from "node:readline";
  * browser's own screen share. The helper is a
  * process of its own, spawned on first use and spoken to over its pipes: one JSON request per
  * line on its stdin, one JSON reply per line on its stdout (the requests are described at the
- * top of the crate's `main.rs`). One capture runs at a time, for one renderer. Without the
+ * top of the crate's `main.rs`). One capture runs at a time, for one renderer, and only of a
+ * kind the helper listed (`captureKinds.ts`). Without the
  * helper on disk (a build without libobs) the bridge reports no capture kinds and the app shows
  * no game option.
  */
@@ -134,6 +142,8 @@ class CaptureHost {
   #nextId = 1;
   /** Where the helper's libobs modules and data are, when the build ships them. */
   #dirs: { pluginDir?: string; dataDir?: string } = {};
+  /** What the last listing offered, the only kinds a capture may be started with. */
+  #offered: Offered = NOTHING_OFFERED;
   readonly #pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -220,20 +230,28 @@ class CaptureHost {
       pictures: boolean;
     };
     // The test pattern is a picture, through libobs's media source.
-    return {
+    const catalogue = {
       kinds: listed.kinds,
       applicationAudio: listed.applicationAudio,
       testMedia: listed.pictures ? testMedia : null,
     };
+    this.#offered = offeredKinds(catalogue);
+    return catalogue;
   }
 
   async start(sender: WebContents, options: StartOptions): Promise<void> {
+    if (!startOffered(this.#offered, options)) {
+      throw new Error(`capture of a kind not offered (${options.kind})`);
+    }
     await this.#request({ type: "start", options: { ...options, ...this.#dirs } });
     this.#own(sender);
   }
 
   /** Captures one application's sound alone, the picture coming from the browser's screen share. */
   async startAudio(sender: WebContents, audio: AudioOptions): Promise<void> {
+    if (!audioOffered(this.#offered, audio)) {
+      throw new Error(`capture of a kind not offered (${audio.kind})`);
+    }
     await this.#request({ type: "startAudio", options: { audio, ...this.#dirs } });
     this.#own(sender);
   }
