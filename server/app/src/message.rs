@@ -517,7 +517,9 @@ async fn post(
             .scope_boxed()
         })
         .await?;
-    if message.kind == MessageKind::Standard {
+    // The system account's notices quote names others chose, so nothing in them is fetched and
+    // shown as a card under its name.
+    if message.kind == MessageKind::Standard && !system_account::is(conn.as_mut(), author).await? {
         spawn_preview_fetch(state.clone(), author, message.id, &message.content);
     }
     Ok(message)
@@ -917,6 +919,7 @@ pub async fn delete_message(
             &access,
             ModerationAction::DeleteMessage,
             Some(id.0.to_string()),
+            Some(author),
         )
         .await?;
     }
@@ -1120,7 +1123,11 @@ pub async fn note_moderation(
     access: &crate::permissions::ChannelAccess,
     action: ModerationAction,
     subject: Option<String>,
+    target: Option<UserId>,
 ) -> crate::Result<()> {
+    if let Some(target) = target {
+        crate::deployment::require_outranks(conn, actor, target).await?;
+    }
     log_moderation(
         conn,
         actor,
@@ -1171,6 +1178,7 @@ pub async fn remove_attachment(
                     &access,
                     ModerationAction::RemoveAttachment,
                     Some(format!("{}/{}", id.0, attachment_id.0)),
+                    Some(author),
                 )
                 .await?;
             }

@@ -460,7 +460,7 @@ pub async fn update_role(
             )?;
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             let permissions = request
                 .permissions
                 .as_deref()
@@ -569,7 +569,7 @@ pub async fn delete_role(
             }
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             // Its holders lose it and its overrides go with it, by the foreign keys. The one
             // event says so: readers of it (the event feed, clients) take the role from its
             // holders and its overrides away themselves, however many there are.
@@ -606,7 +606,7 @@ pub async fn reorder_roles(
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             let roles = load_roles(conn.as_mut(), community_id).await?;
-            let rank = access.rank();
+            let rank = access.role_rank();
             let (everyone, others): (Vec<RoleRow>, Vec<RoleRow>) =
                 roles.into_iter().partition(|r| r.everyone);
             let (movable, fixed): (Vec<RoleRow>, Vec<RoleRow>) =
@@ -708,7 +708,7 @@ pub async fn set_member_role(
             if role.bot.is_some() {
                 return Err(crate::Error::Validation(t!("botRoleFixed")));
             }
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             // Giving a role gives what it allows, which must be the caller's to give, as for
             // making or editing one; taking it away takes rank alone.
             if held {
@@ -727,7 +727,11 @@ pub async fn set_member_role(
                 .for_no_key_update()
                 .first::<UserId>(conn.as_mut())
                 .await?;
-            member_below(conn.as_mut(), &access, member).await?;
+            let their_rank = member_below(conn.as_mut(), &access, member).await?;
+            // Roles are given and taken by rank in the community alone, as they are managed.
+            if member != caller {
+                access.require_role_above(their_rank)?;
+            }
             let changed = if held {
                 diesel::insert_into(community_member_role::table)
                     .values((
@@ -783,6 +787,7 @@ pub async fn remove_member(
                     .contains(Permissions::REMOVE_MEMBERS)
                     && their_rank < access.role_rank())
             {
+                crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                 log_moderation(
                     conn.as_mut(),
                     caller,
@@ -823,6 +828,7 @@ pub async fn clear_nickname(
                         .contains(Permissions::MANAGE_NICKNAMES)
                         && their_rank < access.role_rank())
                 {
+                    crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                     log_moderation(
                         conn.as_mut(),
                         caller,
@@ -926,7 +932,7 @@ fn check_grantable(
     allow: Permissions,
     deny: Permissions,
 ) -> crate::Result<()> {
-    access.require_above(role.position)?;
+    access.require_role_above(role.position)?;
     access.require_holds(allow | deny)
 }
 

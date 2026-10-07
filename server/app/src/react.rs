@@ -67,6 +67,7 @@ pub async fn create_react(
                 aspen_schema::channel::community,
             ))
             .filter(aspen_schema::message::id.eq(message_id))
+            .filter(aspen_schema::message::deleted_at.is_null())
             .first(conn.as_mut())
             .await?;
     crate::permissions::channel_access(state, conn.as_mut(), author, channel)
@@ -146,6 +147,7 @@ pub async fn remove_others_react(
                 &access,
                 crate::moderation_log::ModerationAction::RemoveReaction,
                 Some(format!("{}/{emoji}/{}", message_id.0, author.0)),
+                Some(author),
             )
             .await?;
         }
@@ -281,7 +283,7 @@ struct ReactorRow {
 
 /// Who reacted to `message_id` with `emoji`, earliest first: at most `limit` of them, starting
 /// after `after` when given, leaving out anyone `caller` has blocked. Not found for a message
-/// `caller` may not see.
+/// `caller` may not see, or one deleted.
 pub async fn read_reactors(
     state: &GlobalServerContext,
     caller: UserId,
@@ -294,6 +296,7 @@ pub async fn read_reactors(
     let channel: crate::ChannelId = aspen_schema::message::table
         .select(aspen_schema::message::channel)
         .filter(aspen_schema::message::id.eq(message_id))
+        .filter(aspen_schema::message::deleted_at.is_null())
         .first(conn.as_mut())
         .await?;
     crate::permissions::channel_access_reading(

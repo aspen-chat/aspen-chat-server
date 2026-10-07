@@ -30,7 +30,6 @@
 use crate::context::GlobalServerContext;
 use crate::user::UserPg;
 use crate::{CommunityId, UserId};
-use aspen_schema::community_user;
 use aspen_wire::user::UserOnlineStatus;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -153,11 +152,8 @@ async fn renew_listings(
     user: UserId,
     seconds: i64,
 ) -> crate::Result<()> {
-    let communities: Vec<CommunityId> = community_user::table
-        .select(community_user::community)
-        .filter(community_user::user.eq(user))
-        .load(state.connection_pool.get().await?.as_mut())
-        .await?;
+    let communities =
+        crate::events::memberships(state.connection_pool.get().await?.as_mut(), user).await?;
     if communities.is_empty() {
         return Ok(());
     }
@@ -275,8 +271,9 @@ pub async fn connected_members(
 }
 
 /// Which of `users` `viewer` may learn the presence of: themself, and anyone who shares a
-/// community or a DM with them, or is a bot they own, unless that person has blocked them. Of
-/// anyone else, presence would tell a stranger when someone is about, so they learn nothing.
+/// community (not a deleted one) or a DM with them, or is a bot they own, unless that person
+/// has blocked them. Of anyone else, presence would tell a stranger when someone is about, so
+/// they learn nothing.
 pub async fn presence_visible(
     conn: &mut AsyncPgConnection,
     viewer: UserId,
@@ -299,7 +296,9 @@ pub async fn presence_visible(
            OR ((EXISTS (
                     SELECT 1 FROM community_user mine
                     JOIN community_user theirs ON theirs.community = mine.community
+                    JOIN community shared ON shared.id = mine.community
                     WHERE mine."user" = $1 AND theirs."user" = asked.id
+                      AND shared.deleted_at IS NULL
                 )
                 OR EXISTS (
                     SELECT 1 FROM dm_recipient mine

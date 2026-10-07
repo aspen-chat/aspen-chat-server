@@ -34,17 +34,14 @@ pub fn pair_key(a: UserId, b: UserId) -> String {
     format!("{}:{}", low.0, high.0)
 }
 
-/// Refuses the users in `others` who share no community with `user`.
+/// Refuses the users in `others` who share no community with `user`; a deleted community
+/// joins nobody.
 async fn ensure_shared_community(
     conn: &mut AsyncPgConnection,
     user: UserId,
     others: &[UserId],
 ) -> crate::Result<()> {
-    let communities: Vec<crate::CommunityId> = community_user::table
-        .select(community_user::community)
-        .filter(community_user::user.eq(user))
-        .load(conn)
-        .await?;
+    let communities = crate::events::memberships(conn, user).await?;
     let reachable: HashSet<UserId> = community_user::table
         .select(community_user::user)
         .filter(
@@ -244,6 +241,27 @@ pub async fn insert_dm(
 }
 
 /// The caller's DMs and group DMs with their recipients, the most recently active first.
+/// `user`'s DMs as `list_dms` gives them, for a deployment moderator to open one. Takes
+/// Moderate any community, and is written to the moderation log, since whom someone talks to
+/// privately is theirs; opening any of them is logged again (`readDm`).
+pub async fn list_dms_moderating(
+    state: &GlobalServerContext,
+    access: &crate::deployment::DeploymentAccess,
+    user: UserId,
+) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
+    access.require(crate::deployment::DeploymentPermission::ModerateCommunities)?;
+    crate::moderation_log::log_moderation(
+        state.connection_pool.get().await?.as_mut(),
+        access.user,
+        crate::moderation_log::ModerationAction::ListDms,
+        None,
+        None,
+        Some(user.0.to_string()),
+    )
+    .await?;
+    list_dms(state, user).await
+}
+
 pub async fn list_dms(
     state: &GlobalServerContext,
     caller: UserId,

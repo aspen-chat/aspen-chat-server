@@ -465,7 +465,8 @@ pub async fn read_file_transfer_log(
 }
 
 /// Someone's DMs and group DMs, the most recently active first, for a deployment moderator to
-/// open. Takes Moderate any community; reading any of them is written to the moderation log.
+/// open. Takes Moderate any community; listing them, and reading any of them, is written to the
+/// moderation log.
 #[utoipa::path(
     get,
     path = "/admin/users/{user}/dms",
@@ -484,9 +485,8 @@ pub async fn list_user_dms(
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
 ) -> ApiResult<Json<Vec<crate::message_enum::Channel>>> {
-    access.require(DeploymentPermission::ModerateCommunities)?;
     Ok(Json(
-        app::dm::list_dms(&state, user)
+        app::dm::list_dms_moderating(&state, &access, user)
             .await?
             .into_iter()
             .map(|(dm, recipients)| app::channel::record(&dm, recipients))

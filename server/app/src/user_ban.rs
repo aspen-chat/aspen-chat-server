@@ -1,8 +1,10 @@
 //! Bans from the whole deployment (`user.banned_at`): the person can no longer use it at all.
 //! Banning ends every sign-in they hold, closes their event streams (the `accountBanned` event
-//! tells each one why, `app::event_feed`), and takes them out of every call; while the ban
-//! stands, signing in is refused with `deploymentBanned` and the reason they were given, a bot's
-//! token is refused though kept, so lifting the ban restores it, and other deployments asking
+//! tells each one why, `app::event_feed`), and takes them out of every call, and does the same
+//! to the bots they own, which act for them; while the ban stands, signing in is refused with
+//! `deploymentBanned` and the reason they were given, a bot's token is refused though kept,
+//! whether the bot or its owner is banned (`shut_out`), so lifting the ban restores it, and
+//! other deployments asking
 //! after them are told they are no longer in good standing (`app::federation::standing`). Their
 //! memberships stay, so their name and what they posted still show.
 //!
@@ -34,6 +36,19 @@ pub const BANNED_SQL: &str = "(\"user\".banned_at IS NOT NULL \
 /// The SQL condition that the `user` row in a query is banned now.
 pub fn banned() -> diesel::expression::SqlLiteral<Bool> {
     diesel::dsl::sql::<Bool>(BANNED_SQL)
+}
+
+/// Whether the `user` row in a query is shut out of the deployment now: banned itself, or a
+/// bot whose owner is banned. A bot acts for its owner, so it is shut out while they are.
+pub const SHUT_OUT_SQL: &str = "((\"user\".banned_at IS NOT NULL \
+     AND (\"user\".banned_until IS NULL OR \"user\".banned_until > now())) \
+     OR EXISTS (SELECT 1 FROM \"user\" owner_row WHERE owner_row.id = \"user\".bot_owner \
+     AND owner_row.banned_at IS NOT NULL \
+     AND (owner_row.banned_until IS NULL OR owner_row.banned_until > now())))";
+
+/// The SQL condition that the `user` row in a query is shut out now (`SHUT_OUT_SQL`).
+pub fn shut_out() -> diesel::expression::SqlLiteral<Bool> {
+    diesel::dsl::sql::<Bool>(SHUT_OUT_SQL)
 }
 
 /// A ban as it stands.
@@ -224,18 +239,27 @@ async fn ban_one(
                 .await?
                 .len();
     }
+    // Their bots act for them, so their streams close and they leave their calls too; their
+    // tokens are refused while the ban stands (`shut_out`).
+    let bots: Vec<UserId> = user::table
+        .select(user::id)
+        .filter(user::bot_owner.eq(target).and(user::deleted_at.is_null()))
+        .load(conn)
+        .await?;
     let at = crate::login::database_clock(conn).await?;
-    publish_event(
-        state,
-        conn,
-        EventScope::User(target),
-        &ServerEvent::AccountBanned {
-            reason: reason.clone(),
-            until,
-            at,
-        },
-    )
-    .await?;
+    for account in std::iter::once(target).chain(bots) {
+        publish_event(
+            state,
+            conn,
+            EventScope::User(account),
+            &ServerEvent::AccountBanned {
+                reason: reason.clone(),
+                until,
+                at,
+            },
+        )
+        .await?;
+    }
     outcome.replaced |= was_banned;
     outcome.banned.push(target);
     Ok(bot_owner)

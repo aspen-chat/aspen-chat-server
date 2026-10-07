@@ -231,7 +231,8 @@ pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
     Some(owner)
 }
 
-/// The communities a user belongs to, which is what their event stream reads.
+/// The communities a user belongs to that are not deleted, which is what their event stream
+/// reads.
 pub async fn memberships(
     conn: &mut AsyncPgConnection,
     user: UserId,
@@ -239,6 +240,7 @@ pub async fn memberships(
     Ok(community_user::table
         .select(community_user::community)
         .filter(community_user::user.eq(user))
+        .filter(community_user::community.eq_any(crate::community::live()))
         .load(conn)
         .await?)
 }

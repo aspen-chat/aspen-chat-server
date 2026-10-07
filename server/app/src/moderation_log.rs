@@ -48,6 +48,8 @@ pub enum ModerationAction {
     /// The messages around a reported message in a DM, read in reviewing the report; the
     /// subject is the reported message.
     ReadReportContext,
+    /// Someone's DMs listed, to open one; the subject is the person.
+    ListDms,
 }
 
 /// Writes a moderator's action to the moderation log, and to the server's own log.
@@ -173,7 +175,8 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
         | ModerationAction::LiftUserBan
         | ModerationAction::WarnUser
         | ModerationAction::ResetProfile
-        | ModerationAction::ClearNickname => Some(Subject::User(UserId(id(subject)?))),
+        | ModerationAction::ClearNickname
+        | ModerationAction::ListDms => Some(Subject::User(UserId(id(subject)?))),
         ModerationAction::DeleteMessage
         | ModerationAction::ReadDm
         | ModerationAction::ReadReportContext => Some(Subject::Message(MessageId(id(subject)?))),

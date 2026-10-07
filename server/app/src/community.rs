@@ -46,6 +46,19 @@ pub struct CommunityUser {
     pub nickname: Option<String>,
 }
 
+/// The communities that are not deleted, as a subquery for `community_user::community.eq_any`.
+/// A deleted community keeps its memberships, so every read of what someone belongs to (what
+/// they may search, whom they share a community with, how many they hold) keeps to these.
+#[allow(clippy::type_complexity)]
+pub fn live() -> diesel::dsl::Filter<
+    diesel::dsl::Select<community::table, community::id>,
+    diesel::dsl::IsNull<community::deleted_at>,
+> {
+    community::table
+        .select(community::id)
+        .filter(community::deleted_at.is_null())
+}
+
 impl Loadable for Community {
     type Id = CommunityId;
 
@@ -332,9 +345,8 @@ pub async fn join_community(
     Ok(membership)
 }
 
-/// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
-/// and announces the membership.
-/// Refuses `user` another community once they belong to as many as a user may.
+/// Refuses `user` another community once they belong to as many as a user may. A deleted
+/// community counts for nothing.
 pub async fn ensure_room_for_another(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -342,6 +354,7 @@ pub async fn ensure_room_for_another(
 ) -> crate::Result<()> {
     let held: i64 = community_user::table
         .filter(community_user::user.eq(user))
+        .filter(community_user::community.eq_any(live()))
         .count()
         .get_result(conn)
         .await?;
@@ -352,6 +365,8 @@ pub async fn ensure_room_for_another(
     Ok(())
 }
 
+/// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
+/// and announces the membership.
 pub async fn add_member(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -359,7 +374,19 @@ pub async fn add_member(
     community: CommunityId,
     roles: &[RoleId],
 ) -> crate::Result<message_enum::UserCommunity> {
-    // Every way in passes here, so a standing ban refuses them all.
+    // Every way in passes here, so a deleted community refuses them all. The row is held until
+    // the membership commits, so a deletion running beside it waits and is announced after it.
+    community::table
+        .select(community::id)
+        .filter(
+            community::id
+                .eq(community)
+                .and(community::deleted_at.is_null()),
+        )
+        .for_share()
+        .first::<CommunityId>(conn)
+        .await?;
+    // Likewise a standing ban.
     crate::ban::check_not_banned(conn, community, user).await?;
     let last: Option<i32> = community_user::table
         .filter(community_user::user.eq(user))
