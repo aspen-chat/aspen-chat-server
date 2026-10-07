@@ -190,6 +190,7 @@ export type {
   PollOptionResult,
   PollWriteIn,
   CommunityBan,
+  VoiceMute,
   CommunityPlugin,
   CustomEmoji,
   MessageAnnotation,

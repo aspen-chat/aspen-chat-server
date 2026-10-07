@@ -75,8 +75,15 @@ export function CallBar() {
             )}
           </span>
         </CallPlaceLink>
-        {/* Someone who may not speak here listens only, and has no microphone to mute. */}
-        {call.canSpeak || call.status !== "connected" ? (
+        {/* Someone who may not speak here listens only, and has no microphone to mute; someone
+            a moderator muted stays muted until a moderator lifts it. */}
+        {call.serverMuted ? (
+          <Tooltip text={m.voice.serverMutedYou}>
+            <span aria-label={m.voice.serverMutedYou} className={buttonClass + " text-danger"}>
+              <MicrophoneSlashIcon size={18} aria-hidden="true" />
+            </span>
+          </Tooltip>
+        ) : call.canSpeak || call.status !== "connected" ? (
           <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
             <Button
               aria-label={call.muted ? m.voice.unmute : m.voice.mute}

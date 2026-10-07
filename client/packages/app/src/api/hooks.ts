@@ -16,6 +16,7 @@ import type {
   ChannelVoice,
   Community,
   CommunityBan,
+  VoiceMute,
   CommunityPermissions,
   CommunityPlugin,
   CustomEmoji,
@@ -648,6 +649,43 @@ export function useBans(communityId: string): readonly CommunityBan[] | undefine
     }
   }, [sync, communityId, bans]);
   return bans;
+}
+
+/**
+ * A community's standing server mutes, newest first, read on first use for a holder of Manage
+ * calls; `undefined` until read.
+ */
+export function useVoiceMutes(communityId: string): readonly VoiceMute[] | undefined {
+  const sync = useSync();
+  const mutes = useTopic(`voiceMutes:${communityId}`, (s) => s.voiceMutes(communityId));
+  useEffect(() => {
+    if (mutes === undefined) {
+      void sync.loadVoiceMutes(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, mutes]);
+  return mutes;
+}
+
+/**
+ * Whether a moderator's mute of `userId` stands in `communityId`'s calls, from the community's
+ * mutes, which are read when `load` (the caller holds Manage calls); `undefined` while unknown.
+ */
+export function useVoiceMuted(
+  communityId: string | null,
+  userId: string,
+  load: boolean,
+): boolean | undefined {
+  const sync = useSync();
+  const id = communityId ?? "";
+  const mutes = useTopic(`voiceMutes:${id}`, (s) =>
+    communityId === null ? undefined : s.voiceMutes(communityId),
+  );
+  useEffect(() => {
+    if (load && communityId !== null && mutes === undefined) {
+      void sync.loadVoiceMutes(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, mutes, load]);
+  return mutes?.some((mute) => mute.user === userId);
 }
 
 /** The roles a member holds besides everyone's, or `undefined` while unknown. */

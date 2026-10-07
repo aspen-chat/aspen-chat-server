@@ -889,6 +889,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    voice_mute (community, user) {
+        community -> Uuid,
+        user -> Uuid,
+        muted_by -> Nullable<Uuid>,
+        muted_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     voice_participant (session, user) {
         session -> Uuid,
         user -> Uuid,
@@ -1052,6 +1061,7 @@ diesel::joinable!(user_deployment_role -> user (user));
 diesel::joinable!(user_email -> user (user));
 diesel::joinable!(user_foreign_deployment -> user (user));
 diesel::joinable!(user_preferences -> user (user));
+diesel::joinable!(voice_mute -> community (community));
 diesel::joinable!(voice_participant -> user (user));
 diesel::joinable!(voice_participant -> voice_session (session));
 diesel::joinable!(voice_ring -> voice_session (session));
@@ -1135,6 +1145,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_email,
     user_foreign_deployment,
     user_preferences,
+    voice_mute,
     voice_participant,
     voice_ring,
     voice_server,

@@ -15,11 +15,13 @@
 //! <session> <channel> <user> [<sign-in>]`, `left <session> <channel> <user>`, `speaking <session> <channel>
 //! <user> <true|false>`, `state <session> <channel> <user> <muted> <deafened>`, `ended <session>
 //! <channel>`. Also `verify <token>
-//! <secret> <server>` checks a join token the way a voice server would, and `command-kick
+//! <public key> <server>` checks a signed join token against the base64url Ed25519 public key
+//! the way a voice server would, and `command-kick
 //! <server> <session> <user>` / `command-mute <server> <session> <user> <muted>` /
 //! `command-close <server> <session>` send a command to a voice server the way the API server
 //! does.
 
+use base64::Engine as _;
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -81,10 +83,12 @@ async fn main() {
                 .as_secs(),
         )
         .expect("fits");
-        let secret = rest.get(2).map(String::as_str).unwrap_or_else(|| usage());
+        let public = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(rest.get(2).map(String::as_str).unwrap_or_else(|| usage()))
+            .unwrap_or_else(|_| usage());
         match verify(
             rest.get(1).map(String::as_str).unwrap_or_else(|| usage()),
-            secret.as_bytes(),
+            &public,
             uuid(rest.get(3)),
             now,
         ) {

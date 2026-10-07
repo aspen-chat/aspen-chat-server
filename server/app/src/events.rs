@@ -37,7 +37,7 @@ use crate::{CategoryId, ChannelId, CommunityId, MessageId, UserId, VoiceSessionI
 use aspen_schema::{
     category, channel, community_user, dm_recipient, invite, message, voice_session,
 };
-use aspen_wire::message_enum::server_event::ServerEvent;
+use aspen_wire::message_enum::server_event::{ServerEvent, VoiceMuteEvent};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::future::try_join_all;
@@ -165,6 +165,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::Role(_)
         | ServerEvent::CustomEmoji(_)
         | ServerEvent::CommunityBan(_)
+        | ServerEvent::VoiceMute(_)
         | ServerEvent::ChannelOverride(_)
         | ServerEvent::CategoryOverride(_)
         | ServerEvent::CommunityPlugin(_)
@@ -473,6 +474,14 @@ async fn audience(
     if let ServerEvent::CommunityBan(_) = event {
         return Ok(Some((Permission::BanMembers, None)));
     }
+    // A moderator's mute reaches those who may mute, and the person muted.
+    if let ServerEvent::VoiceMute(
+        VoiceMuteEvent::Create(aspen_wire::message_enum::VoiceMute { user, .. })
+        | VoiceMuteEvent::Delete { user, .. },
+    ) = event
+    {
+        return Ok(Some((Permission::ManageCalls, Some(*user))));
+    }
     // A community's settings for a plugin are its managers' to read.
     if let ServerEvent::CommunityPlugin(_) = event {
         return Ok(Some((Permission::ManagePlugins, None)));
@@ -657,6 +666,11 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
             scoped_user.map(Recheck::User).into_iter().collect()
         }
         ServerEvent::User(UserEvent::Delete { id }) => vec![Recheck::User(*id)],
+        // A moderator's mute reaches the calls the person is in through their recheck.
+        ServerEvent::VoiceMute(
+            VoiceMuteEvent::Create(aspen_wire::message_enum::VoiceMute { user, .. })
+            | VoiceMuteEvent::Delete { user, .. },
+        ) => vec![Recheck::User(*user)],
         // A participant who joined on a token of an ended sign-in leaves the call with it.
         ServerEvent::SignInsEnded { ended, kept, .. } => scoped_user
             .map(|user| Recheck::SignIns {

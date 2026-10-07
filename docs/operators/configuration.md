@@ -177,7 +177,6 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
 | `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it for `failure_window_seconds`, after which it takes calls again on its own (an administrator enabling it ends the suspension sooner). Only this deployment's people whom a join offer sent to that server within the token's lifetime and a minute count, and not those who joined a call there within the window; bots and people from other deployments never do. The last server taking calls is never suspended. |
 | `failure_window_seconds` | `3600` | How long failures are counted, and how long a suspension lasts. |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
@@ -335,8 +334,8 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | Setting | Default | |
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
-| `token_secret` | required | The API servers' `[voice] token_secret`. The server refuses to start when it is the development value or shorter than 32 bytes, unless `development` is set. |
-| `development` | `false` | Lets the server start with a development or short `token_secret`, for a development machine whose API server uses its default. Never on a deployment people use: whoever knows the secret can join any call. |
+| `token_secret` | | Only while upgrading from API servers that signed join tokens with a shared secret ([Upgrading](installing.md#from-shared-secret-join-tokens)): the server then also takes tokens signed with it, and warns at startup. Leave it out otherwise: join tokens are signed with the API servers' key, which the server asks them for over NATS. It refuses to start with the old development value or one shorter than 32 bytes, unless `development` is set. |
+| `development` | `false` | Lets the server start with a development or short `token_secret`. Never on a deployment people use: whoever knows the secret can join any call. |
 | `nats_url` | required | The same NATS as the API servers. |
 | `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
 | `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |

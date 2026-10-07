@@ -471,6 +471,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             voice::delete_voice_server
         ))
         .routes(routes!(voice::report_voice_server_failure))
+        .routes(routes!(voice::read_voice_mutes))
+        .routes(routes!(voice::put_voice_mute, voice::delete_voice_mute))
         .routes(routes!(attachment::init_attachment_upload))
         .routes(routes!(attachment::confirm_attachment_upload))
         .routes(routes!(

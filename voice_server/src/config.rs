@@ -13,9 +13,13 @@ pub struct VoiceServerConfig {
     /// This server's row in the API server's `voice_server` table. Join tokens name the servers
     /// they are good for by this id, and every report carries it.
     pub id: Uuid,
-    /// Shared with the API server; verifies join tokens. The server refuses to start with the
-    /// development value or one shorter than `MIN_TOKEN_SECRET_BYTES` unless `development`.
-    pub token_secret: String,
+    /// Join tokens are signed by the API servers' key, whose public half this server asks them
+    /// for (`signalling::TokenKeys`). Given this too, it also takes tokens of the shared-secret
+    /// form under it (`voice_protocol::token::verify_shared`), which API servers that do not
+    /// sign with a key of their own make; it refuses to start with the development value or one
+    /// shorter than `MIN_TOKEN_SECRET_BYTES` unless `development`.
+    #[serde(default)]
+    pub token_secret: Option<String>,
     /// Lets the server start with a token secret anyone may know, for a development machine.
     #[serde(default)]
     pub development: bool,
@@ -308,14 +312,16 @@ impl VoiceServerConfig {
     /// Refuses a token secret anyone may know or guess, which lets whoever does sign their own
     /// way into any call, unless the server is in `development`.
     pub fn check_secret(&self) -> anyhow::Result<()> {
-        let weak = self.token_secret == DEVELOPMENT_TOKEN_SECRET
-            || self.token_secret.len() < MIN_TOKEN_SECRET_BYTES;
+        let Some(secret) = &self.token_secret else {
+            return Ok(());
+        };
+        let weak = secret == DEVELOPMENT_TOKEN_SECRET || secret.len() < MIN_TOKEN_SECRET_BYTES;
         if weak && !self.development {
             anyhow::bail!(
                 "token_secret is the development value or shorter than {MIN_TOKEN_SECRET_BYTES} \
-                 bytes, so whoever knows or guesses it can join any call; give this server and the \
-                 API servers a long random one ([voice] token_secret), or set development = true \
-                 on a development machine"
+                 bytes, so whoever knows or guesses it can join any call; leave it out once every \
+                 API server signs join tokens with its key, give it a long random one meanwhile, or \
+                 set development = true on a development machine"
             );
         }
         Ok(())

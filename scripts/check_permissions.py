@@ -497,6 +497,35 @@ def calls(world: World, check: Checks) -> None:
               world.owner["token"], expect=(202,))
     lifted = frame_of(call, "participantState")
     check("until the moderator unmutes them", lifted is not None and lifted["muted"] is False, lifted)
+    # A moderator's mute is the community's: it outlasts the call until a moderator lifts it.
+    stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": True},
+              world.owner["token"], expect=(202,))
+    frame_of(call, "participantState")
+    call.close()
+    wait_for("the member's leaving to be recorded", lambda: not in_call(world), 30)
+    muted_offer = offer()
+    check("the next join offer says the mute stands", muted_offer.get("serverMuted") is True, muted_offer)
+    call = join(muted_offer["token"])
+    check("the member joins again", frame_of(call, "ready") is not None)
+
+    def recorded_muted() -> bool:
+        read = stack.api("GET", f"/communities/{world.community}?include=voice", token=world.owner["token"])
+        return any(p["user"] == world.member["id"] and p["muted"]
+                   for p in read.get("included", {}).get("voiceParticipants", []))
+
+    check("and is recorded muted from the start", soon(recorded_muted, 15))
+    mutes = f"/communities/{world.community}/voice-mutes"
+    check("the community's mutes are not the member's to list",
+          stack.status("GET", mutes, token=world.member["token"]) == 403)
+    listed = stack.api("GET", mutes, token=world.owner["token"])
+    check("its call moderators see the member among them",
+          any(mute["user"] == world.member["id"] for mute in listed), listed)
+    check("a member cannot lift their own mute",
+          stack.status("DELETE", f"{mutes}/{world.member['id']}", token=world.member["token"]) == 403)
+    stack.api("DELETE", f"{mutes}/{world.member['id']}", token=world.owner["token"], expect=(204,))
+    lifted = frame_of(call, "participantState", 10)
+    check("lifting it from the community's list reaches the call",
+          lifted is not None and lifted["muted"] is False, lifted)
     callers = world.role("Call moderators", ["manageCalls"])
     world.give(callers)
     owner_seat = f"/channels/{room}/voice/participants/{world.owner['id']}"

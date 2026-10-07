@@ -74,9 +74,6 @@ region = "us-east-1"
 access_key = "…"
 secret_key = "…"
 
-[voice]
-token_secret = "a long random string, shared with every voice server"
-
 [web_client]
 dir = "/srv/aspen/dist"
 ```
@@ -233,12 +230,10 @@ aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.o
 
 It may be run again with the same arguments, so a deployment script can run it every time; the
 dashboard registers servers too. Its id is then in the database
-(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id, the same
-`token_secret`, and NATS:
+(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id and NATS:
 
 ```toml
 id = "…"
-token_secret = "the same string as [voice] token_secret"
 nats_url = "nats.internal:4222"
 listen_addr = "127.0.0.1:9000"
 
@@ -280,6 +275,7 @@ authorization {
         publish: { allow: [
           "aspen.voice.report.*.VOICE_SERVER_ID",
           "aspen.voice.speaking.*.VOICE_SERVER_ID",
+          "aspen.voice.token-key",
           "$JS.API.INFO",
           "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
           "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
@@ -300,8 +296,13 @@ authorization {
 
 That lets the voice server publish its own reports (`aspen.voice.report.{lane}.{id}` and
 `aspen.voice.speaking.{lane}.{id}`), receive its own commands, follow a suspension of rate limits
-(the key-value bucket `aspen_rate_limits`), and receive the replies to its own requests, which it
-asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The API servers apply a
+(the key-value bucket `aspen_rate_limits`), ask the API servers for the public half of the key
+they sign join tokens with (`aspen.voice.token-key`), and receive the replies to its own
+requests, which it asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The key
+itself is made by the first API server to start and kept in the database, so a voice server can
+check the tokens that let people into calls but never make one, and no secret needs copying to
+it. A voice server that cannot reach an API server at startup keeps asking every few seconds, and
+turns joins away until one answers. The API servers apply a
 report only when it came on a subject naming the server it is about, and only when the call or
 channel it is about is that server's, so a voice server taken over can misreport its own calls and
 no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
@@ -493,3 +494,21 @@ deleted.
 
 People's event streams reconnect by themselves when an API server restarts, and pick up exactly
 where they left off.
+
+### From shared-secret join tokens
+
+Deployments whose `aspen.toml` has a `[voice] token_secret` signed join tokens with that secret.
+API servers now sign them with a key of their own and ignore the setting, so upgrade the voice
+servers first, while they still have the secret, then the API servers:
+
+1. Run `aspen-migrate up`, then restart each voice server on the new build with its
+   `token_secret` still in `voice_server.toml`. It takes both kinds of token, and warns that the
+   secret is set.
+2. Restart the API servers on the new build. The first to start makes the key; each answers the
+   voice servers asking for it, and every join token from then on is signed with it.
+3. Take `token_secret` out of every `voice_server.toml` and out of `aspen.toml`, and restart the
+   voice servers. A voice server without it refuses tokens of the old kind.
+
+Calls go on throughout, apart from those on each voice server as it restarts, whose clients
+rejoin on their own. Add `aspen.voice.token-key` to each voice server's NATS permissions (above)
+before step 1.

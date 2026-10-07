@@ -2105,6 +2105,34 @@ export class AspenSync {
     this.store.replaceBans(communityId, result.data);
   }
 
+  /** Reads a community's standing server mutes into the store, for a holder of Manage calls. */
+  async loadVoiceMutes(communityId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/voice-mutes", {
+      params: { path: { community: communityId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.replaceVoiceMutes(communityId, result.data);
+  }
+
+  /** Lifts someone's server mute in a community; its deletion event changes the cache. */
+  async liftVoiceMute(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/communities/{community}/voice-mutes/{user}",
+      { params: { path: { community: communityId, user: userId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "voiceMute",
+      type: "delete",
+      community: communityId,
+      user: userId,
+    });
+  }
+
   /**
    * Bans someone from a community, with a reason, for a time, and deleting their recent
    * messages where asked; the answer is applied when its event has not come first. Returns
@@ -3124,6 +3152,15 @@ export class AspenSync {
     }
     if (event.serverEvent === "voiceSessionEnded") {
       this.voice.onSessionEnded(event);
+    }
+    if (event.serverEvent === "voiceMute" && event.user === this.store.me()?.id) {
+      // A moderator's mute of the user, in the community of the call they are in.
+      const callChannel = this.voice.state.channelId;
+      const community =
+        callChannel === null ? undefined : this.store.channel(callChannel)?.community;
+      if (community != null && community === event.community) {
+        this.voice.setServerMuted(event.type === "create");
+      }
     }
     if (event.serverEvent === "channelMuteChanged") {
       this.#scheduleMuteEnd();

@@ -92,6 +92,27 @@ pub enum RoomError {
     },
 }
 
+/// What a join token admits its holder to, as the participant it makes starts out.
+#[derive(Clone, Debug)]
+pub struct Admission {
+    /// What they may send and offer (`JoinClaims::grants`).
+    pub grants: Grants,
+    /// The sign-in the token was issued to; none for a bot's.
+    pub sign_in: Option<String>,
+    /// Whether a moderator's mute of them stands where the call is.
+    pub server_muted: bool,
+}
+
+impl From<&voice_protocol::token::JoinClaims> for Admission {
+    fn from(claims: &voice_protocol::token::JoinClaims) -> Self {
+        Self {
+            grants: claims.grants(),
+            sign_in: claims.sign_in.clone(),
+            server_muted: claims.server_muted,
+        }
+    }
+}
+
 /// Where a participant's frames go: their socket's outbox.
 pub use crate::outbox::Outbox;
 
@@ -517,8 +538,7 @@ impl Rooms {
         channel: Uuid,
         user: Uuid,
         outbox: Outbox,
-        grants: Grants,
-        sign_in: Option<String>,
+        admission: Admission,
     ) -> Result<Seat, RoomError> {
         let connection = Connection(self.next_connection.fetch_add(1, Ordering::Relaxed));
         loop {
@@ -532,23 +552,37 @@ impl Rooms {
                 Some(room) => room,
                 None => self.start_room(channel).await?,
             };
-            let entered =
-                match self.enter(&room, user, connection, &outbox, grants, sign_in.clone()) {
-                    Ok(entered) => entered,
-                    Err(e) => {
-                        // A room this join started holds no one; it ends as though its last
-                        // participant left.
-                        self.end_if_empty(&room);
-                        return Err(e);
-                    }
-                };
+            let entered = match self.enter(&room, user, connection, &outbox, admission.clone()) {
+                Ok(entered) => entered,
+                Err(e) => {
+                    // A room this join started holds no one; it ends as though its last
+                    // participant left.
+                    self.end_if_empty(&room);
+                    return Err(e);
+                }
+            };
             if entered {
                 self.reporter.report(VoiceReport::ParticipantJoined {
                     session: room.session,
                     channel,
                     user,
-                    sign_in,
+                    sign_in: admission.sign_in,
                 });
+                // A participant joining muted by a moderator is recorded so: their joining is
+                // recorded unmuted, and the recheck that follows finds the mute already
+                // standing and changes nothing.
+                if admission.server_muted {
+                    let report = room
+                        .participants
+                        .lock()
+                        .expect("room lock")
+                        .get(&user)
+                        .filter(|participant| participant.connection == connection)
+                        .map(|participant| Self::state_report(&room, participant));
+                    if let Some(report) = report {
+                        self.reporter.report(report);
+                    }
+                }
                 info!(
                     channel = channel.to_string(),
                     user = user.to_string(),
@@ -574,9 +608,13 @@ impl Rooms {
         user: Uuid,
         connection: Connection,
         outbox: &Outbox,
-        grants: Grants,
-        sign_in: Option<String>,
+        admission: Admission,
     ) -> Result<bool, RoomError> {
+        let Admission {
+            grants,
+            sign_in,
+            server_muted,
+        } = admission;
         let mut participants = room.participants.lock().expect("room lock");
         if room.closed.load(Ordering::Relaxed) {
             return Ok(false);
@@ -603,7 +641,7 @@ impl Rooms {
         let others: Vec<ParticipantInfo> = participants.values().map(Participant::info).collect();
         let joined = ServerMessage::ParticipantJoined {
             user,
-            muted: false,
+            muted: server_muted,
             deafened: false,
         };
         for other in participants.values() {
@@ -621,7 +659,7 @@ impl Rooms {
             own_preview: HashSet::new(),
             consumers: HashMap::new(),
             muted: false,
-            server_muted: false,
+            server_muted,
             deafened: false,
             speaking: false,
             grants,
@@ -1539,7 +1577,17 @@ impl Rooms {
                 user,
                 muted,
             } => {
-                if let Some(room) = self.room_of_session(session)
+                // Every recheck sends the mute as it stands; one that changes nothing is let be.
+                let Some(room) = self.room_of_session(session) else {
+                    return;
+                };
+                let unchanged = room
+                    .participants
+                    .lock()
+                    .expect("room lock")
+                    .get(&user)
+                    .is_none_or(|participant| participant.server_muted == muted);
+                if !unchanged
                     && let Err(e) = self
                         .apply_state(&room, user, None, |participant| {
                             participant.server_muted = muted;

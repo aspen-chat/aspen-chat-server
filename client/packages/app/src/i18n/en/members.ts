@@ -41,6 +41,11 @@ export const members = {
   bannedForever: "Until lifted",
   bannedReason: "Reason: {reason}",
   bannedNoReason: "No reason given",
+  voiceMutedHeading: "Muted in calls",
+  voiceMutedNone: "No one is muted in this community's calls.",
+  voiceMutedSince: "Muted {when}",
+  liftVoiceMute: "Unmute",
+  liftingVoiceMute: "Unmuting…",
   liftBan: "Lift ban",
   lifting: "Lifting…",
 } as const;
