@@ -22,8 +22,10 @@ export const wideModalClass = modalFrameClass + " bg-surface-raised max-w-3xl";
  * next begins.
  */
 export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
-/** The same, wide enough for the planes to stand in two columns (`PlaneColumns`), as Settings. */
+/** The same, wider, for a modal that lays its planes out side by side, as Community settings. */
 export const widePlanesModalClass = modalFrameClass + " bg-surface max-w-3xl";
+/** The same, wide enough for the planes to stand in three columns (`PlaneColumns`), as Settings. */
+export const columnPlanesModalClass = modalFrameClass + " bg-surface max-w-6xl";
 const planeShapeClass =
   "break-inside-avoid rounded-lg border bg-surface-raised px-3 py-1.5 shadow-sm";
 /** A plane's look alone, for an element that lays out its own contents, such as a list. */
