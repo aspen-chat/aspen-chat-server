@@ -1,0 +1,14 @@
+[package]
+name = "aspen_plugin_runtime"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The WebAssembly side of the API server's plugins: the bindings spec/plugin.wit generates, the engine and its epoch, and a call's limits."
+
+[dependencies]
+aspen_wire = { version = "0.1.0", path = "../wire" }
+# Plugins are WebAssembly components run in a sandbox, metered and bounded.
+wasmtime = { version = "49.0.2", default-features = false, features = ["async", "cranelift", "component-model", "runtime", "std", "pooling-allocator", "parallel-compilation"] }
+
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }

@@ -409,6 +409,7 @@ dependencies = [
  "aspen_limits",
  "aspen_locale",
  "aspen_metrics",
+ "aspen_plugin_runtime",
  "aspen_previews",
  "aspen_schema",
  "aspen_wire",
@@ -589,6 +590,15 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aspen_plugin_runtime"
+version = "0.1.0"
+dependencies = [
+ "aspen_wire",
+ "tokio",
+ "wasmtime",
 ]
 
 [[package]]
