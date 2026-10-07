@@ -105,3 +105,4 @@ pub mod m20261007_181608_deployment_roles_own_people_only;
 pub mod m20261007_181834_voice_mute;
 pub mod m20261007_182216_attachment_evidence;
 pub mod m20261007_183427_upload_quota;
+pub mod m20261007_192833_bot_transfer;

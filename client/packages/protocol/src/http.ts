@@ -490,7 +490,8 @@ export class AspenClient {
   ): Promise<Schemas["User"]> {
     const result = await this.api.POST(`${API_PREFIX}/users`, {
       body: {
-        name,
+        // Composed (NFC), as the server requires a new name to be, whatever the keyboard sent.
+        name: name.normalize("NFC"),
         password,
         ...(options.inviteCode === undefined ? {} : { inviteCode: options.inviteCode }),
         ...(options.email === undefined ? {} : { email: options.email }),

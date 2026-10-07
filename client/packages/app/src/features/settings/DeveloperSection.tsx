@@ -1,11 +1,15 @@
 import { DEVELOPER_MODE, ID_WIZARD } from "@aspen/protocol";
 import { usePreference, useSync } from "@/api/hooks";
+import { BotOffers } from "@/features/bots/BotOffers";
 import { BotsDialog } from "@/features/bots/BotsDialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
 import { planeClass } from "@/features/invites/dialog";
 
-/** The opt-in to developer mode, and, once in it, the ID wizard and the user's bots. */
+/**
+ * The opt-in to developer mode, and, once in it, the ID wizard and the user's bots. Bots
+ * others offer the user show here whether or not it is on.
+ */
 export function DeveloperSection() {
   const m = useMessages();
   const sync = useSync();
@@ -35,6 +39,7 @@ export function DeveloperSection() {
         />
       )}
       {on && <BotsDialog />}
+      <BotOffers />
     </section>
   );
 }

@@ -1,6 +1,6 @@
-import { ALL_PERMISSIONS, type Permission, type User } from "@aspen/protocol";
+import { ALL_PERMISSIONS, type BotTransfer, type Permission, type User } from "@aspen/protocol";
 import { CopyIcon, PlusIcon, RobotIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   Button,
   Dialog,
@@ -32,7 +32,12 @@ import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
+import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
+import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
+import { ReauthProvider } from "@/features/security/reauth";
+import { useReauth } from "@/features/security/reauthContext";
+import { useSecuritySettings } from "@/features/security/useSecuritySettings";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { problemText } from "@/api/problemText";
 
@@ -41,7 +46,8 @@ const EVERY_PERMISSION: ReadonlySet<Permission> = new Set(ALL_PERMISSIONS);
 /**
  * The bots the user owns, opened from developer mode in Settings: making one, and for each,
  * its picture, whether it is public, the link that adds it with the permissions it suggests, a new token,
- * handing it to someone, and deleting it. A token is shown once, when it is issued.
+ * offering it to someone (and withdrawing the offer), and deleting it. A token is shown once,
+ * when it is issued. A new token and an offer need a recent verification, which they ask for.
  */
 export function BotsDialog() {
   const m = useMessages();
@@ -55,7 +61,9 @@ export function BotsDialog() {
         <Modal className={widePlanesModalClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.bots.heading}</DialogHeading>
-            <BotsBody />
+            <BotsReauth>
+              <BotsBody />
+            </BotsReauth>
           </Dialog>
         </Modal>
       </ModalOverlay>
@@ -63,18 +71,39 @@ export function BotsDialog() {
   );
 }
 
+/** Asks for a fresh verification when a change to a bot needs one. */
+function BotsReauth({ children }: { children: ReactNode }) {
+  const security = useSecuritySettings();
+  const transport = usePasskeyTransport();
+  return (
+    <ReauthProvider settings={security.settings} transport={transport}>
+      {children}
+    </ReauthProvider>
+  );
+}
+
 function BotsBody() {
   const m = useMessages();
   const sync = useSync();
+  const me = useMe();
   const bots = useOwnedBots();
   const [selected, setSelected] = useState<string | null>(null);
   const [token, setToken] = useState<{ botId: string; token: string } | null>(null);
+  const [offers, setOffers] = useState<readonly BotTransfer[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     sync.loadBots().catch((e: unknown) => {
       setError(problemText(e));
     });
-  }, [sync]);
+    sync.loadBotTransfers().then(
+      (all) => {
+        setOffers(all.filter((offer) => offer.from.id === me?.id));
+      },
+      (e: unknown) => {
+        setError(problemText(e));
+      },
+    );
+  }, [sync, me?.id]);
   const current = bots.find((bot) => bot.id === selected) ?? bots[0];
   return (
     <div className="flex flex-col gap-4 md:flex-row">
@@ -118,6 +147,13 @@ function BotsBody() {
           token={token?.botId === current.id ? token.token : null}
           onToken={(issued) => {
             setToken({ botId: current.id, token: issued });
+          }}
+          offer={offers.find((offer) => offer.bot.id === current.id) ?? null}
+          onOffer={(offer) => {
+            setOffers((all) => [
+              ...all.filter((other) => other.bot.id !== current.id),
+              ...(offer === null ? [] : [offer]),
+            ]);
           }}
           onGone={() => {
             setSelected(null);
@@ -192,16 +228,23 @@ function BotEditor({
   bot,
   token,
   onToken,
+  offer,
+  onOffer,
   onGone,
 }: {
   bot: User;
   token: string | null;
   onToken: (token: string) => void;
+  /** The standing offer of this bot to someone, if there is one. */
+  offer: BotTransfer | null;
+  onOffer: (offer: BotTransfer | null) => void;
   onGone: () => void;
 }) {
   const m = useMessages();
   const sync = useSync();
   const me = useMe();
+  const withReauth = useReauth();
+  const date = useDateFormat({ dateStyle: "medium", timeStyle: "short" });
   const name = displayNameOf(bot);
   const [suggested, setSuggested] = useState<ReadonlySet<Permission>>(new Set());
   const [confirming, setConfirming] = useState<"token" | "delete" | null>(null);
@@ -273,6 +316,26 @@ function BotEditor({
           </div>
         </details>
       </section>
+      {offer !== null && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span>
+            {format(m.bots.offered, {
+              name: displayNameOf(offer.to),
+              date: date.format(new Date(offer.expiresAt)),
+            })}
+          </span>
+          <Button
+            onPress={() => {
+              run(sync.endBotTransfer(bot.id), () => {
+                onOffer(null);
+              });
+            }}
+            className={secondaryButtonClass}
+          >
+            {m.bots.withdraw}
+          </Button>
+        </div>
+      )}
       {confirming === "token" && <p className="text-sm">{m.bots.newTokenConfirm}</p>}
       {confirming === "delete" && (
         <p className="text-sm">{format(m.bots.deleteConfirm, { name })}</p>
@@ -290,8 +353,10 @@ function BotEditor({
               return;
             }
             run(
-              sync.rotateBotToken(bot.id).then((issued) => {
-                onToken(issued);
+              withReauth(() => sync.rotateBotToken(bot.id)).then((issued) => {
+                if (issued !== undefined) {
+                  onToken(issued);
+                }
               }),
             );
           }}
@@ -304,12 +369,15 @@ function BotEditor({
           heading={format(m.bots.transferHeading, { name })}
           confirmLabel={m.bots.transfer}
           pendingLabel={m.bots.transfer}
+          above={<p className="text-sm text-ink-muted">{m.bots.transferHint}</p>}
           exclude={[bot.id, ...(me === null ? [] : [me.id])]}
           max={1}
           onConfirm={async ([owner]) => {
             if (owner !== undefined) {
-              await sync.transferBot(bot.id, owner);
-              onGone();
+              const made = await withReauth(() => sync.offerBotTransfer(bot.id, owner));
+              if (made !== undefined) {
+                onOffer(made);
+              }
             }
           }}
         />
@@ -335,7 +403,7 @@ function BotEditor({
 }
 
 /** A freshly issued token, shown this once, with a way to copy it. */
-function TokenReveal({ name, token }: { name: string; token: string }) {
+export function TokenReveal({ name, token }: { name: string; token: string }) {
   const m = useMessages();
   return (
     <section className="flex flex-col gap-2 rounded-md border border-accent/40 bg-accent-soft/40 p-3">

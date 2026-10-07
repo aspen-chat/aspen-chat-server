@@ -440,7 +440,9 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(block::list_blocks))
         .routes(routes!(bot::list_bots, bot::create_bot))
         .routes(routes!(bot::rotate_bot_token))
-        .routes(routes!(bot::transfer_bot))
+        .routes(routes!(bot::offer_bot_transfer, bot::end_bot_transfer))
+        .routes(routes!(bot::accept_bot_transfer))
+        .routes(routes!(bot::list_bot_transfers))
         .routes(routes!(bot::update_bot, bot::delete_bot))
         .routes(routes!(
             bot_command::publish_bot_commands,

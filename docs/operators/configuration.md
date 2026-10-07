@@ -248,7 +248,24 @@ them, a limit you give replacing the built-in one whole.
 | `trusted_proxies` | `[]` | Reverse proxies, as addresses or networks (`"10.0.0.0/8"`), whose `X-Forwarded-For` names the client: the right-most entry that is not itself a listed proxy, read with or without a port (`192.0.2.1:5678`, `[2001:db8::1]:80`). An entry that is not an address (`unknown`) ends the reading there, and the client counts as the listed proxy that passed it on. **Set it when the server is behind a proxy**, or every client counts as the proxy. |
 | `ipv6_prefix` | `64` | IPv6 clients are counted by their network of this many bits, since one household holds a whole /64. |
 | `max_suspension_seconds` | `86400` | The longest this server honours a suspension of the limits (`aspen-chat-server limits suspend`), counted from when it began. |
-| `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits, rather than let through, so an outage does not allow unlimited guessing of passwords, codes, and invites. Every other endpoint is let through during an outage. The per-username sign-in limit always fails closed. A list given here replaces the built-in one (in `rate_limits.toml`) whole. |
+| `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits, rather than let through, so an outage does not allow unlimited guessing of passwords, codes, and invites. Every other endpoint is let through during an outage. The per-username sign-in limits always fail closed. A list given here replaces the built-in one (in `rate_limits.toml`) whole. |
+
+Password sign-in (`POST /auth/login`) has two limits by username. `username` counts every
+attempt at a name from one network (an IPv4 /24, an IPv6 /48, or the coarser `ipv6_prefix`), so
+guesses from one network cannot lock its owner out from anywhere else. `username_failures` counts
+only wrong passwords for the name, from every network together, so guessing from many networks at
+once is held too; while it is spent, password sign-in for that name is refused (`rateLimited`)
+until it refills, and the owner can still sign in with a passkey or from another device, or reset
+the password by email.
+
+Registration (`POST /users`) is limited per address and for everyone together: 600 accounts
+at once, then twenty a second (72000 an hour). That passes a launch's rush; a deployment expecting
+more at once raises it:
+
+```toml
+[rate_limits.endpoints."POST /users"]
+global = { requests = 6000, per_seconds = 60, burst = 3000 }
+```
 
 Limits for one endpoint go under its method and path:
 

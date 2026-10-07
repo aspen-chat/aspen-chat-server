@@ -17,7 +17,10 @@
 #   global            everyone's
 #   ip                one client address (an IPv6 address's /ipv6_prefix network)
 #   user              one signed-in user (authenticated endpoints only)
-#   username          one username given to `POST /auth/login`
+#   username          one username given to `POST /auth/login`, from one network (an IPv4
+#                     /24, an IPv6 /48 or the coarser ipv6_prefix)
+#   username_failures one username's wrong passwords at `POST /auth/login`, from anywhere:
+#                     looked at before the password is checked, counted after a wrong one
 #   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
 #   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
 #   ip_per_<param>    one address's, per value of the path parameter
@@ -45,7 +48,7 @@ ipv6_prefix = 64
 max_suspension_seconds = 86400
 # Endpoints refused (`503` `serverBusy`) rather than let through while Valkey cannot be reached
 # to count their limits: everything that guesses a password, a code, or an invite. Every other
-# endpoint is let through then. The username limit of `POST /auth/login` is always refused so.
+# endpoint is let through then. The username limits of `POST /auth/login` are always refused so.
 fail_closed = [
   "GET /auth/passkey",
   "POST /auth/login",
@@ -263,11 +266,21 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 per_secret = { requests = 30, per_seconds = 60, burst = 10 }
 
 [rate_limits.endpoints."POST /auth/login"]
-# Guessing one account's password from many addresses.
+# Attempts at one username from one network (an IPv4 /24, an IPv6 /48), counted before the
+# password is checked, so guesses from one network cannot lock the name out everywhere else.
 username = { requests = 10, per_seconds = 600, burst = 5 }
+# Wrong passwords for one username from anywhere, guessed from many networks at once: looked
+# at before the password is checked and counted only once it proves wrong, so the owner's own
+# right passwords never spend it. Spent, password sign-in for the name is refused until it
+# refills; passkeys, device links, and password resets still reach the account.
+username_failures = { requests = 30, per_seconds = 600, burst = 20 }
 
 [rate_limits.endpoints."POST /users"]
 ip = { requests = 5, per_seconds = 3600, burst = 3 }
+# Every account made, from everyone together: enough for a launch's rush (600 at once, then
+# twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
+# A deployment expecting more raises it in aspen.toml.
+global = { requests = 1200, per_seconds = 60, burst = 600 }
 
 # Each sends mail: a code to an address the caller says is theirs.
 [rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
@@ -433,7 +446,8 @@ user = { requests = 30, per_seconds = 3600, burst = 5 }
 [rate_limits.endpoints."POST /bots/{bot}/token"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
-[rate_limits.endpoints."PUT /bots/{bot}/owner"]
+# Each offer of a bot sends its recipient a notice from the system account.
+[rate_limits.endpoints."PUT /bots/{bot}/transfer"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
 # Reporting a message, a profile, or a nickname: ten back to back, and fifty a day, across all

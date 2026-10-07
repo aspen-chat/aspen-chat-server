@@ -1,6 +1,6 @@
 import { ApiProblemError, type AspenClient, type DeviceLinkScan } from "@aspen/protocol";
 import { Link, useLocation } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -12,6 +12,10 @@ import { Caution } from "./DeviceLinkCode";
 import { thisDeviceName } from "./deviceName";
 import { useServerChoice } from "./serverChoice";
 import { deviceLinkOf } from "@/features/qr/aspenLinks";
+import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
+import { ReauthProvider } from "@/features/security/reauth";
+import { useOptionalReauth } from "@/features/security/reauthContext";
+import { useSecuritySettings } from "@/features/security/useSecuritySettings";
 
 /** How often a phone waiting to be signed in asks, within the server's limit. */
 const POLL_MS = 2_000;
@@ -30,6 +34,13 @@ function scanOnce(client: AspenClient, id: string, deviceName: string) {
   if (scan === undefined) {
     scan = client.scanDeviceLink(id, deviceName);
     scans.set(id, scan);
+    // A scan refused before it used the code (a sign-in to verify again first) may be tried
+    // again, so it is not kept.
+    scan.catch((e: unknown) => {
+      if (e instanceof ApiProblemError && e.code === "reauthenticationRequired") {
+        scans.delete(id);
+      }
+    });
   }
   return scan;
 }
@@ -53,7 +64,8 @@ function messageOf(e: unknown): string {
  * it in only when confirmed. Signed out, it is a computer offering its account: the phone waits
  * for the computer to confirm it, then is signed in. A code for another server is refused when
  * signed in; signed out in the apps, the app offers to move to that server, naming its host, and
- * moves only when the person agrees.
+ * moves only when the person agrees. Giving a sign-in takes a recent verification, which it asks
+ * for first when the server wants one.
  */
 export function DeviceLinkScreen({ server, id }: { server: string; id: string }) {
   const m = useMessages();
@@ -62,6 +74,7 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
   const signedIn = client.session !== null;
   const elsewhere = client.baseUrl !== server;
   const [phase, setPhase] = useState<Phase>({ kind: "scanning" });
+  const withReauth = useOptionalReauth();
 
   useEffect(() => {
     if (elsewhere || claimed.has(id)) {
@@ -71,11 +84,16 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
     const name = thisDeviceName((app, system) =>
       system === null ? app : format(m.deviceLink.deviceName, { app, system }),
     );
-    scanOnce(client, id, name).then(
-      ({ scan, verifier }) => {
+    withReauth(() => scanOnce(client, id, name)).then(
+      (scanned) => {
         if (stopped) {
           return;
         }
+        if (scanned === undefined) {
+          setPhase({ kind: "failed", message: m.deviceLink.notVerified });
+          return;
+        }
+        const { scan, verifier } = scanned;
         if (scan.kind === "request" && signedIn) {
           setPhase({ kind: "confirm", deviceName: scan.deviceName ?? "" });
         } else if (scan.kind === "offer" && verifier !== null) {
@@ -103,7 +121,7 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
     return () => {
       stopped = true;
     };
-  }, [client, id, elsewhere, signedIn, m]);
+  }, [client, id, elsewhere, signedIn, m, withReauth]);
 
   const verifier = phase.kind === "waiting" ? phase.verifier : null;
   useEffect(() => {
@@ -251,12 +269,25 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
  */
 export function DeviceLinkRoute() {
   const m = useMessages();
+  const signedIn = useAspenClient().session !== null;
   const { searchStr, hash } = useLocation();
   const link = deviceLinkOf(searchStr.replace(/^\?/, ""), hash);
   if (link === null) {
     return <Failed text={m.deviceLink.incomplete} />;
   }
-  return <DeviceLinkScreen key={link.id} server={link.server} id={link.id} />;
+  const screen = <DeviceLinkScreen key={link.id} server={link.server} id={link.id} />;
+  return signedIn ? <SignedInReauth>{screen}</SignedInReauth> : screen;
+}
+
+/** Asks a signed-in phone to confirm it's them when giving its sign-in needs it. */
+function SignedInReauth({ children }: { children: ReactNode }) {
+  const security = useSecuritySettings();
+  const transport = usePasskeyTransport();
+  return (
+    <ReauthProvider settings={security.settings} transport={transport}>
+      {children}
+    </ReauthProvider>
+  );
 }
 
 function hostOf(url: string): string {

@@ -81,6 +81,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    bot_transfer (bot) {
+        bot -> Uuid,
+        from_owner -> Uuid,
+        to_user -> Uuid,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     category (id) {
         id -> Uuid,
         community -> Uuid,
@@ -1079,6 +1089,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_user,
     bot_command_list,
     bot_token,
+    bot_transfer,
     category,
     category_collapse,
     category_override,
