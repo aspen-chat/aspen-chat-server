@@ -381,25 +381,57 @@ fn route(request: &Request) -> Response {
     }
 }
 
+/// Text as an iCalendar property value holds it (RFC 5545, 3.3.11): backslashes, semicolons,
+/// commas, and line breaks escaped, and every other control character left out, so nothing a
+/// person writes can end the line and start a property of its own.
+fn ics_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            ';' => out.push_str("\\;"),
+            ',' => out.push_str("\\,"),
+            '\n' => out.push_str("\\n"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Appends `line` to `out` folded as iCalendar folds a content line (RFC 5545, 3.1): at most 75
+/// octets to a line, each continuation begun by a space, never splitting a character.
+fn push_folded(out: &mut String, line: &str) {
+    let mut room = 75;
+    for c in line.chars() {
+        if c.len_utf8() > room {
+            out.push_str("\r\n ");
+            room = 74;
+        }
+        out.push(c);
+        room -= c.len_utf8();
+    }
+    out.push_str("\r\n");
+}
+
 /// `events` as an iCalendar feed, each an hour long.
 fn ics(events: &[Event]) -> String {
-    let escape = |s: &str| {
-        s.replace('\\', "\\\\")
-            .replace(';', "\\;")
-            .replace(',', "\\,")
-            .replace('\n', "\\n")
-    };
     let mut out =
         String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Aspen//Calendar plugin//EN\r\n");
     for event in events {
-        out.push_str(&format!(
-            "BEGIN:VEVENT\r\nUID:{}@aspen-calendar\r\nDTSTAMP:{}\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:{}\r\nEND:VEVENT\r\n",
-            event.id,
-            format_ics(now_ms()),
-            format_ics(event.start),
-            format_ics(event.start + 3_600_000),
-            escape(&event.title),
-        ));
+        out.push_str("BEGIN:VEVENT\r\n");
+        push_folded(
+            &mut out,
+            &format!("UID:{}@aspen-calendar", ics_text(&event.id)),
+        );
+        push_folded(&mut out, &format!("DTSTAMP:{}", format_ics(now_ms())));
+        push_folded(&mut out, &format!("DTSTART:{}", format_ics(event.start)));
+        push_folded(
+            &mut out,
+            &format!("DTEND:{}", format_ics(event.start + 3_600_000)),
+        );
+        push_folded(&mut out, &format!("SUMMARY:{}", ics_text(&event.title)));
+        out.push_str("END:VEVENT\r\n");
     }
     out.push_str("END:VCALENDAR\r\n");
     out
@@ -458,5 +490,27 @@ mod tests {
             parse_time("2024-02-29T00:00:00Z").map(format_time).unwrap(),
             "2024-02-29T00:00:00Z"
         );
+    }
+
+    #[test]
+    fn a_title_cannot_start_a_property() {
+        assert_eq!(
+            ics_text("a\r\nEND:VEVENT\u{7}; b, c\\"),
+            "a\\nEND:VEVENT\\; b\\, c\\\\"
+        );
+    }
+
+    #[test]
+    fn long_lines_fold_at_75_octets_between_characters() {
+        let mut out = String::new();
+        push_folded(&mut out, &format!("SUMMARY:{}", "é".repeat(100)));
+        let lines: Vec<&str> = out.trim_end_matches("\r\n").split("\r\n").collect();
+        assert!(lines.len() > 1);
+        for (at, line) in lines.iter().enumerate() {
+            assert!(line.len() <= 75, "{line}");
+            assert_eq!(at > 0, line.starts_with(' '));
+        }
+        let unfolded: String = out.replace("\r\n ", "");
+        assert_eq!(unfolded, format!("SUMMARY:{}\r\n", "é".repeat(100)));
     }
 }
