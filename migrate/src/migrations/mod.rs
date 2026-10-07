@@ -94,3 +94,4 @@ pub mod m20261005_165400_reply_echo;
 pub mod m20261006_150944_token_digests;
 pub mod m20261006_154118_recovery_code_created_at;
 pub mod m20261006_154221_voice_server_suspension;
+pub mod m20261007_141409_sign_in_created_at;

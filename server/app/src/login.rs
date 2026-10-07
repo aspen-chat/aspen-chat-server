@@ -485,13 +485,27 @@ async fn announce_ended(
     ended: Option<String>,
     kept: Option<String>,
 ) -> crate::Result<()> {
+    let at = database_clock(conn).await?;
     crate::publish_event(
         state,
         conn,
         crate::EventScope::User(user),
-        &ServerEvent::SignInsEnded { ended, kept },
+        &ServerEvent::SignInsEnded { ended, kept, at },
     )
     .await
+}
+
+/// The database's clock as it reads now, which a sign-in's `refresh_token.created_at` is set
+/// by. Read after a transaction's changes, it is later than the start of every transaction they
+/// saw committed, so every sign-in an end of sign-ins or a ban covered began before it.
+pub async fn database_clock(conn: &mut AsyncPgConnection) -> crate::Result<DateTime<Utc>> {
+    Ok(
+        diesel::select(diesel::dsl::sql::<diesel::sql_types::Timestamptz>(
+            "clock_timestamp()",
+        ))
+        .get_result(conn)
+        .await?,
+    )
 }
 
 /// Revokes a refresh token and all sessions issued from it, closing their event streams.

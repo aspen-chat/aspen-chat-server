@@ -224,6 +224,7 @@ async fn ban_one(
                 .await?
                 .len();
     }
+    let at = crate::login::database_clock(conn).await?;
     publish_event(
         state,
         conn,
@@ -231,6 +232,7 @@ async fn ban_one(
         &ServerEvent::AccountBanned {
             reason: reason.clone(),
             until,
+            at,
         },
     )
     .await?;

@@ -369,8 +369,8 @@ struct Identified {
     user: UserPg,
     /// The session, as it stood when the stream was identified.
     caller: Caller,
-    /// The sign-in the session belongs to (`app::login::sign_in_id`).
-    sign_in: String,
+    /// The sign-in the session belongs to.
+    sign_in: app::event_feed::SignIn,
     /// When the sign-in expires, closing the stream; `None` for a bot's, which does not.
     expires: Option<tokio::time::Instant>,
     resume_after: Option<u64>,
@@ -418,16 +418,18 @@ async fn identify(
     if caller.verification_required(&state.settings()) {
         return Err(Rejection(EventStreamErrorCode::EmailVerificationRequired));
     }
-    let expires = app::user::sign_in_expires(state, &caller.refresh_digest)
-        .await?
-        .map(|at| {
-            let left = (at - chrono::Utc::now()).to_std().unwrap_or_default();
-            tokio::time::Instant::now() + left
-        });
+    let times = app::user::sign_in_times(state, &caller).await?;
+    let expires = times.expires.map(|at| {
+        let left = (at - chrono::Utc::now()).to_std().unwrap_or_default();
+        tokio::time::Instant::now() + left
+    });
     app::user_status::mark_user_online(state, &user);
     Ok(Identified {
         user,
-        sign_in: caller.sign_in(),
+        sign_in: app::event_feed::SignIn {
+            id: caller.sign_in(),
+            began: times.began,
+        },
         caller,
         expires,
         resume_after,
