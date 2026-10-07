@@ -132,7 +132,11 @@ To replace your own key:
 Someone whose home lets them emigrate adds another server from the "Create or join a community"
 dialog, or opens an invite link naming it (`/invite/<code>?at=<domain>`). Their home signs a
 two-minute statement of who they are for that deployment, which signs them in there. Their
-profile stays their home's; their status is theirs to set anywhere.
+profile stays their home's; their status is theirs to set anywhere. Their username must follow
+the same rules as one made here: someone whose name does not (one holding `@`, spaces, or
+invisible characters, or looking like the deployment's own `system` account) cannot sign in here
+for the first time until they change it at home, and a visitor who later changes to such a name
+keeps the name they had here.
 
 Visitors appear in lists as `name@domain`. Moderators with Ban users can ban a visitor from your
 deployment in the dashboard's user directory, as they can your own users: their sessions end
