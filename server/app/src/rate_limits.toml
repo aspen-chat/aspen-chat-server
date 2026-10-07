@@ -62,6 +62,7 @@ fail_closed = [
   "GET /invites/{code}",
   "GET /invite/{code}",
   "PUT /communities/{community}/members/@me",
+  "POST /communities/{community}/invites",
 ]
 
 # Applies to every endpoint, beneath any group or endpoint setting.
@@ -472,8 +473,12 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 user = { requests = 20, per_seconds = 3600, burst = 5 }
 
 [rate_limits.endpoints."GET /invites/{code}"]
-# Guessing invite codes.
-user = { requests = 30, per_seconds = 60, burst = 10 }
+# Guessing invite codes. Making an invite with a code of one's own choosing says whether that
+# code is taken, so it counts in the same budget.
+user = { requests = 30, per_seconds = 60, burst = 10, bucket = "inviteLookup" }
+
+[rate_limits.endpoints."POST /communities/{community}/invites"]
+user = { requests = 30, per_seconds = 60, burst = 10, bucket = "inviteLookup" }
 
 [rate_limits.endpoints."GET /invite/{code}"]
 # The web client's invite page, which shows the invite's community to anyone: guessing invite
