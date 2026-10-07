@@ -354,7 +354,10 @@ async fn wake(
                 }
                 .await;
             }
-            Err(e) => tracing::warn!(endpoint = subscription.endpoint, "a push failed: {e}"),
+            Err(e) => {
+                tracing::warn!(subscription = %subscription.id.0, "a push failed: {e}");
+                tracing::debug!(endpoint = subscription.endpoint, "the push that failed");
+            }
         }
     }
 }
@@ -370,10 +373,18 @@ enum Delivery {
 enum SendError {
     #[error("{0}")]
     Encrypt(#[from] webpush::WebPushError),
+    /// Held without its URL, the endpoint, which is a capability to wake the phone and so is
+    /// kept out of logs.
     #[error("{0}")]
-    Http(#[from] reqwest::Error),
+    Http(reqwest::Error),
     #[error("the push service answered {0}: {1}")]
     Refused(reqwest::StatusCode, String),
+}
+
+impl From<reqwest::Error> for SendError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
 }
 
 async fn send(

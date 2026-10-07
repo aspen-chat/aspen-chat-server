@@ -5,7 +5,9 @@ use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Deserialize)]
+/// Its `Debug` leaves out the secrets it holds (`AspenConfig`'s own impl, below), so a config
+/// written to a log gives none away.
+#[derive(Clone, Deserialize)]
 pub struct AspenConfig {
     /// The one address of this deployment, such as `https://chat.example.org`: the API, the web
     /// client this server serves, and the pages it opens are all at this origin. Every link to
@@ -367,8 +369,9 @@ pub struct PluginsConfig {
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the
-/// dashboard or the terminal (`aspen-chat-server voice-servers`).
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
+/// dashboard or the terminal (`aspen-chat-server voice-servers`). Its `Debug` leaves out
+/// `token_secret`.
+#[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct VoiceConfig {
     /// Shared with every voice server; signs the join tokens they verify. The default is
@@ -405,11 +408,107 @@ pub struct VoiceConfig {
 }
 
 /// A NATS user and its password.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NatsUser {
     pub user: String,
     pub password: String,
+}
+
+/// Stands for a secret in a `Debug` impl.
+struct Redacted;
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// A URL in a `Debug` impl, with any password it holds replaced, and the whole replaced when it
+/// does not parse, since then where its password is cannot be told.
+struct RedactedUrl<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match url::Url::parse(self.0) {
+            Ok(mut url) => {
+                if url.password().is_some() {
+                    let _ = url.set_password(Some("<redacted>"));
+                }
+                write!(f, "{:?}", url.as_str())
+            }
+            Err(_) => Redacted.fmt(f),
+        }
+    }
+}
+
+impl std::fmt::Debug for AspenConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            public_url,
+            event_queue_size,
+            event_feed_shards,
+            database_url,
+            database_pool_size,
+            database_pool_wait_seconds,
+            nats_url,
+            nats_auth_token,
+            nats,
+            valkey_url,
+            media,
+            voice,
+            limits,
+            auth,
+            presence,
+            metrics,
+            connections,
+            federation,
+            push,
+            web_client,
+            plugins,
+            email,
+            rate_limit_overrides,
+            rate_limits,
+        } = self;
+        f.debug_struct("AspenConfig")
+            .field("public_url", public_url)
+            .field("event_queue_size", event_queue_size)
+            .field("event_feed_shards", event_feed_shards)
+            .field("database_url", &RedactedUrl(database_url))
+            .field("database_pool_size", database_pool_size)
+            .field("database_pool_wait_seconds", database_pool_wait_seconds)
+            .field("nats_url", &RedactedUrl(nats_url))
+            .field(
+                "nats_auth_token",
+                &nats_auth_token.as_ref().map(|_| Redacted),
+            )
+            .field("nats", nats)
+            .field("valkey_url", &RedactedUrl(valkey_url))
+            .field("media", media)
+            .field("voice", voice)
+            .field("limits", limits)
+            .field("auth", auth)
+            .field("presence", presence)
+            .field("metrics", metrics)
+            .field("connections", connections)
+            .field("federation", federation)
+            .field("push", push)
+            .field("web_client", web_client)
+            .field("plugins", plugins)
+            .field("email", email)
+            .field("rate_limit_overrides", rate_limit_overrides)
+            .field("rate_limits", rate_limits)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for NatsUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsUser")
+            .field("user", &self.user)
+            .field("password", &Redacted)
+            .finish()
+    }
 }
 
 impl AspenConfig {
@@ -446,6 +545,31 @@ const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
 /// The shortest `[voice] token_secret` an `https` deployment accepts: as long as the HMAC-SHA256
 /// key it is, so it cannot be guessed more easily than the signature forged.
 const MIN_TOKEN_SECRET_BYTES: usize = 32;
+
+impl std::fmt::Debug for VoiceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            token_secret: _,
+            failure_threshold,
+            failure_window_seconds,
+            join_token_ttl_seconds,
+            candidate_limit,
+            offer_silence_seconds,
+            session_silence_seconds,
+            idle_session_seconds,
+        } = self;
+        f.debug_struct("VoiceConfig")
+            .field("token_secret", &Redacted)
+            .field("failure_threshold", failure_threshold)
+            .field("failure_window_seconds", failure_window_seconds)
+            .field("join_token_ttl_seconds", join_token_ttl_seconds)
+            .field("candidate_limit", candidate_limit)
+            .field("offer_silence_seconds", offer_silence_seconds)
+            .field("session_silence_seconds", session_silence_seconds)
+            .field("idle_session_seconds", idle_session_seconds)
+            .finish()
+    }
+}
 
 impl VoiceConfig {
     /// Refuses, at an `https` address, the development secret or one shorter than
@@ -484,8 +608,8 @@ pub struct WebClientConfig {
 }
 
 /// Sending mail (`app::email`): verification and password reset codes, the daily digest, and the
-/// newsletter.
-#[derive(Clone, Debug, Deserialize)]
+/// newsletter. Its `Debug` leaves out the password in `smtp_url`.
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// The SMTP server mail is handed to, with its credentials: `smtps://user:password@host`
@@ -505,6 +629,23 @@ pub struct EmailConfig {
     pub max_per_second: Option<u32>,
     /// Who mail comes from, such as `Aspen <noreply@chat.example.org>`.
     pub from: String,
+}
+
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            smtp_url,
+            send,
+            max_per_second,
+            from,
+        } = self;
+        f.debug_struct("EmailConfig")
+            .field("smtp_url", &smtp_url.as_deref().map(RedactedUrl))
+            .field("send", send)
+            .field("max_per_second", max_per_second)
+            .field("from", from)
+            .finish()
+    }
 }
 
 impl EmailConfig {
@@ -578,18 +719,18 @@ pub struct MediaConfig {
 
 /// Object-storage configuration.
 ///
-/// `endpoint` is the authenticated S3 API the server talks to (PUTs preview
-/// images, deletes objects, checks uploads). `public_endpoint`, when set, is the
-/// same API as clients reach it, and is the host the presigned upload URLs they
-/// are handed name; without it they name `endpoint`, which is right only when
-/// clients reach storage at the same address the server does. `public_base_url` is what
-/// clients see in `downloadUrl` fields and is expected to be served by an
-/// operator-configured anonymous read path (e.g. Garage's `s3_web` website
-/// endpoint, or an AWS bucket with `BlockPublicAccess=false` plus a
-/// `s3:GetObject` allow-all policy). The two URLs may point at completely
-/// different hosts; the public path does not need to be reachable from the
-/// server itself.
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
+/// `endpoint` is the authenticated S3 API the server talks to (writes preview images, copies
+/// confirmed uploads into place, deletes objects, checks uploads). `public_endpoint`, when set, is
+/// the same API as clients reach it, and is the host the presigned upload URLs they are handed
+/// name; without it they name `endpoint`, which is right only when clients reach storage at the
+/// same address the server does. `public_base_url` is what clients download objects from, an
+/// anonymous read path the operator sets up that allows reading objects and nothing else, no
+/// listing and no writes (Garage's `s3_web` website endpoint, an AWS bucket whose policy allows
+/// `s3:GetObject` alone, or a CDN before either; `docs/operators/installing.md`). The addresses
+/// may name different hosts; the read path need not be reachable from the server itself. The
+/// defaults are a development storage's, which a public deployment refuses
+/// (`AspenConfig::check_development_credentials`). Its `Debug` leaves out `secret_key`.
+#[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct MediaS3Config {
     #[default = "http://127.0.0.1:3900"]
@@ -613,6 +754,31 @@ pub struct MediaS3Config {
     /// later.
     #[default = 900]
     pub upload_url_ttl_seconds: u64,
+}
+
+impl std::fmt::Debug for MediaS3Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            endpoint,
+            public_endpoint,
+            region,
+            bucket,
+            access_key,
+            secret_key: _,
+            public_base_url,
+            upload_url_ttl_seconds,
+        } = self;
+        f.debug_struct("MediaS3Config")
+            .field("endpoint", endpoint)
+            .field("public_endpoint", public_endpoint)
+            .field("region", region)
+            .field("bucket", bucket)
+            .field("access_key", access_key)
+            .field("secret_key", &Redacted)
+            .field("public_base_url", public_base_url)
+            .field("upload_url_ttl_seconds", upload_url_ttl_seconds)
+            .finish()
+    }
 }
 
 pub fn default_event_feed_shards() -> usize {
@@ -1098,6 +1264,51 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    /// A config written to a log gives none of its secrets away.
+    #[test]
+    fn debug_leaves_out_secrets() {
+        let mut config: AspenConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+                public_url = "https://chat.example.org"
+                database_url = "postgres://aspen:db-secret@db/aspen"
+                nats_url = "nats://x"
+                nats_auth_token = "nats-secret"
+                valkey_url = "redis://:valkey-secret@valkey:6379"
+                [nats]
+                user = "aspen"
+                password = "nats-user-secret"
+                [voice]
+                token_secret = "voice-secret"
+                [media.s3]
+                secret_key = "s3-secret"
+                [email]
+                from = "a@example.org"
+                smtp_url = "smtps://mail:smtp-secret@mail.example.org"
+                "#,
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        config.derive_from_public_url().unwrap();
+        let written = format!("{config:?}");
+        for secret in [
+            "db-secret",
+            "nats-secret",
+            "valkey-secret",
+            "nats-user-secret",
+            "voice-secret",
+            "s3-secret",
+            "smtp-secret",
+        ] {
+            assert!(!written.contains(secret), "{secret} in {written}");
+        }
+        assert!(written.contains("chat.example.org"));
+        assert!(written.contains("db/aspen"));
     }
 
     /// The domain is the public URL's, and the gates are not set here.
