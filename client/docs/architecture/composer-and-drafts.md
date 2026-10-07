@@ -22,6 +22,9 @@
   custom emoji written out as references (`messageLength.ts`). Within its last thousand, the
   message box and the editor count beneath themselves (`MessageLengthNote`); over it, they say
   by how much and what to do, and Send and Save wait until it is shortened.
+  The server also refuses text nesting quotes and lists more than 32 levels deep
+  (`app::message::MAX_NESTING`, the depth `markdownLimits.ts` renders as plain text beyond), with
+  `messageNestingTooDeep`, which the message box shows as it shows any refusal.
 - Messages held for their previews (`HeldMessages.tsx`): `AspenSync.sendMessage` sends with
   `mayHold`, so a message whose picture or video is still having its preview made is held by
   the server for up to twenty seconds from the upload and answered `202` with the held message,

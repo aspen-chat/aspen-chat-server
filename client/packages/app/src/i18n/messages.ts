@@ -260,6 +260,7 @@ export const en = {
     "Say what it shows, for people who can't see it. Screen readers read this in its place, and the gallery shows it beneath.",
   attachmentDescribed: "Described",
   describeFailed: "The description could not be saved: {reason}",
+  tooManyAttachments: "A message may carry at most {max} attachments. Send the rest in another message.",
   imageAlt: "Image: {name}",
   openImage: "Open image",
   viewAllImages: "View all {count} images",

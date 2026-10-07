@@ -118,7 +118,7 @@ pub async fn list_reactors(
     responses(
         (status = CREATED, description = "Reaction added", body = React),
         (status = OK, description = "Reaction already present", body = React),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a single emoji)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (not a single emoji, or a message already carrying 50 different reactions)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

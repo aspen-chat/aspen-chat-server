@@ -120,13 +120,17 @@ pub struct MessageAttachment {
     attachment_id: AttachmentId,
 }
 
+/// The most attachments one message may carry, whoever sends it.
+pub const MAX_ATTACHMENTS: usize = 50;
+
 /// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
 /// NOT NULL`) row that `author` uploaded, or that is already in `message`,
 /// before linking it to a message. The `attachment` table admits
 /// half-uploaded reservations, and exposing them through a message would let
 /// a client publish a card pointing at bytes that may never arrive; and an
 /// upload is its uploader's to send. Returns [`app::Error::Validation`] if
-/// any id is missing, pending, or someone else's.
+/// any id is missing, pending, or someone else's, or if there are more than
+/// [`MAX_ATTACHMENTS`].
 async fn ensure_attachments_ready(
     conn: &mut AsyncPgConnection,
     author: UserId,
@@ -135,6 +139,12 @@ async fn ensure_attachments_ready(
 ) -> Result<(), crate::Error> {
     if attachments.is_empty() {
         return Ok(());
+    }
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(crate::Error::Validation(t!(
+            "messageTooManyAttachments",
+            max = MAX_ATTACHMENTS
+        )));
     }
     use diesel::NullableExpressionMethods;
     let kept = message_attachment::table
@@ -218,7 +228,37 @@ pub fn check_content(content: &str) -> crate::Result<()> {
             max = MAX_CONTENT_CHARS
         )));
     }
+    if nesting_depth(content) > MAX_NESTING {
+        return Err(crate::Error::Validation(t!(
+            "messageNestingTooDeep",
+            max = MAX_NESTING
+        )));
+    }
     Ok(())
+}
+
+/// How deeply a message's Markdown may nest (quotes in quotes, lists in lists, and what they
+/// hold), as the client's `MAX_NESTING` counts it: readers' apps render the tree recursively, so
+/// a short message of thousands of levels (`>>>>…`, `1. 1. 1. …`) would overflow their stack,
+/// and no message a person writes to be read comes near it.
+pub const MAX_NESTING: usize = 32;
+
+/// The deepest nesting of `content`'s Markdown elements, counted on the parser's events with no
+/// recursion.
+fn nesting_depth(content: &str) -> usize {
+    let mut depth: usize = 0;
+    let mut deepest = 0;
+    for event in crate::markdown::parser(content) {
+        match event {
+            pulldown_cmark::Event::Start(_) => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            pulldown_cmark::Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
 }
 
 /// What `create_message` posts besides its text.
@@ -1216,5 +1256,19 @@ pub async fn remove_attachment(
 impl From<MessageWithRelations> for aspen_wire::message_enum::Message {
     fn from(m: MessageWithRelations) -> Self {
         record(&m.message, m.attachments, m.link_previews)
+    }
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::*;
+
+    #[test]
+    fn deep_quotes_and_lists_are_refused() {
+        assert!(check_content("> a quote\n\n- a\n  - list").is_ok());
+        assert!(check_content(&format!("{} deep", ">".repeat(20))).is_ok());
+        assert!(check_content(&format!("{} deep", ">".repeat(40))).is_err());
+        assert!(check_content(&format!("{}deep", "1. ".repeat(40))).is_err());
+        assert!(check_content(&format!("{}x", ">".repeat(MAX_CONTENT_CHARS - 1))).is_err());
     }
 }
