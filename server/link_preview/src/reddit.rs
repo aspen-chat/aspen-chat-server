@@ -319,8 +319,15 @@ async fn fetch_embed_page(subreddit: &str, id: &str) -> (Option<EmbedPost>, bool
     let Some(bytes) = read_capped(response, MAX_EMBED_PAGE_BYTES).await else {
         return (None, false);
     };
-    let page = String::from_utf8_lossy(&bytes);
-    (parse_embed_page(&page, id), true)
+    // Tokenizing the page is work for a blocking thread, not the runtime's.
+    let id = id.to_owned();
+    let post = tokio::task::spawn_blocking(move || {
+        parse_embed_page(String::from_utf8_lossy(&bytes).as_ref(), &id)
+    })
+    .await
+    .ok()
+    .flatten();
+    (post, true)
 }
 
 /// What a card takes from the embed page.

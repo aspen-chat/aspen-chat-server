@@ -516,6 +516,10 @@ async fn copy_avatar(
         Some(home_icon) => Some(fetch_avatar(state, home, home_icon).await?),
         None => None,
     };
+    // A picture of more pixels than an icon may have, or none its header gives, is not copied:
+    // the user goes without an avatar here until their home gives them another.
+    let copied = copied
+        .filter(|(bytes, _)| crate::icon::size_within(bytes, crate::icon::MAX_PIXELS).is_some());
     let local = match copied {
         Some((bytes, mime_type)) => {
             let id = IconId::new();

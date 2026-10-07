@@ -140,6 +140,8 @@ async fn ensure_attachments_ready(
     let kept = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.nullable().eq(message));
+    // Locked until the message is saved, so the sweep of unsent attachments
+    // (`attachment::sweep_unsent`) passes them by.
     let ready: Vec<AttachmentId> = attachment::table
         .select(attachment::id)
         .filter(
@@ -152,6 +154,7 @@ async fn ensure_attachments_ready(
                         .or(attachment::id.eq_any(kept)),
                 ),
         )
+        .for_key_share()
         .load(conn)
         .await?;
     if ready.len() != attachments.len() {
@@ -464,6 +467,7 @@ async fn post(
                         .execute(conn.as_mut())
                         .await?;
                 }
+                crate::attachment::mark_sent(conn.as_mut(), &attachments).await?;
                 // The new message goes out with no link previews; the fetcher spawned below
                 // publishes an `Update` with them once it has settled (see `app::link_preview`).
                 publish_event(
@@ -818,6 +822,7 @@ pub async fn update_message(
                             .execute(conn.as_mut())
                             .await?;
                     }
+                    crate::attachment::mark_sent(conn.as_mut(), new_attachments).await?;
                 }
 
                 let attachments: Vec<AttachmentId> = message_attachment::table

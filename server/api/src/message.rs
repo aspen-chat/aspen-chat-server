@@ -567,9 +567,11 @@ pub struct MessageListQuery {
     pub before: Option<MessageId>,
     /// Return messages newer than this message id (exclusive).
     pub after: Option<MessageId>,
-    /// Return this message and up to `limit` messages on each side of it.
+    /// Return this message and up to `limit` messages on each side of it, at most 100 a side
+    /// whatever `limit` says.
     pub around: Option<MessageId>,
-    /// Maximum number of messages to return (per side, for `around`). Defaults to 50.
+    /// Maximum number of messages to return (per side, for `around`, where more than 100 reads
+    /// as 100). Defaults to 50.
     #[param(minimum = 1, maximum = 200)]
     pub limit: Option<u32>,
     /// Related records to return alongside the messages, comma separated.

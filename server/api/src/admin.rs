@@ -183,7 +183,8 @@ pub enum CommunitySort {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct UserListQuery {
-    /// Only those whose username or display name contains this, ignoring case.
+    /// Only those whose username or display name contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
@@ -207,7 +208,8 @@ pub struct UserListQuery {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct CommunityListQuery {
-    /// Only those whose name contains this, ignoring case.
+    /// Only those whose name contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,

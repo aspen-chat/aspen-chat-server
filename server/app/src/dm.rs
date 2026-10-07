@@ -115,20 +115,21 @@ pub async fn open_dm(
     caller: UserId,
     with: Vec<UserId>,
 ) -> crate::Result<(Channel, Vec<UserId>, bool)> {
+    // Refused as soon as there are too many, so a long list costs no more than a short one.
     let mut others: Vec<UserId> = Vec::new();
     for user in with {
         if user != caller && !others.contains(&user) {
+            if others.len() + 1 >= MAX_RECIPIENTS {
+                return Err(crate::Error::Validation(t!(
+                    "dmTooManyRecipients",
+                    max = MAX_RECIPIENTS
+                )));
+            }
             others.push(user);
         }
     }
     if others.is_empty() {
         return Err(crate::Error::Validation(t!("dmNeedsRecipient")));
-    }
-    if others.len() + 1 > MAX_RECIPIENTS {
-        return Err(crate::Error::Validation(t!(
-            "dmTooManyRecipients",
-            max = MAX_RECIPIENTS
-        )));
     }
     let mut conn = state.connection_pool.get().await?;
     refuse_system_account(conn.as_mut(), &others).await?;

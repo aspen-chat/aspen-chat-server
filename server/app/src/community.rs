@@ -847,7 +847,7 @@ pub async fn search_community_members(
         "#,
     )
     .bind::<Uuid, _>(community.0)
-    .bind::<Nullable<Text>, _>(crate::admin::contains_pattern(search))
+    .bind::<Nullable<Text>, _>(crate::admin::contains_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_MEMBER_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
     .load(conn.as_mut())
