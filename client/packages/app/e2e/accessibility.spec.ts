@@ -148,7 +148,9 @@ for (const { palette, scheme, contrast } of combinations) {
 
     test("open source attributions", async ({ page }) => {
       await page.goto("/attributions");
-      await expect(page.getByRole("heading", { name: /^The servers/, level: 2 })).toBeVisible({
+      // The app's part, which every development server lists; one without the Rust toolchain
+      // (Playwright's Docker image) leaves out the servers'.
+      await expect(page.getByRole("heading", { name: /^The app/, level: 2 })).toBeVisible({
         timeout: 60_000,
       });
       await page

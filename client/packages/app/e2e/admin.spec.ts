@@ -234,7 +234,7 @@ test("a permission that another includes shows as held, and fixed, while that on
   await expect(remove).toBeChecked();
   await expect(remove).toBeDisabled();
   await expect(roles.getByText("Included in Moderate any community.")).toBeVisible();
-  await roles.getByRole("checkbox", { name: /^Moderate any community/ }).click({ force: true });
+  await roles.getByText("Moderate any community", { exact: true }).click();
   await expect(remove).not.toBeChecked();
   await expect(remove).toBeEnabled();
 });
