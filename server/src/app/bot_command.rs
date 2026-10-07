@@ -15,6 +15,7 @@ use crate::app::permissions::{ChannelAccess, Permissions, channel_access, requir
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, EventScope, UserId, publish_event};
 use crate::t;
 use aspen_schema::bot_command_list;
+pub use aspen_wire::bot_command::{Argument, ParameterType};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -85,32 +86,6 @@ pub struct Parameter {
     /// For a `regex` parameter, and only for one: what a value must match whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
-}
-
-/// What a parameter's value must be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum ParameterType {
-    /// Someone's id; a client completes it from the people there.
-    UserId,
-    /// A channel's id, one the person invoking may view.
-    ChannelId,
-    /// A message's id, one the person invoking may read.
-    MessageId,
-    /// A community's id, one the person invoking belongs to.
-    CommunityId,
-    /// A role's id, of the community the command is invoked in.
-    RoleId,
-    /// A file the person invoking attaches to the command.
-    AttachmentId,
-    /// A deployment's domain, as federation names deployments.
-    DeploymentHost,
-    /// One emoji.
-    React,
-    /// Any text; as the last parameter it takes the rest of what was typed.
-    Any,
-    /// Text that matches the parameter's `pattern` whole.
-    Regex,
 }
 
 /// Why a list was refused, for the bot's developer: what is wrong, and where.
@@ -394,17 +369,6 @@ pub struct Invocation {
     pub arguments: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<AttachmentId>,
-}
-
-/// One argument as the bot receives it: named, typed, and checked against its type, an emoji
-/// in its fully qualified form.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Argument {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: ParameterType,
-    pub value: String,
 }
 
 /// Why an invocation was refused, for the person who typed it.

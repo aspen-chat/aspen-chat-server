@@ -411,6 +411,7 @@ dependencies = [
  "aspen_metrics",
  "aspen_previews",
  "aspen_schema",
+ "aspen_wire",
  "async-nats",
  "aws-config",
  "aws-credential-types",
@@ -612,6 +613,27 @@ name = "aspen_schema"
 version = "0.1.0"
 dependencies = [
  "diesel",
+]
+
+[[package]]
+name = "aspen_wire"
+version = "0.1.0"
+dependencies = [
+ "aspen_locale",
+ "aspen_schema",
+ "bitflags 2.13.2",
+ "chrono",
+ "clap",
+ "diesel",
+ "heck 0.5.0",
+ "message_gen",
+ "rust-i18n",
+ "schemars",
+ "serde",
+ "serde_json",
+ "strum",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]

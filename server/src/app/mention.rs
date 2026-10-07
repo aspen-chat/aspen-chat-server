@@ -13,52 +13,14 @@ use crate::app::events::{ChannelHome, channel_home, dm_recipients};
 use crate::app::permissions::{ChannelAccess, Permissions};
 use crate::app::{self, ChannelId, MessageId, RoleId, UserId};
 use aspen_schema::{community_role, community_user, mention};
-use diesel::deserialize::FromSqlRow;
-use diesel::expression::AsExpression;
+pub use aspen_wire::mention::Mentions;
 use diesel::prelude::*;
-use diesel::sql_types::Jsonb;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use pulldown_cmark::{Event, Tag, TagEnd};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// The most distinct people and roles one message may tag; any beyond are plain text.
 pub const MAX_TAGS: usize = 50;
-
-/// Who a message tags, as far as its author was allowed to: these are the tags that count.
-#[derive(
-    Debug,
-    Clone,
-    Default,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    ToSchema,
-    JsonSchema,
-    FromSqlRow,
-    AsExpression,
-)]
-#[diesel(sql_type = Jsonb)]
-#[serde(rename_all = "camelCase")]
-pub struct Mentions {
-    /// Members tagged by name, in the order first tagged.
-    pub users: Vec<UserId>,
-    /// Roles tagged, in the order first tagged; everyone's is tagged as `everyone` instead.
-    pub roles: Vec<RoleId>,
-    /// Whether the message tags everyone who can see the channel.
-    pub everyone: bool,
-}
-
-impl Mentions {
-    pub fn is_empty(&self) -> bool {
-        self.users.is_empty() && self.roles.is_empty() && !self.everyone
-    }
-}
-
-app::jsonb_sql_traits!(Mentions);
 
 /// The tags a message's text asks for, before permissions and membership are applied.
 #[derive(Debug, Default, PartialEq, Eq)]

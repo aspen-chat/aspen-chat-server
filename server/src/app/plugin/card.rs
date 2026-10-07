@@ -13,14 +13,11 @@ use crate::app::message::Message as MessageRow;
 use crate::app::permissions::channel_access;
 use crate::app::{self, ChannelId, EventScope, MessageId, UserId, publish_event};
 use aspen_schema::message;
+pub use aspen_wire::plugin::card::{ButtonStyle, Card, CardButton, CardField, CardValue};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel::{AsExpression, FromSqlRow};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 /// The most fields a card has.
 const MAX_FIELDS: usize = 25;
@@ -28,82 +25,6 @@ const MAX_FIELDS: usize = 25;
 const MAX_BUTTONS: usize = 5;
 /// The longest a plain value may be, in characters.
 const MAX_PLAIN_CHARS: usize = 1000;
-
-/// What a message of a plugin's account shows beneath its text.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    ToSchema,
-    JsonSchema,
-    FromSqlRow,
-    AsExpression,
-)]
-#[diesel(sql_type = diesel::sql_types::Jsonb)]
-#[serde(rename_all = "camelCase")]
-pub struct Card {
-    /// The plugin whose card it is, whose catalogue its text is drawn from.
-    pub plugin: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<PluginText>,
-    pub fields: Vec<CardField>,
-    pub buttons: Vec<CardButton>,
-}
-
-app::jsonb_sql_traits!(Card);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CardField {
-    pub label: PluginText,
-    pub value: CardValue,
-}
-
-/// What a card's field shows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum CardValue {
-    /// Text as it is, not translated.
-    Plain {
-        text: String,
-    },
-    /// A time, which each client shows in its reader's time zone and language.
-    Time {
-        at: DateTime<Utc>,
-    },
-    Count {
-        count: u64,
-    },
-    /// A person, whom clients name.
-    Person {
-        user: UserId,
-    },
-    /// An `https` link, and the text it shows.
-    Link {
-        url: String,
-        text: PluginText,
-    },
-}
-
-/// A button, which calls the card's plugin as whoever presses it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CardButton {
-    pub id: String,
-    pub label: PluginText,
-    pub style: ButtonStyle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum ButtonStyle {
-    Primary,
-    Secondary,
-    Danger,
-}
 
 fn invalid(why: &str) -> wit::Error {
     wit::Error::Invalid(why.to_string())
@@ -117,79 +38,77 @@ fn name_ok(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
-impl Card {
-    /// `card` as the plugin `plugin` gave it, checked.
-    pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Self, wit::Error> {
-        if card.fields.len() > MAX_FIELDS || card.buttons.len() > MAX_BUTTONS {
-            return Err(invalid(&format!(
-                "a card has at most {MAX_FIELDS} fields and {MAX_BUTTONS} buttons"
-            )));
-        }
-        let fields = card
-            .fields
-            .into_iter()
-            .map(|field| {
-                let value = match field.value {
-                    wit::CardValue::Plain(text) => {
-                        if text.chars().count() > MAX_PLAIN_CHARS {
-                            return Err(invalid(&format!(
-                                "a card's text is at most {MAX_PLAIN_CHARS} characters"
-                            )));
-                        }
-                        CardValue::Plain { text }
-                    }
-                    wit::CardValue::Time(at) => CardValue::Time {
-                        at: DateTime::parse_from_rfc3339(&at)
-                            .map_err(|_| invalid("a card's time is RFC 3339"))?
-                            .with_timezone(&Utc),
-                    },
-                    wit::CardValue::Count(count) => CardValue::Count { count },
-                    wit::CardValue::Person(user) => CardValue::Person {
-                        user: UserId(
-                            uuid::Uuid::parse_str(&user).map_err(|_| invalid("not a person"))?,
-                        ),
-                    },
-                    wit::CardValue::Link((url, text)) => {
-                        if !url::Url::parse(&url).is_ok_and(|u| u.scheme() == "https") {
-                            return Err(invalid("a card's link is an https URL"));
-                        }
-                        CardValue::Link {
-                            url,
-                            text: text.into(),
-                        }
-                    }
-                };
-                Ok(CardField {
-                    label: field.label.into(),
-                    value,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut buttons = Vec::with_capacity(card.buttons.len());
-        for button in card.buttons {
-            if !name_ok(&button.id) || buttons.iter().any(|b: &CardButton| b.id == button.id) {
-                return Err(invalid(
-                    "a button's id is 1 to 64 letters, digits, dots, hyphens, and underscores, \
-                     each once",
-                ));
-            }
-            buttons.push(CardButton {
-                id: button.id,
-                label: button.label.into(),
-                style: match button.style {
-                    wit::ButtonStyle::Primary => ButtonStyle::Primary,
-                    wit::ButtonStyle::Secondary => ButtonStyle::Secondary,
-                    wit::ButtonStyle::Danger => ButtonStyle::Danger,
-                },
-            });
-        }
-        Ok(Card {
-            plugin: plugin.to_string(),
-            title: card.title.map(PluginText::from),
-            fields,
-            buttons,
-        })
+/// `card` as the plugin `plugin` gave it, checked.
+pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
+    if card.fields.len() > MAX_FIELDS || card.buttons.len() > MAX_BUTTONS {
+        return Err(invalid(&format!(
+            "a card has at most {MAX_FIELDS} fields and {MAX_BUTTONS} buttons"
+        )));
     }
+    let fields = card
+        .fields
+        .into_iter()
+        .map(|field| {
+            let value = match field.value {
+                wit::CardValue::Plain(text) => {
+                    if text.chars().count() > MAX_PLAIN_CHARS {
+                        return Err(invalid(&format!(
+                            "a card's text is at most {MAX_PLAIN_CHARS} characters"
+                        )));
+                    }
+                    CardValue::Plain { text }
+                }
+                wit::CardValue::Time(at) => CardValue::Time {
+                    at: DateTime::parse_from_rfc3339(&at)
+                        .map_err(|_| invalid("a card's time is RFC 3339"))?
+                        .with_timezone(&Utc),
+                },
+                wit::CardValue::Count(count) => CardValue::Count { count },
+                wit::CardValue::Person(user) => CardValue::Person {
+                    user: UserId(
+                        uuid::Uuid::parse_str(&user).map_err(|_| invalid("not a person"))?,
+                    ),
+                },
+                wit::CardValue::Link((url, text)) => {
+                    if !url::Url::parse(&url).is_ok_and(|u| u.scheme() == "https") {
+                        return Err(invalid("a card's link is an https URL"));
+                    }
+                    CardValue::Link {
+                        url,
+                        text: text.into(),
+                    }
+                }
+            };
+            Ok(CardField {
+                label: field.label.into(),
+                value,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut buttons = Vec::with_capacity(card.buttons.len());
+    for button in card.buttons {
+        if !name_ok(&button.id) || buttons.iter().any(|b: &CardButton| b.id == button.id) {
+            return Err(invalid(
+                "a button's id is 1 to 64 letters, digits, dots, hyphens, and underscores, \
+                 each once",
+            ));
+        }
+        buttons.push(CardButton {
+            id: button.id,
+            label: button.label.into(),
+            style: match button.style {
+                wit::ButtonStyle::Primary => ButtonStyle::Primary,
+                wit::ButtonStyle::Secondary => ButtonStyle::Secondary,
+                wit::ButtonStyle::Danger => ButtonStyle::Danger,
+            },
+        });
+    }
+    Ok(Card {
+        plugin: plugin.to_string(),
+        title: card.title.map(PluginText::from),
+        fields,
+        buttons,
+    })
 }
 
 /// Changes or removes the card of `message`, which `principal` must have posted, and announces

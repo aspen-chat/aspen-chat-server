@@ -80,6 +80,7 @@ metrics = "0.24"
 aspen_previews = { version = "0.1.0", path = "previews" }
 aspen_schema = { version = "0.1.0", path = "schema" }
 aspen_locale = { version = "0.1.0", path = "locale" }
+aspen_wire = { version = "0.1.0", path = "wire", features = ["clap"] }
 aspen_bench_protocol = { version = "0.1.0", path = "../bench_protocol" }
 smart-default = "0.7.1"
 strum = { version = "0.28.0", features = ["derive"] }

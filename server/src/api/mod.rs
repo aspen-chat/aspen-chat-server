@@ -34,7 +34,7 @@ pub(crate) mod include;
 pub(crate) mod invite;
 pub(crate) mod link_preview;
 pub(crate) mod message;
-pub(crate) mod message_enum;
+pub(crate) use aspen_wire::message_enum;
 pub(crate) mod metrics;
 pub mod notification_setting;
 pub(crate) mod passkey_page;

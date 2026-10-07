@@ -14,23 +14,10 @@ use crate::api::message_enum::{MessageAnnotation, UserAnnotation};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AnnotationId, CommunityId, EventScope, MessageId, UserId, publish_event};
 use aspen_schema::{community_user, message_annotation, user, user_annotation};
+pub use aspen_wire::plugin::annotation::Severity;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
-
-/// How much an annotation matters, which decides how a client draws it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum Severity {
-    Info,
-    Notice,
-    Warning,
-}
-
-app::wire_name_traits!(Severity);
 
 /// The most arguments a plugin's text may fill in.
 const MAX_ARGS: usize = 16;

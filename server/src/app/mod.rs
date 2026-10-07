@@ -1,14 +1,12 @@
-use diesel::deserialize::{FromSql, FromSqlRow};
+use diesel::Queryable;
+use diesel::deserialize::FromSql;
 use diesel::expression::{AsExpression, TypedExpressionType};
 use diesel::pg::sql_types::Uuid as PgUuid;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::ToSql;
-use diesel::sql_types::{SqlType, Uuid as DieselUuid};
-use diesel::{QueryId, Queryable};
-use heck::ToKebabCase;
-use serde::{Deserialize, Serialize};
+use diesel::sql_types::SqlType;
 use std::error::Error as StdError;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
 use std::result::Result as StdResult;
 
 pub mod admin;
@@ -79,209 +77,14 @@ use crate::app::context::GlobalServerContext;
 pub use error::Error;
 pub use error::Result;
 
-/// `Display` and `FromStr` for a unit-variant enum through its serde names, so the names it
-/// has on the wire are the only ones it has anywhere.
-macro_rules! wire_name_traits {
-    ($type_name:ty) => {
-        impl std::fmt::Display for $type_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match serde_json::to_value(self) {
-                    Ok(serde_json::Value::String(name)) => f.write_str(&name),
-                    _ => Err(std::fmt::Error),
-                }
-            }
-        }
-
-        impl std::str::FromStr for $type_name {
-            type Err = serde_json::Error;
-            fn from_str(name: &str) -> Result<Self, Self::Err> {
-                serde_json::from_value(serde_json::Value::String(name.to_string()))
-            }
-        }
-    };
-}
-pub(crate) use wire_name_traits;
-
-/// Diesel's `FromSql` and `ToSql` for a `bitflags` set stored as a `BIGINT`, so rows load and
-/// store the set itself. Unknown bits are kept, as the database holds them.
-macro_rules! bigint_sql_traits {
-    ($type_name:ty) => {
-        impl diesel::deserialize::FromSql<diesel::sql_types::BigInt, diesel::pg::Pg>
-            for $type_name
-        {
-            fn from_sql(
-                bytes: diesel::pg::PgValue<'_>,
-            ) -> diesel::deserialize::Result<Self> {
-                <i64 as diesel::deserialize::FromSql<diesel::sql_types::BigInt, diesel::pg::Pg>>::from_sql(bytes)
-                    .map(Self::from_bits_retain)
-            }
-        }
-
-        impl diesel::serialize::ToSql<diesel::sql_types::BigInt, diesel::pg::Pg> for $type_name {
-            fn to_sql<'b>(
-                &'b self,
-                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
-            ) -> diesel::serialize::Result {
-                use std::io::Write;
-                out.write_all(&self.bits().to_be_bytes())?;
-                Ok(diesel::serialize::IsNull::No)
-            }
-        }
-    };
-}
-pub(crate) use bigint_sql_traits;
-
-/// Diesel's `FromSql` and `ToSql` for a type stored as `TEXT` in its `Display` form and read
-/// back through `FromStr`, such as an enum with `wire_name_traits!`.
-macro_rules! text_sql_traits {
-    ($type_name:ty) => {
-        impl diesel::deserialize::FromSql<diesel::sql_types::Text, diesel::pg::Pg> for $type_name {
-            fn from_sql(bytes: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
-                let text = <String as diesel::deserialize::FromSql<
-                    diesel::sql_types::Text,
-                    diesel::pg::Pg,
-                >>::from_sql(bytes)?;
-                Ok(text.parse::<$type_name>()?)
-            }
-        }
-
-        impl diesel::serialize::ToSql<diesel::sql_types::Text, diesel::pg::Pg> for $type_name {
-            fn to_sql<'b>(
-                &'b self,
-                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
-            ) -> diesel::serialize::Result {
-                use std::io::Write;
-                write!(out, "{self}")?;
-                Ok(diesel::serialize::IsNull::No)
-            }
-        }
-    };
-}
-pub(crate) use text_sql_traits;
-
-/// Diesel's `FromSql` and `ToSql` for a serde type stored as `JSONB`, which Postgres sends and
-/// takes as a version byte, 1, followed by the JSON text.
-macro_rules! jsonb_sql_traits {
-    ($type_name:ty) => {
-        impl diesel::deserialize::FromSql<diesel::sql_types::Jsonb, diesel::pg::Pg> for $type_name {
-            fn from_sql(value: diesel::pg::PgValue<'_>) -> diesel::deserialize::Result<Self> {
-                match value.as_bytes().split_first() {
-                    Some((1, json)) => Ok(serde_json::from_slice(json)?),
-                    _ => Err("unsupported jsonb encoding".into()),
-                }
-            }
-        }
-
-        impl diesel::serialize::ToSql<diesel::sql_types::Jsonb, diesel::pg::Pg> for $type_name {
-            fn to_sql<'b>(
-                &'b self,
-                out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>,
-            ) -> diesel::serialize::Result {
-                use std::io::Write;
-                out.write_all(&[1])?;
-                serde_json::to_writer(out, self)?;
-                Ok(diesel::serialize::IsNull::No)
-            }
-        }
-    };
-}
-pub(crate) use jsonb_sql_traits;
-
-macro_rules! id_type {
-    ($type_name:ident) => {
-        #[derive(
-            Debug,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Copy,
-            Deserialize,
-            Serialize,
-            Hash,
-            FromSqlRow,
-            QueryId,
-            AsExpression,
-            utoipa::ToSchema,
-            schemars::JsonSchema,
-        )]
-        #[serde(transparent)]
-        #[diesel(sql_type = PgUuid)]
-        pub struct $type_name(pub uuid::Uuid);
-
-        impl $type_name {
-            pub fn new() -> Self {
-                Self(uuid::Uuid::now_v7())
-            }
-        }
-
-        impl From<uuid::Uuid> for $type_name {
-            fn from(value: uuid::Uuid) -> Self {
-                Self(value)
-            }
-        }
-
-        impl Display for $type_name {
-            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}-{}", stringify!($type_name).to_kebab_case(), self.0)
-            }
-        }
-
-        impl FromSql<DieselUuid, Pg> for $type_name {
-            fn from_sql(v: PgValue) -> StdResult<Self, Box<dyn StdError + Send + Sync + 'static>> {
-                uuid::Uuid::from_sql(v).map(|u| $type_name(u))
-            }
-        }
-
-        impl ToSql<DieselUuid, Pg> for $type_name {
-            fn to_sql<'b>(
-                &'b self,
-                out: &mut diesel::serialize::Output<'b, '_, Pg>,
-            ) -> diesel::serialize::Result {
-                <uuid::Uuid as ToSql<diesel::sql_types::Uuid, Pg>>::to_sql(&self.0, out)
-            }
-        }
-    };
-}
-
-id_type!(CommunityId);
-
-id_type!(UserId);
-
-id_type!(ChannelId);
-
-id_type!(MessageId);
-// A message waiting for its attachments' previews before it is posted (`app::message::held`).
-id_type!(HeldMessageId);
-
-id_type!(PollId);
-
-id_type!(VoiceServerId);
-
-id_type!(VoiceSessionId);
-
-id_type!(CategoryId);
-
-id_type!(AttachmentId);
-
-id_type!(IconId);
-id_type!(CustomEmojiId);
-
-id_type!(LinkPreviewImageId);
-
-id_type!(PasskeyId);
-id_type!(RoleId);
-id_type!(DeploymentRoleId);
-id_type!(FederationKeyId);
-id_type!(PushKeyId);
-id_type!(PushSubscriptionId);
-id_type!(ReportCaseId);
-id_type!(ReportId);
-id_type!(ReportCategoryId);
-id_type!(AnnotationId);
-id_type!(PluginNoticeId);
-id_type!(NewsletterPostId);
+// The helper macros and IDs are `aspen_wire`'s, named here as they always are.
+pub use aspen_wire::{
+    AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId,
+    DeploymentRoleId, FederationKeyId, HeldMessageId, IconId, LinkPreviewImageId, MessageId,
+    NewsletterPostId, PasskeyId, PluginNoticeId, PollId, PushKeyId, PushSubscriptionId,
+    ReportCaseId, ReportCategoryId, ReportId, RoleId, UserId, VoiceServerId, VoiceSessionId,
+};
+pub(crate) use aspen_wire::{jsonb_sql_traits, text_sql_traits, wire_name_traits};
 
 #[derive(Debug, Clone)]
 pub enum MaybeLoaded<T: Loadable> {

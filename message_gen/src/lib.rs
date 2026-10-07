@@ -191,7 +191,7 @@ pub fn message_enum_source(
                 .iter()
                 .map(|f| {
                     if is_option(&f.ty) {
-                        quote!(#[serde(default, deserialize_with = "crate::api::extract::double_option")])
+                        quote!(#[serde(default, deserialize_with = "crate::double_option")])
                     } else {
                         quote!(#[serde(default)] #[schema(nullable = false)])
                     }

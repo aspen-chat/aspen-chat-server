@@ -1263,7 +1263,7 @@ impl Call {
         card: wit::Card,
     ) -> Result<Option<String>, wit::Error> {
         let channel = ChannelId(parse_id(&channel_id)?);
-        let card = super::card::Card::from_wit(&self.plugin.id, card)?;
+        let card = super::card::from_wit(&self.plugin.id, card)?;
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel).await?;
@@ -1284,7 +1284,7 @@ impl Call {
     ) -> Result<(), wit::Error> {
         let message = MessageId(parse_id(&message_id)?);
         let card = card
-            .map(|card| super::card::Card::from_wit(&self.plugin.id, card))
+            .map(|card| super::card::from_wit(&self.plugin.id, card))
             .transpose()?;
         self.act(Deferred::UpdateCard { message, card })
             .await

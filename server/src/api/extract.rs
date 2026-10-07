@@ -6,12 +6,13 @@
 //! gaining Problem Details rejections instead of axum's plain-text defaults.
 
 use crate::api::error::{ApiError, ProblemCode};
+pub use aspen_wire::double_option;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{FromRequest, FromRequestParts};
 use axum::http::StatusCode;
 use axum::http::header::LOCATION;
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::Serialize;
 
 #[derive(FromRequest)]
 #[from_request(via(axum::Json), rejection(ApiError))]
@@ -83,16 +84,4 @@ impl IntoResponse for NoContent {
     fn into_response(self) -> Response {
         StatusCode::NO_CONTENT.into_response()
     }
-}
-
-/// Deserializes `Option<Option<T>>` for JSON Merge Patch fields. Plain serde folds a JSON `null`
-/// into the outer `None`, which would make "clear this field" indistinguishable from "leave it
-/// alone". Routing the field through this function (together with `#[serde(default)]` for the
-/// absent case) maps a present `null` to `Some(None)` and a present value to `Some(Some(v))`.
-pub fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: Deserializer<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }

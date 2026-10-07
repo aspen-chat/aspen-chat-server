@@ -1,0 +1,27 @@
+[package]
+name = "aspen_wire"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "What the API server and its clients exchange: the message_gen records, request bodies, and server events, the IDs, and the types the records hold."
+
+[dependencies]
+aspen_locale = { version = "0.1.0", path = "../locale" }
+aspen_schema = { version = "0.1.0", path = "../schema" }
+bitflags = "2.13.2"
+clap = { version = "4.5.37", optional = true }
+chrono = { version = "0.4.41", features = ["serde"] }
+diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "serde_json"] }
+heck = "0.5.0"
+message_gen = { path = "../../message_gen" }
+rust-i18n = "3.1.5"
+schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+strum = { version = "0.28.0", features = ["derive"] }
+utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid", "yaml"] }
+uuid = { version = "1.16.0", features = ["serde", "v7"] }
+
+[features]
+# `clap::ValueEnum` for the names the terminal takes, as the operator commands do.
+clap = ["dep:clap"]

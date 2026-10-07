@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
+pub use aspen_wire::plugin::PluginText;
 pub use registry::Plugins;
 
 /// The version of the plugin interface (`spec/plugin.wit`) this host speaks.
@@ -135,29 +136,6 @@ pub enum Mode {
 }
 
 app::wire_name_traits!(Mode);
-
-/// What a plugin says to people: a key of its `messages`, and the values of its placeholders.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    ToSchema,
-    JsonSchema,
-    diesel::deserialize::FromSqlRow,
-    diesel::expression::AsExpression,
-)]
-#[diesel(sql_type = diesel::sql_types::Jsonb)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginText {
-    pub key: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub args: BTreeMap<String, String>,
-}
-
-app::jsonb_sql_traits!(PluginText);
 
 /// A plugin's text in each language it speaks: language tag to key to text.
 pub type Messages = BTreeMap<String, BTreeMap<String, String>>;

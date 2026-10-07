@@ -22,6 +22,7 @@ use crate::api::extract::{Created, Json, NoContent, Path, double_option};
 use crate::api::{API_PREFIX, TAG_ATTACHMENTS};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId};
+pub use aspen_wire::attachment::AttachmentPreview;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -51,18 +52,6 @@ pub struct Attachment {
     /// is what is shown at full size and saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<AttachmentPreview>,
-}
-
-/// A smaller copy of an attachment for showing it inline: a picture fitted within
-/// `aspen_previews::BOX` and encoded for the web, or the same of a video.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentPreview {
-    pub url: String,
-    pub mime_type: String,
-    /// Its size in pixels, as it is shown upright.
-    pub width: u32,
-    pub height: u32,
 }
 
 pub(crate) fn attachment_to_api(

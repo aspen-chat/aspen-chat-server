@@ -12,6 +12,7 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment::DeploymentPermission;
 use crate::app::{ChannelId, UserId, VoiceServerId};
+pub use aspen_wire::voice::VoiceSessionEndReason;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
@@ -26,23 +27,6 @@ pub struct VoiceParticipantModerationRequest {
     /// a moderator unmutes them. Unmuting lifts only the server mute: someone who also muted
     /// themself stays muted.
     pub muted: bool,
-}
-
-/// Why a call ended, carried by the `voiceSessionEnded` event so a client can tell its user.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub enum VoiceSessionEndReason {
-    /// The last participant left.
-    Empty,
-    /// The voice server stopped reporting and the call was ended for it.
-    ServerLost,
-    /// The call went a day without ever holding two people, so it was ended to free the
-    /// voice server; the lone participant is shown a dialog saying so.
-    Idle,
-    /// An operator removed the voice server.
-    ServerRemoved,
 }
 
 /// A voice server as operators see it.

@@ -37,19 +37,6 @@ pub enum AdminCommand {
     },
 }
 
-/// The terminal names deployment permissions as the API does, and lists them in its help.
-impl clap::ValueEnum for crate::app::deployment::DeploymentPermission {
-    fn value_variants<'a>() -> &'a [Self] {
-        <Self as strum::VariantArray>::VARIANTS
-    }
-
-    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
-        Some(clap::builder::PossibleValue::new(<&'static str>::from(
-            self,
-        )))
-    }
-}
-
 pub async fn admin(config: &AspenConfig, command: AdminCommand) -> Result<()> {
     let mut conn = database(config).await?;
     let publisher = publisher(config).await?;

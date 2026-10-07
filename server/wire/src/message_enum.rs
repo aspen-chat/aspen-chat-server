@@ -1,15 +1,15 @@
-use crate::api::attachment::AttachmentPreview;
-use crate::api::link_preview::LinkPreview;
-use crate::api::poll::{PollOption, PollOptionResult, PollWriteIn};
-use crate::api::user::{CustomStatus, UserOnlineStatus};
-use crate::api::voice::VoiceSessionEndReason;
-use crate::app::channel::ChannelType;
-use crate::app::deployment::DeploymentPermission;
-use crate::app::message::MessageKind;
-use crate::app::permissions::Permission;
-use crate::app::plugin::PluginText;
-use crate::app::plugin::annotation::Severity;
-use crate::app::{
+use crate::attachment::AttachmentPreview;
+use crate::channel::ChannelType;
+use crate::deployment::DeploymentPermission;
+use crate::link_preview::LinkPreview;
+use crate::message::MessageKind;
+use crate::permissions::Permission;
+use crate::plugin::PluginText;
+use crate::plugin::annotation::Severity;
+use crate::poll::{PollOption, PollOptionResult, PollWriteIn};
+use crate::user::{CustomStatus, UserOnlineStatus};
+use crate::voice::VoiceSessionEndReason;
+use crate::{
     AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, HeldMessageId,
     IconId, MessageId, PollId, ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
 };
@@ -193,7 +193,7 @@ enum MessageEnumSource {
         invoker: UserId,
         bot: UserId,
         command: String,
-        arguments: Vec<crate::app::bot_command::Argument>,
+        arguments: Vec<crate::bot_command::Argument>,
     },
     // The user blocked or unblocked someone, on one of their devices; the others follow. The
     // blocked user is never told. See `app::block`.
@@ -224,7 +224,7 @@ enum MessageEnumSource {
     NotificationSettingChanged {
         community: Option<CommunityId>,
         channel: Option<ChannelId>,
-        level: Option<crate::app::notification_setting::NotificationLevel>,
+        level: Option<crate::notification_setting::NotificationLevel>,
     },
     Message {
         #[message_gen(id)]
@@ -268,7 +268,7 @@ enum MessageEnumSource {
         // Who it tags, as far as its author was allowed to (see `app::mention`); an edit that
         // changes the text tags afresh, announced by an `Update` event carrying the new set.
         #[message_gen(server_authoritative = "mutable")]
-        mentions: crate::app::mention::Mentions,
+        mentions: crate::mention::Mentions,
         // For a `Call`, how long the DM's call lasted, in seconds; `None` for every other kind,
         // a `MissedCall` included.
         #[message_gen(server_authoritative)]
@@ -286,7 +286,7 @@ enum MessageEnumSource {
         // For a `Warning`, what it warns about: the person warned, and the message or the
         // profile as the reports found it. See `app::report`.
         #[message_gen(server_authoritative)]
-        warning: Option<crate::app::report::Warning>,
+        warning: Option<crate::report::Warning>,
         // The plugins that rewrote its text as it was posted or last edited, in the order they
         // ran (`app::plugin::intercept`), so every client can say it was changed and by what;
         // an edit announces the new set with its `Update` event.
@@ -296,7 +296,7 @@ enum MessageEnumSource {
         // buttons, drawn from the plugin's catalogue. Only the plugin changes it, announced
         // by the message's `Update` event. See `app::plugin::card`.
         #[message_gen(server_authoritative = "mutable")]
-        card: Option<crate::app::plugin::card::Card>,
+        card: Option<crate::plugin::card::Card>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]
@@ -394,7 +394,7 @@ enum MessageEnumSource {
         // never open to more people than these allow. Each is checked as setting it afterwards
         // would be; they are then the channel's overrides like any other.
         #[message_gen(secret)]
-        overrides: Option<Vec<crate::app::role::RoleOverride>>,
+        overrides: Option<Vec<crate::role::RoleOverride>>,
         // For a channel of `ty` `plugin`, the kind a plugin adds (`org.example.forums:board`),
         // which a plugin running in the community must declare; its contents are the plugin's,
         // which clients show by its view. See `app::plugin::channel_type`.
@@ -662,7 +662,7 @@ enum MessageEnumSource {
     // its catalogue. See `app::plugin::notice`.
     #[message_gen(custom_event)]
     PluginNotice {
-        id: crate::app::PluginNoticeId,
+        id: crate::PluginNoticeId,
         plugin: String,
         channel: ChannelId,
         community: Option<CommunityId>,
@@ -695,8 +695,7 @@ enum MessageEnumSource {
 
 #[cfg(test)]
 mod tests {
-    use crate::api;
-    use crate::app::{IconId, MessageId, UserId};
+    use crate::{IconId, MessageId, UserId};
     use serde_json::json;
 
     use super::request::CommunityUpdateRequest;
@@ -708,7 +707,7 @@ mod tests {
     fn create_event_is_flattened() {
         let message_id = MessageId::new();
         let user_id = UserId::new();
-        let e = ServerEvent::React(ReactEvent::Create(api::message_enum::React {
+        let e = ServerEvent::React(ReactEvent::Create(crate::message_enum::React {
             message_id,
             emoji: "😁".to_string(),
             user_id,
@@ -729,7 +728,7 @@ mod tests {
     /// cleared, absence means it was left alone.
     #[test]
     fn update_event_omits_unchanged_fields() {
-        let id = crate::app::CommunityId::new();
+        let id = crate::CommunityId::new();
         let e = ServerEvent::Community(CommunityEvent::Update {
             id,
             name: None,

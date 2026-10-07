@@ -12,7 +12,7 @@ use crate::api::message_enum::{self, server_event::*};
 use crate::app::context::GlobalServerContext;
 use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{
-    CommunityAccess, Permission, Permissions, channel_access, from_names, require_actual_member,
+    CommunityAccess, Permissions, channel_access, from_names, require_actual_member,
     require_member, to_names,
 };
 use crate::app::{
@@ -23,6 +23,7 @@ use aspen_schema::{
     category, category_override, channel, channel_override, community, community_member_role,
     community_role, community_user,
 };
+pub use aspen_wire::role::RoleOverride;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -898,25 +899,6 @@ pub async fn transfer_ownership(
 pub enum OverrideTarget {
     Channel(ChannelId),
     Category(CategoryId),
-}
-
-/// One role's override as a request names it before its channel exists (`overrides` on a new
-/// channel): what the role is allowed and denied there besides its own permissions.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub struct RoleOverride {
-    pub role: RoleId,
-    pub allow: Vec<Permission>,
-    pub deny: Vec<Permission>,
 }
 
 /// An override checked for its caller and ready to write.

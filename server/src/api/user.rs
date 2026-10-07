@@ -10,40 +10,13 @@ use crate::app::context::GlobalServerContext;
 use crate::app::login::ChangePasswordOutcome;
 use crate::t;
 use crate::{api, app};
+pub use aspen_wire::user::{CustomStatus, UserOnlineStatus};
 use axum::extract::State;
 use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
-
-/// What a user says they are up to: a short line of text and, optionally, an emoji beside it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomStatus {
-    pub text: String,
-    /// A single emoji, or none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub emoji: Option<String>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Deserialize,
-    Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub enum UserOnlineStatus {
-    Online,
-    Offline,
-    Away,
-}
 
 /// A user addressed in a URL: either a user id or the literal `@me` for the calling user.
 #[derive(Debug, Clone, Copy)]
