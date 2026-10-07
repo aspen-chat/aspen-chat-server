@@ -35,7 +35,11 @@
       "subscribeHint": "This address is yours alone: anyone with it sees this calendar as you do.",
       "copy": "Copy",
       "failed": "That did not work. Try again in a moment.",
-      "cannotAdd": "You can see this calendar, but not add to it."
+      "cannotAdd": "You can see this calendar, but not add to it.",
+      "cannotDelete": "Only whoever added an event, or someone who may manage messages, can delete it.",
+      "full": "This calendar holds as many events as it can. Delete one that has passed to add another.",
+      "delete": "Delete",
+      "cancelledTitle": "Cancelled: %{title}"
     }
   },
   "permissions": [

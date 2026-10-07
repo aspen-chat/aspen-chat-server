@@ -1,10 +1,15 @@
 //! An example Aspen plugin: an event calendar, a kind of channel (`calendar`) whose events the
 //! plugin keeps in storage scoped to the channel, which its view (`views/calendar.html`) shows.
 //!
+//! - `GET calendars/{channel}/events` lists its events, soonest first: each one's id, title,
+//!   start, creator, how many are going, and whether the caller is.
 //! - Adding an event (`POST calendars/{channel}/events`, `{title, start}`), for whoever may send
 //!   messages in the channel, counts them as going, and, where the community's settings name an
 //!   `announceChannel`, has the plugin's account post the event there as a card: when it is, how
-//!   many are going, and a button to say you are going or not.
+//!   many are going, and a button to say you are going or not. A calendar holds at most
+//!   `MAX_EVENTS` events.
+//! - Deleting an event (`DELETE calendars/{channel}/events/{event}`), for its creator and whoever
+//!   may manage messages, deletes its card and its reminder too.
 //! - Going or not (`POST calendars/{channel}/events/{event}/rsvp`, or the card's button, which
 //!   reaches `aspen/cards/{message}/rsvp`) updates the card.
 //! - Ten minutes before an event starts, a timer tells everyone going (`notify`), as Aspen tells
@@ -20,8 +25,8 @@ wit_bindgen::generate!({
 
 use aspen::plugin::host;
 use aspen::plugin::types::{
-    Audience, ButtonStyle, Card, CardButton, CardField, CardValue, Context, Observed, Request,
-    Response, Scope, Text, Timer,
+    Audience, ButtonStyle, Card, CardButton, CardField, CardValue, Context, Level, Observed,
+    Request, Response, Scope, Text, Timer,
 };
 use exports::aspen::plugin::hooks::Guest;
 use serde::{Deserialize, Serialize};
@@ -33,6 +38,11 @@ struct Calendar;
 /// How long before an event starts its people are told.
 const REMIND_BEFORE_MS: i64 = 10 * 60 * 1000;
 const MAX_TITLE: usize = 200;
+/// The most events one calendar holds. Two people adding the last place's event at once may each
+/// be let in, so a calendar may hold a few more.
+const MAX_EVENTS: usize = 200;
+/// The most keys one storage read returns.
+const PAGE: u32 = 100;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +63,33 @@ struct Event {
 struct CardOf {
     channel: String,
     event: String,
+}
+
+/// An event as the calendar lists it: who is going counted rather than named, so a list stays
+/// small however many go.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Listed<'a> {
+    id: &'a str,
+    title: &'a str,
+    start: i64,
+    creator: &'a str,
+    going_count: usize,
+    /// Whether the caller is going.
+    you_are_going: bool,
+}
+
+impl Event {
+    fn listed(&self, caller: &str) -> Listed<'_> {
+        Listed {
+            id: &self.id,
+            title: &self.title,
+            start: self.start,
+            creator: &self.creator,
+            going_count: self.going.len(),
+            you_are_going: self.going.iter().any(|g| g == caller),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -193,12 +230,21 @@ fn save_event(channel: &str, event: &Event) -> bool {
     .is_ok()
 }
 
+/// Every event of the calendar, soonest first.
 fn events(channel: &str) -> Option<Vec<Event>> {
-    let page = host::storage_list(&scope(channel), "event:", None, 100).ok()?;
-    let mut events: Vec<Event> = page
-        .iter()
-        .filter_map(|(_, v)| serde_json::from_slice(v).ok())
-        .collect();
+    let mut events: Vec<Event> = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = host::storage_list(&scope(channel), "event:", after.as_deref(), PAGE).ok()?;
+        events.extend(
+            page.iter()
+                .filter_map(|(_, v)| serde_json::from_slice(v).ok()),
+        );
+        match page.last() {
+            Some((key, _)) if page.len() == PAGE as usize => after = Some(key.clone()),
+            _ => break,
+        }
+    }
     events.sort_by_key(|e| e.start);
     Some(events)
 }
@@ -243,7 +289,37 @@ fn toggle(channel: &str, mut event: Event, who: &str) -> Response {
         let _ = host::update_card(message, Some(&card(&event)));
     }
     changed(channel);
-    json(200, &event)
+    json(200, event.listed(who))
+}
+
+/// The card an event's announcement keeps when the event is deleted and its message cannot be.
+fn cancelled_card(event: &Event) -> Card {
+    Card {
+        title: Some(text("cancelledTitle", &[("title", &event.title)])),
+        fields: Vec::new(),
+        buttons: Vec::new(),
+    }
+}
+
+/// Deletes `event`, its reminder, and its card, or, where the card's message cannot be deleted,
+/// marks the card cancelled.
+fn delete(channel: &str, event: &Event) -> Response {
+    if host::storage_delete(&scope(channel), &format!("event:{}", event.id)).is_err() {
+        return problem(500, "failed");
+    }
+    let _ = host::cancel_timer(&format!("remind:{}", event.id));
+    if let Some(message) = &event.card {
+        let _ = host::storage_delete(&Scope::Deployment, &format!("card:{message}"));
+        if host::delete_message(message).is_err() {
+            let _ = host::update_card(message, Some(&cancelled_card(event)));
+        }
+    }
+    changed(channel);
+    Response {
+        status: 204,
+        content_type: None,
+        body: Vec::new(),
+    }
 }
 
 /// The kind of channel a calendar is, as the manifest names it beneath the plugin's id.
@@ -267,7 +343,10 @@ fn route(request: &Request) -> Response {
         |channel: &str, permission: &str| host::caller_may(channel, permission).unwrap_or(false);
     match (request.method.as_str(), parts.as_slice()) {
         ("GET", ["calendars", channel, "events"]) => match events(channel) {
-            Some(events) => json(200, events),
+            Some(events) => json(
+                200,
+                events.iter().map(|e| e.listed(caller)).collect::<Vec<_>>(),
+            ),
             None => problem(404, "notFound"),
         },
         ("POST", ["calendars", channel, "events"]) => {
@@ -284,6 +363,11 @@ fn route(request: &Request) -> Response {
             if title.is_empty() || title.chars().count() > MAX_TITLE {
                 return problem(400, "failed");
             }
+            match events(channel) {
+                Some(held) if held.len() < MAX_EVENTS => {}
+                Some(_) => return problem(409, "full"),
+                None => return problem(500, "failed"),
+            }
             let mut event = Event {
                 id: new_id(),
                 title,
@@ -292,6 +376,32 @@ fn route(request: &Request) -> Response {
                 going: vec![caller.to_string()],
                 card: None,
             };
+            if !save_event(channel, &event) {
+                return problem(500, "failed");
+            }
+            // The reminder goes with the calendar: deleting the channel deletes it.
+            if event.start > now_ms() {
+                let remind_at = (event.start - REMIND_BEFORE_MS).max(now_ms());
+                let set = host::set_timer_in(
+                    &scope(channel),
+                    &format!("remind:{}", event.id),
+                    &format_time(remind_at),
+                    &serde_json::to_string(&CardOf {
+                        channel: channel.to_string(),
+                        event: event.id.clone(),
+                    })
+                    .unwrap_or_default(),
+                );
+                if let Err(error) = set {
+                    // An event nobody would be reminded of is not kept.
+                    let _ = host::storage_delete(&scope(channel), &format!("event:{}", event.id));
+                    host::log(
+                        Level::Warn,
+                        &format!("setting an event's reminder failed: {error:?}"),
+                    );
+                    return problem(503, "failed");
+                }
+            }
             // A route is told of no community; the calendar's own is where it announces.
             let settings: CommunitySettings = host::place_of(channel)
                 .ok()
@@ -312,24 +422,11 @@ fn route(request: &Request) -> Response {
                     .unwrap_or_default(),
                 );
                 event.card = Some(message);
-            }
-            if !save_event(channel, &event) {
-                return problem(500, "failed");
-            }
-            let remind_at = (event.start - REMIND_BEFORE_MS).max(now_ms());
-            if event.start > now_ms() {
-                let _ = host::set_timer(
-                    &format!("remind:{}", event.id),
-                    &format_time(remind_at),
-                    &serde_json::to_string(&CardOf {
-                        channel: channel.to_string(),
-                        event: event.id.clone(),
-                    })
-                    .unwrap_or_default(),
-                );
+                // Kept without its card, the event stands; only the card would not be updated.
+                let _ = save_event(channel, &event);
             }
             changed(channel);
-            json(201, &event)
+            json(201, event.listed(caller))
         }
         ("POST", ["calendars", channel, "events", id, "rsvp"]) => {
             if !may(channel, "viewChannel") {
@@ -339,6 +436,15 @@ fn route(request: &Request) -> Response {
                 Some(event) => toggle(channel, event, caller),
                 None => problem(404, "notFound"),
             }
+        }
+        ("DELETE", ["calendars", channel, "events", id]) => {
+            let Some(event) = load_event(channel, id) else {
+                return problem(404, "notFound");
+            };
+            if event.creator != caller && !may(channel, "manageMessages") {
+                return problem(403, "cannotDelete");
+            }
+            delete(channel, &event)
         }
         // A card's button, pressed by someone who may read the card's message.
         ("POST", ["aspen", "cards", message, "rsvp"]) => {
