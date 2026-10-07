@@ -12,7 +12,7 @@
 //! Every file and page goes out with the headers that keep the page to itself
 //! (`security_headers`): a Content Security Policy that runs only the web client's own scripts,
 //! keeps any other page from framing it, and lets it reach only what it uses, and `nosniff`, no
-//! referrer, and, over `https`, HSTS.
+//! referrer, no opener shared with another page, and, over `https`, HSTS.
 
 use crate::error::{ApiError, ApiResult, ProblemCode};
 use crate::extract::Path;
@@ -31,7 +31,7 @@ use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY,
     STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderMap, HeaderValue, Uri};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::convert::Infallible;
@@ -261,10 +261,17 @@ async fn respond(
     Ok(response)
 }
 
+/// The header that gives a page a browsing context group of its own; the `http` crate names
+/// none for it.
+const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-opener-policy");
+
 /// The headers on every file and page of the web client: its Content Security Policy
 /// (`content_security_policy`), `nosniff`, so no file is run as anything but its type, no
 /// referrer, so the deployment's paths reach no one the page links to or loads from, framing
-/// refused (for browsers that predate `frame-ancestors` too), and, over `https`, HSTS, without
+/// refused (for browsers that predate `frame-ancestors` too), a browsing context group of its
+/// own (`Cross-Origin-Opener-Policy`), so no page that opened it or that it opens holds a handle
+/// on its window, and, over `https`, HSTS, without
 /// `includeSubDomains`, since other names under the deployment's may be served otherwise.
 fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
     let policy = content_security_policy(&config.public_url, &config.media.s3);
@@ -279,6 +286,10 @@ fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        CROSS_ORIGIN_OPENER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
     if config.public_url.starts_with("https://") {
         headers.insert(
             STRICT_TRANSPORT_SECURITY,
