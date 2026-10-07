@@ -469,6 +469,30 @@ impl Call {
         Ok(())
     }
 
+    /// While answering a route, that the caller may read the message `id`; not found otherwise,
+    /// as if it were not. Outside a route there is no caller to ask about.
+    async fn caller_reads(&self, id: MessageId) -> Result<(), wit::Error> {
+        if let Phase::Route { .. } = self.phase {
+            self.readable_message(id).await?;
+        }
+        Ok(())
+    }
+
+    /// While answering a route, that the caller belongs to `community`; not found otherwise, as
+    /// if it were not. Outside a route there is no caller to ask about.
+    async fn caller_belongs(
+        &self,
+        conn: &mut AsyncPgConnection,
+        community: CommunityId,
+    ) -> Result<(), wit::Error> {
+        if let Phase::Route { caller } = self.phase {
+            crate::permissions::require_member(conn, caller, community)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        Ok(())
+    }
+
     /// Whether the plugin runs in `community`.
     async fn running_in(
         &self,
@@ -922,11 +946,7 @@ impl Call {
             wit::Audience::Community(id) => {
                 let community = CommunityId(parse_id(&id)?);
                 self.running_in(conn.as_mut(), community).await?;
-                if let Phase::Route { caller } = self.phase {
-                    crate::permissions::require_member(conn.as_mut(), caller, community)
-                        .await
-                        .map_err(|_| wit::Error::NotFound)?;
-                }
+                self.caller_belongs(conn.as_mut(), community).await?;
                 super::Target::Community(community)
             }
             wit::Audience::User(id) => {
@@ -962,6 +982,7 @@ impl Call {
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel).await?;
+            self.caller_views(conn.as_mut(), channel).await?;
         }
         self.act(Deferred::Send { channel, content })
             .await
@@ -970,11 +991,13 @@ impl Call {
 
     async fn delete_message(&mut self, message_id: String) -> Result<(), wit::Error> {
         let id = MessageId(parse_id(&message_id)?);
+        self.caller_reads(id).await?;
         self.act(Deferred::Delete(id)).await.map(|_| ())
     }
 
     async fn add_reaction(&mut self, message_id: String, emoji: String) -> Result<(), wit::Error> {
         let message = MessageId(parse_id(&message_id)?);
+        self.caller_reads(message).await?;
         self.act(Deferred::React { message, emoji })
             .await
             .map(|_| ())
@@ -983,6 +1006,10 @@ impl Call {
     async fn remove_member(&mut self, community: String, user: String) -> Result<(), wit::Error> {
         let community = CommunityId(parse_id(&community)?);
         let user = UserId(parse_id(&user)?);
+        {
+            let mut conn = self.conn().await?;
+            self.caller_belongs(conn.as_mut(), community).await?;
+        }
         self.act(Deferred::Remove { community, user })
             .await
             .map(|_| ())
@@ -997,6 +1024,10 @@ impl Call {
     ) -> Result<(), wit::Error> {
         let community = CommunityId(parse_id(&community)?);
         let user = UserId(parse_id(&user)?);
+        {
+            let mut conn = self.conn().await?;
+            self.caller_belongs(conn.as_mut(), community).await?;
+        }
         self.act(Deferred::Ban {
             community,
             user,
@@ -1176,6 +1207,7 @@ impl Call {
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel).await?;
+            self.caller_views(conn.as_mut(), channel).await?;
         }
         self.act(Deferred::SendCard {
             channel,

@@ -269,6 +269,11 @@ a message the caller may not read is not found, and storage in a channel's or co
 is readable only by those who may view the channel or belong to the community, and in a user's
 scope only by that user. So it is with what it sends: an event published, or a notice sent, while
 answering goes only to a channel the caller may view, a community they belong to, or themself.
+And so it is with what its principal does while answering: it sends a message or a card only to a
+channel the caller may view, deletes or reacts to only a message the caller may read, and removes
+or bans only in a community the caller belongs to, so no one can have a plugin act where they
+cannot see. Changing the card of a message the principal posted is not limited so, since it shows
+nothing new to the caller and is how a card stays current wherever it is read.
 
 ### Events
 

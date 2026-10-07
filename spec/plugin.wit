@@ -365,7 +365,10 @@ interface host {
     revoke-capability: func(name: string) -> result<_, error>;
 
     /// Acts as the plugin's principal (`act`), with its permissions where it acts. While
-    /// intercepting, an action is run once the hook has answered, and returns nothing.
+    /// intercepting, an action is run once the hook has answered, and returns nothing. While
+    /// answering a route, it acts only where the caller may look: sending to a channel they may
+    /// view, deleting or reacting to a message they may read, removing or banning in a community
+    /// they belong to.
     send-message: func(channel: id, content: string) -> result<option<id>, error>;
     delete-message: func(message: id) -> result<_, error>;
     add-reaction: func(message: id, emoji: string) -> result<_, error>;

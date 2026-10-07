@@ -1434,6 +1434,18 @@ def calendar_channels(world: World, check: Checks) -> None:
     world.stream.gather(0.5)
     check("given the channel back, their private URL answers again",
           stack.status("GET", f"{stack.base}{feed}") == 200)
+    # A route's actions reach only where its caller may look: hidden from the announcements, a
+    # member's new event is kept, but the plugin's account posts no card there on their behalf.
+    world.as_owner("PUT", f"/channels/{announce}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    latest = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    added = stack.status("POST", events, {"title": "Unseen", "start": soon}, world.member["token"])
+    time.sleep(0.5)
+    still = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    check("a member who cannot see where events are announced adds one, and no card is posted there for them",
+          added == 201 and still == latest, added)
+    world.as_owner("DELETE", f"/channels/{announce}/overrides/{world.everyone}")
+    world.stream.gather(0.5)
     stack.command("admin", "grant", world.owner["name"])
     stack.command("admin", "allow", "banUsers")
     world.as_owner("PUT", f"/admin/users/{world.member['id']}/ban", {})
