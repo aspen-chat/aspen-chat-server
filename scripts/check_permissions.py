@@ -268,6 +268,11 @@ def hidden_managers(world: World, check: Checks) -> None:
     open_channel = world.channel("for-managers")
     check("while a channel they may view is theirs to manage",
           world.stack.status("PATCH", f"/channels/{open_channel}", {"name": "managed"}, member) == 200)
+    check("but not to file in a category hidden from them",
+          world.stack.status("PATCH", f"/channels/{open_channel}", {"parentCategory": hidden}, member) == 404)
+    check("nor is a channel made there",
+          world.stack.status("POST", "/channels", {"name": "smuggled", "ty": "text", "community": world.community,
+                                                   "sortIndex": 1, "parentCategory": hidden}, member) == 404)
 
 
 def role_grants(world: World, check: Checks) -> None:

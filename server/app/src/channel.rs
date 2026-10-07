@@ -106,7 +106,7 @@ pub async fn create_channel(
             let access = require_member(conn.as_mut(), caller, community).await?;
             access.require(Permissions::MANAGE_CHANNELS)?;
             if let Some(category) = request.parent_category {
-                ensure_category_of(conn.as_mut(), category, community).await?;
+                ensure_category_of(conn.as_mut(), &access, category, community).await?;
             }
             if let Some(plugin_type) = &request.plugin_type {
                 crate::plugin::channel_type::check(state, conn.as_mut(), community, plugin_type)
@@ -133,9 +133,11 @@ pub async fn create_channel(
     .await
 }
 
-/// Refuses, as not found, a category that is not a live one of `community`.
+/// Refuses, as not found, a category that is not a live one of `community` that `access`'s
+/// holder may view.
 async fn ensure_category_of(
     conn: &mut AsyncPgConnection,
+    access: &crate::permissions::CommunityAccess,
     category_id: CategoryId,
     community: CommunityId,
 ) -> crate::Result<()> {
@@ -150,6 +152,15 @@ async fn ensure_category_of(
         )
         .first::<CategoryId>(conn)
         .await?;
+    // A channel filed in a category takes its overrides, so only someone who may view the
+    // category (`app::category::viewed_category`) files one there; to anyone else it is not
+    // found, as it is everywhere.
+    if !crate::permissions::in_category(conn, access, category_id)
+        .await?
+        .contains(Permissions::VIEW_CHANNEL)
+    {
+        return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+    }
     Ok(())
 }
 
@@ -559,7 +570,7 @@ pub async fn update_channel(
                 return Err(crate::Error::Validation(t!("channelCommunityFixed")));
             }
             if let Some(Some(category)) = command.parent_category {
-                ensure_category_of(conn.as_mut(), category, community).await?;
+                ensure_category_of(conn.as_mut(), &access, category, community).await?;
             }
             let rows = diesel::update(channel::table)
                 .set(ChannelChangeset {
