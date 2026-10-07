@@ -1,10 +1,10 @@
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import eventSchema from "./generated/event_schema.json";
-import type { ClientMessage, ServerEvent, ServerMessage } from "./generated/events";
+import type { ClientMessage, EphemeralEvent, ServerEvent, ServerMessage } from "./generated/events";
 import { acceptLanguage } from "./languages";
 
-export type { ClientMessage, ServerEvent, ServerMessage };
+export type { ClientMessage, EphemeralEvent, ServerEvent, ServerMessage };
 
 /** Reconnect backoff: immediate, then 0.5s, 1s, 2s, 4s, then 5s forever. */
 export function reconnectDelayMs(attempt: number): number {
@@ -43,6 +43,11 @@ export interface ReadyInfo {
 export interface EventStreamHandlers {
   /** One decoded server event, after the connection is live. */
   onEvent?: (event: ServerEvent) => void;
+  /**
+   * Something that happens and is never kept (who is typing): it has no sequence, is not
+   * replayed after a reconnect, and what it told of is lost with the connection.
+   */
+  onEphemeral?: (event: EphemeralEvent) => void;
   /** The server accepted `identify`. Fires on the first connect and after every reconnect. */
   onReady?: (info: ReadyInfo) => void;
   /** The connection dropped or could not be made; reconnection is being attempted. */
@@ -146,6 +151,22 @@ export class EventStream {
       return false;
     }
     const frame: ClientMessage = { type: "activity" };
+    socket.send(JSON.stringify(frame));
+    return true;
+  }
+
+  /**
+   * Tells the server the user is typing in a channel, or (`typing` false) has stopped. Sent only
+   * on a connection that has identified; returns whether it was.
+   */
+  sendTyping(channelId: string, typing: boolean): boolean {
+    const socket = this.#socket;
+    if (this.#status !== "open" || socket === null || socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    const frame: ClientMessage = typing
+      ? { type: "typing", channelId }
+      : { type: "stoppedTyping", channelId };
     socket.send(JSON.stringify(frame));
     return true;
   }
@@ -317,6 +338,9 @@ export class EventStream {
           }
         }
         this.#options.onEvent?.(frame.event);
+        break;
+      case "ephemeral":
+        this.#options.onEphemeral?.(frame.event);
         break;
       case "error":
         // The server closes right after this; the close handler drives reconnection and, for
