@@ -658,7 +658,7 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         }
         ServerEvent::User(UserEvent::Delete { id }) => vec![Recheck::User(*id)],
         // A participant who joined on a token of an ended sign-in leaves the call with it.
-        ServerEvent::SignInsEnded { ended, kept } => scoped_user
+        ServerEvent::SignInsEnded { ended, kept, .. } => scoped_user
             .map(|user| Recheck::SignIns {
                 user,
                 ended: ended.clone(),
@@ -1168,6 +1168,7 @@ mod tests {
         let signed_out = ServerEvent::SignInsEnded {
             ended: None,
             kept: Some("kept".to_string()),
+            at: chrono::Utc::now(),
         };
         assert_eq!(
             rechecks_of(&signed_out, &EventScope::User(blocker)),
