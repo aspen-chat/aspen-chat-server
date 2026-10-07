@@ -51,13 +51,14 @@ export const email = {
     "Enter your username. We'll send a code to the email address on your account.",
   resetAddressPrompt:
     "Your account's address is {masked}. Type the whole address to show it's yours, and we'll send a code there.",
-  resetCodePrompt: "Enter the code we sent to {masked}, and choose a new password.",
+  resetCodePrompt:
+    "If you typed {masked} whole and right, a code is on its way there. Enter it, and choose a new password.",
   resetContinue: "Continue",
   resetSendCode: "Send the code",
   resetFinish: "Set the new password",
   resetWorking: "Working…",
   resetNewPassword: "New password",
-  resetNoCode: "No code? Send it again",
+  resetNoCode: "No code? Check the address and send it again",
   resetBack: "Back to sign in",
   resetDone:
     "Your password was reset and you were signed out everywhere. Sign in with your new password.",

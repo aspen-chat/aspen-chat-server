@@ -9,7 +9,16 @@ development, with passwords written into it; it is not a production setup.
   the database's owner may do on PostgreSQL 13 and later.
 - **NATS 2.10 or later, with JetStream on** (`--jetstream`) and a token (`--auth <token>`).
   Aspen creates the stream it needs and keeps only the last minute of events, in memory.
-- **Valkey** (or anything that speaks the Redis protocol).
+- **Valkey** (or anything that speaks the Redis protocol). Give it a memory limit and tell it
+  never to evict, `maxmemory 512mb` and `maxmemory-policy noeviction` in `valkey.conf` (or
+  `--maxmemory 512mb --maxmemory-policy noeviction`). Everything Aspen keeps there expires on its
+  own; an eviction policy would instead drop rate limit counts (letting guesses through) or
+  sign-ins in progress at random, while a full Valkey that refuses writes is treated as one that
+  cannot be reached: sign-in, password reset, registration, and invite endpoints answer
+  `serverBusy` until it has room. Aspen limits how fast strangers can start what it stores there
+  (password resets, passkey ceremonies, device links) for everyone together, so half a gigabyte
+  is plenty for most deployments; watch `used_memory` in `INFO memory` and raise it if it
+  approaches the limit.
 - **Object storage that speaks S3**: SeaweedFS, Garage, MinIO, or AWS S3. It needs a bucket, a
   key pair that may read, write, delete, and list in it, and two things clients reach directly: the S3 API (they
   upload to presigned URLs, so it must allow your deployment's origin and the apps' by CORS) and an anonymous

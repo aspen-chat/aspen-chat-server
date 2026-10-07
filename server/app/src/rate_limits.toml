@@ -265,7 +265,19 @@ ip = { requests = 5, per_seconds = 3600, burst = 3 }
 [rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
 user = { requests = 5, per_seconds = 3600, burst = 3 }
 
-# Each mails the reset code again, to an address its asker proved they know; the account's mail
+# Starting a reset, a passkey ceremony, or a device link each keeps a little state in Valkey
+# until it expires (half an hour, five minutes, a minute), so everyone's starts together are
+# limited too, generously, to bound what a crowd of addresses can store there.
+[rate_limits.endpoints."POST /auth/password-resets"]
+global = { requests = 600, per_seconds = 60, burst = 300 }
+
+[rate_limits.endpoints."POST /auth/passkey-ceremonies"]
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
+
+[rate_limits.endpoints."POST /auth/device-links"]
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
+
+# Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).
 [rate_limits.endpoints."POST /auth/password-resets/{reset}/codes"]
 per_reset = { requests = 5, per_seconds = 1800, burst = 3 }

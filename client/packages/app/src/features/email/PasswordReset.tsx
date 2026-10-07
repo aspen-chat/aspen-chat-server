@@ -25,9 +25,10 @@ type Step =
 /**
  * Resetting a forgotten password by email, from the sign-in screen: the username, then the
  * account's address typed whole (the server shows it masked: its first three characters before
- * the `@`, and the domain), then the code mailed there with a new password. A reset that ends
- * (expired, used, or too many wrong tries) starts again from the username, saying why. Finished,
- * it returns to signing in with `onDone`.
+ * the `@`, and the domain), then the code mailed there with a new password. The server answers
+ * the address the same whether or not it is the account's, so the code step says a code was sent
+ * only if it was. A reset that ends (expired, used, or too many tries) starts again from the
+ * username, saying why. Finished, it returns to signing in with `onDone`.
  */
 export function PasswordReset({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const m = useMessages();

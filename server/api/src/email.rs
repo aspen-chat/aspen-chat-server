@@ -340,8 +340,9 @@ pub async fn start_password_reset(
     ))
 }
 
-/// Mails a reset code to the account's address, once the whole address is given. Asking again
-/// sends a new code, which replaces the one before. Unauthenticated.
+/// Mails a reset code to the account's address when the whole address given is that address,
+/// answering the same whether or not it is. Asking again sends a new code, which replaces the
+/// one before; each reset takes five addresses. Unauthenticated.
 #[utoipa::path(
     post,
     path = "/auth/password-resets/{reset}/codes",
@@ -350,9 +351,8 @@ pub async fn start_password_reset(
     request_body = PasswordResetCodeRequest,
     responses(
         (status = NO_CONTENT),
-        (status = FORBIDDEN, description = "`emailMismatch`: that is not the account's address", body = Problem),
         (status = NOT_FOUND, description = "`passwordResetExpired`: start again", body = Problem),
-        (status = TOO_MANY_REQUESTS, description = "`tooManyAttempts`: the reset ended; start again", body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`tooManyAttempts`: the reset took its five addresses and ended, or the account has been mailed five codes this hour; start again later", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

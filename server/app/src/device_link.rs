@@ -184,6 +184,27 @@ async fn write(
     Ok(())
 }
 
+/// Writes a link back after a step on it, only while it still exists (`XX`), so a step racing
+/// a `cancel` that removed it between its read and this write cannot bring it back.
+async fn rewrite(
+    state: &GlobalServerContext,
+    id: &str,
+    link: &Link,
+    ttl_seconds: i64,
+) -> crate::Result<()> {
+    let written: Option<String> = state
+        .valkey
+        .set(
+            token_key(LINK_PREFIX, id),
+            serde_json::to_string(link)?,
+            Some(Expiration::EX(ttl_seconds)),
+            Some(SetOptions::XX),
+            false,
+        )
+        .await?;
+    written.map(|_| ()).ok_or(crate::Error::DeviceLinkExpired)
+}
+
 /// Starts a link. With `caller` set it is an offer of the caller's account; without, a request
 /// from a device naming itself `name`, which will claim with the verifier behind
 /// `challenge`.
@@ -270,7 +291,7 @@ pub async fn scan(
     if let Some(receiver) = receiver {
         link.receiver = Some(receiver);
     }
-    write(state, id, &link, CONFIRM_SECONDS).await?;
+    rewrite(state, id, &link, CONFIRM_SECONDS).await?;
     Ok(Scanned {
         kind: link.kind,
         device_name: match link.kind {
@@ -324,13 +345,14 @@ pub async fn approve(state: &GlobalServerContext, id: &str, caller: &Caller) -> 
     }
     if !link.approved {
         link.approved = true;
-        write(state, id, &link, CLAIM_SECONDS).await?;
+        rewrite(state, id, &link, CLAIM_SECONDS).await?;
     }
     Ok(())
 }
 
 /// Ends a link before it is claimed: the giver declining, or either device giving up. Holding
 /// the code is enough, since it ends nothing but the link.
+/// A scan or an approval under way when it ends finds it gone (`rewrite`) rather than reviving it.
 pub async fn cancel(state: &GlobalServerContext, id: &str) -> crate::Result<()> {
     let _: i64 = state.valkey.del(token_key(LINK_PREFIX, id)).await?;
     Ok(())

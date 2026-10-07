@@ -57,8 +57,6 @@ pub enum ProblemCode {
     /// The deployment requires a verified email address, and this account's is not verified;
     /// the session may only verify, change, or resend it (`/users/@me/email`), or sign out.
     EmailVerificationRequired,
-    /// Password reset: the email address given is not the one the account has.
-    EmailMismatch,
     /// Password reset cannot start for this account: no account has that username, or it has no
     /// verified email address. `detail` says which, and what to do.
     PasswordResetUnavailable,
@@ -147,7 +145,6 @@ impl ProblemCode {
             | ProblemCode::ReauthenticationRequired
             | ProblemCode::TwoFactorEnrollmentRequired
             | ProblemCode::EmailVerificationRequired
-            | ProblemCode::EmailMismatch
             | ProblemCode::RegistrationInviteRequired
             | ProblemCode::RegistrationInviteInvalid
             | ProblemCode::AdminRequired
@@ -200,7 +197,6 @@ impl ProblemCode {
             ProblemCode::ReauthenticationRequired => t!("problemReauthenticationRequired"),
             ProblemCode::TwoFactorEnrollmentRequired => t!("problemTwoFactorEnrollmentRequired"),
             ProblemCode::EmailVerificationRequired => t!("problemEmailVerificationRequired"),
-            ProblemCode::EmailMismatch => t!("problemEmailMismatch"),
             ProblemCode::PasswordResetUnavailable => t!("problemPasswordResetUnavailable"),
             ProblemCode::PasswordResetExpired => t!("problemPasswordResetExpired"),
             ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
@@ -321,9 +317,6 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::ReauthenticationRequired)
             }
             app::Error::TooManyAttempts => Self::new(ProblemCode::TooManyAttempts),
-            app::Error::EmailMismatch => {
-                Self::new(ProblemCode::EmailMismatch).with_detail(t!("emailMismatchDetail"))
-            }
             app::Error::PasswordResetUnavailable(reason) => {
                 Self::new(ProblemCode::PasswordResetUnavailable).with_detail(reason)
             }

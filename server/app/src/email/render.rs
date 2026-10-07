@@ -128,7 +128,10 @@ fn write(
             outro: vec![t!("emailResetIgnore").into()],
             ..Letter::default()
         },
-        Mail::PasswordWasReset { removed_factors } => {
+        Mail::PasswordWasReset {
+            removed_factors,
+            recovery_codes_gone,
+        } => {
             let mut intro = vec![
                 t!(
                     "emailPasswordWasResetIntro",
@@ -145,6 +148,9 @@ fn write(
                     )
                     .into(),
                 );
+            }
+            if *recovery_codes_gone {
+                intro.push(t!("emailPasswordWasResetRecoveryCodesGone").into());
             }
             Letter {
                 subject: t!("emailPasswordWasResetSubject", deployment = deployment).into(),
