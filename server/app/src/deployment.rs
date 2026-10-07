@@ -102,15 +102,20 @@ pub async fn require_outranks(
     deployment_access(conn, actor).await?.require_above(theirs)
 }
 
-/// What `user` may do across the deployment.
+/// What `user` may do across the deployment. Only this deployment's own people hold deployment
+/// roles (`deployment_role::ensure_may_hold`); a bot or a user of another deployment holds none,
+/// whatever rows say.
 pub async fn deployment_access(
     mut conn: &AsyncPgConnection,
     user: UserId,
 ) -> crate::Result<DeploymentAccess> {
     let rows: Vec<(i32, DeploymentPermissions)> = user_deployment_role::table
         .inner_join(deployment_role::table)
+        .inner_join(aspen_schema::user::table)
         .select((deployment_role::position, deployment_role::permissions))
         .filter(user_deployment_role::user.eq(user))
+        .filter(aspen_schema::user::bot.eq(false))
+        .filter(aspen_schema::user::home_domain.is_null())
         .load(&mut conn)
         .await?;
     Ok(DeploymentAccess {

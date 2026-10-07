@@ -918,6 +918,26 @@ body {
   animation: aspen-arrive var(--motion-slow) var(--motion-ease-out);
 }
 
+/* The typing indicator's dots (`TypingDots`): each lights and dims again in its turn, a fifth of a
+   cycle after the last, so the next is lighting as the last fades; then all rest dimmed until
+   the cycle ends. It is a fade alone, which goes on where motion is reduced. */
+.typing-dot {
+  opacity: 0.3;
+  animation: aspen-dot-light calc(1200ms * var(--motion-scale)) infinite;
+  animation-delay: calc(240ms * var(--motion-scale) * var(--dot));
+}
+
+@keyframes aspen-dot-light {
+  0%,
+  45%,
+  100% {
+    opacity: 0.3;
+  }
+  20% {
+    opacity: 1;
+  }
+}
+
 /* Drawing the eye to something that changed: a quick swell. */
 @utility motion-pop {
   animation: aspen-pop var(--motion-slow) var(--motion-ease-out);

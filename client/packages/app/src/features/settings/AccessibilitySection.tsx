@@ -14,7 +14,7 @@ export function AccessibilitySection() {
   const announce = usePreference(ANNOUNCE_MESSAGES);
   return (
     <section aria-labelledby="settings-accessibility" className={planeClass}>
-      <h3 id="settings-accessibility" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-accessibility" className="text-lg font-semibold text-ink-muted">
         {m.settings.accessibility}
       </h3>
       <ChoiceCheckbox

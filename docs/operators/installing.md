@@ -335,7 +335,8 @@ aspen-chat-server admin grant <username>
 ```
 
 It needs the database and NATS, as the servers do: it announces the change to the account's open
-apps. It gives that account the deployment's top role, making an Administrator role with every
+apps. The account must be a person's on this deployment: bots and users from other deployments
+hold no deployment roles, and the command refuses them. It gives that account the deployment's top role, making an Administrator role with every
 permission but the moderation ones if there is none: `moderateCommunities` (reading everything in
 any community or DM, the record of files sent in calls, and taking things out; it includes
 `removeContent`), `reviewReports` (the reports people make of messages, profiles, and

@@ -60,7 +60,7 @@ export const plugins = {
   hosts: "Hosts it may call",
   retention: "What it keeps",
   storageLabel: "Storage",
-  storage: "Keeps {used} of {quota}",
+  storage: "Keeps {used} in all, at most {quota} for each community, DM, or person",
   moveUp: "Run {plugin} earlier",
   moveDown: "Run {plugin} later",
   order:

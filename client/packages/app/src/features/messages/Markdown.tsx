@@ -1,18 +1,14 @@
 import type { Mentions } from "@aspen/protocol";
 import { type ReactNode, isValidElement, memo, useContext } from "react";
-import { ChatTextIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
 import { CodeBlock } from "@/features/messages/CodeBlock";
-import {
-  messageLink,
-  openInviteLink,
-  parseMessageUrl,
-  useDomain,
-  type MessageUrl,
-} from "@/features/messages/links";
+import { openInviteLink, useDomain } from "@/features/messages/links";
+import { parseSelfLink, type KnownHosts } from "@/features/messages/selfLinks";
+import { SelfLink } from "@/features/messages/SelfLink";
+import { remarkLiteralLinks } from "@/features/messages/remarkLiteralLinks";
 import { HomeClientContext } from "@/api/context";
 import { useForeignDeployments } from "@/api/deploymentsContext";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
@@ -26,8 +22,6 @@ import { remarkMentions } from "@/features/messages/remarkMentions";
 import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
 import { messageLinkUrl } from "@/features/layout/safeUrl";
-import { useMessages } from "@/i18n/context";
-import { format } from "@/i18n/messages";
 
 /**
  * A link in text is underlined as well as coloured: in most palettes the accent is too near the
@@ -37,24 +31,35 @@ const linkClass =
   "text-accent underline underline-offset-2 hover:decoration-2 focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none";
 
 /**
- * A link in a message. An Aspen invite link that names its deployment opens its invite screen
- * here (`InviteMessageLink`), whichever client made it, and a link to a message of a deployment
- * the user uses opens it here (`LinkToMessage`); every other link opens elsewhere.
+ * A link in a message. A link to a deployment the user uses opens what it names here, shown by
+ * those names (`SelfLink`); an Aspen invite link that names another deployment opens its
+ * invite screen here (`InviteMessageLink`), whichever client made it; every other link opens
+ * elsewhere.
  */
 function MessageLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+  const hosts = useKnownHosts();
+  const self = href === undefined ? null : parseSelfLink(href, hosts);
+  if (self !== null && href !== undefined) {
+    return <SelfLink target={self} href={href} />;
+  }
   const invite = href === undefined ? null : parseInvite(href);
   if (invite?.domain != null) {
     return <InviteMessageLink invite={invite}>{children}</InviteMessageLink>;
   }
-  const message = href === undefined ? null : parseMessageUrl(href);
-  if (message !== null) {
-    return (
-      <LinkToMessage target={message} href={href ?? ""}>
-        {children}
-      </LinkToMessage>
-    );
-  }
   return <ExternalLink href={href}>{children}</ExternalLink>;
+}
+
+/**
+ * The addresses of the deployments the user uses: the home's (the address the app reaches it
+ * at, and the page's own) and every other one they sign in to from there.
+ */
+function useKnownHosts(): KnownHosts {
+  const home = useContext(HomeClientContext);
+  const foreign = useForeignDeployments();
+  return {
+    home: [window.location.host, ...(home === null ? [] : [new URL(home.baseUrl).host])],
+    foreign: foreign.map((d) => d.domain),
+  };
 }
 
 /**
@@ -74,66 +79,6 @@ function ExternalLink({ href, children }: { href: string | undefined; children: 
   );
 }
 
-/**
- * A link to a message, opened here when it is on the user's home deployment (the address the
- * app reaches it at, or the page's own) or another they use, and elsewhere otherwise. Written
- * as its bare address, it shows as a short label, since the message itself shows beneath.
- */
-function LinkToMessage({
-  target,
-  href,
-  children,
-}: {
-  target: MessageUrl;
-  href: string;
-  children: ReactNode;
-}) {
-  const m = useMessages();
-  const home = useContext(HomeClientContext);
-  const foreign = useForeignDeployments();
-  const homeHosts = [window.location.host, ...(home === null ? [] : [new URL(home.baseUrl).host])];
-  const domain = homeHosts.includes(target.host)
-    ? null
-    : foreign.find((d) => d.domain === target.host)?.domain;
-  if (domain === undefined) {
-    return <ExternalLink href={href}>{children}</ExternalLink>;
-  }
-  const bare = textOf(children) === href;
-  return (
-    <Link
-      {...messageLink({ domain, community: target.community }, target.channel, target.message)}
-      {...(bare
-        ? { "aria-label": format(m.reports.messageLinkFull, { url: href }), title: href }
-        : {})}
-      className={
-        bare
-          ? "inline-flex items-baseline gap-0.5 rounded bg-accent-soft px-1 text-accent-strong outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
-          : linkClass
-      }
-    >
-      {bare ? (
-        <>
-          <ChatTextIcon size={14} aria-hidden="true" className="self-center" />
-          {m.reports.messageLinkLabel}
-        </>
-      ) : (
-        children
-      )}
-    </Link>
-  );
-}
-
-/** The plain text of a link's children, or `null` when they hold more than text. */
-function textOf(children: ReactNode): string | null {
-  if (typeof children === "string") {
-    return children;
-  }
-  if (Array.isArray(children) && children.every((child) => typeof child === "string")) {
-    return children.join("");
-  }
-  return null;
-}
-
 function InviteMessageLink({ invite, children }: { invite: InviteRef; children: ReactNode }) {
   const current = useDomain();
   return (
@@ -145,17 +90,14 @@ function InviteMessageLink({ invite, children }: { invite: InviteRef; children: 
 
 /**
  * Links take the palette accent (see `MessageLink`), and only an absolute web or mail address
- * becomes one (`ExternalLink`). A picture written into the text (`![alt](url)`) is shown as a
- * link to it, named by its alt text, never loaded: loading it would tell whoever serves it the
- * address of everyone who reads the message. Fenced blocks go through `CodeBlock` for
- * highlighting; inline code is left to the stylesheet.
+ * becomes one (`ExternalLink`). A link is always its own address: one named by its author's
+ * words, or a picture written into the text (`![alt](url)`), shows as the text it was written
+ * as (`remarkLiteralLinks`), so a picture is never loaded either, which would tell whoever
+ * serves it the address of everyone who reads the message. Fenced blocks go through
+ * `CodeBlock` for highlighting; inline code is left to the stylesheet.
  */
 const components: Components = {
   a: ({ href, children }) => <MessageLink href={href}>{children}</MessageLink>,
-  img: ({ src, alt }) => {
-    const href = typeof src === "string" ? src : undefined;
-    return <MessageLink href={href}>{alt != null && alt !== "" ? alt : href}</MessageLink>;
-  },
   // `remarkSpoilers` marks its spans with `data-spoiler` and `remarkMentions` with
   // `data-mention`; every other span is left as it is.
   span: ({ children, ...props }) => {
@@ -256,6 +198,7 @@ export const Markdown = memo(function Markdown({
             remarkPlugins={[
               remarkGfm,
               remarkLimits,
+              remarkLiteralLinks,
               remarkSpoilers,
               remarkMentions,
               remarkCustomEmoji,

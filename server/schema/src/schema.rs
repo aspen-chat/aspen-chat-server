@@ -578,6 +578,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    plugin_storage_usage (plugin, owner_kind, owner) {
+        plugin -> Text,
+        owner_kind -> Text,
+        owner -> Uuid,
+        bytes -> Int8,
+    }
+}
+
+diesel::table! {
     plugin_timer (plugin, key) {
         plugin -> Text,
         key -> Text,
@@ -587,6 +596,8 @@ diesel::table! {
         claimed_until -> Nullable<Timestamptz>,
         scope_kind -> Nullable<Text>,
         scope -> Nullable<Uuid>,
+        owner_kind -> Text,
+        owner -> Uuid,
     }
 }
 
@@ -1004,6 +1015,7 @@ diesel::joinable!(plugin_notice -> message (message));
 diesel::joinable!(plugin_notice -> plugin (plugin));
 diesel::joinable!(plugin_notice -> user (user));
 diesel::joinable!(plugin_storage -> plugin (plugin));
+diesel::joinable!(plugin_storage_usage -> plugin (plugin));
 diesel::joinable!(plugin_timer -> plugin (plugin));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
@@ -1094,6 +1106,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     plugin_capability,
     plugin_notice,
     plugin_storage,
+    plugin_storage_usage,
     plugin_timer,
     poll,
     poll_option,

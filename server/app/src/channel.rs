@@ -200,6 +200,7 @@ pub async fn insert_channel(
         }
         _ => return Err(crate::Error::Validation(t!("channelTypeNotCreatable"))),
     }
+    crate::community::ensure_room_for_channel(conn, community).await?;
     let channel = Channel {
         id: ChannelId::new(),
         community: Some(MaybeLoaded::NotLoaded(community)),

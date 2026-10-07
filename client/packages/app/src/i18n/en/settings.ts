@@ -40,6 +40,10 @@ export const settings = {
   audio: "Audio and video",
   appearance: "Appearance",
   language: "Language",
+  privacy: "Privacy",
+  typingNotices: "Show others when I'm typing",
+  typingNoticesHint:
+    "People in a conversation see that you're writing a message there. Turned off, they don't, and you still see when they are. Every device and server you use follows this setting.",
   languageLabel: "Show Aspen in",
   languageAutomatic: "Automatic ({language})",
   languageHint:

@@ -21,7 +21,7 @@ export function NotificationsSection() {
   const mobile = detectShell() === "mobile";
   return (
     <section aria-labelledby="settings-notifications" className={planeClass}>
-      <h3 id="settings-notifications" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-notifications" className="text-lg font-semibold text-ink-muted">
         {m.notifications.settings}
       </h3>
       {!mobile && (

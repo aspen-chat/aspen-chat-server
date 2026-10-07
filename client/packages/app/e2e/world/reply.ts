@@ -2,8 +2,16 @@ import type { Request, Route } from "@playwright/test";
 import type { administration } from "./administration";
 import type { lunch } from "./poll";
 
-/** Sends a server event down the page's event stream. */
-export type Publish = (event: Record<string, unknown>) => void;
+/**
+ * Sends a server event down the page's event stream. The world's own also sends what happens
+ * and is never kept (`ephemeral` frames), keeps every frame the client sent after `identify`,
+ * and can drop the connection.
+ */
+export type Publish = ((event: Record<string, unknown>) => void) & {
+  ephemeral?: (event: Record<string, unknown>) => void;
+  sent?: Record<string, unknown>[];
+  drop?: () => void;
+};
 
 /** A response other than `200` with a JSON body. */
 export class Reply {
