@@ -540,14 +540,17 @@ export function ReactionPicker({
   messageId,
   communityId,
   triggerClassName,
-  iconSize = 16,
+  iconSize = "1.5em",
 }: {
   messageId: string;
   /** The community whose own emoji the picker offers too; none in a DM. */
   communityId: string | null;
   triggerClassName: string;
-  /** The trigger's icon size: a chip's beside the reactions, an action's in the actions. */
-  iconSize?: number;
+  /**
+   * The trigger's icon size: by default a reaction chip's emoji's (`EmojiKey`), so the chip that
+   * adds one stands as tall as the chips beside it at any text size; an action's in the actions.
+   */
+  iconSize?: number | string;
 }) {
   const m = useMessages();
   return (
