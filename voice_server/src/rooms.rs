@@ -773,6 +773,16 @@ impl Rooms {
         direction: TransportDirection,
     ) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
+        if direction == TransportDirection::Send {
+            // One send transport per participant: a second would hold more ports while the
+            // first lives on in its producers. One closed for not connecting may be replaced.
+            let participants = room.participants.lock().expect("room lock");
+            if seated(&participants, seat)?.send_transport.is_some() {
+                return Err(RoomError::BadParameters(
+                    "the participant already has a send transport".to_string(),
+                ));
+            }
+        }
         room.require(seat)?;
         let mut listen = ListenInfo {
             protocol: Protocol::Udp,
@@ -806,6 +816,11 @@ impl Rooms {
             let mut participants = room.participants.lock().expect("room lock");
             let participant = seated_mut(&mut participants, seat)?;
             match direction {
+                TransportDirection::Send if participant.send_transport.is_some() => {
+                    return Err(RoomError::BadParameters(
+                        "the participant already has a send transport".to_string(),
+                    ));
+                }
                 TransportDirection::Send => participant.send_transport = Some(transport),
                 TransportDirection::Recv => {
                     participant.recv_transport = Some(ReceiveTransport::WebRtc(transport));

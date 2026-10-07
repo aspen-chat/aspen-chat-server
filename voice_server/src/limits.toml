@@ -56,8 +56,9 @@ user = { requests = 30, per_seconds = 60, burst = 12 }
 [rate_limits.frames.setCapabilities]
 user = { requests = 30, per_seconds = 60, burst = 12 }
 
-# Each transport takes ports from the media range. A participant holds one in each direction,
-# a new one replacing the last, and leaving closes both, so moving between calls churns
+# Each transport takes ports from the media range. A participant holds one in each direction
+# (a second send transport is refused; a new receive transport replaces the last), and leaving
+# closes both, so moving between calls churns
 # transports rather than piling them up.
 [rate_limits.frames.createTransport]
 user = { requests = 60, per_seconds = 60, burst = 24 }
