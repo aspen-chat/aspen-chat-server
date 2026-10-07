@@ -3,9 +3,9 @@
 //! with the same arguments, so a deployment's scripts can declare their servers.
 
 use super::{database, operator, publisher};
-use crate::app::voice::{self, VoiceServer, VoiceServerChangeset};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result, anyhow};
+use aspen_app::aspen_config::AspenConfig;
+use aspen_app::voice::{self, VoiceServer, VoiceServerChangeset};
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -54,7 +54,7 @@ fn capacity(capacity: u32) -> Result<i32> {
 }
 
 pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -> Result<()> {
-    let fail = |e: crate::app::Error| anyhow!("{e}");
+    let fail = |e: aspen_app::Error| anyhow!("{e}");
     let mut conn = database(config).await?;
     let servers = voice::list_servers_in(&mut conn).await.map_err(fail)?;
     let named = |name: &str| {

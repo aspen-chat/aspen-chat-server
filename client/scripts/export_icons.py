@@ -33,7 +33,7 @@ APP_PUBLIC = CLIENT / "packages/app/public"
 DESKTOP_BUILD = CLIENT / "packages/desktop/build"
 ANDROID_RES = CLIENT / "packages/mobile/android/app/src/main/res"
 IOS_ASSETS = CLIENT / "packages/mobile/ios/App/App/Assets.xcassets"
-PASSKEY_PAGE = REPO / "server/src/api/passkey_page/page.html"
+PASSKEY_PAGE = REPO / "server/api/src/passkey_page/page.html"
 
 EMERALD = "#047857"
 MINT = "#34d399"

@@ -18,7 +18,7 @@
   `http(s)` URLs, and bare domains whose TLD is on IANA's list (the `tlds` package). A handful
   of TLDs that double as source-file extensions only link with a port, a path, or `www.`; the
   set is a constant in that file. The server's preview extractor
-  (`server/src/app/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
+  (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
   as a link is what gets a preview; change both together.
 - Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (`upload.ts`; reserve,
   `PUT` the bytes straight to storage with `uploadFetch`, confirm, which has the server move them

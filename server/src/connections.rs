@@ -7,7 +7,7 @@
 //! the total; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network, as rate limits
 //! count it.
 
-use crate::aspen_config::ConnectionsConfig;
+use aspen_app::aspen_config::ConnectionsConfig;
 use aspen_limits::ClientAddresses;
 use std::collections::HashMap;
 use std::io;

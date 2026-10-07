@@ -4,11 +4,11 @@
 //! permissions, which the operator reads and accepts before it is installed.
 
 use super::{database, operator, publisher};
-use crate::app::events::{Publisher, noting, settle_in};
-use crate::app::plugin::manifest::Manifest;
-use crate::app::plugin::{Mode, PluginPermission, install};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result, anyhow, bail};
+use aspen_app::aspen_config::AspenConfig;
+use aspen_app::events::{Publisher, noting, settle_in};
+use aspen_app::plugin::manifest::Manifest;
+use aspen_app::plugin::{Mode, PluginPermission, install};
 use clap::Subcommand;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -98,11 +98,11 @@ fn confirm(question: &str) -> Result<bool> {
 }
 
 fn text(manifest: &Manifest, key: &str) -> String {
-    crate::app::plugin::render(
+    aspen_app::plugin::render(
         &manifest.messages,
         &manifest.default_language,
         &manifest.default_language,
-        &crate::app::plugin::PluginText {
+        &aspen_app::plugin::PluginText {
             key: key.to_string(),
             args: Default::default(),
         },
@@ -167,8 +167,8 @@ pub async fn plugins(config: &AspenConfig, command: PluginsCommand) -> Result<()
 }
 
 async fn announce(publisher: &Publisher) -> Result<()> {
-    use crate::app::events::Publishing;
-    crate::app::plugin::registry::announce(&publisher.nats().client(), None)
+    use aspen_app::events::Publishing;
+    aspen_app::plugin::registry::announce(&publisher.nats().client(), None)
         .await
         .map_err(|e| anyhow!("{e}"))
 }
@@ -190,7 +190,7 @@ async fn run(
                 &std::fs::read(&path).with_context(|| format!("could not read {path:?}"))?,
             )
             .with_context(|| format!("{path:?} is not JSON"))?;
-            let unknown = crate::app::plugin::manifest::unknown_names(&json);
+            let unknown = aspen_app::plugin::manifest::unknown_names(&json);
             if !unknown.is_empty() {
                 bail!(
                     "the plugin asks for {}, which this Aspen does not know; it needs a newer Aspen",
@@ -212,12 +212,12 @@ async fn run(
             let assets = match &manifest.assets {
                 Some(dir) => {
                     let dir = path.parent().unwrap_or(std::path::Path::new(".")).join(dir);
-                    crate::app::plugin::asset::read_dir(&manifest, &dir)
+                    aspen_app::plugin::asset::read_dir(&manifest, &dir)
                         .map_err(|e| anyhow!("its views' files are not fit to serve: {e}"))?
                 }
                 None => Vec::new(),
             };
-            crate::app::plugin::Plugins::new(&Default::default())
+            aspen_app::plugin::Plugins::new(&Default::default())
                 .map_err(|e| anyhow!("{e}"))?
                 .check_component(&component)
                 .map_err(|e| anyhow!("the component is not a plugin this Aspen runs: {e}"))?;
@@ -308,7 +308,7 @@ async fn run(
                 if plugin.enabled { "on" } else { "off" }
             );
             let (shown, secrets) =
-                crate::app::plugin::settings::readable(&plugin.manifest.settings, &plugin.settings);
+                aspen_app::plugin::settings::readable(&plugin.manifest.settings, &plugin.settings);
             println!("Settings: {}", serde_json::Value::Object(shown));
             if !secrets.is_empty() {
                 println!("Secrets set: {}", secrets.join(", "));

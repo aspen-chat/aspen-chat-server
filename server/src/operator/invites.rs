@@ -1,8 +1,8 @@
 //! `invites create`, `list`, and `revoke`: registration invites (`app::registration_invite`).
 
 use super::{database, operator, publisher};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow};
+use aspen_app::aspen_config::AspenConfig;
 use clap::Subcommand;
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ pub enum InvitesCommand {
 }
 
 pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()> {
-    use crate::app::registration_invite;
+    use aspen_app::registration_invite;
     let mut conn = database(config).await?;
     match command {
         InvitesCommand::Create {
@@ -52,7 +52,7 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
                 .map_err(|e| anyhow!("{e}"))?;
             tracing::info!(code = %invite.code, operator = operator(), "made a registration invite");
             println!("{}", invite.code);
-            let settings = crate::app::deployment_settings::load(&mut conn)
+            let settings = aspen_app::deployment_settings::load(&mut conn)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             if !settings.registration_invite_required {

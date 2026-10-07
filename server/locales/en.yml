@@ -4,7 +4,7 @@ _version: 1
 invalidAuthToken: "Your session has ended or is not valid. Sign in again."
 tryAgainLater: "Something went wrong on the server. Try again; if it keeps happening, tell this server's administrators."
 
-# Problem Details titles (see server/src/api/error.rs)
+# Problem Details titles (see server/api/src/error.rs)
 problemBadRequest: "The request could not be understood."
 problemValidation: "The request is not valid."
 problemUnauthorized: "You must be logged in to do that."

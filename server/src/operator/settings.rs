@@ -4,11 +4,11 @@
 //! has an account.
 
 use super::{database, operator, publisher};
-use crate::app::deployment_settings::{self, DeploymentSettings, SettingsChange};
-use crate::app::events::{noting, settle_in};
-use crate::app::federation::{Gate, own_domain};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow};
+use aspen_app::aspen_config::AspenConfig;
+use aspen_app::deployment_settings::{self, DeploymentSettings, SettingsChange};
+use aspen_app::events::{noting, settle_in};
+use aspen_app::federation::{Gate, own_domain};
 use clap::Subcommand;
 use serde::Serialize;
 
@@ -166,7 +166,7 @@ fn print(settings: &DeploymentSettings) -> Result<()> {
 }
 
 pub async fn settings(config: &AspenConfig, command: SettingsCommand) -> Result<()> {
-    let fail = |e: crate::app::Error| anyhow!("{e}");
+    let fail = |e: aspen_app::Error| anyhow!("{e}");
     let mut conn = database(config).await?;
     match command {
         SettingsCommand::Show => {

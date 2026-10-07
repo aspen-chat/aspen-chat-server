@@ -1,7 +1,7 @@
 //! `bench seed` and `bench purge`: benchmark populations (`app::benchmark`).
 
-use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result, anyhow};
+use aspen_app::aspen_config::AspenConfig;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -35,7 +35,7 @@ pub async fn bench(config: &AspenConfig, command: BenchCommand) -> Result<()> {
             )
             .context("the plan is not a seed plan")?;
             let started = std::time::Instant::now();
-            let manifest = crate::app::benchmark::seed(
+            let manifest = aspen_app::benchmark::seed(
                 &mut conn,
                 &plan,
                 config.limits.max_communities_per_user,
@@ -54,13 +54,13 @@ pub async fn bench(config: &AspenConfig, command: BenchCommand) -> Result<()> {
             );
         }
         BenchCommand::Purge { run } => {
-            let media = crate::app::media_store::MediaStore::new(config)
+            let media = aspen_app::media_store::MediaStore::new(config)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            let report = crate::app::benchmark::purge(&mut conn, &media, &run)
+            let report = aspen_app::benchmark::purge(&mut conn, &media, &run)
                 .await
                 .map_err(|e| match e {
-                    crate::app::Error::Diesel(diesel::result::Error::NotFound) => {
+                    aspen_app::Error::Diesel(diesel::result::Error::NotFound) => {
                         anyhow!("there is no benchmark run {run:?}")
                     }
                     other => anyhow!("{other}"),

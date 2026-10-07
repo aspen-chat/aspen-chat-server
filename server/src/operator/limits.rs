@@ -1,8 +1,8 @@
 //! `limits suspend`, `resume`, and `status`: rate limit suspensions (`aspen_limits::suspension`).
 
 use super::operator;
-use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result, anyhow};
+use aspen_app::aspen_config::AspenConfig;
 use aspen_limits::suspension::{self, Scope, Suspension};
 use clap::{Subcommand, ValueEnum};
 use std::time::Duration;

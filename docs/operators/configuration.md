@@ -232,7 +232,7 @@ mail it cannot take now is tried again, waiting longer each time, for about a da
 ## `[rate_limits]`
 
 Every endpoint is rate limited. The built-in limits, with what each is for, are in
-`server/src/rate_limits.toml`, which also explains the format; what you write here is laid over
+`server/app/src/rate_limits.toml`, which also explains the format; what you write here is laid over
 them, a limit you give replacing the built-in one whole.
 
 | Setting | Default | |

@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// Decrypting a Web Push message (RFC 8291, `aes128gcm` of RFC 8188) with the subscription's
-/// keys, as the deployment encrypted it (`server/src/app/push/webpush.rs`) and as Android's
+/// keys, as the deployment encrypted it (`server/webpush/src/lib.rs`) and as Android's
 /// `WebPush.java` reads it. The message is one record: a 16-byte salt, the record size, the
 /// sender's public key, and the ciphertext with its tag.
 enum WebPush {

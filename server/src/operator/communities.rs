@@ -1,8 +1,8 @@
 //! `communities set-owner` and `unowned`: naming a community's owner from the terminal.
 
 use super::{database, operator, publisher};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Result, bail};
+use aspen_app::aspen_config::AspenConfig;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -34,7 +34,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                 .filter(
                     community_user::community
                         .eq(id)
-                        .and(crate::app::user::named(username.clone())),
+                        .and(aspen_app::user::named(username.clone())),
                 )
                 .first(&mut conn)
                 .await
@@ -51,19 +51,19 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                 bail!("no community has the id {id}");
             }
             let publisher = publisher(config).await?;
-            let community_id = crate::app::CommunityId(id);
+            let community_id = aspen_app::CommunityId(id);
             let set = {
                 use diesel_async::AsyncConnection;
                 use diesel_async::scoped_futures::ScopedFutureExt;
                 let publisher = &publisher;
                 let conn = &mut conn;
-                crate::app::events::noting(conn.transaction(|conn| {
+                aspen_app::events::noting(conn.transaction(|conn| {
                     async move {
-                        crate::app::role::set_owner(
+                        aspen_app::role::set_owner(
                             publisher,
                             conn,
                             community_id,
-                            Some(crate::app::UserId(member)),
+                            Some(aspen_app::UserId(member)),
                         )
                         .await
                     }
@@ -72,7 +72,7 @@ pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> R
                 .await
             };
             let (set, noted) = set;
-            crate::app::events::settle_in(&publisher, &mut conn, noted, set.is_err()).await;
+            aspen_app::events::settle_in(&publisher, &mut conn, noted, set.is_err()).await;
             set.map_err(|e| anyhow::anyhow!("{e}"))?;
             tracing::info!(%id, %username, operator = operator(), "set a community's owner");
             println!("{username} now owns community {id}");

@@ -2,9 +2,9 @@
 //! what it allows (`app::deployment_role`).
 
 use super::{database, operator, publisher};
-use crate::app::events::{Publisher, noting, settle_in};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow, bail};
+use aspen_app::aspen_config::AspenConfig;
+use aspen_app::events::{Publisher, noting, settle_in};
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -27,13 +27,13 @@ pub enum AdminCommand {
     Allow {
         /// A deployment permission's name.
         #[clap(value_enum)]
-        permission: crate::app::deployment::DeploymentPermission,
+        permission: aspen_app::deployment::DeploymentPermission,
     },
     /// Stop the deployment's top role doing something.
     Deny {
         /// A deployment permission's name.
         #[clap(value_enum)]
-        permission: crate::app::deployment::DeploymentPermission,
+        permission: aspen_app::deployment::DeploymentPermission,
     },
 }
 
@@ -50,19 +50,19 @@ async fn run(
     conn: &mut diesel_async::AsyncPgConnection,
     command: AdminCommand,
 ) -> Result<()> {
-    use crate::app::deployment_role;
+    use aspen_app::deployment_role;
     use aspen_schema::user;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     let find = |username: String| {
         user::table
             .select(user::id)
-            .filter(crate::app::user::named(username))
+            .filter(aspen_app::user::named(username))
     };
     match command {
         AdminCommand::Grant { username } => {
             let Some(id) = find(username.clone())
-                .first::<crate::app::UserId>(conn)
+                .first::<aspen_app::UserId>(conn)
                 .await
                 .optional()?
             else {
@@ -76,7 +76,7 @@ async fn run(
         }
         AdminCommand::Revoke { username } => {
             let Some(id) = find(username.clone())
-                .first::<crate::app::UserId>(conn)
+                .first::<aspen_app::UserId>(conn)
                 .await
                 .optional()?
             else {
@@ -109,10 +109,10 @@ async fn run(
 async fn top_role(
     publisher: &Publisher,
     conn: &mut diesel_async::AsyncPgConnection,
-    permission: crate::app::deployment::DeploymentPermission,
+    permission: aspen_app::deployment::DeploymentPermission,
     allow: bool,
 ) -> Result<()> {
-    use crate::app::deployment_role;
+    use aspen_app::deployment_role;
     let role = deployment_role::set_top_role_permission(publisher, conn, permission, allow)
         .await
         .map_err(|e| anyhow!("{e}"))?;

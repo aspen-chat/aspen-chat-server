@@ -2,8 +2,8 @@
 //! (`app::federation`).
 
 use super::{database, operator, publisher};
-use crate::aspen_config::AspenConfig;
 use anyhow::{Result, anyhow, bail};
+use aspen_app::aspen_config::AspenConfig;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -15,22 +15,22 @@ pub enum FederationCommand {
     /// Add a deployment and contact it, pinning its key.
     Add {
         /// Its domain, with `:port` when it is not served on 443.
-        domain: crate::app::federation::Domain,
+        domain: aspen_app::federation::Domain,
         /// What it is, shown beside it in the dashboard.
         #[clap(long)]
         note: Option<String>,
     },
     /// Forget a deployment: its pinned key and the lists it is on.
     Remove {
-        domain: crate::app::federation::Domain,
+        domain: aspen_app::federation::Domain,
     },
     /// Read a known deployment's document now and check its key against the pinned one.
     Contact {
-        domain: crate::app::federation::Domain,
+        domain: aspen_app::federation::Domain,
     },
     /// Accept the key a deployment offered in place of its pinned one.
     AcceptKey {
-        domain: crate::app::federation::Domain,
+        domain: aspen_app::federation::Domain,
         /// The offered key's fingerprint, as `federation list` shows it, confirmed with the
         /// deployment's administrators.
         #[clap(long)]
@@ -38,13 +38,13 @@ pub enum FederationCommand {
     },
     /// Put a known deployment on a list, such as `usersEmigrationAllow`.
     ListAdd {
-        domain: crate::app::federation::Domain,
-        list: crate::app::federation::FederationList,
+        domain: aspen_app::federation::Domain,
+        list: aspen_app::federation::FederationList,
     },
     /// Take a deployment off a list.
     ListRemove {
-        domain: crate::app::federation::Domain,
-        list: crate::app::federation::FederationList,
+        domain: aspen_app::federation::Domain,
+        list: aspen_app::federation::FederationList,
     },
     /// Replace this deployment's key, as planned or because it may have leaked.
     RotateKey {
@@ -64,10 +64,10 @@ pub enum FederationCommand {
 }
 
 fn print_deployment(
-    policy: &crate::app::federation::FederationPolicy,
-    listed: &crate::app::federation::Listed,
+    policy: &aspen_app::federation::FederationPolicy,
+    listed: &aspen_app::federation::Listed,
 ) {
-    use crate::app::federation::{self, Direction, Subject};
+    use aspen_app::federation::{self, Direction, Subject};
     let d = &listed.deployment;
     let key = d
         .public_key
@@ -143,10 +143,10 @@ fn print_deployment(
 }
 
 pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Result<()> {
-    use crate::app::federation::{self, ContactOutcome, Origin};
+    use aspen_app::federation::{self, ContactOutcome, Origin};
     let mut conn = database(config).await?;
-    let fail = |e: crate::app::Error| anyhow!("{e}");
-    let policy = crate::app::deployment_settings::load(&mut conn)
+    let fail = |e: aspen_app::Error| anyhow!("{e}");
+    let policy = aspen_app::deployment_settings::load(&mut conn)
         .await
         .map_err(fail)?
         .federation;

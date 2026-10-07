@@ -2,7 +2,6 @@
 //! operator runs against a deployment (`operator`).
 
 use std::{
-    cell::RefCell,
     fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
     panic,
@@ -19,9 +18,6 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server,
 };
-use rand::SeedableRng as _;
-use rand::rngs::SysRng;
-use rand_chacha::ChaCha20Rng;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
@@ -34,9 +30,9 @@ use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
-mod api;
-mod app;
-mod aspen_config;
+use aspen_api as api;
+use aspen_app as app;
+use aspen_app::aspen_config;
 mod connections;
 mod operator;
 
@@ -156,13 +152,6 @@ enum Command {
         action: operator::PluginsCommand,
     },
 }
-
-thread_local! {
-    pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::try_from_rng(&mut SysRng).expect("failed to initialize system randomness"));
-}
-
-// The catalogue `t!` reads, which `aspen_locale` holds.
-use aspen_locale::{_rust_i18n_try_translate, t};
 
 // tokio-console reads instrumentation Tokio compiles only under this flag.
 #[cfg(all(feature = "console", not(tokio_unstable)))]

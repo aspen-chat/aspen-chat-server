@@ -1,6 +1,6 @@
 //! Polls' options, tallies, and write-ins.
 
-use crate::UserId;
+use crate::{PollId, UserId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -35,4 +35,20 @@ pub struct PollWriteIn {
     /// once their account is gone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub written_by: Option<UserId>,
+}
+
+/// One of the calling user's own write-ins: the poll and the answer's index. Sent only to the
+/// writer, since an anonymous poll's record does not say who wrote what.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnWriteIn {
+    pub poll: PollId,
+    pub option: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PollVote {
+    pub poll: PollId,
+    pub option: u32,
 }

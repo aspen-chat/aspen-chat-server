@@ -113,7 +113,7 @@ commit, as with comments.
   `AspenClient` retries a read once when the wait is at most `RATE_LIMIT_RETRY_MAX_MS`; a
   refused write, or a longer wait, reaches the caller as an `ApiProblemError` whose localized
   text says to slow down. Code that polls must stay well inside the server's built-in limits
-  (`server/src/rate_limits.toml`), as presence polling does.
+  (`server/app/src/rate_limits.toml`), as presence polling does.
 - Errors are RFC 9457 Problems. Branch on `problem.code`, never on `title` or `detail`, which are
   localized prose for display. `unwrap()` converts a failed openapi-fetch result into an
   `ApiProblemError` for callers that prefer exceptions.

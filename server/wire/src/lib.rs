@@ -16,6 +16,10 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::result::Result as StdResult;
 
+/// Every REST route and the event stream live under this prefix. Bumping the version means a
+/// breaking change to the wire contract; additive changes stay within `v1`.
+pub const API_PREFIX: &str = "/api/v1";
+
 pub mod attachment;
 pub mod bot_command;
 pub mod channel;
@@ -164,6 +168,8 @@ macro_rules! id_type {
         #[diesel(sql_type = PgUuid)]
         pub struct $type_name(pub uuid::Uuid);
 
+        // A new ID is a fresh one, never a default.
+        #[allow(clippy::new_without_default)]
         impl $type_name {
             pub fn new() -> Self {
                 Self(uuid::Uuid::now_v7())

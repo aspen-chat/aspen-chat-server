@@ -3,7 +3,7 @@ import { visit } from "unist-util-visit";
 
 /**
  * A tag in the syntax tree: `<@user-id>`, `<@&role-id>`, or `@everyone`, as the server reads
- * them (`server/src/app/mention.rs`). Rendered by `Markdown.tsx` through the `data-mention`
+ * them (`server/app/src/mention.rs`). Rendered by `Markdown.tsx` through the `data-mention`
  * and `data-id` attributes on a `span`, whose text is what was written.
  */
 export interface MentionNode extends Parent {

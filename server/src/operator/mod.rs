@@ -34,8 +34,8 @@ pub use plugins::{PluginsCommand, plugins};
 pub use settings::{SettingsCommand, settings};
 pub use voice_servers::{VoiceServersCommand, voice_servers};
 
-use crate::aspen_config::AspenConfig;
 use anyhow::{Context, Result};
+use aspen_app::aspen_config::AspenConfig;
 
 /// Who is running the command, for the servers' logs.
 fn operator() -> String {
@@ -50,8 +50,8 @@ fn operator() -> String {
 
 /// What an operator command announces its changes with, so connected clients and the servers'
 /// event streams see them as they would the API's.
-async fn publisher(config: &AspenConfig) -> Result<crate::app::events::Publisher> {
-    crate::app::events::Publisher::connect(config)
+async fn publisher(config: &AspenConfig) -> Result<aspen_app::events::Publisher> {
+    aspen_app::events::Publisher::connect(config)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("could not connect to NATS, which announces the change; is it running?")

@@ -3,7 +3,7 @@
  *
  * The server speaks WebAuthn options and credentials as JSON with every binary field in
  * base64url; the browser API wants and returns `ArrayBuffer`s. The conversions here are the
- * same ones the server's own handoff page (`server/src/api/passkey_page/page.html`) performs.
+ * same ones the server's own handoff page (`server/api/src/passkey_page/page.html`) performs.
  *
  * A page can run a ceremony itself only when its host is the relying party's domain or under
  * it (`canRunInPage`). The desktop and mobile shells cannot, so they hand the ceremony to that

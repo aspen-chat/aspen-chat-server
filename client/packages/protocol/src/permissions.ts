@@ -1,6 +1,6 @@
 /**
  * Who may do what in a community, resolved the way the server resolves it
- * (`server/src/app/permissions.rs`). Both are tested against `spec/permission_vectors.json`, so
+ * (`server/app/src/permissions.rs`). Both are tested against `spec/permission_vectors.json`, so
  * they cannot drift apart.
  *
  * A member's permissions across a community are the union of their roles', everyone's role

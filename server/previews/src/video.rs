@@ -131,8 +131,6 @@ fn limit(command: &mut Command, memory: u64) {
 #[cfg(not(unix))]
 fn limit(_command: &mut Command, _memory: u64) {}
 
-/// Copies a video from storage to a file of its own and makes its poster.
-
 /// The frame `at` seconds into the video at `path`, upright, as a PNG of at most
 /// `max_picture_bytes`.
 pub async fn poster_frame(
