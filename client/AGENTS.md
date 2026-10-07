@@ -333,9 +333,9 @@ commit, as with comments.
 - Three builds of the same code: `pnpm build` (web, served from a site root, real URL paths),
   `pnpm build:shell` (`--base ./`, used by the mobile package, which loads the bundle from an
   app-local origin and routes after a `#`), and `pnpm build:desktop` (the same for the desktop
-  package's `file://` page, with its Content Security Policy written into the page,
-  `DESKTOP_POLICY` in `vite.config.ts`, since a file has no headers; the web build's comes from
-  the server). Never write an absolute `/assets/…` URL by hand; let Vite resolve assets so every
+  package's `file://` page). Both write their Content Security Policy into the page
+  (`shellPolicy` in `vite.config.ts`), since neither page comes with headers; the web build's
+  comes from the server. Never write an absolute `/assets/…` URL by hand; let Vite resolve assets so every
   build works.
 - Routing is TanStack Router (`src/router.tsx`), code-based, one route tree for every shell.
   Anything a user might want to share is a route: `/communities/{id}/channels/{id}`,
