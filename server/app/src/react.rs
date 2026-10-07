@@ -147,6 +147,7 @@ pub async fn remove_others_react(
                 &access,
                 crate::moderation_log::ModerationAction::RemoveReaction,
                 Some(format!("{}/{emoji}/{}", message_id.0, author.0)),
+                Some(author),
             )
             .await?;
         }

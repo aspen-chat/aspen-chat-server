@@ -787,6 +787,7 @@ pub async fn remove_member(
                     .contains(Permissions::REMOVE_MEMBERS)
                     && their_rank < access.role_rank())
             {
+                crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                 log_moderation(
                     conn.as_mut(),
                     caller,
@@ -827,6 +828,7 @@ pub async fn clear_nickname(
                         .contains(Permissions::MANAGE_NICKNAMES)
                         && their_rank < access.role_rank())
                 {
+                    crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                     log_moderation(
                         conn.as_mut(),
                         caller,

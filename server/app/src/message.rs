@@ -914,6 +914,7 @@ pub async fn delete_message(
             &access,
             ModerationAction::DeleteMessage,
             Some(id.0.to_string()),
+            Some(author),
         )
         .await?;
     }
@@ -1117,7 +1118,11 @@ pub async fn note_moderation(
     access: &crate::permissions::ChannelAccess,
     action: ModerationAction,
     subject: Option<String>,
+    target: Option<UserId>,
 ) -> crate::Result<()> {
+    if let Some(target) = target {
+        crate::deployment::require_outranks(conn, actor, target).await?;
+    }
     log_moderation(
         conn,
         actor,
@@ -1168,6 +1173,7 @@ pub async fn remove_attachment(
                     &access,
                     ModerationAction::RemoveAttachment,
                     Some(format!("{}/{}", id.0, attachment_id.0)),
+                    Some(author),
                 )
                 .await?;
             }

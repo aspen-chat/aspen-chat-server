@@ -1210,6 +1210,42 @@ def banned_owners_bots(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def moderator_ranks(world: World, check: Checks) -> None:
+    say("moderating the deployment reaches no one ranked at or above the moderator there")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+    # Each role is made below the others, so Senior outranks Mods.
+    senior_role = world.as_owner("POST", "/admin/roles", {"name": f"Senior{world.run}", "permissions": []})["id"]
+    mods = world.as_owner("POST", "/admin/roles", {"name": f"Mods{world.run}",
+                                                   "permissions": ["moderateCommunities"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{mods}")
+    senior, plain = world.account("senior"), world.account("plain")
+    for person in (senior, plain):
+        invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+        stack.api("PUT", f"/communities/{world.community}/members/@me",
+                  {"inviteCode": invite.get("code") or invite.get("id")}, person["token"])
+    world.as_owner("PUT", f"/admin/users/{senior['id']}/roles/{senior_role}")
+    channel = world.channel("ranked")
+
+    def said(person: dict) -> str:
+        return stack.api("POST", f"/channels/{channel}/messages", {"content": "hello", "attachments": []},
+                         person["token"])["id"]
+
+    check("a moderator does not delete the message of someone who outranks them on the deployment",
+          stack.status("DELETE", f"/messages/{said(senior)}", token=member["token"]) == 403)
+    check("nor remove them from a community",
+          stack.status("DELETE", f"/communities/{world.community}/members/{senior['id']}",
+                       token=member["token"]) == 403)
+    check("but deletes the message of someone with no deployment role",
+          stack.status("DELETE", f"/messages/{said(plain)}", token=member["token"]) == 204)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{senior_role}")
+    stack.command("admin", "deny", "moderateCommunities")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
 def ban_deletions(world: World, check: Checks) -> None:
     say("a ban's deletion window reaches only channels the banner may view")
     stack, member = world.stack, world.member
@@ -1725,7 +1761,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, banned_owners_bots, ban_deletions, dm_reads,
+             nicknames, review_powers, ban_ranks, banned_owners_bots, moderator_ranks, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

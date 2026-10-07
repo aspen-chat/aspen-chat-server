@@ -86,6 +86,22 @@ impl DeploymentAccess {
     }
 }
 
+/// Refuses `actor`'s use of moderating the deployment on `target` unless `actor`'s highest
+/// deployment role ranks above `target`'s, as a ban from the deployment ranks: what Moderate any
+/// community takes away in a community does not reach anyone who holds a deployment role at or
+/// above the moderator's. Acting on oneself is not moderation and is never refused.
+pub async fn require_outranks(
+    conn: &mut AsyncPgConnection,
+    actor: UserId,
+    target: UserId,
+) -> crate::Result<()> {
+    if actor == target {
+        return Ok(());
+    }
+    let theirs = deployment_access(conn, target).await?.rank();
+    deployment_access(conn, actor).await?.require_above(theirs)
+}
+
 /// What `user` may do across the deployment.
 pub async fn deployment_access(
     mut conn: &AsyncPgConnection,
