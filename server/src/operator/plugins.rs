@@ -137,7 +137,9 @@ fn describe(manifest: &Manifest, granted: Option<&std::collections::BTreeSet<Plu
         println!("It may call: {}", manifest.hosts.join(", "));
     }
     if let Some(quota) = manifest.storage_quota {
-        println!("It may keep up to {quota} bytes.");
+        println!(
+            "It may keep up to {quota} bytes for each community, each DM, each person, and itself."
+        );
     }
     if let Some(principal) = &manifest.principal {
         let permissions: Vec<String> = principal
