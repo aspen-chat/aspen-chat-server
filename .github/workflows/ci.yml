@@ -46,6 +46,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # The second-factor failure limit's tests count attempts in a real Valkey. The one
+      # docker-compose.yaml runs, which the permissions check below starts again and finds up.
+      - name: Valkey for the tests
+        run: |
+          docker compose up -d valkey
+          timeout 30 sh -c 'until docker compose exec -T valkey valkey-cli ping | grep -q PONG; do sleep 1; done'
       - run: cargo test --locked --workspace
       # The desktop shell's capture helper is a workspace of its own; on Linux it links PipeWire
       # and libopus and no libobs.
@@ -254,8 +260,16 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container: debian:bookworm
     timeout-minutes: 90
+    # The second-factor failure limit's tests count attempts in a real Valkey, which a job in a
+    # container reaches by its service's name.
+    services:
+      valkey:
+        image: valkey/valkey:alpine
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 2s --health-timeout 2s --health-retries 15
     env:
       JEMALLOC_SYS_WITH_LG_PAGE: "16"
+      VALKEY_URL: redis://valkey:6379
     steps:
       - name: System packages
         run: |
