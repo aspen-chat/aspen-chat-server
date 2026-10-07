@@ -40,8 +40,6 @@ export const reports = {
   embedUnavailable: "You can't view this message.",
   embedLoading: "Loading the linked message",
   jumpToMessage: "Jump to message",
-  messageLinkLabel: "Message",
-  messageLinkFull: "Link to a message: {url}",
   deletedTag: "Deleted",
   // Warnings
   warningLabel: "Moderator warning",

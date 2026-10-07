@@ -255,6 +255,7 @@ export class AspenSync {
   /** The read of the plugin catalogue in flight, which every ask shares. */
   #pluginLoad: Promise<void> | null = null;
   readonly #userLoads = new Map<string, Promise<void>>();
+  readonly #channelLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the user last did something in the app, and when the server was last told. */
@@ -482,6 +483,7 @@ export class AspenSync {
     this.#held = null;
     this.#windowLoads.clear();
     this.#userLoads.clear();
+    this.#channelLoads.clear();
     this.#pollLoads.clear();
     this.#iconLoads.clear();
     this.#unreported.clear();
@@ -887,6 +889,37 @@ export class AspenSync {
     }
     this.store.ingest({ channels: [result.data] });
     return result.data;
+  }
+
+  /**
+   * Reads one channel into the store in the background when it is not there and has not been
+   * refused, as a link naming a DM from before the last listing does to show its people. A
+   * channel the caller may not see, or that is gone, is marked missing.
+   */
+  ensureChannel(channelId: string): void {
+    if (
+      this.store.channel(channelId) !== undefined ||
+      this.store.missing("channel", channelId) ||
+      this.#channelLoads.has(channelId)
+    ) {
+      return;
+    }
+    const load = this.#client.api
+      .GET("/api/v1/channels/{channel}", { params: { path: { channel: channelId } } })
+      .then(({ data, response }) => {
+        if (data !== undefined) {
+          this.store.ingest({ channels: [data] });
+        } else if (response.status === 403 || response.status === 404) {
+          this.store.markMissing("channel", channelId);
+        }
+      })
+      .catch(() => {
+        // Transient; the next render that needs the channel asks again.
+      })
+      .finally(() => {
+        this.#channelLoads.delete(channelId);
+      });
+    this.#channelLoads.set(channelId, load);
   }
 
   /**

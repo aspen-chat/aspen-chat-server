@@ -5,9 +5,14 @@
   `message-body` rules in `styles.css`. Only an absolute `http:`, `https:`, or `mailto:` address
   becomes a link (`messageLinkUrl`); a relative or protocol-relative one (`//host/share/file`),
   which on a page loaded from a file (the desktop app's) would be a `file:` link, stays plain
-  text. A picture written into the text (`![alt](url)`) is a link named by its alt text, never
-  loaded. Fenced code is highlighted by highlight.js
-  (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
+  text. A link is always its own address: one its author named with words of their own
+  (`[text](url)`, a reference `[text][ref]` and its `[ref]: url` line) and a picture written
+  into the text (`![alt](url)`) show as the characters they were written as
+  (`remarkLiteralLinks.ts`), so `[my bank](https://evil.example)` cannot pass for a link to the
+  bank and a picture is never loaded; the address inside is then linked as any bare address is.
+  Autolinks (`<https://…>`) and GFM's literal `https://…` and `www.…` stay links, since their
+  text is their address. Only messages are rendered by `Markdown.tsx`. Fenced code is
+  highlighted by highlight.js (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
   block: its "common" grammars come with that chunk and every other grammar it ships is fetched
   on first use. Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at
   the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain. Spoilers are
@@ -20,6 +25,27 @@
   set is a constant in that file. The server's preview extractor
   (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
   as a link is what gets a preview; change both together.
+- A link to a deployment the user uses (`parseSelfLink` in `src/features/messages/selfLinks.ts`:
+  the home, at the address the app reaches it at or the page's own, and every deployment signed
+  in to from there) is a chip naming what it leads to rather than its address (`SelfLink.tsx`):
+  the name behind each of its ids, outside in, between Phosphor carets, such as
+  `Family › general › Message from Bob`, led by the deployment's domain when it is not the one
+  the message is from. Every route of the app is read: a deployment's front page, communities,
+  channels, messages, threads, DMs, and invites, on its own address or the home's under
+  `/at/{domain}` (an invite's `?at=` naming its deployment), and the home's own pages (the
+  dashboard and its tabs, adding a bot, registration invites, sign-in codes, attributions);
+  the deployment's API, files, and any other path stay ordinary links. Pressing the chip opens
+  the route here through the router (`selfLinkRoute`), so the page is not loaded again. Names
+  come from the store of the deployment the link is to (`SourceScope`), with a word for the kind
+  of thing wherever a name is unknown or not the reader's to see (`unnamed`): a community's and
+  channel's from the store, a DM's from its people (read on demand with
+  `AspenSync.ensureChannel`, a skeleton meanwhile), a message's from its author as the read of
+  the linking message sideloaded it (`include=linked`), a thread as the word "Thread", since a
+  thread's starter message names it, and an invite by its code, since reading what an invite
+  opens counts against the limit on guessing invites. Its tooltip is its address, and
+  right-clicking it, or holding a finger on it (its own timer, which keeps the press from the
+  message's actions), opens a menu that copies the address or opens it as an ordinary link
+  would.
 - Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (`upload.ts`; reserve,
   `PUT` the bytes straight to storage with `uploadFetch`, confirm, which has the server move them
   from the URL's staging key to where readers fetch them, so the URL can change nothing after) and are named by id in

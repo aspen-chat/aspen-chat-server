@@ -37,6 +37,7 @@ import { qr } from "./en/qr";
 import { reports } from "./en/reports";
 import { roles } from "./en/roles";
 import { search } from "./en/search";
+import { selfLinks } from "./en/selfLinks";
 import { security } from "./en/security";
 import { settings } from "./en/settings";
 import { status } from "./en/status";
@@ -295,6 +296,7 @@ export const en = {
   palettes,
   syncStatus,
   reports,
+  selfLinks,
 } as const;
 
 /** A catalogue: the shape of `en`, with any text in place of its strings. */
