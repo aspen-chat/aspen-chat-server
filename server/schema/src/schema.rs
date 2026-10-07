@@ -584,6 +584,8 @@ diesel::table! {
         payload -> Text,
         attempts -> Int4,
         claimed_until -> Nullable<Timestamptz>,
+        scope_kind -> Nullable<Text>,
+        scope -> Nullable<Uuid>,
     }
 }
 

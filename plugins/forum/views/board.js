@@ -1,5 +1,6 @@
-// A forum board: its posts newest first, a form to post, and a post with its replies. Everything
-// goes through the bridge (`bridge.js`), which calls the plugin's routes as the person.
+// A forum board: its posts newest first, a page at a time, a form to post, and a post with its
+// replies, a page at a time. Everything goes through the bridge (`bridge.js`), which calls the
+// plugin's routes as the person.
 "use strict";
 
 const board = document.getElementById("board");
@@ -39,18 +40,67 @@ function failed(error) {
   return element("p", { class: "error", role: "alert" }, message);
 }
 
+/** A button that runs `load`, which shows another page, and then takes itself away. */
+function more(label, load) {
+  const button = element("button", { type: "button" }, label);
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await load();
+      button.remove();
+    } catch (error) {
+      button.disabled = false;
+      button.after(failed(error));
+    }
+  });
+  return button;
+}
+
+/** Appends a page of posts to `list`, and the button for the page after it to `footer`. */
+async function appendPosts(list, footer, before) {
+  const channel = aspen.context.channel;
+  const query = before === null ? "" : `?before=${encodeURIComponent(before)}`;
+  const { posts, next } = await aspen.json("GET", `boards/${channel}/posts${query}`);
+  await name(posts.map((p) => p.author));
+  for (const post of posts) {
+    list.append(
+      element(
+        "li",
+        { class: "post" },
+        element(
+          "button",
+          { class: "title", type: "button", onclick: () => showPost(post.id) },
+          post.title,
+        ),
+        element(
+          "div",
+          { class: "meta" },
+          `${names.get(post.author) ?? aspen.t("someone")} · ${when(post.createdAt)} · ${
+            post.replies === 0 ? aspen.t("noReplies") : aspen.t("replies", { count: post.replies })
+          }`,
+        ),
+      ),
+    );
+  }
+  if (next !== null) {
+    footer.append(more(aspen.t("older"), () => appendPosts(list, footer, next)));
+  }
+  return posts.length;
+}
+
 async function showList() {
   shown = null;
   board.setAttribute("aria-busy", "true");
   const channel = aspen.context.channel;
-  let posts;
+  const list = element("ul", { "aria-label": aspen.context.channelName ?? "" });
+  const footer = element("div", {});
+  let count;
   try {
-    posts = await aspen.json("GET", `boards/${channel}/posts`);
+    count = await appendPosts(list, footer, null);
   } catch (error) {
     board.replaceChildren(failed(error));
     return;
   }
-  await name(posts.map((p) => p.author));
   const title = element("input", { name: "title", required: "", maxlength: "200" });
   const body = element("textarea", { name: "body" });
   const form = element(
@@ -74,47 +124,56 @@ async function showList() {
     element("label", {}, aspen.t("body"), body),
     element("button", { type: "submit", class: "primary" }, aspen.t("post")),
   );
-  const list = element("ul", { "aria-label": aspen.context.channelName ?? "" });
-  for (const post of posts) {
-    list.append(
+  board.replaceChildren(
+    form,
+    count === 0 ? element("p", { class: "hint" }, aspen.t("empty")) : list,
+    footer,
+  );
+  board.setAttribute("aria-busy", "false");
+}
+
+/** Appends a page of a post's replies to `thread`, and the button for the page after it. */
+async function appendReplies(thread, footer, id, after) {
+  const channel = aspen.context.channel;
+  const query = after === null ? "" : `?after=${encodeURIComponent(after)}`;
+  const found = await aspen.json("GET", `boards/${channel}/posts/${id}${query}`);
+  await name(found.replies.map((r) => r.author));
+  for (const reply of found.replies) {
+    thread.append(
       element(
         "li",
         { class: "post" },
         element(
-          "button",
-          { class: "title", type: "button", onclick: () => showPost(post.id) },
-          post.title,
-        ),
-        element(
           "div",
           { class: "meta" },
-          `${names.get(post.author) ?? aspen.t("someone")} · ${when(post.createdAt)} · ${
-            post.replies === 0 ? aspen.t("noReplies") : aspen.t("replies", { count: post.replies })
-          }`,
+          `${names.get(reply.author) ?? aspen.t("someone")} · ${when(reply.createdAt)}`,
         ),
+        element("div", { class: "body" }, reply.body),
       ),
     );
   }
-  board.replaceChildren(
-    form,
-    posts.length === 0 ? element("p", { class: "hint" }, aspen.t("empty")) : list,
-  );
-  board.setAttribute("aria-busy", "false");
+  if (found.next !== null) {
+    footer.append(
+      more(aspen.t("moreReplies"), () => appendReplies(thread, footer, id, found.next)),
+    );
+  }
+  return found.post;
 }
 
 async function showPost(id) {
   shown = id;
   board.setAttribute("aria-busy", "true");
   const channel = aspen.context.channel;
-  let found;
+  const thread = element("ul", {});
+  const footer = element("div", {});
+  let post;
   try {
-    found = await aspen.json("GET", `boards/${channel}/posts/${id}`);
+    post = await appendReplies(thread, footer, id, null);
   } catch (error) {
     board.replaceChildren(failed(error));
     return;
   }
-  const { post, replies } = found;
-  await name([post.author, ...replies.map((r) => r.author)]);
+  await name([post.author]);
   const body = element("textarea", { name: "reply", required: "" });
   const form = element(
     "form",
@@ -132,21 +191,6 @@ async function showPost(id) {
     element("label", {}, aspen.t("reply"), body),
     element("button", { type: "submit", class: "primary" }, aspen.t("reply")),
   );
-  const thread = element("ul", {});
-  for (const reply of replies) {
-    thread.append(
-      element(
-        "li",
-        { class: "post" },
-        element(
-          "div",
-          { class: "meta" },
-          `${names.get(reply.author) ?? aspen.t("someone")} · ${when(reply.createdAt)}`,
-        ),
-        element("div", { class: "body" }, reply.body),
-      ),
-    );
-  }
   const actions = element(
     "div",
     {},
@@ -182,6 +226,7 @@ async function showPost(id) {
       element("div", { class: "body" }, post.body),
     ),
     thread,
+    footer,
     form,
   );
   board.setAttribute("aria-busy", "false");

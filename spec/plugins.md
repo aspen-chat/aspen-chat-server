@@ -269,6 +269,11 @@ a message the caller may not read is not found, and storage in a channel's or co
 is readable only by those who may view the channel or belong to the community, and in a user's
 scope only by that user. So it is with what it sends: an event published, or a notice sent, while
 answering goes only to a channel the caller may view, a community they belong to, or themself.
+And so it is with what its principal does while answering: it sends a message or a card only to a
+channel the caller may view, deletes or reacts to only a message the caller may read, and removes
+or bans only in a community the caller belongs to, so no one can have a plugin act where they
+cannot see. Changing the card of a message the principal posted is not limited so, since it shows
+nothing new to the caller and is how a card stays current wherever it is read.
 
 ### Events
 
@@ -331,7 +336,10 @@ it loads the view again, in a new frame, with a new port.
 A plugin holding `timers` sets a timer by key (`set-timer`), due at a time with a payload of its
 own, and cancels it (`cancel-timer`); setting a key again replaces it. When it falls due, any one
 API server calls the plugin's `observe` with `timer-fired`, at least once: a call that fails is
-tried again a minute later, three times at most. A plugin keeps at most 10,000 timers.
+tried again a minute later, three times at most. A plugin keeps at most 10,000 timers. A timer
+set in a scope (`set-timer-in`: a community, a channel, or a user, checked as storage's scopes
+are) goes when that scope does, with what the plugin keeps there, so a reminder about a deleted
+channel's event neither fires nor counts against the plugin's timers.
 
 ### Notices
 

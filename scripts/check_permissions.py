@@ -1434,6 +1434,18 @@ def calendar_channels(world: World, check: Checks) -> None:
     world.stream.gather(0.5)
     check("given the channel back, their private URL answers again",
           stack.status("GET", f"{stack.base}{feed}") == 200)
+    # A route's actions reach only where its caller may look: hidden from the announcements, a
+    # member's new event is kept, but the plugin's account posts no card there on their behalf.
+    world.as_owner("PUT", f"/channels/{announce}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    latest = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    added = stack.status("POST", events, {"title": "Unseen", "start": soon}, world.member["token"])
+    time.sleep(0.5)
+    still = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    check("a member who cannot see where events are announced adds one, and no card is posted there for them",
+          added == 201 and still == latest, added)
+    world.as_owner("DELETE", f"/channels/{announce}/overrides/{world.everyone}")
+    world.stream.gather(0.5)
     stack.command("admin", "grant", world.owner["name"])
     stack.command("admin", "allow", "banUsers")
     world.as_owner("PUT", f"/admin/users/{world.member['id']}/ban", {})
@@ -1442,6 +1454,22 @@ def calendar_channels(world: World, check: Checks) -> None:
     world.as_owner("DELETE", f"/admin/users/{world.member['id']}/ban")
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
+
+    # An event is deleted by whoever added it, or by someone who may manage messages.
+    mine = stack.api("POST", events, {"title": "Mine", "start": soon}, world.member["token"])["id"]
+    owners = world.as_owner("POST", events, {"title": "Theirs", "start": soon})["id"]
+    check("a member may not delete someone else's event",
+          stack.status("DELETE", f"{events}/{owners}", token=world.member["token"]) == 403)
+    check("but may delete their own",
+          stack.status("DELETE", f"{events}/{mine}", token=world.member["token"]) == 204)
+    check("and its reminder goes with it",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE key = 'remind:{mine}'", stack.database) == "0")
+    # Deleting the calendar deletes the reminders set in it, with its events.
+    check("an event's reminder is kept in the calendar's scope",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) != "0")
+    world.as_owner("DELETE", f"/channels/{calendar}")
+    check("deleting the calendar deletes its reminders",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) == "0")
     stack.command("plugins", "disable", CALENDAR_ID)
 
 

@@ -1,6 +1,7 @@
-// An event calendar: its events soonest first, each with who is going and a way to go or not, a
-// form to add one, and the person's own feed address for their calendar app. Everything goes
-// through the bridge (`bridge.js`), which calls the plugin's routes as the person.
+// An event calendar: its events soonest first, each with how many are going and a way to go or
+// not, and for its creator a way to delete it, a form to add one, and the person's own feed
+// address for their calendar app. Everything goes through the bridge (`bridge.js`), which calls
+// the plugin's routes as the person.
 "use strict";
 
 const calendar = document.getElementById("calendar");
@@ -23,9 +24,10 @@ function when(ms) {
   });
 }
 
-function failed(error) {
-  const message = error.status === 403 ? aspen.t("cannotAdd") : aspen.t("failed");
-  return element("p", { class: "error", role: "alert" }, message);
+/** Why something did not work: `forbidden` when it was refused, and a full calendar. */
+function failed(error, forbidden = "cannotAdd") {
+  const key = error.status === 403 ? forbidden : error.status === 409 ? "full" : "failed";
+  return element("p", { class: "error", role: "alert" }, aspen.t(key));
 }
 
 async function show() {
@@ -63,32 +65,51 @@ async function show() {
   );
   const list = element("ul", {});
   for (const event of events) {
-    const going = event.going.includes(me);
-    list.append(
+    const going = event.youAreGoing;
+    const item = element(
+      "li",
+      { class: "post" },
+      element("h2", {}, event.title),
       element(
-        "li",
-        { class: "post" },
-        element("h2", {}, event.title),
-        element(
-          "div",
-          { class: "meta" },
-          `${when(event.start)} · ${aspen.t("goingCount", { count: event.going.length })}`,
-        ),
+        "div",
+        { class: "meta" },
+        `${when(event.start)} · ${aspen.t("goingCount", { count: event.goingCount })}`,
+      ),
+      element(
+        "button",
+        {
+          type: "button",
+          class: going ? "" : "primary",
+          "aria-pressed": String(going),
+          onclick: async () => {
+            await aspen.request("POST", `calendars/${channel}/events/${event.id}/rsvp`);
+            await show();
+          },
+        },
+        going ? aspen.t("notGoingButton") : aspen.t("goingButton"),
+      ),
+    );
+    if (event.creator === me) {
+      item.append(
+        " ",
         element(
           "button",
           {
             type: "button",
-            class: going ? "" : "primary",
-            "aria-pressed": String(going),
             onclick: async () => {
-              await aspen.request("POST", `calendars/${channel}/events/${event.id}/rsvp`);
-              await show();
+              const answer = await aspen.request(
+                "DELETE",
+                `calendars/${channel}/events/${event.id}`,
+              );
+              if (answer.status >= 400) item.append(failed(answer, "cannotDelete"));
+              else await show();
             },
           },
-          going ? aspen.t("notGoingButton") : aspen.t("goingButton"),
+          aspen.t("delete"),
         ),
-      ),
-    );
+      );
+    }
+    list.append(item);
   }
   const feed = element("div", {});
   const subscribe = element(

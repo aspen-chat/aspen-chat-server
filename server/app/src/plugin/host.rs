@@ -2,7 +2,8 @@
 //!
 //! Each call runs in a fresh instance in a store of its own, so nothing survives from one call
 //! to the next but what the plugin keeps through the host. A call first waits for a place among
-//! the calls running (`[plugins] concurrency` and `concurrency_per_plugin`). A store has a
+//! the calls running (`[plugins] concurrency` and `concurrency_per_plugin`, of which a share is
+//! kept for intercepting calls, `registry::Places`). A store has a
 //! memory ceiling (`[plugins] memory_mib`, for all its memories together), bounded instances,
 //! tables, and table elements (`CallLimits`), and a deadline: the engine's epoch ticks every
 //! millisecond, and at each tick a call past its deadline traps, while one within it yields to
@@ -138,6 +139,24 @@ impl WasiView for CallState {
     }
 }
 
+/// The most characters of a plugin's message the log keeps.
+const MAX_LOG_CHARS: usize = 2000;
+
+/// A plugin's message as one line of the log: its first `MAX_LOG_CHARS` characters, with line
+/// breaks and every other control character escaped (`\n`, `\u{1b}`), so a plugin cannot write
+/// lines that read as the server's own or send escape sequences to a terminal.
+fn log_line(message: &str) -> String {
+    let mut line = String::with_capacity(message.len().min(MAX_LOG_CHARS));
+    for c in message.chars().take(MAX_LOG_CHARS) {
+        if c.is_control() {
+            line.extend(c.escape_default());
+        } else {
+            line.push(c);
+        }
+    }
+    line
+}
+
 /// Why a call did not answer.
 #[derive(Debug)]
 pub(super) struct CallFailed(pub String);
@@ -171,7 +190,7 @@ impl Instance {
         // each one's manifest says rather than queueing without end.
         let permit = state
             .plugins
-            .admit(&plugin.id, deadline)
+            .admit(&plugin.id, matches!(phase, Phase::Intercept), deadline)
             .await
             .ok_or_else(|| CallFailed("too many plugin calls were running to start".into()))?;
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
@@ -468,6 +487,30 @@ impl Call {
         Ok(())
     }
 
+    /// While answering a route, that the caller may read the message `id`; not found otherwise,
+    /// as if it were not. Outside a route there is no caller to ask about.
+    async fn caller_reads(&self, id: MessageId) -> Result<(), wit::Error> {
+        if let Phase::Route { .. } = self.phase {
+            self.readable_message(id).await?;
+        }
+        Ok(())
+    }
+
+    /// While answering a route, that the caller belongs to `community`; not found otherwise, as
+    /// if it were not. Outside a route there is no caller to ask about.
+    async fn caller_belongs(
+        &self,
+        conn: &mut AsyncPgConnection,
+        community: CommunityId,
+    ) -> Result<(), wit::Error> {
+        if let Phase::Route { caller } = self.phase {
+            crate::permissions::require_member(conn, caller, community)
+                .await
+                .map_err(|_| wit::Error::NotFound)?;
+        }
+        Ok(())
+    }
+
     /// Whether the plugin runs in `community`.
     async fn running_in(
         &self,
@@ -567,7 +610,7 @@ impl Call {
     }
 
     async fn log(&mut self, level: wit::Level, message: String) {
-        let message: String = message.chars().take(2000).collect();
+        let message = log_line(&message);
         let plugin = self.plugin.id.as_str();
         match level {
             wit::Level::Debug => tracing::debug!(plugin, "{message}"),
@@ -921,11 +964,7 @@ impl Call {
             wit::Audience::Community(id) => {
                 let community = CommunityId(parse_id(&id)?);
                 self.running_in(conn.as_mut(), community).await?;
-                if let Phase::Route { caller } = self.phase {
-                    crate::permissions::require_member(conn.as_mut(), caller, community)
-                        .await
-                        .map_err(|_| wit::Error::NotFound)?;
-                }
+                self.caller_belongs(conn.as_mut(), community).await?;
                 super::Target::Community(community)
             }
             wit::Audience::User(id) => {
@@ -961,6 +1000,7 @@ impl Call {
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel).await?;
+            self.caller_views(conn.as_mut(), channel).await?;
         }
         self.act(Deferred::Send { channel, content })
             .await
@@ -969,11 +1009,13 @@ impl Call {
 
     async fn delete_message(&mut self, message_id: String) -> Result<(), wit::Error> {
         let id = MessageId(parse_id(&message_id)?);
+        self.caller_reads(id).await?;
         self.act(Deferred::Delete(id)).await.map(|_| ())
     }
 
     async fn add_reaction(&mut self, message_id: String, emoji: String) -> Result<(), wit::Error> {
         let message = MessageId(parse_id(&message_id)?);
+        self.caller_reads(message).await?;
         self.act(Deferred::React { message, emoji })
             .await
             .map(|_| ())
@@ -982,6 +1024,10 @@ impl Call {
     async fn remove_member(&mut self, community: String, user: String) -> Result<(), wit::Error> {
         let community = CommunityId(parse_id(&community)?);
         let user = UserId(parse_id(&user)?);
+        {
+            let mut conn = self.conn().await?;
+            self.caller_belongs(conn.as_mut(), community).await?;
+        }
         self.act(Deferred::Remove { community, user })
             .await
             .map(|_| ())
@@ -996,6 +1042,10 @@ impl Call {
     ) -> Result<(), wit::Error> {
         let community = CommunityId(parse_id(&community)?);
         let user = UserId(parse_id(&user)?);
+        {
+            let mut conn = self.conn().await?;
+            self.caller_belongs(conn.as_mut(), community).await?;
+        }
         self.act(Deferred::Ban {
             community,
             user,
@@ -1093,7 +1143,28 @@ impl Call {
     ) -> Result<(), wit::Error> {
         self.require(PluginPermission::Timers)?;
         let mut conn = self.conn().await?;
-        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload).await
+        super::timer::set(
+            conn.as_mut(),
+            &self.plugin.id,
+            &key,
+            &due,
+            &payload,
+            &storage::Scope::Deployment,
+        )
+        .await
+    }
+
+    async fn set_timer_in(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.require(PluginPermission::Timers)?;
+        let scope = self.scope(scope).await?;
+        let mut conn = self.conn().await?;
+        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload, &scope).await
     }
 
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
@@ -1175,6 +1246,7 @@ impl Call {
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel).await?;
+            self.caller_views(conn.as_mut(), channel).await?;
         }
         self.act(Deferred::SendCard {
             channel,
@@ -1371,6 +1443,16 @@ impl aspen::plugin::host::Host for CallState {
         self.call.set_timer(key, due, payload).await
     }
 
+    async fn set_timer_in(
+        &mut self,
+        scope: wit::Scope,
+        key: String,
+        due: String,
+        payload: String,
+    ) -> Result<(), wit::Error> {
+        self.call.set_timer_in(scope, key, due, payload).await
+    }
+
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
         self.call.cancel_timer(key).await
     }
@@ -1408,5 +1490,19 @@ impl aspen::plugin::host::Host for CallState {
         card: Option<wit::Card>,
     ) -> Result<(), wit::Error> {
         self.call.update_card(message, card).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plugin_writes_one_line_of_the_log() {
+        assert_eq!(
+            log_line("fine\nERROR forged\r\u{1b}[2J"),
+            "fine\\nERROR forged\\r\\u{1b}[2J"
+        );
+        assert_eq!(log_line(&"é".repeat(5000)).chars().count(), MAX_LOG_CHARS);
     }
 }

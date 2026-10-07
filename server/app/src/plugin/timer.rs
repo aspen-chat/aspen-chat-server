@@ -3,10 +3,13 @@
 //! (`FOR UPDATE SKIP LOCKED`, so no two claim one), calls the plugin's `observe` with
 //! `timer-fired`, and deletes the timer once it is handled. A claim lasts a minute, so a timer
 //! whose handling failed, or whose server stopped, is tried again then, `MAX_ATTEMPTS` times at
-//! most. Only plugins that are on are called; a plugin's timers wait while it is off.
+//! most. Only plugins that are on are called; a plugin's timers wait while it is off. A timer set
+//! in a scope (`set-timer-in`) goes with it, as the plugin's storage there does
+//! (`storage::forget`).
 
 use super::host::wit;
 use super::registry::Running;
+use super::storage::Scope;
 use crate::context::GlobalServerContext;
 use aspen_schema::plugin_timer;
 use chrono::{DateTime, Utc};
@@ -23,13 +26,15 @@ const MAX_ATTEMPTS: i32 = 3;
 const MAX_KEY: usize = 200;
 const MAX_PAYLOAD: usize = 16 << 10;
 
-/// Sets `key` due at `due` with `payload`, replacing a timer of that key.
+/// Sets `key` due at `due` with `payload`, replacing a timer of that key, to go with `scope`
+/// when it names a community, a channel, or a user.
 pub async fn set(
     conn: &mut AsyncPgConnection,
     plugin_id: &str,
     key: &str,
     due: &str,
     payload: &str,
+    scope: &Scope,
 ) -> Result<(), wit::Error> {
     if key.is_empty() || key.len() > MAX_KEY || payload.len() > MAX_PAYLOAD {
         return Err(wit::Error::Invalid(format!(
@@ -63,12 +68,18 @@ pub async fn set(
             )));
         }
     }
+    let (scope_kind, scope) = match scope {
+        Scope::Deployment => (None, None),
+        scope => (Some(scope.kind()), Some(scope.id())),
+    };
     diesel::insert_into(plugin_timer::table)
         .values((
             plugin_timer::plugin.eq(plugin_id),
             plugin_timer::key.eq(key),
             plugin_timer::due.eq(due),
             plugin_timer::payload.eq(payload),
+            plugin_timer::scope_kind.eq(scope_kind),
+            plugin_timer::scope.eq(scope),
         ))
         .on_conflict((plugin_timer::plugin, plugin_timer::key))
         .do_update()
@@ -77,6 +88,8 @@ pub async fn set(
             plugin_timer::payload.eq(payload),
             plugin_timer::attempts.eq(0),
             plugin_timer::claimed_until.eq(None::<DateTime<Utc>>),
+            plugin_timer::scope_kind.eq(scope_kind),
+            plugin_timer::scope.eq(scope),
         ))
         .execute(conn)
         .await
