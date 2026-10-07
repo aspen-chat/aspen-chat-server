@@ -8,9 +8,12 @@
 //! only after the transaction that published it has written it. It wakes the people a new
 //! message is for, and, for the phones it woke, says when that channel was read elsewhere or the
 //! message deleted, so the phone can take its notification down. What it woke whom for is kept
-//! in Valkey for [`REMEMBERED`].
+//! in Valkey for [`REMEMBERED`]. An event is acknowledged once its pushes are decided and
+//! queued ([`queue`]); push services' answers are waited for there, never by the dispatcher.
 
 pub use aspen_webpush as webpush;
+
+mod queue;
 
 use crate::channel::Channel;
 use crate::context::GlobalServerContext;
@@ -49,8 +52,9 @@ use webpush::PushKey;
 const CONSUMER: &str = "aspen_push";
 /// How many events one server handles at once.
 const CONCURRENCY: usize = 16;
-/// How many people one event wakes at once: a message tagging everyone in a large community
-/// wakes thousands, each a request to a push service that spends most of its time waiting.
+/// How many people one event's pushes are prepared for at once: a message tagging everyone in a
+/// large community wakes thousands, each needing a Valkey write and, for a badge, database
+/// reads, before their pushes are queued.
 const FAN_OUT: usize = 128;
 /// How long the dispatcher waits for what an event announces to be committed: events are
 /// published before their transaction commits, and one whose change is not there by then was
@@ -333,7 +337,8 @@ async fn phones_of(
     Ok(phones)
 }
 
-/// Sends `pointer` to each of `phones`, dropping those their relay says are gone.
+/// Queues `pointer` for each of `phones` ([`queue`]), which sends it without the caller waiting
+/// for push services to answer.
 async fn wake(
     state: &GlobalServerContext,
     phones: &[PushSubscription],
@@ -341,21 +346,7 @@ async fn wake(
     badge: Option<i64>,
 ) {
     for subscription in phones {
-        match send(state, subscription, pointer, badge).await {
-            Ok(Delivery::Accepted) => {}
-            Ok(Delivery::Gone) => {
-                tracing::debug!(subscription = %subscription.id.0, "push subscription is gone");
-                let _ = async {
-                    let mut conn = state.connection_pool.get().await?;
-                    diesel::delete(push_subscription::table.find(subscription.id))
-                        .execute(conn.as_mut())
-                        .await?;
-                    Ok::<_, crate::Error>(())
-                }
-                .await;
-            }
-            Err(e) => tracing::warn!(endpoint = subscription.endpoint, "a push failed: {e}"),
-        }
+        queue::enqueue(state, subscription.clone(), pointer, badge).await;
     }
 }
 
@@ -421,6 +412,7 @@ async fn send(
         // so a burst in one channel replaces what the phone has not yet received.
         .header("Topic", pointer.channel().0.simple().to_string())
         .header("Authorization", authorization)
+        .timeout(queue::SEND_TIMEOUT)
         .body(body)
         .send()
         .await?;
