@@ -442,6 +442,14 @@ export function useBlocked(userId: string | undefined): boolean {
 }
 
 /**
+ * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
+ * they block.
+ */
+export function useTypers(channelId: string): readonly string[] {
+  return useTopic(`typing:${channelId}`, (s) => s.typers(channelId));
+}
+
+/**
  * The other person of a one-to-one DM (or of the DM a thread is in) whom the caller blocked,
  * so that nothing may be written there; `null` otherwise.
  */

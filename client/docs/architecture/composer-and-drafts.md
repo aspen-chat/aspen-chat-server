@@ -17,6 +17,25 @@
   latest" answers at once: the pill keeps its own state, so a press repaints it alone, saying
   the newest are on their way, before the list moves to the end of what it holds, and `AspenSync.loadLatest` follows any page already being read rather than
   settling for it.
+- Who else is typing shows on a line of its own just above the message box (`TypingIndicator`,
+  which `Composer` puts there whether or not the caller may write), kept one line tall at the
+  current text size (`h-[1lh]`) whether or not anyone is typing, so nothing moves when someone
+  starts or stops. Up to three people are named, through `PersonName` in the channel's
+  community and joined as the language lists things (`listNodes`), "is typing…" for one and
+  "are typing…" for more; four or more are "Several people are typing…". Beside the words,
+  `TypingKeys` draws three mechanical key switches side on in line art of one colour, the
+  accent's (`currentColor` under `text-accent`), each pressed and let go in turn from the left,
+  the next going down 80ms before the last is back up (`typing-key` in `styles.css`, timed by the
+  motion tokens, so it follows the animation speed, and still where motion is reduced or off).
+  It is not a live region, which would talk over the conversation at every start and stop. The
+  box tells the server as its user writes (`AspenSync.noteTyping`, at most every
+  `TYPING_REFRESH_MS`, and never while `TYPING_NOTICES` is off), and that they stopped
+  (`stopTyping`) when the box empties, a message is sent, or the box goes; a draft it opens
+  with is not typing. What the stream tells of others is kept in `RecordStore.typers` (topic
+  `typing:<channelId>`, leaving out the user and whoever they block on any deployment), each
+  for `TYPING_EXPIRY_MS` after the last word, gone at once when they stop or a message of
+  theirs arrives, and all of it forgotten when the stream's connection drops. See
+  `docs/architecture/typing.md` at the repository's root for the server's side.
 - A message's text may be at most `MESSAGE_MAX_CHARS` (10,000) characters, the server's limit,
   counted as the server counts them (Unicode scalar values) in the text as sent, its tags and
   custom emoji written out as references (`messageLength.ts`). Within its last thousand, the

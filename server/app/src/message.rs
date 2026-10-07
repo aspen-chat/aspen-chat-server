@@ -160,15 +160,14 @@ async fn ensure_attachments_ready(
     Ok(())
 }
 
-/// Checks that `author` may post in `channel_id` with `attachments`, as `create_message` and
-/// `held::post` do, answering the channel and the author's access to it.
-async fn check_posting(
+/// Checks that `author` may post text in `channel_id`, answering the channel and the author's
+/// access to it: that it holds messages, and that they may send there. Saying they are typing
+/// there (`app::typing`) takes the same.
+pub(crate) async fn may_post(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     author: UserId,
     channel_id: ChannelId,
-    attachments: &[AttachmentId],
-    echo_to_parent: bool,
 ) -> Result<(Channel, ChannelAccess), crate::Error> {
     let target: Channel = channel::table
         .select(Channel::as_select())
@@ -185,6 +184,20 @@ async fn check_posting(
     }
     let access = channel_access(state, conn, author, channel_id).await?;
     access.require(access.send_permission())?;
+    Ok((target, access))
+}
+
+/// Checks that `author` may post in `channel_id` with `attachments`, as `create_message` and
+/// `held::post` do, answering the channel and the author's access to it.
+async fn check_posting(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    channel_id: ChannelId,
+    attachments: &[AttachmentId],
+    echo_to_parent: bool,
+) -> Result<(Channel, ChannelAccess), crate::Error> {
+    let (target, access) = may_post(state, conn, author, channel_id).await?;
     if !attachments.is_empty() {
         access.require(Permissions::ATTACH_FILES)?;
     }

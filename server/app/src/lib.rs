@@ -77,6 +77,7 @@ pub mod search;
 pub mod system_account;
 pub mod thread;
 pub mod two_factor;
+pub mod typing;
 pub mod user;
 pub mod user_ban;
 pub mod user_status;
