@@ -302,7 +302,8 @@ interface host {
     /// object (while answering a route, a community the caller belongs to).
     community-settings: func(community: id) -> result<string, error>;
 
-    /// Writes to the server's log under the plugin's id.
+    /// Writes one line to the server's log under the plugin's id: the first 2000 characters of
+    /// `message`, with line breaks and other control characters escaped.
     log: func(level: level, message: string);
 
     /// Adds `amount` to the count of `key` in the current window of `window-seconds`, and

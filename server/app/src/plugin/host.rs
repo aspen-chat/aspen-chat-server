@@ -139,6 +139,24 @@ impl WasiView for CallState {
     }
 }
 
+/// The most characters of a plugin's message the log keeps.
+const MAX_LOG_CHARS: usize = 2000;
+
+/// A plugin's message as one line of the log: its first `MAX_LOG_CHARS` characters, with line
+/// breaks and every other control character escaped (`\n`, `\u{1b}`), so a plugin cannot write
+/// lines that read as the server's own or send escape sequences to a terminal.
+fn log_line(message: &str) -> String {
+    let mut line = String::with_capacity(message.len().min(MAX_LOG_CHARS));
+    for c in message.chars().take(MAX_LOG_CHARS) {
+        if c.is_control() {
+            line.extend(c.escape_default());
+        } else {
+            line.push(c);
+        }
+    }
+    line
+}
+
 /// Why a call did not answer.
 #[derive(Debug)]
 pub(super) struct CallFailed(pub String);
@@ -592,7 +610,7 @@ impl Call {
     }
 
     async fn log(&mut self, level: wit::Level, message: String) {
-        let message: String = message.chars().take(2000).collect();
+        let message = log_line(&message);
         let plugin = self.plugin.id.as_str();
         match level {
             wit::Level::Debug => tracing::debug!(plugin, "{message}"),
@@ -1441,5 +1459,19 @@ impl aspen::plugin::host::Host for CallState {
         card: Option<wit::Card>,
     ) -> Result<(), wit::Error> {
         self.call.update_card(message, card).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plugin_writes_one_line_of_the_log() {
+        assert_eq!(
+            log_line("fine\nERROR forged\r\u{1b}[2J"),
+            "fine\\nERROR forged\\r\\u{1b}[2J"
+        );
+        assert_eq!(log_line(&"é".repeat(5000)).chars().count(), MAX_LOG_CHARS);
     }
 }
