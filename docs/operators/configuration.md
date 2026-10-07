@@ -326,7 +326,7 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | `nats_url` | required | The same NATS as the API servers. |
 | `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
 | `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |
-| `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front. |
+| `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front, and list it in `[rate_limits] trusted_proxies`, or every client counts as the proxy's address. The server warns at startup when this is a loopback address and no proxy is trusted. |
 | `workers` | one per CPU | Media worker processes, each using at most one core. |
 
 ### `[rtc]`

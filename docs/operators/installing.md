@@ -232,6 +232,11 @@ listen_addr = "127.0.0.1:9000"
 user = "voice-1"
 password = "…"
 
+# The TLS proxy in front (below) is on this machine. Without this every client has the
+# proxy's address, and the limits each address has apply to everyone together.
+[rate_limits]
+trusted_proxies = ["127.0.0.1"]
+
 [rtc]
 announced_address = "203.0.113.10"
 min_port = 40000
@@ -291,7 +296,9 @@ Clients reach a voice server in two ways, and both must be open to them:
 
 - **Signalling and the latency check**, over HTTPS: `GET /health` and the WebSocket
   `GET /ws`. The voice server speaks plain HTTP on `listen_addr`, so put a TLS proxy in front
-  of it at the `url` you registered, passing WebSocket upgrades through.
+  of it at the `url` you registered, passing WebSocket upgrades through and setting
+  `X-Forwarded-For`, and list the proxy's address in `[rate_limits] trusted_proxies`. The
+  server warns at startup when it listens on loopback with no trusted proxies.
 - **Media**, over UDP (and TCP where UDP is blocked) on the ports from `min_port` to
   `max_port`. `announced_address` is the address clients send media to: set it to the
   server's public address when it is behind NAT. Leave it out only when the machine has a

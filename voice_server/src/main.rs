@@ -100,6 +100,14 @@ async fn main() -> anyhow::Result<()> {
         limits::Limits::new(&config.rate_limits)
             .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,
     );
+    // Listening on loopback means a proxy on this machine passes every client on, and without
+    // it trusted every client has the proxy's address: the per-address limits then count
+    // everyone together, and a few clients lock out the rest.
+    if config.listen_addr.ip().is_loopback() && config.rate_limits.trusted_proxies.is_empty() {
+        tracing::warn!(
+            "listen_addr is a loopback address but [rate_limits] trusted_proxies is empty: every              client behind the proxy counts as the proxy's address, so the per-address limits              apply to everyone at once; list the proxy (trusted_proxies = [\"127.0.0.1\"])"
+        );
+    }
 
     let manager = WorkerManager::new();
     let mut workers = Vec::new();
