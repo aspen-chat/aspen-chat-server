@@ -16,12 +16,11 @@
 - Message links. Copy link (`MessageActions`) copies `messageUrl`: the message's route on its
   deployment's own address (`AspenClient.baseUrl`), `/communities/{c}/channels/{ch}/messages/{m}`
   or `/dms/{ch}/messages/{m}`, which the server reads as a link to it in any message
-  (`parseMessageUrl` reads the same two routes back; `links.test.ts`). In a message's text such
-  a link to the home deployment (the client's address for it, or the page's own) or another the
-  user uses opens here (`LinkToMessage` in `Markdown.tsx`), and written as its bare address it
-  shows as a short Message chip, since the message itself shows beneath; to any other host it is
-  an ordinary link. A message's `linkedMessages` show beneath it as `LinkedMessages`
-  (`src/features/messages/EmbeddedMessage.tsx`): each is `EmbeddedMessage`, the author, the time
+  (`parseSelfLink` reads the same two routes back; `links.test.ts`). In a message's text such
+  a link to the home deployment or another the user uses is a chip naming the message's place
+  and author that opens it here (`SelfLink`, see `message-rendering.md`), with the message
+  itself beneath; to any other host it is an ordinary link. A message's `linkedMessages` show
+  beneath it as `LinkedMessages` (`src/features/messages/EmbeddedMessage.tsx`): each is `EmbeddedMessage`, the author, the time
   as the way to jump to it, and its body drawn `still` (no poll to vote in, no actions, and no
   links of its own followed), or a line saying it was deleted or cannot be viewed. What the
   reader finds at each comes from the store's `linkedMessage` (topic `link:<id>`), filled by

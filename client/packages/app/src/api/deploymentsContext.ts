@@ -29,7 +29,8 @@ const NOTHING_TO_HEAR = () => () => undefined;
  */
 export function useForeignDeployments(): readonly ForeignDeployment[] {
   const hub = useContext(DeploymentsContext);
-  return useSyncExternalStore(hub?.subscribe ?? NOTHING_TO_HEAR, () => hub?.list ?? NONE);
+  const read = () => hub?.list ?? NONE;
+  return useSyncExternalStore(hub?.subscribe ?? NOTHING_TO_HEAR, read, read);
 }
 
 /**

@@ -42,28 +42,10 @@ import { CommunityDirectory, UserDirectory } from "@/features/admin/Directories"
 import { FleetHealth } from "@/features/admin/FleetHealth";
 import { Growth } from "@/features/admin/Growth";
 import { Overview } from "@/features/admin/Overview";
+import { ADMIN_TABS, useAdminTabLabel, type AdminTab } from "@/features/admin/adminTabs";
 import { RegistrationInvites } from "@/features/admin/RegistrationInvites";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-
-/** The dashboard's tabs, in the rail's order. */
-const ADMIN_TABS = [
-  "overview",
-  "fleet",
-  "invites",
-  "roles",
-  "reports",
-  "reportCategories",
-  "users",
-  "communities",
-  "settings",
-  "newsletter",
-  "federation",
-  "plugins",
-  "moderation",
-  "transfers",
-] as const;
-type AdminTab = (typeof ADMIN_TABS)[number];
 
 /** Which tabs the caller may open: each needs the deployment permission its content does. */
 function useAllowedTabs(): AdminTab[] {
@@ -92,27 +74,6 @@ function useAllowedTabs(): AdminTab[] {
     transfers: permissions.has("moderateCommunities"),
   };
   return ADMIN_TABS.filter((tab) => allowed[tab]);
-}
-
-function useTabLabel(): (tab: AdminTab) => string {
-  const m = useMessages();
-  return (tab) =>
-    ({
-      overview: m.admin.overview,
-      fleet: m.admin.fleet,
-      invites: m.admin.invites,
-      roles: m.admin.deploymentRoles,
-      reports: m.reports.title,
-      reportCategories: m.reports.categoriesTitle,
-      users: m.admin.users,
-      communities: m.admin.communities,
-      settings: m.admin.settings,
-      newsletter: m.email.newsletterTitle,
-      federation: m.federation.title,
-      plugins: m.plugins.adminTab,
-      moderation: m.admin.moderationLog,
-      transfers: m.admin.fileTransfers,
-    })[tab];
 }
 
 const TAB_ICONS: Record<AdminTab, Icon> = {
@@ -149,7 +110,7 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
   const m = useMessages();
   const admin = useIsAdmin();
   const allowed = useAllowedTabs();
-  const label = useTabLabel();
+  const label = useAdminTabLabel();
   const openReports = useOpenReports() ?? 0;
   const open = allowed.find((t) => t === tab);
   const first = allowed[0];
