@@ -411,7 +411,7 @@ async fn send(
         .map(|domain| format!("https://{domain}"));
     let authorization = key.authorization(&audience, subject.as_deref(), Utc::now().timestamp())?;
     let response = state
-        .federation_client
+        .push_client
         .post(url)
         .header("Content-Encoding", "aes128gcm")
         .header("Content-Type", "application/octet-stream")
@@ -447,13 +447,40 @@ async fn send(
     ))
 }
 
-/// Whether `endpoint` names an address inside a network, which pushes never go to unless
-/// `[federation.development]` allows private addresses. A name is checked as it is connected to
-/// (`app::outbound::PublicResolver`); an address is connected to without being resolved, so it is
-/// checked here, when a subscription is made and again before each push.
+/// The client every push is made with: like the federation client, but reaching only public
+/// addresses, and this machine's when `[federation.development]` allows private addresses (which
+/// only a deployment at `localhost` may), so a push endpoint someone registers can never reach
+/// into this server's network.
+pub fn client(config: &crate::aspen_config::FederationConfig) -> crate::Result<reqwest::Client> {
+    crate::federation::fetch::builder(
+        config,
+        crate::outbound::PublicResolver {
+            allow_private: false,
+            allow_loopback: config.development.allow_private_addresses,
+        },
+    )?
+    .user_agent(concat!("Aspen/", env!("CARGO_PKG_VERSION"), " (push)"))
+    .build()
+    .map_err(|e| {
+        crate::Error::Config(config::ConfigError::Message(format!(
+            "building the push client: {e}"
+        )))
+    })
+}
+
+/// Whether `endpoint` names an address inside a network, which pushes never go to, but for this
+/// machine's when `[federation.development]` allows private addresses. A name is checked as it is
+/// connected to (`push_client`'s `app::outbound::PublicResolver`); an address is connected to
+/// without being resolved, so it is checked here, when a subscription is made and again before
+/// each push.
 fn reaches_inside(state: &GlobalServerContext, endpoint: &reqwest::Url) -> bool {
-    !state.config.federation.development.allow_private_addresses
-        && crate::outbound::names_inside_address(endpoint)
+    let loopback = match endpoint.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    crate::outbound::names_inside_address(endpoint)
+        && !(loopback && state.config.federation.development.allow_private_addresses)
 }
 
 /// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now, as

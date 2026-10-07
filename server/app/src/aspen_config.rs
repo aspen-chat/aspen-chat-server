@@ -655,6 +655,7 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
         .voice
         .check_secret(loaded.public_url.starts_with("https:"))?;
     loaded.check_development_credentials()?;
+    loaded.check_federation_development()?;
     if let Some(email) = &loaded.email {
         email.validate()?;
     }
@@ -699,6 +700,27 @@ impl AspenConfig {
         url::Url::parse(&self.public_url).is_ok_and(|url| {
             url.scheme() == "https" && url.host().is_some_and(|host| !is_loopback_host(&host))
         })
+    }
+
+    /// Refuses `[federation.development]` unless `public_url`'s host is this machine (`localhost`,
+    /// a name under it, or a loopback address): what it allows, trusting more certificate
+    /// authorities and calling into private networks, is for deployments side by side on one
+    /// machine, and would let a deployment others reach be pointed inside its own network.
+    fn check_federation_development(&self) -> Result<(), config::ConfigError> {
+        let development = &self.federation.development;
+        if development.extra_root_certificates.is_empty() && !development.allow_private_addresses {
+            return Ok(());
+        }
+        let local = url::Url::parse(&self.public_url)
+            .is_ok_and(|url| url.host().is_some_and(|host| is_loopback_host(&host)));
+        if local {
+            return Ok(());
+        }
+        Err(config::ConfigError::Message(
+            "[federation.development] is only for deployments whose public_url is at localhost \
+             or a name under it; remove it"
+                .to_string(),
+        ))
     }
 
     /// Refuses, at a public deployment ([`AspenConfig::is_public`]), the database, NATS, and
@@ -1032,6 +1054,50 @@ mod tests {
         let mut s3 = config(public, own_s3);
         s3.media.s3.access_key = "GK484e56c38fb7e14b182bf47a".to_string();
         assert!(s3.check_development_credentials().is_err());
+    }
+
+    /// Development federation settings are only for deployments on this machine.
+    #[test]
+    fn federation_development_is_only_for_this_machine() {
+        let config = |public_url: &str, development: &str| -> AspenConfig {
+            let mut config: AspenConfig = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = {public_url:?}\ndatabase_url = \"postgres://x\"\n\
+                         nats_url = \"nats://x\"\nnats_auth_token = \"t\"\n\
+                         valkey_url = \"redis://x\"\n[federation.development]\n{development}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+            config.derive_from_public_url().unwrap();
+            config
+        };
+        let private = "allow_private_addresses = true";
+        let roots = "extra_root_certificates = [\"ca.pem\"]";
+        for local in ["https://alpha.localhost:8443", "http://localhost:5173"] {
+            assert!(
+                config(local, private)
+                    .check_federation_development()
+                    .is_ok()
+            );
+        }
+        for elsewhere in ["https://chat.example.org", "http://192.168.2.220:8000"] {
+            assert!(config(elsewhere, "").check_federation_development().is_ok());
+            assert!(
+                config(elsewhere, private)
+                    .check_federation_development()
+                    .is_err()
+            );
+            assert!(
+                config(elsewhere, roots)
+                    .check_federation_development()
+                    .is_err()
+            );
+        }
     }
 
     /// The domain is the public URL's, and the gates are not set here.

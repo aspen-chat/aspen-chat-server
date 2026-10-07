@@ -31,6 +31,7 @@ pub(super) fn outbound_client() -> &'static reqwest::Client {
             .no_proxy()
             .dns_resolver(std::sync::Arc::new(PublicResolver {
                 allow_private: false,
+                allow_loopback: false,
             }))
             .redirect(reqwest::redirect::Policy::none())
             .https_only(true)

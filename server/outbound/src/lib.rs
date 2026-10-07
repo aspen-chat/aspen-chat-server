@@ -136,16 +136,21 @@ pub enum ResolveError {
 }
 
 /// A resolver for `reqwest` that answers only with public addresses (`is_public_address`),
-/// unless `allow_private` is set. It filters at the moment of connecting, so a name cannot
-/// resolve to a public address when checked and a private one when used.
+/// and loopback ones too when `allow_loopback` is set, and any address when `allow_private` is.
+/// It filters at the moment of connecting, so a name cannot resolve to a public address when
+/// checked and a private one when used.
 #[derive(Debug, Clone, Copy)]
 pub struct PublicResolver {
     pub allow_private: bool,
+    pub allow_loopback: bool,
 }
 
 impl Resolve for PublicResolver {
     fn resolve(&self, name: Name) -> Resolving {
-        let allow_private = self.allow_private;
+        let PublicResolver {
+            allow_private,
+            allow_loopback,
+        } = *self;
         Box::pin(async move {
             let host = name.as_str().to_owned();
             let all: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
@@ -157,7 +162,11 @@ impl Resolve for PublicResolver {
             }
             let found: Vec<SocketAddr> = all
                 .into_iter()
-                .filter(|addr| allow_private || is_public_address(addr.ip()))
+                .filter(|addr| {
+                    allow_private
+                        || is_public_address(addr.ip())
+                        || (allow_loopback && addr.ip().is_loopback())
+                })
                 .collect();
             if found.is_empty() {
                 return Err(ResolveError::NoPublicAddress(host).into());

@@ -271,13 +271,14 @@ See [Federation](federation.md) for what these mean together. The deployment's d
 
 ### `[federation.development]`
 
-For running deployments side by side on one machine (`scripts/dev_federation.py`). Leave it out
-of a deployment anyone else uses.
+For running deployments side by side on one machine (`scripts/dev_federation.py`). A server whose
+`public_url` is not at `localhost`, a name under it, or a loopback address refuses to start with
+either setting given.
 
 | Setting | Default | |
 | --- | --- | --- |
 | `extra_root_certificates` | `[]` | PEM files of certificate authorities to trust, besides the system's, when calling other deployments. |
-| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network. |
+| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network, and push to push services at loopback addresses (`scripts/dev_push.py`). Pushes never go to other private addresses. |
 
 ## Deployment settings
 

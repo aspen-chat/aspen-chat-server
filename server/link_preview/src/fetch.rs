@@ -59,6 +59,7 @@ pub fn http_client() -> &'static reqwest::Client {
             .no_proxy()
             .dns_resolver(Arc::new(PublicResolver {
                 allow_private: false,
+                allow_loopback: false,
             }))
             .redirect(outbound::checked_redirects(MAX_REDIRECTS, may_fetch))
             .user_agent(USER_AGENT)
