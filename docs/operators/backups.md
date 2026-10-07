@@ -41,6 +41,12 @@ the database holds only their names. Back the bucket up with your storage's own 
 database whose bucket was lost shows every picture and file as missing, and the people who
 posted them would have to post them again.
 
+The bucket also holds, under `evidence/`, the files of deleted messages and of attachments taken
+off their messages, kept for reviewing reports. Nothing deletes them but
+`aspen-chat-server attachments purge --message <id>` (or `--attachment <id>`), which deletes them
+from the database and the bucket and writes the purge to the moderation log; a backup made before
+a purge still holds what was purged, so restoring one brings it back until it is purged again.
+
 ## What needs no backup
 
 - **NATS** holds only the last minute of events, voice servers' reports waiting to be applied,

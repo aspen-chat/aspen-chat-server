@@ -43,6 +43,7 @@ export const reports = {
   messageLinkLabel: "Message",
   messageLinkFull: "Link to a message: {url}",
   deletedTag: "Deleted",
+  removedAttachments: "Taken off this message:",
   // Warnings
   warningLabel: "Moderator warning",
   warningAbout: "About your message:",

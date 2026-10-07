@@ -1127,6 +1127,88 @@ REVIEWING = ["reviewReports", "removeContent"]
 MODERATION = ["moderateCommunities", "reviewReports", "removeContent", "banUsers", "messageAnyUser"]
 
 
+def read_url(url: str) -> tuple[int, bytes]:
+    """Reads `url` without credentials, as anyone holding it could."""
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, b""
+
+
+def evidence(world: World, check: Checks) -> None:
+    say("the files of deleted messages and removed attachments are kept for reviewers alone")
+    stack, member = world.stack, world.member
+    channel = world.channel("evidence")
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+
+    def upload(body: bytes) -> dict:
+        handle = stack.api("POST", "/attachments", {"fileName": "kept.txt", "mimeType": "text/plain",
+                                                    "byteSize": len(body)}, member["token"])
+        put = urllib.request.Request(handle["uploadUrl"], data=body, method="PUT",
+                                     headers={"content-type": "text/plain"})
+        urllib.request.urlopen(put, timeout=15).close()
+        return stack.api("POST", f"/attachments/{handle['id']}/confirm", token=member["token"])
+
+    def post(attachments: list[str]) -> str:
+        posted = stack.api("POST", f"/channels/{channel}/messages",
+                           {"content": "kept", "attachments": attachments}, member["token"])["id"]
+        stack.api("POST", f"/messages/{posted}/reports", {"category": category}, world.owner["token"])
+        return posted
+
+    deleted_file = upload(b"deleted message's file")
+    deleted = post([deleted_file["id"]])
+    removed_file, kept_file = upload(b"removed file"), upload(b"file that stays")
+    edited = post([removed_file["id"], kept_file["id"]])
+    stack.api("DELETE", f"/messages/{deleted}", token=member["token"])
+    stack.api("DELETE", f"/messages/{edited}/attachments/{removed_file['id']}", token=member["token"])
+    check("its uploader no longer reads a deleted message's file",
+          stack.status("GET", f"/attachments/{deleted_file['id']}", token=member["token"]) == 404)
+    check("nor one they took off its message",
+          stack.status("GET", f"/attachments/{removed_file['id']}", token=member["token"]) == 404)
+    check("the public read path soon stops serving either",
+          soon(lambda: read_url(deleted_file["downloadUrl"])[0] in (403, 404)
+               and read_url(removed_file["downloadUrl"])[0] in (403, 404), 20))
+    check("while the file that stays is still served", read_url(kept_file["downloadUrl"]) == (200, b"file that stays"))
+    check("nor may a new message take kept evidence up",
+          stack.status("POST", f"/channels/{channel}/messages",
+                       {"content": "again", "attachments": [deleted_file["id"]]}, member["token"]) == 400)
+
+    reviewer = world.account("evidencereviewer")
+    for permission in MODERATION:
+        stack.command("admin", "deny", permission)
+    stack.command("admin", "grant", reviewer["name"])
+    stack.command("admin", "allow", "reviewReports")
+    try:
+        page = stack.api("GET", "/admin/reports?limit=50", token=reviewer["token"])
+        files = {a["id"]: a for a in page["attachments"]}
+        messages = {m["message"]["id"]: m for m in page["messages"]}
+        check("a reviewer reads the deleted message's file at a signed URL",
+              deleted_file["id"] in files
+              and read_url(files[deleted_file["id"]]["downloadUrl"]) == (200, b"deleted message's file"), files)
+        check("and the file taken off the reported message, which the case names",
+              removed_file["id"] in messages.get(edited, {}).get("removedAttachments", [])
+              and removed_file["id"] in files
+              and read_url(files[removed_file["id"]]["downloadUrl"]) == (200, b"removed file"), messages.get(edited))
+        signed = files.get(deleted_file["id"], {}).get("downloadUrl", "")
+        stack.command("attachments", "purge", "--message", deleted)
+        page = stack.api("GET", "/admin/reports?limit=50", token=reviewer["token"])
+        check("purging from the terminal deletes it outright",
+              deleted_file["id"] not in {a["id"] for a in page["attachments"]}
+              and (not signed or read_url(signed)[0] in (403, 404)))
+        log = stack.api("GET", "/admin/moderation-log", token=reviewer["token"])
+        check("and the moderation log records it, with no account as its actor",
+              any(e["action"] == "purgeAttachment" and e.get("actor") is None for e in log), log[:3])
+        try:
+            stack.command("attachments", "purge", "--attachment", kept_file["id"])
+            refused = False
+        except Failed:
+            refused = True
+        check("the terminal refuses to purge a file a message still holds", refused)
+    finally:
+        stop_review_powers(world, reviewer)
+
+
 def review_powers(world: World, check: Checks) -> None:
     say("reviewing reports: what each deployment permission allows on its own")
     stack = world.stack
@@ -1842,7 +1924,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, banned_owners_bots, moderator_ranks, ban_deletions, dm_reads,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, moderator_ranks, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

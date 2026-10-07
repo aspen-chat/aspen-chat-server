@@ -31,8 +31,8 @@ use crate::t;
 use crate::user::UserPg;
 use crate::user_ban::{UserBanRequest, banned};
 use crate::{
-    ChannelId, CommunityId, EventScope, MessageId, ReportCaseId, ReportCategoryId, ReportId,
-    UserId, publish_event,
+    AttachmentId, ChannelId, CommunityId, EventScope, MessageId, ReportCaseId, ReportCategoryId,
+    ReportId, UserId, publish_event,
 };
 use aspen_schema::{
     community, community_user, deployment_role, message, report, report_case, report_category,
@@ -429,6 +429,8 @@ impl From<ReportRow> for Report {
 pub struct ReviewedMessage {
     pub message: MessageWithRelations,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// The attachments taken off it, kept as evidence (`attachment::evidence`).
+    pub removed_attachments: Vec<AttachmentId>,
 }
 
 /// Cases with what they name: their messages, and every report category their reports used.
@@ -1246,11 +1248,16 @@ async fn reviewed(
         .await?;
     let deleted: HashMap<MessageId, Option<DateTime<Utc>>> =
         rows.iter().map(|row| (row.id, row.deleted_at)).collect();
+    let mut removed: HashMap<MessageId, Vec<AttachmentId>> = HashMap::new();
+    for (message, attachment) in crate::attachment::evidence::removed_from(conn, ids).await? {
+        removed.entry(message).or_default().push(attachment);
+    }
     Ok(with_relations(state, conn, rows)
         .await?
         .into_iter()
         .map(|message| ReviewedMessage {
             deleted_at: deleted.get(&message.message.id).copied().flatten(),
+            removed_attachments: removed.remove(&message.message.id).unwrap_or_default(),
             message,
         })
         .collect())
@@ -1950,7 +1957,12 @@ pub async fn warned_messages(
         return Ok(Vec::new());
     }
     let mut conn = state.connection_pool.get().await?;
-    reviewed(state, conn.as_mut(), &ids).await
+    let mut messages = reviewed(state, conn.as_mut(), &ids).await?;
+    // The warned person reads no evidence.
+    for message in &mut messages {
+        message.removed_attachments.clear();
+    }
+    Ok(messages)
 }
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ Federation, letting a user of one deployment use others, is built in five phases
 - `--port` — Port (default `443`)
 - `--private-worker` — Serve nothing: open no listening socket, need no web client, read no events for connections, and do only the background work every API server shares (mail and digests, voice reports, standing checks, plugins' observers and timers, push; `app::context::Role`). Refuses the listening and TLS flags. Without it a server refuses to start without the web client
 
-Operator subcommands read the same configuration, log to stderr, and exit: `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking, `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`, described under Administration, `communities unowned|set-owner`, under Roles and permissions, `voice-servers list|add|set|remove`, under Voice, `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`, under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`, under Plugins.
+Operator subcommands read the same configuration, log to stderr, and exit: `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking, `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`, described under Administration, `communities unowned|set-owner`, under Roles and permissions, `attachments purge --message|--attachment`, under Reports, `voice-servers list|add|set|remove`, under Voice, `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`, under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`, under Plugins.
 
 ## Architecture
 
@@ -228,7 +228,7 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/email.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
 - `docs/architecture/event-routing.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
-- `docs/architecture/reports.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, and what deleting a message keeps
+- `docs/architecture/reports.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept of its files
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
 - `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
 - `docs/architecture/web-client.md` — the web client every API server serves at `public_url`, its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's community's

@@ -5,7 +5,7 @@
 use crate::API_PREFIX;
 use crate::TAG_REPORTS;
 use crate::admin::{AdminUser, UserBanRequest};
-use crate::attachment::{Attachment, attachment_to_api};
+use crate::attachment::Attachment;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
@@ -34,6 +34,10 @@ pub struct ReviewedMessage {
     pub message: Message,
     /// When it was deleted; `null` while it stands.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// The attachments taken off it, which a review alone reads, among the response's
+    /// `attachments`; absent when there are none, and for anyone but a reviewer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_attachments: Vec<AttachmentId>,
 }
 
 impl From<app::report::ReviewedMessage> for ReviewedMessage {
@@ -41,6 +45,7 @@ impl From<app::report::ReviewedMessage> for ReviewedMessage {
         Self {
             message: Message::from(reviewed.message),
             deleted_at: reviewed.deleted_at,
+            removed_attachments: reviewed.removed_attachments,
         }
     }
 }
@@ -281,12 +286,18 @@ async fn named_by(
         .collect();
     let attachment_ids: Vec<AttachmentId> = messages
         .iter()
-        .flat_map(|m| m.message.attachments.iter().copied())
+        .flat_map(|m| {
+            m.message
+                .attachments
+                .iter()
+                .chain(&m.removed_attachments)
+                .copied()
+        })
         .collect();
     let (users, mut channels, attachments) = tokio::try_join!(
         app::user::read_users(state, viewer, &users),
         app::channel::read_channels(state, &channel_ids),
-        app::attachment::read_attachments(state, &attachment_ids),
+        app::attachment::evidence::read_for_review(state, &attachment_ids),
     )?;
     // A thread's parent says where the thread is.
     let parents: Vec<ChannelId> = channels
@@ -303,14 +314,15 @@ async fn named_by(
         .into_iter()
         .collect();
     let communities = app::community::read_communities(state, &community_ids).await?;
+    let mut reviewed = Vec::with_capacity(attachments.len());
+    for row in attachments {
+        reviewed.push(crate::attachment::attachment_for_review(state, row).await?);
+    }
     Ok((
         users.into_iter().map(User::from).collect(),
         channels,
         communities.into_iter().map(Community::from).collect(),
-        attachments
-            .into_iter()
-            .map(|row| attachment_to_api(state, row))
-            .collect(),
+        reviewed,
     ))
 }
 

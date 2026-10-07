@@ -111,7 +111,7 @@ export function ModerationLog() {
             <tr key={entry.id}>
               <Cell>{timeFormat.format(new Date(entry.at))}</Cell>
               <Cell>
-                <Actor userId={entry.actor ?? undefined} />
+                <Actor userId={entry.actor ?? undefined} action={entry.action} />
               </Cell>
               <Cell>
                 <span className="block">{actionName(m, entry.action)}</span>
@@ -150,9 +150,16 @@ function actionName(m: Messages, action: string): string {
   return names[action] ?? action;
 }
 
-function Actor({ userId }: { userId: string | undefined }) {
+/**
+ * Who took an action: a person, or, for what only the terminal does, an operator, since such an
+ * entry names no account.
+ */
+function Actor({ userId, action }: { userId: string | undefined; action: string }) {
   const m = useMessages();
-  return userId === undefined ? <>{m.admin.logAccountGone}</> : <Person id={userId} />;
+  if (userId !== undefined) {
+    return <Person id={userId} />;
+  }
+  return <>{action === "purgeAttachment" ? m.admin.logOperator : m.admin.logAccountGone}</>;
 }
 
 /**

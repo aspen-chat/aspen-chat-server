@@ -27,6 +27,8 @@ diesel::table! {
         preview_width -> Nullable<Int4>,
         preview_height -> Nullable<Int4>,
         sent -> Bool,
+        evidence_at -> Nullable<Timestamptz>,
+        removed_from -> Nullable<Uuid>,
     }
 }
 
@@ -920,6 +922,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(attachment -> message (removed_from));
 diesel::joinable!(attachment -> user (uploader));
 diesel::joinable!(attachment_preview_job -> attachment (attachment_id));
 diesel::joinable!(benchmark_community -> benchmark_run (run));

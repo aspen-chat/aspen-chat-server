@@ -148,6 +148,8 @@ async fn ensure_attachments_ready(
             attachment::id
                 .eq_any(attachments)
                 .and(attachment::ready_at.is_not_null())
+                // Evidence is no one's to post again (`attachment::evidence`).
+                .and(attachment::evidence_at.is_null())
                 .and(
                     attachment::uploader
                         .eq(author)
@@ -811,9 +813,10 @@ pub async fn update_message(
                 if let Some(ref new_attachments) = command.attachments {
                     ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments)
                         .await?;
-                    diesel::delete(message_attachment::table)
+                    let before: Vec<AttachmentId> = diesel::delete(message_attachment::table)
                         .filter(message_attachment::message_id.eq(id))
-                        .execute(conn.as_mut())
+                        .returning(message_attachment::attachment_id)
+                        .load(conn.as_mut())
                         .await?;
                     for attachment_id in new_attachments {
                         diesel::insert_into(message_attachment::table)
@@ -825,6 +828,12 @@ pub async fn update_message(
                             .await?;
                     }
                     crate::attachment::mark_sent(conn.as_mut(), new_attachments).await?;
+                    // What the edit took off is kept for reviewing reports.
+                    let removed: Vec<AttachmentId> = before
+                        .into_iter()
+                        .filter(|kept| !new_attachments.contains(kept))
+                        .collect();
+                    crate::attachment::evidence::keep_removed(conn.as_mut(), id, &removed).await?;
                 }
 
                 let attachments: Vec<AttachmentId> = message_attachment::table
@@ -954,6 +963,8 @@ pub async fn soft_delete(
     if deleted.kind != MessageKind::ThreadEcho {
         thread::delete_echo_of(state, conn, id).await?;
     }
+    // Its files leave the public read path, kept for reviewing reports.
+    crate::attachment::evidence::keep_deleted(conn, id).await?;
     publish_event(
         state,
         conn,
@@ -1171,6 +1182,8 @@ pub async fn remove_attachment(
             if removed == 0 {
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
             }
+            // Kept for reviewing reports, off the public read path.
+            crate::attachment::evidence::keep_removed(conn.as_mut(), id, &[attachment_id]).await?;
             if author != caller && access.moderating(Permissions::MANAGE_MESSAGES) {
                 note_moderation(
                     conn.as_mut(),

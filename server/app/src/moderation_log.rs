@@ -50,6 +50,10 @@ pub enum ModerationAction {
     ReadReportContext,
     /// Someone's DMs listed, to open one; the subject is the person.
     ListDms,
+    /// Evidence deleted outright from the terminal (`aspen-chat-server attachments purge`,
+    /// `app::attachment::evidence::purge`); the subject is the message it was in or taken off
+    /// and the attachment, and the entry has no actor.
+    PurgeAttachment,
 }
 
 /// Writes a moderator's action to the moderation log, and to the server's own log.
@@ -75,6 +79,37 @@ pub async fn log_moderation(
         .values((
             moderation_log::id.eq(uuid::Uuid::now_v7()),
             moderation_log::actor.eq(Some(actor)),
+            moderation_log::action.eq(action),
+            moderation_log::community.eq(community),
+            moderation_log::channel.eq(channel),
+            moderation_log::subject.eq(subject),
+        ))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Writes an operator's action from the terminal to the moderation log, with no actor, since
+/// no account took it, and to the server's own log.
+pub async fn log_operator_moderation(
+    conn: &mut AsyncPgConnection,
+    action: ModerationAction,
+    community: Option<CommunityId>,
+    channel: Option<ChannelId>,
+    subject: Option<String>,
+) -> crate::Result<()> {
+    let action: &'static str = action.into();
+    tracing::info!(
+        action,
+        community = ?community.map(|c| c.0),
+        channel = ?channel.map(|c| c.0),
+        subject = ?subject,
+        "deployment moderation from the terminal"
+    );
+    diesel::insert_into(moderation_log::table)
+        .values((
+            moderation_log::id.eq(uuid::Uuid::now_v7()),
+            moderation_log::actor.eq(None::<UserId>),
             moderation_log::action.eq(action),
             moderation_log::community.eq(community),
             moderation_log::channel.eq(channel),
@@ -180,7 +215,7 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
         ModerationAction::DeleteMessage
         | ModerationAction::ReadDm
         | ModerationAction::ReadReportContext => Some(Subject::Message(MessageId(id(subject)?))),
-        ModerationAction::RemoveAttachment => {
+        ModerationAction::RemoveAttachment | ModerationAction::PurgeAttachment => {
             let (message, attachment) = subject.split_once('/')?;
             Some(Subject::Attachment(
                 MessageId(id(message)?),
