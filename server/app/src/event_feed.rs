@@ -195,6 +195,7 @@ impl FeedEvent {
             requires: None,
             creator: None,
             change: None,
+            ends_at: None,
             access: OnceLock::new(),
             before: OnceLock::new(),
             published: Instant::now(),
@@ -2438,7 +2439,7 @@ mod tests {
                 id,
                 Connection {
                     user,
-                    sign_in: String::new(),
+                    sign_in: SignIn::default(),
                     communities: HashSet::from([community]),
                     roles,
                     moderator: false,
