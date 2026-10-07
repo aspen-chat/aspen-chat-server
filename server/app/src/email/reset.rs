@@ -311,12 +311,15 @@ pub async fn complete(
             }
             crate::login::revoke_all_sessions(state, conn, user_id).await?;
             crate::plugin::capability::revoke_all(conn, user_id).await?;
-            let removed_factors = crate::two_factor::remove_recent(conn, user_id).await?;
+            let removed = crate::two_factor::remove_recent(conn, user_id).await?;
             outbox::queue(
                 conn,
                 user_id,
                 None,
-                &Mail::PasswordWasReset { removed_factors },
+                &Mail::PasswordWasReset {
+                    removed_factors: removed.factors,
+                    recovery_codes_gone: removed.recovery_codes_gone,
+                },
             )
             .await
         }
