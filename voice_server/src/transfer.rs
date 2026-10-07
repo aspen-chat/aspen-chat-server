@@ -168,12 +168,14 @@ impl Relay {
         self.policy.clone()
     }
 
-    /// Opens one side (`role`) of the transfer of `offer` to `receiver`, and says which ICE
-    /// servers it uses: STUN, unless the transfer is relayed only, and TURN with credentials for
-    /// this side of this transfer alone, when the server relays.
+    /// Opens one side (`role`) of the transfer of the offer this server recorded as `record` to
+    /// `receiver`, and says which ICE servers it uses: STUN, unless the transfer is relayed
+    /// only, and TURN with credentials for this side of this transfer alone, when the server
+    /// relays. The offer is named by the id this server made for it, never the one its sender's
+    /// client chose, so no client can make its transfer's credentials those of another's.
     pub fn open(
         &self,
-        offer: Uuid,
+        record: Uuid,
         receiver: Uuid,
         role: TransferRole,
         mode: TransferMode,
@@ -187,7 +189,7 @@ impl Relay {
             });
         }
         if self.policy.relay_mbps.is_some() {
-            let username = username(offer, receiver, role);
+            let username = username(record, receiver, role);
             let credential = password(&self.secret, &username);
             self.live
                 .lock()
@@ -203,10 +205,10 @@ impl Relay {
         servers
     }
 
-    /// Ends one side of the transfer of `offer` to `receiver` at the relay: its credentials
-    /// stop working and its allocations close.
-    pub async fn close(&self, offer: Uuid, receiver: Uuid, role: TransferRole) {
-        let username = username(offer, receiver, role);
+    /// Ends one side of the transfer of the offer recorded as `record` to `receiver` at the
+    /// relay: its credentials stop working and its allocations close.
+    pub async fn close(&self, record: Uuid, receiver: Uuid, role: TransferRole) {
+        let username = username(record, receiver, role);
         let was_live = self
             .live
             .lock()
@@ -229,12 +231,13 @@ impl Relay {
 }
 
 /// Names one side of one transfer: a sender with several receivers holds one per transfer.
-fn username(offer: Uuid, receiver: Uuid, role: TransferRole) -> String {
+/// `record` is the server's id for the offer, unique on this server.
+fn username(record: Uuid, receiver: Uuid, role: TransferRole) -> String {
     let side = match role {
         TransferRole::Sender => "s",
         TransferRole::Receiver => "r",
     };
-    format!("{offer}:{receiver}:{side}")
+    format!("{record}:{receiver}:{side}")
 }
 
 fn password(secret: &[u8], username: &str) -> String {

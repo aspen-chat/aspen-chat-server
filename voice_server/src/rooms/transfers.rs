@@ -368,7 +368,7 @@ impl Rooms {
             mode,
             name: name.clone(),
             size,
-            ice_servers: self.relay.open(offer, user, role, mode),
+            ice_servers: self.relay.open(record, user, role, mode),
         };
         room.send_to(sender, starting(user, TransferRole::Sender));
         room.send_to(user, starting(sender, TransferRole::Receiver));
@@ -463,7 +463,7 @@ impl Rooms {
         let (offer, receiver) = key;
         let sender = transfer.sender;
         for role in [TransferRole::Sender, TransferRole::Receiver] {
-            self.relay.close(offer, receiver, role).await;
+            self.relay.close(transfer.record, receiver, role).await;
         }
         metrics::gauge!(aspen_metrics::voice::TRANSFERS, "mode" => mode_label(transfer.mode))
             .decrement(1.0);
