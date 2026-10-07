@@ -513,7 +513,9 @@ async fn post(
             .scope_boxed()
         })
         .await?;
-    if message.kind == MessageKind::Standard {
+    // The system account's notices quote names others chose, so nothing in them is fetched and
+    // shown as a card under its name.
+    if message.kind == MessageKind::Standard && !system_account::is(conn.as_mut(), author).await? {
         spawn_preview_fetch(state.clone(), author, message.id, &message.content);
     }
     Ok(message)

@@ -45,6 +45,19 @@ describe("Markdown", () => {
     expect(render("> a quote")).toContain("<blockquote>");
   });
 
+  it("shows every address as text when links are off", () => {
+    const html = renderToStaticMarkup(
+      <Markdown
+        content="[Verify your account](https://evil.example/login) or evil.example/x ![p](https://evil.example/p.png)"
+        links={false}
+      />,
+    );
+    expect(html).not.toContain("<a ");
+    expect(html).not.toContain("href=");
+    expect(html).toContain("Verify your account");
+    expect(html).toContain("evil.example/x");
+  });
+
   it("ignores raw HTML and unsafe schemes", () => {
     const html = render("<img src=x onerror=alert(1)> [x](javascript:alert(1))");
     expect(html).not.toContain("<img");

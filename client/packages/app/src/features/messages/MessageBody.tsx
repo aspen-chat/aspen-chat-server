@@ -12,6 +12,7 @@ import { PluginCard } from "@/features/plugins/PluginCard";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
+import { useUser } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -42,6 +43,9 @@ export function MessageBody({
 }) {
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
+  // The system account's notices quote names others chose (a community's, a person's), so
+  // nothing in them is a link the deployment would seem to vouch for.
+  const fromSystem = useUser(message.author)?.system === true;
   const imageLinks = imageUrls(message.content);
   // Every picture is the server's copy, kept in its storage, of what it found behind a link,
   // never the link itself: loading a picture from wherever a message points would tell whoever
@@ -89,6 +93,7 @@ export function MessageBody({
               content={message.content}
               mentions={message.mentions}
               communityId={home.community}
+              links={!fromSystem}
             />
           )}
           {message.editedAt != null && (

@@ -188,6 +188,18 @@ const components: Components = {
 };
 
 /**
+ * As `components`, with every link and picture shown as its text alone, for text whose links
+ * nobody vouches for (`Markdown`'s `links`).
+ */
+const linklessComponents: Components = {
+  ...components,
+  a: ({ children }) => <span>{children}</span>,
+  img: ({ src, alt }) => (
+    <span>{alt != null && alt !== "" ? alt : typeof src === "string" ? src : ""}</span>
+  ),
+};
+
+/**
  * The text and language of a fenced block, read from the `<code>` element react-markdown
  * places inside `<pre>`, whose class is `language-<fence name>` when the fence named one.
  */
@@ -209,17 +221,21 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
  * until clicked, and tags (`<@user>`, `<@&role>`, `@everyone`) shown by name, as chips where
  * `mentions`, the message's tags as the server decided them, says they count. Raw HTML in the
  * source is ignored rather than rendered. Element styling comes from the `message-body` rules
- * in `styles.css`.
+ * in `styles.css`. With `links` false, nothing is a link: every address, written as Markdown or
+ * bare, shows as text.
  */
 export function Markdown({
   content,
   mentions = NO_MENTIONS,
   communityId = null,
+  links = true,
 }: {
   content: string;
   mentions?: Mentions;
   /** The community the message is in, where its tagged roles are found; `null` in a DM. */
   communityId?: string | null;
+  /** Whether addresses become links; the system account's notices quote names others chose. */
+  links?: boolean;
 }) {
   return (
     <div className="message-body">
@@ -232,7 +248,7 @@ export function Markdown({
             remarkCustomEmoji,
             remarkBareLinks,
           ]}
-          components={components}
+          components={links ? components : linklessComponents}
           skipHtml
         >
           {content}

@@ -19,7 +19,10 @@
   of TLDs that double as source-file extensions only link with a port, a path, or `www.`; the
   set is a constant in that file. The server's preview extractor
   (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
-  as a link is what gets a preview; change both together.
+  as a link is what gets a preview; change both together. The system account's notices quote
+  names others chose (a community's, a person's), so `MessageBody` renders its messages with
+  `links` off: every address in them, Markdown or bare, shows as text, and the server fetches
+  no previews for them.
 - Attachments upload in the server's two phases from `AspenSync.uploadAttachment` (`upload.ts`; reserve,
   `PUT` the bytes straight to storage with `uploadFetch`, confirm, which has the server move them
   from the URL's staging key to where readers fetch them, so the URL can change nothing after) and are named by id in
