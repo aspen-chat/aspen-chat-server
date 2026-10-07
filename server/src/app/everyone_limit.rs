@@ -105,12 +105,8 @@ mod tests {
     /// the notice names `@everyone` only as code.
     #[test]
     fn the_notice_tags_no_one() {
-        let notice = rust_i18n::t!(
-            "everyoneLimitNotice",
-            locale = crate::app::locale::DEFAULT,
-            community = "Example",
-            count = 200
-        );
+        // Outside a request, `t!` speaks `locale::DEFAULT`.
+        let notice = crate::t!("everyoneLimitNotice", community = "Example", count = 200);
         assert!(notice.contains("@everyone"));
         assert_eq!(mention::parse(&notice), mention::Requested::default());
     }

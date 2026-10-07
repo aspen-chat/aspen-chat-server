@@ -407,6 +407,7 @@ dependencies = [
  "askama 0.16.1",
  "aspen_bench_protocol",
  "aspen_limits",
+ "aspen_locale",
  "aspen_metrics",
  "aspen_previews",
  "aspen_schema",
@@ -564,6 +565,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aspen_locale"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "rust-i18n",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

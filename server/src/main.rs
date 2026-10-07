@@ -22,7 +22,6 @@ use hyper_util::{
 use rand::SeedableRng as _;
 use rand::rngs::SysRng;
 use rand_chacha::ChaCha20Rng;
-use rust_i18n::i18n;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
@@ -162,23 +161,8 @@ thread_local! {
     pub static CHACHA_RNG: RefCell<ChaCha20Rng> = RefCell::new(ChaCha20Rng::try_from_rng(&mut SysRng).expect("failed to initialize system randomness"));
 }
 
-i18n!(
-    "locales",
-    fallback = "en",
-    backend = app::locale::PseudoLocales::default()
-);
-
-/// `rust_i18n::t!` in the locale of the request being handled (`app::locale`). Every
-/// client-facing string goes through this one, never `rust_i18n::t!` directly.
-macro_rules! t {
-    ($key:expr) => {
-        rust_i18n::t!($key, locale = $crate::app::locale::current())
-    };
-    ($key:expr, $($rest:tt)+) => {
-        rust_i18n::t!($key, locale = $crate::app::locale::current(), $($rest)+)
-    };
-}
-pub(crate) use t;
+// The catalogue `t!` reads, which `aspen_locale` holds.
+use aspen_locale::{_rust_i18n_try_translate, t};
 
 // tokio-console reads instrumentation Tokio compiles only under this flag.
 #[cfg(all(feature = "console", not(tokio_unstable)))]

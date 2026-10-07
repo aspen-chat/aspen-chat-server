@@ -18,6 +18,26 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{LazyLock, RwLock};
 
+rust_i18n::i18n!(
+    "../locales",
+    fallback = "en",
+    backend = PseudoLocales::default()
+);
+
+/// `rust_i18n::t!` in the locale of the request being handled ([`current`]). Every
+/// client-facing string goes through this one, never `rust_i18n::t!` directly. It reads the one
+/// catalogue this crate holds through `_rust_i18n_try_translate`, which each crate using it
+/// imports at its root.
+#[macro_export]
+macro_rules! t {
+    ($key:expr) => {
+        rust_i18n::_tr!($key, locale = $crate::current(), _minify_key = false)
+    };
+    ($key:expr, $($rest:tt)+) => {
+        rust_i18n::_tr!($key, locale = $crate::current(), $($rest)+, _minify_key = false)
+    };
+}
+
 /// The locale of anything not answering a request, and of a request naming none this server has.
 pub const DEFAULT: &str = "en";
 /// English with every letter accented and every word lengthened, in brackets.
