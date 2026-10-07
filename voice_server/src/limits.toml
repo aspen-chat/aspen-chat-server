@@ -86,11 +86,13 @@ global = { requests = 1200, per_seconds = 60, burst = 300 }
 [rate_limits.frames.closeProducer]
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+# Only a `setState` that unmutes or undeafens counts: one that mutes or deafens, and lifts
+# neither, always goes through (`Rooms::quietens`), so no one can be kept audible. Each is
+# reported to the API server and announced to everyone who can see the call; since every mute
+# must be undone by a limited frame before it can be repeated, this limit bounds both. There is
+# no `channel` limit: others' frames must never spend someone's own.
 [rate_limits.frames.setState]
 user = { requests = 40, per_seconds = 60, burst = 20 }
-# Every mute and deafen is reported to the API server and announced to everyone who can see
-# the call.
-channel = { requests = 120, per_seconds = 60, burst = 30 }
 
 # File transfers. An offer and an acceptance are announced to everyone in the call.
 [rate_limits.frames.offerFile]

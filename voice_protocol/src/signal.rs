@@ -451,6 +451,11 @@ pub enum ServerMessage {
         /// same request would be taken.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_seconds: Option<u64>,
+        /// The `type` of the client frame this answers, when it answers one: a client tells
+        /// by it which of its requests was refused (a `setState` unmuting, for instance, so it
+        /// goes on showing itself muted).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
     },
 }
 

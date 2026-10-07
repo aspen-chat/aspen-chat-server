@@ -899,6 +899,7 @@ impl Rooms {
                 ),
                 fatal: false,
                 retry_after_seconds: None,
+                refused: None,
             });
             (
                 closing,
@@ -1215,6 +1216,21 @@ impl Rooms {
                     .map(|p| p.grants)
             })
             .unwrap_or_default()
+    }
+
+    /// Whether a `setState` of `muted` and `deafened` from the participant `seat` made only
+    /// silences them further: it mutes or deafens them and lifts neither. Such a frame is never
+    /// rate limited, so nothing, a flood of others' frames included, can keep someone's
+    /// microphone open after they asked to close it. Each one changes something and undoing it
+    /// is limited, so they cannot come faster than the limits allow either.
+    pub fn quietens(&self, seat: Seat, muted: bool, deafened: bool) -> bool {
+        let Ok(room) = self.room(seat.channel) else {
+            return false;
+        };
+        let participants = room.participants.lock().expect("room lock");
+        seated(&participants, seat).is_ok_and(|p| {
+            muted >= p.muted && deafened >= p.deafened && (muted, deafened) != (p.muted, p.deafened)
+        })
     }
 
     /// Sets what `user` may do in `room`'s call, as the API server says: their producers of a

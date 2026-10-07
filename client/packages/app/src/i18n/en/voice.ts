@@ -27,6 +27,9 @@ export const voice = {
     "Aspen isn't allowed to use your camera. Allow camera access in your browser or system settings, then try again.",
   cameraFailed: "None of your cameras would start. Close any other app using one, then try again.",
   cameraUnsent: "Your camera couldn't be sent to the call. Try again, or rejoin the call.",
+  stateRefusedWait:
+    "You're changing mute or deafen too often, so your last change didn't go through. Try again in {wait}.",
+  stateRefused: "Your last change to mute or deafen didn't go through. Try again, or rejoin the call.",
   voiceVolume: "Voice volume",
   streamVolume: "Stream volume",
   muteStreamForMe: "Mute stream for me",
