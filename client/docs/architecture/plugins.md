@@ -91,7 +91,9 @@ a view's page, in a sandboxed frame that reaches the app only by the bridge (bel
   a message's `card` from its plugin's catalogue: a title, fields (a time in the reader's zone
   and language, a count, a person by `PersonName`, a link), and buttons styled as the plugin
   asks, each pressed through `AspenSync.pressCardButton`, disabled while on its way and saying
-  why it failed. The card's change arrives as the message's update. A card of a plugin the
+  that it failed. The press's answer is the plugin's to choose, so it is fetched as a plugin's
+  route is (`AspenClient.pressCardButton`, through `#pluginFetch`): it never refreshes or flags
+  the session, and every failure reads the same, naming the plugin, whatever the answer says. The card's change arrives as the message's update. A card of a plugin the
   catalogue lacks is not drawn, nor its buttons where the message is shown still.
 - **Notices.** `AspenSync.onPluginNotice` hears `pluginNotice`, which the server sends only
   where the person's mute and level for the channel would tell of a message that tags them;

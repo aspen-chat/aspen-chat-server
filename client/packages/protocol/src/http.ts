@@ -660,7 +660,21 @@ export class AspenClient {
   }
 
   /**
-   * A request to a plugin's route, as the user, without the handling the API's own answers get:
+   * Presses a button of a message's card, which calls its plugin as the user, and answers the
+   * status. The answer is the plugin's, so it is fetched as a route's is (`#pluginFetch`): what
+   * a plugin answers cannot refresh the session, flag it, or put words in the app's mouth.
+   */
+  async pressCardButton(messageId: string, button: string): Promise<number> {
+    const result = await this.api.POST("/api/v1/messages/{message}/card/buttons/{button}", {
+      params: { path: { message: messageId, button } },
+      parseAs: "text",
+      fetch: (request) => this.#pluginFetch(request),
+    });
+    return result.response.status;
+  }
+
+  /**
+   * A request to a plugin's route, or a card's button, as the user, without the handling the API's own answers get:
    * a plugin chooses its status codes and bodies, so one that answered `401`, or `403` with a
    * Problem naming a requirement, would otherwise refresh the session or put the app behind an
    * enrollment screen.
