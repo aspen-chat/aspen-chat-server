@@ -89,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
     config.check_secret()?;
+    config.transfer.check(&config.rtc)?;
     let limits = Arc::new(
         limits::Limits::new(&config.rate_limits)
             .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,

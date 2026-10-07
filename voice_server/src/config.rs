@@ -221,6 +221,28 @@ pub struct TransferConfig {
     pub relay_max_port: u16,
 }
 
+impl TransferConfig {
+    /// Refuses relay ports that overlap the media range or the STUN and TURN port: the relay
+    /// would then take ports media needs, or relay to them.
+    pub fn check(&self, rtc: &RtcConfig) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.relay_min_port <= self.relay_max_port,
+            "transfer.relay_min_port is above transfer.relay_max_port"
+        );
+        let relay = self.relay_min_port..=self.relay_max_port;
+        anyhow::ensure!(
+            self.relay_max_port < rtc.min_port || rtc.max_port < self.relay_min_port,
+            "transfer.relay_min_port to relay_max_port overlaps rtc.min_port to max_port; give \
+             relayed transfers ports of their own"
+        );
+        anyhow::ensure!(
+            !relay.contains(&self.port) && !(rtc.min_port..=rtc.max_port).contains(&self.port),
+            "transfer.port is inside the relay or media port range"
+        );
+        Ok(())
+    }
+}
+
 fn default_workers() -> usize {
     num_cpus::get().max(1)
 }

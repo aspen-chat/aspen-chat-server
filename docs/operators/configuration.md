@@ -350,7 +350,7 @@ calls, never to the rest of the internet, and sees only ciphertext.
 | --- | --- | --- |
 | `relay_mbps` | `50` | The most every relayed transfer on this server may carry together, in megabits a second. People are told this limit before they choose the relay. `0` turns relaying off: transfers then go directly between devices or not at all. |
 | `port` | `3478` | The UDP port STUN and TURN answer on; open it to clients. |
-| `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side), inside the server only: they need not be open to clients. |
+| `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side), inside the server only: they need not be open to clients. The server refuses to start when they overlap the media ports or `port`. |
 
 ### `[metrics]` and `[rate_limits]`
 

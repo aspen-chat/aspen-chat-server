@@ -10,7 +10,9 @@
 //!   credentials are accepted from that many client addresses and no more, and an allocation is
 //!   bound to the address that asked for it, so no one can take the relay's ports with a
 //!   credential handed out for one transfer.
-//! - It forwards only between allocations of its own. Every transfer through it is relayed at
+//! - It forwards only between live allocations of its own (`LivePorts`): never to another port
+//!   of the relay range on this machine that no allocation holds, whatever may be listening
+//!   there. Every transfer through it is relayed at
 //!   both ends (a relay candidate pairs only with the other side's relay candidate), so it is
 //!   never an open relay to the rest of the internet. Traffic between two allocations is looped
 //!   back inside the server rather than sent to its own public address, which a server behind
@@ -84,6 +86,25 @@ pub struct Relay {
 /// accepted from.
 type LiveCredentials = HashMap<String, HashSet<SocketAddr>>;
 
+/// The relay ports live allocations hold, the only ones the relay sends to or takes from. An
+/// allocation's port is added as it is made and removed as it closes or is dropped.
+#[derive(Default)]
+struct LivePorts(Mutex<HashSet<u16>>);
+
+impl LivePorts {
+    fn add(&self, port: u16) {
+        self.0.lock().expect("live ports").insert(port);
+    }
+
+    fn remove(&self, port: u16) {
+        self.0.lock().expect("live ports").remove(&port);
+    }
+
+    fn holds(&self, port: u16) -> bool {
+        self.0.lock().expect("live ports").contains(&port)
+    }
+}
+
 impl Relay {
     /// Starts STUN and TURN on `config.port` of `bind`, announced as `announced` (the media
     /// address clients already reach), relaying at most `config.relay_mbps` in all.
@@ -92,10 +113,6 @@ impl Relay {
         bind: IpAddr,
         announced: &str,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            config.relay_min_port <= config.relay_max_port,
-            "transfer.relay_min_port is above transfer.relay_max_port"
-        );
         let announced_ip = tokio::net::lookup_host((announced, 0))
             .await?
             .map(|address| address.ip())
@@ -116,6 +133,7 @@ impl Relay {
                     max_port: config.relay_max_port,
                     next: AtomicU16::new(config.relay_min_port),
                     pacer,
+                    live: Arc::default(),
                 }),
             }],
             realm: REALM.to_string(),
@@ -358,6 +376,7 @@ struct Allocations {
     max_port: u16,
     next: AtomicU16,
     pacer: Arc<Pacer>,
+    live: Arc<LivePorts>,
 }
 
 #[async_trait]
@@ -381,7 +400,10 @@ impl RelayAddressGenerator for Allocations {
             let offset = u32::from(self.next.fetch_add(1, Ordering::Relaxed)) % span;
             let port = self.min_port + offset as u16;
             if let Ok(socket) = UdpSocket::bind(SocketAddr::new(self.bind, port)).await {
+                self.live.add(port);
                 let conn = RelayConn {
+                    port,
+                    live: self.live.clone(),
                     socket: Arc::new(socket),
                     announced: self.announced,
                     loopback: if self.bind.is_unspecified() {
@@ -389,8 +411,6 @@ impl RelayAddressGenerator for Allocations {
                     } else {
                         self.bind
                     },
-                    min_port: self.min_port,
-                    max_port: self.max_port,
                     pacer: self.pacer.clone(),
                 };
                 return Ok((Arc::new(conn), SocketAddr::new(self.announced, port)));
@@ -402,19 +422,27 @@ impl RelayAddressGenerator for Allocations {
 
 /// One allocation's relay socket.
 struct RelayConn {
+    /// Its port, live in `live` until it closes or is dropped.
+    port: u16,
+    live: Arc<LivePorts>,
     socket: Arc<UdpSocket>,
     /// The address allocations are announced at.
     announced: IpAddr,
     /// Where another allocation is reached from inside the server.
     loopback: IpAddr,
-    min_port: u16,
-    max_port: u16,
     pacer: Arc<Pacer>,
 }
 
 impl RelayConn {
+    /// Whether `port` is another live allocation's.
     fn is_relay_port(&self, port: u16) -> bool {
-        (self.min_port..=self.max_port).contains(&port)
+        port != self.port && self.live.holds(port)
+    }
+}
+
+impl Drop for RelayConn {
+    fn drop(&mut self) {
+        self.live.remove(self.port);
     }
 }
 
@@ -471,6 +499,7 @@ impl Conn for RelayConn {
     }
 
     async fn close(&self) -> Result<(), webrtc_util::Error> {
+        self.live.remove(self.port);
         Ok(())
     }
 
@@ -505,6 +534,33 @@ mod tests {
         // About a quarter of a second at a megabyte a second.
         let took = started.elapsed().as_secs_f64();
         assert!((0.2..0.4).contains(&took), "{took}");
+    }
+
+    #[tokio::test]
+    async fn the_relay_forwards_only_between_live_allocations() {
+        let live = Arc::new(LivePorts::default());
+        let pacer = Pacer::start(8);
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let conn = |port: u16| RelayConn {
+            port,
+            live: live.clone(),
+            socket: socket.clone(),
+            announced: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+            loopback: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            pacer: pacer.clone(),
+        };
+        live.add(42000);
+        live.add(42001);
+        let a = conn(42000);
+        let b = conn(42001);
+        assert!(a.is_relay_port(42001));
+        // A port of the range no allocation holds, and its own, are not relayed to.
+        assert!(!a.is_relay_port(42002));
+        assert!(!a.is_relay_port(42000));
+        drop(b);
+        assert!(!a.is_relay_port(42001));
+        a.close().await.unwrap();
+        assert!(!live.holds(42000));
     }
 
     #[test]
