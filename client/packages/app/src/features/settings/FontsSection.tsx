@@ -141,7 +141,7 @@ export function FontsSection() {
   return (
     <section aria-labelledby="settings-fonts" className={planeClass}>
       <div>
-        <h3 id="settings-fonts" className="text-sm font-semibold text-ink-muted">
+        <h3 id="settings-fonts" className="text-lg font-semibold text-ink-muted">
           {m.fonts.heading}
         </h3>
         <p className="text-xs text-ink-faint">{m.fonts.hint}</p>

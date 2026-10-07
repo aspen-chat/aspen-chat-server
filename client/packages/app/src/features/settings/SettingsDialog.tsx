@@ -93,7 +93,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                 <DialogHeading>{m.settings.title}</DialogHeading>
                 <PlaneColumns>
                   <section aria-labelledby="settings-account" className={planeClass}>
-                    <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
+                    <h3 id="settings-account" className="text-lg font-semibold text-ink-muted">
                       {m.settings.account}
                     </h3>
                     <SecurityDialog />
@@ -101,7 +101,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   </section>
                   <AudioSection />
                   <section aria-labelledby="settings-appearance" className={planeClass}>
-                    <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
+                    <h3 id="settings-appearance" className="text-lg font-semibold text-ink-muted">
                       {m.settings.appearance}
                     </h3>
                     <ThemePicker />
@@ -148,7 +148,7 @@ function AudioSection() {
   const outputs = canChooseOutput();
   return (
     <section aria-labelledby="settings-audio" className={planeClass}>
-      <h3 id="settings-audio" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-audio" className="text-lg font-semibold text-ink-muted">
         {m.settings.audio}
       </h3>
       <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
