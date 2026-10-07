@@ -270,14 +270,8 @@ pub async fn change_password(
     if user_id != session.user.id {
         return Err(not_your_account(app::Error::Unauthorized));
     }
-    let conn = state
-        .connection_pool
-        .get()
-        .await
-        .map_err(app::Error::from)?;
     match app::login::try_change_password(
         &state,
-        conn,
         &session.caller,
         &state.config.auth,
         &request.old_password,
@@ -290,10 +284,7 @@ pub async fn change_password(
             Err(ApiError::new(ProblemCode::OldPasswordIncorrect))
         }
         ChangePasswordOutcome::RequirementNotMet(requirement) => {
-            Err(ApiError::password_requirement(requirement).with_detail(t!(
-                "passwordTooShort",
-                min = app::login::PASSWORD_MIN_LENGTH
-            )))
+            Err(ApiError::password_requirement(requirement))
         }
     }
 }

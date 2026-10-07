@@ -286,8 +286,17 @@ impl ApiError {
         self
     }
 
+    /// `passwordRequirementsNotMet`, naming the rule the password broke and saying what it is.
     pub fn password_requirement(requirement: PasswordRequirement) -> Self {
-        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet);
+        let detail = match requirement {
+            PasswordRequirement::Length => {
+                t!("passwordTooShort", min = app::login::PASSWORD_MIN_LENGTH)
+            }
+            PasswordRequirement::MaxLength => {
+                t!("passwordTooLong", max = app::login::PASSWORD_MAX_BYTES)
+            }
+        };
+        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet).with_detail(detail);
         e.problem.requirement = Some(requirement);
         e
     }
@@ -307,11 +316,7 @@ impl From<app::Error> for ApiError {
             app::Error::Validation(reason) => {
                 Self::new(ProblemCode::Validation).with_detail(reason)
             }
-            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement)
-                .with_detail(t!(
-                    "passwordTooShort",
-                    min = app::login::PASSWORD_MIN_LENGTH
-                )),
+            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement),
             app::Error::Unauthorized => Self::new(ProblemCode::Forbidden),
             app::Error::Forbidden(reason) => Self::new(ProblemCode::Forbidden).with_detail(reason),
             app::Error::Unauthenticated => Self::new(ProblemCode::Unauthorized),

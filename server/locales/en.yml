@@ -17,6 +17,7 @@ problemInviteCodeTaken: "That invite code is already in use."
 problemOldPasswordIncorrect: "The current password is incorrect."
 problemPasswordRequirementsNotMet: "The new password does not meet the requirements."
 passwordTooShort: "Passwords must be at least %{min} characters long."
+passwordTooLong: "Passwords may be at most %{max} bytes long, which is fewer characters in some scripts. Choose a shorter one."
 notYourAccount: "You can only modify your own account."
 
 # User

@@ -186,4 +186,6 @@ pub type Result<T> = std::result::Result<T, crate::Error>;
 pub enum PasswordRequirement {
     /// The password is shorter than the minimum length.
     Length,
+    /// The password is longer than the most bytes a password may have.
+    MaxLength,
 }

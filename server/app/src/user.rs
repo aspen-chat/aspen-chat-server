@@ -1,7 +1,6 @@
-use crate::PasswordRequirement;
 use crate::context::GlobalServerContext;
 use crate::icon::Icon;
-use crate::login::{PASSWORD_MIN_LENGTH, hash_password};
+use crate::login::hash_password;
 use crate::react::validate_emoji;
 use crate::registration_invite;
 use crate::t;
@@ -199,15 +198,12 @@ pub fn validate_new_username(name: &str) -> Result<(), crate::Error> {
     Ok(())
 }
 
-/// Rejects a bad username, passwords that fail the same length rule `try_change_password`
-/// enforces, and a profile `update_user` would refuse.
+/// Rejects a bad username, a password `app::login::check_new_password` refuses, and a profile
+/// `update_user` would refuse.
 fn validate_registration(command: &UserCreateRequest) -> Result<(), crate::Error> {
     validate_new_username(&command.name)?;
-    if command.password.len() < PASSWORD_MIN_LENGTH {
-        return Err(crate::Error::PasswordRequirement(
-            PasswordRequirement::Length,
-        ));
-    }
+    crate::login::check_new_password(&command.password)
+        .map_err(crate::Error::PasswordRequirement)?;
     validate_profile(&UserUpdateRequest {
         display_name: Some(command.display_name.clone()),
         pronouns: Some(command.pronouns.clone()),
@@ -230,12 +226,6 @@ pub async fn create_user(
     validate_registration(command)?;
     let email = crate::email::check_registration(&state, command.email.as_deref())?;
     let newsletter = command.newsletter.unwrap_or(false);
-    let mut conn = match state.connection_pool.get().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
     let invite_required = state.settings().registration_invite_required;
     let invite_code = command
         .invite_code
@@ -246,7 +236,9 @@ pub async fn create_user(
     if invite_required && invite_code.is_none() {
         return Err(crate::Error::RegistrationInviteRequired);
     }
+    // The connection is taken once the password is hashed (see `hash_password`).
     let password_hash = hash_password(command.password.to_string()).await?;
+    let mut conn = state.connection_pool.get().await?;
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
     let state = &state;

@@ -862,13 +862,17 @@ pub async fn reauthenticate(
                 )));
             }
             limited(state, user_id, async || {
-                let mut conn = state.connection_pool.get().await?;
-                let hash: String = user::table
-                    .select(user::password_hash)
-                    .filter(user::id.eq(user_id))
-                    .filter(user::deleted_at.is_null())
-                    .first(&mut conn)
-                    .await?;
+                // The connection goes back to the pool before the password work
+                // (`app::login::hash_password`).
+                let hash: String = {
+                    let mut conn = state.connection_pool.get().await?;
+                    user::table
+                        .select(user::password_hash)
+                        .filter(user::id.eq(user_id))
+                        .filter(user::deleted_at.is_null())
+                        .first(&mut conn)
+                        .await?
+                };
                 crate::login::check_password(password, hash).await
             })
             .await?
