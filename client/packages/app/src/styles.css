@@ -918,37 +918,23 @@ body {
   animation: aspen-arrive var(--motion-slow) var(--motion-ease-out);
 }
 
-/* The typing indicator's keys (`TypingKeys`): each goes down, holds, and comes back up over a
-   third of a cycle (400ms at normal speed), and the next starts four fifteenths of a cycle after
-   it, so it starts down a fifteenth (80ms) before the last is back up; then all rest until the
-   cycle ends. How far a key travels is the
-   motion distance's, so where motion is reduced they stand still, as they do with it off. */
-.typing-keys {
-  --key-travel: calc(var(--motion-distance) * 0.6);
-  --key-cycle: calc(1200ms * var(--motion-scale));
+/* The typing indicator's dots (`TypingDots`): each lights and dims again in its turn, a fifth of a
+   cycle after the last, so the next is lighting as the last fades; then all rest dimmed until
+   the cycle ends. It is a fade alone, which goes on where motion is reduced. */
+.typing-dot {
+  opacity: 0.3;
+  animation: aspen-dot-light calc(1200ms * var(--motion-scale)) infinite;
+  animation-delay: calc(240ms * var(--motion-scale) * var(--dot));
 }
 
-.typing-key {
-  animation: aspen-key-press var(--key-cycle) infinite;
-  animation-delay: calc(var(--key-cycle) * 0.2667 * var(--key));
-}
-
-@keyframes aspen-key-press {
-  0% {
-    transform: translateY(0);
-    animation-timing-function: var(--motion-ease-in);
-  }
-  12.5% {
-    transform: translateY(var(--key-travel));
-    animation-timing-function: linear;
-  }
-  20.8% {
-    transform: translateY(var(--key-travel));
-    animation-timing-function: var(--motion-ease-out);
-  }
-  33.3%,
+@keyframes aspen-dot-light {
+  0%,
+  45%,
   100% {
-    transform: translateY(0);
+    opacity: 0.3;
+  }
+  20% {
+    opacity: 1;
   }
 }
 

@@ -162,8 +162,7 @@ commit, as with comments.
   drawer sliding out and back; call tiles, the
   composer's files (with an upload progress bar, from `uploadAttachment`'s `onProgress`), the
   sync banner, and the Jump to latest pill appearing; speaking rings fading; the typing
-  indicator's keys pressed in turn, which travel the motion distance and so stand still where
-  motion is reduced. Code that moves
+  indicator's dots lighting in turn. Code that moves
   things itself reads `useMotion` (off, reduced, scale).
 - The channel list (and the DM list in its place), the member list, and the thread panel are
   `ResizablePane`s (`src/features/layout`): each has an edge, a `separator`, that the reader

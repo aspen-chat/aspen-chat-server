@@ -23,10 +23,9 @@
   starts or stops. Up to three people are named, through `PersonName` in the channel's
   community and joined as the language lists things (`listNodes`), "is typing…" for one and
   "are typing…" for more; four or more are "Several people are typing…". Beside the words,
-  `TypingKeys` draws three mechanical key switches side on in line art of one colour, the
-  accent's (`currentColor` under `text-accent`), each pressed and let go in turn from the left,
-  the next going down 80ms before the last is back up (`typing-key` in `styles.css`, timed by the
-  motion tokens, so it follows the animation speed, and still where motion is reduced or off).
+  `TypingDots` draws three dots in the accent's colour, each lit and dimmed again in turn from
+  the start of the line (`typing-dot` in `styles.css`, timed by the motion tokens, so it follows
+  the animation speed; a fade alone, so it goes on where motion is reduced).
   It is not a live region, which would talk over the conversation at every start and stop. The
   box tells the server as its user writes (`AspenSync.noteTyping`, at most every
   `TYPING_REFRESH_MS`, and never while `TYPING_NOTICES` is off), and that they stopped
