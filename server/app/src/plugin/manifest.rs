@@ -60,7 +60,8 @@ pub struct Manifest {
     /// The hosts it may call over HTTPS, with `network`.
     #[serde(default)]
     pub hosts: Vec<String>,
-    /// The bytes of storage it may keep, with `storage`.
+    /// The bytes of storage it may keep, with `storage`, in each owner's share: each community
+    /// (with its channels), each DM or group DM, each user's own scope, and its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_quota: Option<u64>,
     /// The largest attachment it may read, in bytes, with `attachments.read`.
