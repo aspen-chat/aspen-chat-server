@@ -1756,7 +1756,8 @@ export class AspenSync {
    */
   async createBot(name: string, displayName: string | null): Promise<{ bot: User; token: string }> {
     const result = await this.#client.api.POST("/api/v1/users/@me/bots", {
-      body: { name, displayName },
+      // Composed (NFC), as the server requires a new name to be.
+      body: { name: name.normalize("NFC"), displayName },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -2525,7 +2526,8 @@ export class AspenSync {
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
-      body: patch,
+      // A new username composed (NFC), as the server requires.
+      body: patch.name == null ? patch : { ...patch, name: patch.name.normalize("NFC") },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
