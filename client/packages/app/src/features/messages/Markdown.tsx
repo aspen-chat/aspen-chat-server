@@ -18,6 +18,8 @@ import { useForeignDeployments } from "@/api/deploymentsContext";
 import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
+import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
+import { opensTooDeeply, remarkLimits } from "@/features/messages/markdownLimits";
 import { MentionContext } from "@/features/messages/mentionContext";
 import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
 import { remarkMentions } from "@/features/messages/remarkMentions";
@@ -210,6 +212,10 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
  * `mentions`, the message's tags as the server decided them, says they count. Raw HTML in the
  * source is ignored rather than rendered. Element styling comes from the `message-body` rules
  * in `styles.css`.
+ *
+ * A body nesting too deeply to render safely is shown as its plain text (`opensTooDeeply`
+ * before parsing, `remarkLimits` after), and one that fails to render for any other reason
+ * falls back to its plain text too, rather than taking the message list down with it.
  */
 export function Markdown({
   content,
@@ -221,23 +227,30 @@ export function Markdown({
   /** The community the message is in, where its tagged roles are found; `null` in a DM. */
   communityId?: string | null;
 }) {
+  const plain = <p>{content}</p>;
+  if (opensTooDeeply(content)) {
+    return <div className="message-body">{plain}</div>;
+  }
   return (
     <div className="message-body">
-      <MentionContext.Provider value={{ mentions, communityId }}>
-        <ReactMarkdown
-          remarkPlugins={[
-            remarkGfm,
-            remarkSpoilers,
-            remarkMentions,
-            remarkCustomEmoji,
-            remarkBareLinks,
-          ]}
-          components={components}
-          skipHtml
-        >
-          {content}
-        </ReactMarkdown>
-      </MentionContext.Provider>
+      <ErrorBoundary fallback={plain} resetKey={content}>
+        <MentionContext.Provider value={{ mentions, communityId }}>
+          <ReactMarkdown
+            remarkPlugins={[
+              remarkGfm,
+              remarkLimits,
+              remarkSpoilers,
+              remarkMentions,
+              remarkCustomEmoji,
+              remarkBareLinks,
+            ]}
+            components={components}
+            skipHtml
+          >
+            {content}
+          </ReactMarkdown>
+        </MentionContext.Provider>
+      </ErrorBoundary>
     </div>
   );
 }

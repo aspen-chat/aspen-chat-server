@@ -68,4 +68,19 @@ describe("Markdown", () => {
     expect(html).toContain(">a cat</a>");
     expect(html).not.toContain('href="//attacker');
   });
+
+  it("shows a body nesting too deeply to render as its plain text", () => {
+    for (const content of [">".repeat(10000), "1. ".repeat(1400), "- ".repeat(5000)]) {
+      const html = render(content);
+      expect(html).not.toContain("<blockquote");
+      expect(html).not.toContain("<li");
+      expect(html).toContain(content.trim().slice(0, 40).replaceAll(">", "&gt;"));
+    }
+    // Nesting built by indenting is caught once parsed.
+    const indented = Array.from({ length: 40 }, (_, i) => `${"  ".repeat(i)}- a`).join("\n");
+    expect(render(indented)).not.toContain("<li");
+    // Nesting a person writes is drawn as Markdown.
+    expect(render("> > > quoted\n\n- a\n  - b\n    - c")).toContain("<blockquote>");
+    expect((render("- a\n  - b\n    - c").match(/<li>/g) ?? []).length).toBe(3);
+  });
 });

@@ -2,7 +2,14 @@
 
 - Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages/Markdown.tsx`
   with `react-markdown` (no raw HTML, unsafe schemes dropped); element styles are the
-  `message-body` rules in `styles.css`. Only an absolute `http:`, `https:`, or `mailto:` address
+  `message-body` rules in `styles.css`. Parsing and rendering recurse once per level of
+  nesting, so a body nesting more than `MAX_NESTING` (32) levels deep is shown as its plain
+  text (`src/features/messages/markdownLimits.ts`): one whose lines open that many quotes or
+  lists at once is never parsed (`opensTooDeeply`), and any other is caught once parsed, with a
+  walk of its own (`remarkLimits`). Whatever still fails to render falls back to plain text in
+  an error boundary (`src/features/layout/ErrorBoundary.tsx`) around the Markdown and around
+  each `MessageBody`, and a route that fails to draw shows `RouteError` in its place (the
+  router's `defaultErrorComponent`), so one message cannot blank the app. Only an absolute `http:`, `https:`, or `mailto:` address
   becomes a link (`messageLinkUrl`); a relative or protocol-relative one (`//host/share/file`),
   which on a page loaded from a file (the desktop app's) would be a `file:` link, stays plain
   text. A picture written into the text (`![alt](url)`) is a link named by its alt text, never
