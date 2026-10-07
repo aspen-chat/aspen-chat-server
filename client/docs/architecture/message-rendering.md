@@ -21,7 +21,9 @@
   (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
   block: its "common" grammars come with that chunk and every other grammar it ships is fetched
   on first use. Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at
-  the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain. Spoilers are
+  the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain, and so is a
+  block longer than `MAX_HIGHLIGHT_LENGTH` (4096 code units, `CodeBlock.tsx`), since some
+  grammars take most of a second over a few kilobytes written to slow them. Spoilers are
   `||text||` (Discord) or `>!text!<` (Reddit), wrapped by `remarkSpoilers.ts` and rendered by
   `Spoiler.tsx` as a block the reader activates to reveal; markup inside them is kept. On top of
   GFM's own autolinks, bare domains are linked by
