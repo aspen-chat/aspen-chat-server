@@ -102,4 +102,11 @@
   any other address is unavailable, and a preview's picture there is left out. The desktop
   shell checks again: the window navigates only to the app's own `index.html` (or the dev
   server), and hands the system only `http:`, `https:`, and `mailto:` links
-  (`packages/desktop/src/main/navigation.ts`).
+  (`packages/desktop/src/main/navigation.ts`), and its session grants permissions (`permitted`
+  there) only as the app needs them: calls, notifications, the clipboard, choosing where sound
+  plays, and saving files to the app's own page alone, fullscreen to any frame the app let ask
+  for it (a video player), handing a link to the system (`openExternal`) only for what
+  `externalUrl` lets out, and nothing else to anyone. The phone apps do the same with a
+  Capacitor plugin Capacitor asks about each navigation (`AspenNavigationPlugin`, in
+  `android/.../navigation/` and in iOS's `MainViewController.swift`): an address outside the
+  app leaves it only when it is `http:`, `https:`, or `mailto:`, and any other is dropped.

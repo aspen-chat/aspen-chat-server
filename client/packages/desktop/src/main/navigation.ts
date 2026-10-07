@@ -51,3 +51,44 @@ export function isAppPage(url: string, app: { devServerUrl: string } | { indexUr
     parsed.search === ""
   );
 }
+
+/**
+ * What the app's own page may be granted: calls (`media`, `display-capture`), notifications,
+ * fullscreen, writing to the clipboard, choosing where sound plays, and saving a file it was
+ * sent. Any other frame (a plugin's view, a video player) is granted none of these.
+ */
+const APP_PAGE_PERMISSIONS: ReadonlySet<string> = new Set([
+  "media",
+  "display-capture",
+  "notifications",
+  "fullscreen",
+  "clipboard-sanitized-write",
+  "speaker-selection",
+  "fileSystem",
+]);
+
+/**
+ * Whether a frame of the window is granted `permission`. Handing a link to the system
+ * (`openExternal`, which any frame can ask for by navigating to another scheme) is granted for
+ * what `externalUrl` lets out, from any frame. Fullscreen is granted to any frame, since a frame
+ * can only ask for it when the app allowed it to (a video player's); the app's frames are not
+ * allowed it otherwise. Everything else is granted only to the app's own page, and only what
+ * `APP_PAGE_PERMISSIONS` lists; the rest is refused.
+ */
+export function permitted(
+  permission: string,
+  request: { requestingUrl?: string | undefined; externalURL?: string | undefined },
+  app: { devServerUrl: string } | { indexUrl: string },
+): boolean {
+  if (permission === "openExternal") {
+    return request.externalURL !== undefined && externalUrl(request.externalURL) !== null;
+  }
+  if (permission === "fullscreen") {
+    return true;
+  }
+  return (
+    APP_PAGE_PERMISSIONS.has(permission) &&
+    request.requestingUrl !== undefined &&
+    isAppPage(request.requestingUrl, app)
+  );
+}

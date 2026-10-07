@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { claimAppLinks, serveAppLinks } from "./appLinks";
 import { serveChromiumNotices } from "./chromiumNotices";
 import { serveGameCapture } from "./gameCapture";
-import { externalUrl, isAppPage } from "./navigation";
+import { externalUrl, isAppPage, permitted } from "./navigation";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
 
@@ -50,6 +50,39 @@ function windowIcon(): string | undefined {
     : join(app.getAppPath(), "build", "icons", "512x512.png");
 }
 
+/** The app's own page, the only one the window shows (`isAppPage`). */
+const indexFile = join(process.resourcesPath, "app", "index.html");
+function appPage(): { devServerUrl: string } | { indexUrl: string } {
+  return isDevelopment() ? { devServerUrl } : { indexUrl: pathToFileURL(indexFile).href };
+}
+
+/**
+ * What the window's frames may use: the app's page what it needs, other frames almost nothing,
+ * and links handed to the system only as `externalUrl` allows (`permitted`). Asking and
+ * checking are answered alike, so a frame cannot learn of a grant it would be refused.
+ */
+function servePermissions(): void {
+  const page = appPage();
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    callback(
+      permitted(
+        permission,
+        {
+          requestingUrl: details.requestingUrl,
+          externalURL: "externalURL" in details ? details.externalURL : undefined,
+        },
+        page,
+      ),
+    );
+  });
+  session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
+    // A check may not name its frame's address; the main frame's is the window's.
+    const requestingUrl =
+      details.requestingUrl ?? (details.isMainFrame ? contents?.getURL() : undefined);
+    return permitted(permission, { requestingUrl }, page);
+  });
+}
+
 function createWindow(): void {
   const icon = windowIcon();
   const window = new BrowserWindow({
@@ -82,8 +115,7 @@ function createWindow(): void {
 
   // The window only ever shows the app. Links to other sites open in the user's browser, and
   // only web and mail links leave the app at all (`externalUrl`).
-  const indexFile = join(process.resourcesPath, "app", "index.html");
-  const appPage = isDevelopment() ? { devServerUrl } : { indexUrl: pathToFileURL(indexFile).href };
+  const page = appPage();
   const openOutside = (url: string) => {
     const external = externalUrl(url);
     if (external !== null) {
@@ -95,7 +127,7 @@ function createWindow(): void {
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event, url) => {
-    if (!isAppPage(url, appPage)) {
+    if (!isAppPage(url, page)) {
       event.preventDefault();
       openOutside(url);
     }
@@ -211,6 +243,7 @@ app
     serveAppLinks();
     serveChromiumNotices();
     serveDisplayMedia();
+    servePermissions();
     serveGameCapture();
     servePasskeyHandoff();
     serveZoom();
