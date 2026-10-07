@@ -18,7 +18,9 @@
 //!    name="description">` / `<meta name="theme-color">` via `html5ever`'s
 //!    tokenizer, (c) downloads the referenced `og:image` and uploads the
 //!    bytes to the S3 media store, (d) writes a fresh set of
-//!    `message_link_preview` rows, and (e) broadcasts a message `Update`
+//!    `message_link_preview` rows, if the message, locked, is not deleted and
+//!    still says what the links were found in (otherwise it discards them and
+//!    their pictures), and (e) broadcasts a message `Update`
 //!    carrying the new `link_previews` so connected clients can swap the
 //!    empty-preview card stack on the message for the populated one without
 //!    reloading the channel. Reddit gives an unrecognised crawler a script
@@ -65,10 +67,10 @@ use crate::media_store::MediaStore;
 use crate::{LinkPreviewImageId, MessageId, UserId};
 use aspen_link_preview::fetch::{fetch_metadata, http_client, may_fetch};
 use aspen_link_preview::html_meta::ParsedMetadata;
-use aspen_schema::message_link_preview;
+use aspen_schema::{message, message_link_preview};
 use aspen_wire::link_preview::{LinkPreview, VideoEmbed};
 use aspen_wire::message_enum::server_event::{MessageEvent, ServerEvent};
-use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable};
+use diesel::{ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable, Selectable};
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -344,6 +346,7 @@ pub fn spawn_preview_fetch(
     content: &str,
 ) {
     let urls = extract_preview_urls(content);
+    let content = content.to_owned();
     if urls.is_empty() {
         // Nothing to do; any previously-attached previews (e.g. from a prior version of this
         // message) have already been cleared by the edit path, and the caller has already
@@ -366,7 +369,7 @@ pub fn spawn_preview_fetch(
             );
             return;
         };
-        if let Err(e) = run_preview_fetch(&state, message_id, urls).await {
+        if let Err(e) = run_preview_fetch(&state, message_id, &content, urls).await {
             warn!(
                 message_id = message_id.0.to_string(),
                 error = e.to_string(),
@@ -376,9 +379,13 @@ pub fn spawn_preview_fetch(
     });
 }
 
+/// Fetches the previews of `urls`, found in `content`, and gives them to the message, if it
+/// still says `content` and is not deleted when they are ready; an edit or a deletion in the
+/// meantime discards them (an edit's own fetch brings the new set).
 async fn run_preview_fetch(
     state: &GlobalServerContext,
     message_id: MessageId,
+    content: &str,
     urls: Vec<Url>,
 ) -> crate::Result<()> {
     // Fetch metadata for each URL concurrently.
@@ -440,11 +447,24 @@ async fn run_preview_fetch(
         .collect();
 
     let mut conn = state.connection_pool.get().await?;
-    let txn_result: crate::Result<Vec<LinkPreviewImageId>> = conn
+    let txn_result: crate::Result<Option<Vec<LinkPreviewImageId>>> = conn
         .transaction::<_, crate::Error, _>(|conn| {
             let wire_previews = wire_previews.clone();
             let materialised_ref = &materialised;
             async move {
+                // The message, locked against an edit or a deletion until this commits, must
+                // still say what the previews were fetched for.
+                let current: Option<String> = message::table
+                    .select(message::content)
+                    .filter(message::id.eq(message_id))
+                    .filter(message::deleted_at.is_null())
+                    .for_update()
+                    .first(conn.as_mut())
+                    .await
+                    .optional()?;
+                if current.as_deref() != Some(content) {
+                    return Ok(None);
+                }
                 // Collect the image ids currently attached to this message so
                 // we can drop them from S3 after the new generation commits.
                 let stale_ids: Vec<Option<LinkPreviewImageId>> = message_link_preview::table
@@ -512,14 +532,14 @@ async fn run_preview_fetch(
                     &event,
                 )
                 .await?;
-                Ok(stale_ids.into_iter().flatten().collect::<Vec<_>>())
+                Ok(Some(stale_ids.into_iter().flatten().collect::<Vec<_>>()))
             }
             .scope_boxed()
         })
         .await;
 
     match txn_result {
-        Ok(stale_image_ids) => {
+        Ok(Some(stale_image_ids)) => {
             // Best-effort delete of the old generation's S3 objects. If the
             // deletion fails we leak an orphan; a future sweep job can clean
             // them up — same trade-off as `attachment::delete_attachment`.
@@ -534,20 +554,33 @@ async fn run_preview_fetch(
             }
             Ok(())
         }
+        Ok(None) => {
+            info!(
+                message_id = message_id.0.to_string(),
+                "link previews discarded: the message was edited or deleted while they were fetched"
+            );
+            delete_new_images(state, new_image_ids).await;
+            Ok(())
+        }
         Err(e) => {
             // Transaction failed (message was hard-deleted between the send
             // and now, NATS publish failed, etc). Drop any S3 uploads we
             // made so we don't leak orphaned preview bytes.
-            for id in new_image_ids {
-                if let Err(del_err) = state.media_store.delete(&image_storage_key(id)).await {
-                    warn!(
-                        error = del_err.to_string(),
-                        id = id.0.to_string(),
-                        "failed to clean up orphaned preview image after commit failure"
-                    );
-                }
-            }
+            delete_new_images(state, new_image_ids).await;
             Err(e)
+        }
+    }
+}
+
+/// Deletes the pictures stored for previews that were never given to their message.
+async fn delete_new_images(state: &GlobalServerContext, new_image_ids: Vec<LinkPreviewImageId>) {
+    for id in new_image_ids {
+        if let Err(del_err) = state.media_store.delete(&image_storage_key(id)).await {
+            warn!(
+                error = del_err.to_string(),
+                id = id.0.to_string(),
+                "failed to clean up orphaned preview image after commit failure"
+            );
         }
     }
 }
