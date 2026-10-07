@@ -303,13 +303,17 @@ async fn fetch_and_store_image(
     if bytes.is_empty() {
         return None;
     }
-    // Its size, read from its header, lets readers make room for it before it loads; a
-    // picture whose header says nothing sensible simply has none.
-    let size = imagesize::blob_size(&bytes).ok().and_then(|size| {
-        let width = i32::try_from(size.width).ok().filter(|w| *w > 0)?;
-        let height = i32::try_from(size.height).ok().filter(|h| *h > 0)?;
-        Some((width, height))
-    });
+    // Its size, read from its header, lets readers make room for it before it loads. A
+    // picture whose header gives none, or more pixels than an icon may have
+    // (`app::icon::MAX_PIXELS`), which every reader would decode whole, is left out.
+    let Some((width, height)) = crate::icon::size_within(&bytes, crate::icon::MAX_PIXELS) else {
+        info!(
+            url = image_url,
+            "preview image refused: no size, or too many pixels"
+        );
+        return None;
+    };
+    let size = i32::try_from(width).ok().zip(i32::try_from(height).ok());
     let id = LinkPreviewImageId::new();
     let key = image_storage_key(id);
     if let Err(e) = state.media_store.put_bytes(&key, bytes, &mime_type).await {

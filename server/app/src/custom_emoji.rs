@@ -27,6 +27,10 @@ pub const NAME_MAX_CHARS: usize = 32;
 /// The largest picture an emoji may be, in bytes, as small as it is shown.
 pub const MAX_BYTES: u64 = 256 * 1024;
 
+/// The most pixels an emoji's picture may have: 512 by 512, four times on a side what clients
+/// scale one to.
+pub const MAX_PIXELS: u64 = 512 * 512;
+
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = custom_emoji)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -117,7 +121,7 @@ pub async fn read_emoji(
 }
 
 /// Adds an emoji to a community from an icon the caller uploaded, which must be a picture format
-/// of at most [`MAX_BYTES`] and in use nowhere else, under the community's limit. Takes
+/// of at most [`MAX_BYTES`] and [`MAX_PIXELS`] and in use nowhere else, under the community's limit. Takes
 /// Manage custom emoji.
 pub async fn create_emoji(
     state: &GlobalServerContext,
@@ -134,13 +138,16 @@ pub async fn create_emoji(
         .await?
     {
         None => return Err(crate::Error::Validation(t!("customEmojiIconMissing"))),
-        Some(bytes) if bytes > MAX_BYTES => {
-            return Err(crate::Error::Validation(t!(
-                "customEmojiTooLarge",
-                max = crate::attachment::size_text(MAX_BYTES)
-            )));
-        }
+        Some(bytes) if bytes > MAX_BYTES => return Err(too_large()),
         Some(_) => {}
+    }
+    match state
+        .media_store
+        .get_bytes(&crate::icon::storage_key(icon_id), MAX_BYTES)
+        .await?
+    {
+        Some(bytes) => crate::icon::require_pixels(&bytes, MAX_PIXELS)?,
+        None => return Err(too_large()),
     }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -191,6 +198,13 @@ pub async fn create_emoji(
         .scope_boxed()
     })
     .await
+}
+
+fn too_large() -> crate::Error {
+    crate::Error::Validation(t!(
+        "customEmojiTooLarge",
+        max = crate::attachment::size_text(MAX_BYTES)
+    ))
 }
 
 /// Renames an emoji. Takes Manage custom emoji in its community.
