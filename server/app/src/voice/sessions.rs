@@ -784,10 +784,27 @@ async fn record_session(
     // reports is the channel's call, and stays so: this room is closed, sending its people to
     // rejoin there, and every later report of it (a snapshot, a join) finds it unrecorded and
     // comes here or is ignored, so it never displaces the call it duplicates.
-    if let Some(stale) = session_on_channel(conn, row.channel).await? {
-        if stale.id == row.id {
-            return Ok(Some(stale));
-        }
+    let stale = session_on_channel(conn, row.channel).await?;
+    if let Some(recorded) = stale.as_ref().filter(|stale| stale.id == row.id) {
+        return Ok(Some(recorded.clone()));
+    }
+    // A call not yet recorded is believed only where the API server sent someone.
+    if !super::servers::offered_for(
+        state,
+        VoiceServerId::from(server),
+        ChannelId::from(channel),
+        None,
+    )
+    .await
+    {
+        warn!(
+            channel = channel.to_string(),
+            server = server.to_string(),
+            "a voice server reported a call in a channel no one was sent to it for; ignoring it"
+        );
+        return Ok(None);
+    }
+    if let Some(stale) = stale {
         let recorded_server: VoiceServer = voice_server::table
             .select(VoiceServer::as_select())
             .filter(voice_server::id.eq(stale.voice_server))
@@ -853,6 +870,22 @@ async fn record_participant(
     session: &mut VoiceSession,
     joined: &ParticipantSnapshot,
 ) -> crate::Result<()> {
+    if !super::servers::offered_for(
+        state,
+        session.voice_server,
+        session.channel,
+        Some(UserId::from(joined.user)),
+    )
+    .await
+    {
+        warn!(
+            session = %session.id.0,
+            user = %joined.user,
+            "a voice server reported someone joining a call they were not sent to it for; \
+             ignoring it"
+        );
+        return Ok(());
+    }
     let row = VoiceParticipant {
         session: session.id,
         user: UserId::from(joined.user),

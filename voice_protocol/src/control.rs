@@ -56,6 +56,21 @@ pub fn subject_server(subject: &str) -> Option<Uuid> {
     subject.rsplit('.').next()?.parse().ok()
 }
 
+/// Where a voice server asks the API servers for the key join tokens are signed with
+/// (`token::sign`); any API server answers with a `TokenKey`. The request is empty.
+pub const TOKEN_KEY_SUBJECT: &str = "aspen.voice.token-key";
+
+/// The public half of the key the API servers sign join tokens with, as they answer a request on
+/// `TOKEN_KEY_SUBJECT`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenKey {
+    /// `token::key_id` of the key, as the tokens it signs name it.
+    pub key_id: String,
+    /// The Ed25519 public key, base64url without padding.
+    pub public_key: String,
+}
+
 /// The subject one voice server listens on for commands.
 pub fn command_subject(server: Uuid) -> String {
     format!("aspen.voice.command.{server}")

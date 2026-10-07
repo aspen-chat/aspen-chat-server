@@ -378,7 +378,7 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
-    note_offered(state, user, &candidates).await;
+    note_offered(state, user, channel_id, &candidates).await;
     let Grants {
         speak,
         share_screen,
@@ -405,7 +405,7 @@ pub async fn join_offer(
     Ok(JoinOffer {
         session,
         candidates,
-        token: sign(&claims, voice.token_secret.as_bytes()),
+        token: sign(&claims, state.join_token_key.pair()),
         expires_at,
         speak,
         share_screen,
@@ -439,34 +439,79 @@ fn offered_key(server: VoiceServerId, user: UserId) -> String {
     format!("voice_offered:{}:{}", server.0, user.0)
 }
 
-/// Notes that `user` was offered `servers`, so their failure reports about them count. A
-/// Valkey outage is logged and the offer goes ahead; reports from it then count for nothing,
-/// which leaves servers enabled rather than letting anyone disable them.
-async fn note_offered(state: &GlobalServerContext, user: UserId, servers: &[VoiceServer]) {
-    let ttl = state
-        .config
-        .voice
-        .join_token_ttl_seconds
-        .saturating_add(OFFER_REPORT_GRACE_SECONDS);
-    let ttl = i64::try_from(ttl).unwrap_or(i64::MAX);
+/// How long after its join token expires a voice server's report of a call it was offered for
+/// is still believed (`offered_for`): a report comes within seconds of the join, and the margin
+/// covers one held up by an outage of the report link and repaired by a snapshot.
+const JOIN_REPORT_GRACE_SECONDS: u64 = 10 * 60;
+
+/// The Valkey key saying `user` was recently offered `server` for a call in `channel`, or with
+/// no user that anyone was.
+fn offered_for_key(server: VoiceServerId, channel: ChannelId, user: Option<UserId>) -> String {
+    match user {
+        Some(user) => format!("voice_offered_for:{}:{}:{}", server.0, channel.0, user.0),
+        None => format!("voice_offered_for:{}:{}", server.0, channel.0),
+    }
+}
+
+/// Notes that `user` was offered `servers` for a call in `channel`: their failure reports about
+/// those servers count, and a server's report of a call in that channel, or of them joining it,
+/// is believed (`offered_for`). A Valkey outage is logged and the offer goes ahead; failure
+/// reports from it then count for nothing, which leaves servers enabled rather than letting
+/// anyone disable them, and the join reports are believed as `offered_for` says.
+async fn note_offered(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel: ChannelId,
+    servers: &[VoiceServer],
+) {
+    let token_ttl = state.config.voice.join_token_ttl_seconds;
+    let seconds = |grace: u64| i64::try_from(token_ttl.saturating_add(grace)).unwrap_or(i64::MAX);
+    let (failures, joins) = (
+        seconds(OFFER_REPORT_GRACE_SECONDS),
+        seconds(JOIN_REPORT_GRACE_SECONDS),
+    );
     let pipeline = state.valkey.pipeline();
     let noted: Result<Vec<fred::types::Value>, fred::error::Error> = async {
         for server in servers {
-            let () = pipeline
-                .set(
-                    offered_key(server.id, user),
-                    1,
-                    Some(Expiration::EX(ttl)),
-                    None,
-                    false,
-                )
-                .await?;
+            for (key, ttl) in [
+                (offered_key(server.id, user), failures),
+                (offered_for_key(server.id, channel, Some(user)), joins),
+                (offered_for_key(server.id, channel, None), joins),
+            ] {
+                let () = pipeline
+                    .set(key, 1, Some(Expiration::EX(ttl)), None, false)
+                    .await?;
+            }
         }
         pipeline.all().await
     }
     .await;
     if let Err(e) = noted {
         warn!(error = %e, "could not note the voice servers offered to a joiner");
+    }
+}
+
+/// Whether `server` was offered for a call in `channel` (to `user`, or with no user to anyone)
+/// recently enough that its report of that call, or of `user` joining it, is believed: a voice
+/// server reports only calls and joins the API server sent people to it for, so one taken over
+/// cannot make up a call in a channel, or someone in one, to ring a DM or show a call that is
+/// not there. A Valkey outage is logged and believes the report, so calls go on through it.
+pub(super) async fn offered_for(
+    state: &GlobalServerContext,
+    server: VoiceServerId,
+    channel: ChannelId,
+    user: Option<UserId>,
+) -> bool {
+    match state
+        .valkey
+        .exists::<i64, _>(offered_for_key(server, channel, user))
+        .await
+    {
+        Ok(found) => found > 0,
+        Err(e) => {
+            warn!(error = %e, "could not read whether a voice server was offered for a call");
+            true
+        }
     }
 }
 
