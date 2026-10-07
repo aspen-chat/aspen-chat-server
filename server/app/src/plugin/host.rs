@@ -909,6 +909,14 @@ impl Call {
         }
         let payload: serde_json::Value = serde_json::from_str(&payload)
             .map_err(|_| wit::Error::Invalid("an event's payload is JSON".into()))?;
+        // Written out again it may be longer than given (`9e15` is `9000000000000000.0`), and
+        // that is what is published, so that is what the limit holds to.
+        if !serde_json::to_string(&payload).is_ok_and(|written| written.len() <= MAX_EVENT_PAYLOAD)
+        {
+            return Err(wit::Error::Limit(format!(
+                "an event's payload is at most {MAX_EVENT_PAYLOAD} bytes"
+            )));
+        }
         let mut conn = self.conn().await?;
         let target = match audience {
             // While answering a route, only where the caller may look, as its reads are.
