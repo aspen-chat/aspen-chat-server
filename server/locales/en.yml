@@ -7,6 +7,7 @@ tryAgainLater: "Something went wrong on the server. Try again; if it keeps happe
 # Problem Details titles (see server/api/src/error.rs)
 problemBadRequest: "The request could not be understood."
 problemValidation: "The request is not valid."
+textHasNul: "Text may not contain the null character (U+0000). Remove it and try again."
 problemUnauthorized: "You must be logged in to do that."
 problemForbidden: "You are not allowed to do that."
 problemNotFound: "The requested item does not exist."

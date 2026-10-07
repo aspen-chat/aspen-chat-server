@@ -302,6 +302,15 @@ impl ApiError {
     }
 }
 
+/// Whether PostgreSQL's message refuses text it cannot store: `invalid byte sequence for
+/// encoding` (SQLSTATE 22021, a NUL in text) or `unsupported Unicode escape sequence` (22P05, a
+/// `\u0000` in JSON). The messages are PostgreSQL's English ones, which a server set to report
+/// in another language does not give; such a refusal then answers `internal`.
+fn unstorable_text(message: &str) -> bool {
+    message.starts_with("invalid byte sequence for encoding")
+        || message.starts_with("unsupported Unicode escape sequence")
+}
+
 /// How long a client told `serverBusy` waits before trying again.
 const BUSY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -313,6 +322,15 @@ impl From<app::Error> for ApiError {
                 DatabaseErrorKind::UniqueViolation,
                 _,
             )) => Self::new(ProblemCode::Conflict),
+            // Text PostgreSQL cannot store (U+0000, which the extractors refuse, reaching it
+            // another way): the request's fault, not the server's. The database names neither
+            // case by a kind of its own, only by its message.
+            app::Error::Diesel(diesel::result::Error::DatabaseError(
+                DatabaseErrorKind::Unknown,
+                ref info,
+            )) if unstorable_text(info.message()) => {
+                Self::new(ProblemCode::Validation).with_detail(t!("textHasNul"))
+            }
             app::Error::Validation(reason) => {
                 Self::new(ProblemCode::Validation).with_detail(reason)
             }
