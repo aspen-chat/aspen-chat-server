@@ -28,7 +28,9 @@
 # for the page unsubscribe links open, and `GET /invite/{code}` and `GET /{*path}` for the web
 # client's pages (all but the first served at those paths, outside `/api/v1`). The pages
 # check their own limits and are served, over them, without what they preview as; the web
-# client's files are not limited.
+# client's files are not limited. A request using a method its path does not have, which is
+# refused, still counts toward the `default` limits that need no session or path parameter;
+# a method that is not a standard HTTP one is named `OTHER`.
 
 [rate_limits]
 enabled = true

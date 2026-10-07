@@ -511,7 +511,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         )
         // The event stream is a WebSocket and has no OpenAPI representation; its frames are
         // described by `event_schema.json`.
-        .route("/events", any(event_stream::event_stream))
+        .route("/events", axum::routing::get(event_stream::event_stream))
 }
 
 /// The OpenAPI document of every API route.

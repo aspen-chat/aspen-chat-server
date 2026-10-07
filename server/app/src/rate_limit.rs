@@ -125,8 +125,24 @@ impl Route {
     }
 }
 
+/// The methods a route key names as they are. Any other method token a client sends is named
+/// `OTHER` (`OTHER_METHOD`), so made-up methods cannot make new keys, and with them new metric
+/// series and buckets.
+const METHODS: [&str; 9] = [
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
+];
+
+/// What a route key calls a method that is none of `METHODS`.
+pub const OTHER_METHOD: &str = "OTHER";
+
+/// The key a request's limits and metrics go by: its method and its path template.
 pub fn route_key(method: &str, template: &str) -> String {
-    format!("{} {template}", method.to_ascii_uppercase())
+    let method = METHODS
+        .iter()
+        .find(|known| known.eq_ignore_ascii_case(method))
+        .copied()
+        .unwrap_or(OTHER_METHOD);
+    format!("{method} {template}")
 }
 
 /// Whose requests a rule counts together.
@@ -239,6 +255,10 @@ pub struct RateLimiter {
     addresses: ClientAddresses,
     suspension: SuspensionState,
     rules: HashMap<String, Vec<Rule>>,
+    /// The rules of a request whose route key has none of its own (a method the route does not
+    /// have, refused by the router): the default ones that need neither a session nor a path
+    /// parameter, so such requests are counted too.
+    unknown: Vec<Rule>,
     /// The routes refused while the limits cannot be counted.
     fail_closed: HashSet<String>,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
@@ -254,7 +274,10 @@ const MAX_KEY_PART: usize = 64;
 impl RateLimiter {
     /// The names of the dimensions `route` is counted along, sorted.
     pub fn dimensions(&self, route: &str) -> Vec<String> {
-        let mut names: Vec<String> = self.rules[route]
+        let mut names: Vec<String> = self
+            .rules
+            .get(route)
+            .unwrap_or(&self.unknown)
             .iter()
             .map(|rule| rule.dimension.name())
             .collect();
@@ -313,17 +336,7 @@ impl RateLimiter {
                     route.key
                 )
             };
-            // The defaults apply wherever they can: a user limit where users sign in, a
-            // per-parameter limit where the path has the parameter.
-            let mut defaults: HashMap<Dimension, Limit> = HashMap::new();
-            for (dimension, setting) in &config.default {
-                let parsed = parse_dimension(dimension, "default")?;
-                if let Some(limit) = limit_of(setting, "default", dimension)?
-                    && applies(&parsed, route)
-                {
-                    defaults.insert(parsed, limit);
-                }
-            }
+            let defaults = defaults_for(config, route)?;
             // An endpoint's own setting replaces its group's, dimension by dimension; `false`
             // (a `None` here) also removes the default of that dimension.
             let mut merged: HashMap<Dimension, Option<Limit>> = HashMap::new();
@@ -366,11 +379,19 @@ impl RateLimiter {
             }));
             rules.insert(route.key.clone(), compiled);
         }
+        let unknown_route = Route::new(OTHER_METHOD, "/*", Access::Anonymous);
+        let unknown = defaults_for(config, &unknown_route)?
+            .into_iter()
+            .map(|(dimension, limit)| {
+                compile_rule(dimension, &limit, &format!("default:{}", unknown_route.key))
+            })
+            .collect();
         Ok(Self {
             enabled: config.enabled,
             addresses,
             suspension: SuspensionState::new(Duration::from_secs(config.max_suspension_seconds)),
             rules,
+            unknown,
             fail_closed,
             last_failure_log: AtomicU64::new(0),
         })
@@ -398,9 +419,7 @@ impl RateLimiter {
         if !self.enabled {
             return Decision::Allowed;
         }
-        let Some(rules) = self.rules.get(route) else {
-            return Decision::Allowed;
-        };
+        let rules = self.rules.get(route).unwrap_or(&self.unknown);
         let exemption = self.suspension.exemption(identity.ip);
         if exemption == Exemption::All {
             return Decision::Allowed;
@@ -530,6 +549,24 @@ fn limit_of(
 }
 
 /// Whether a dimension can count requests to `route` at all.
+/// The default limits that apply to `route`, which is wherever they can: a user limit where
+/// users sign in, a per-parameter limit where the path has the parameter.
+fn defaults_for(
+    config: &RateLimitConfig,
+    route: &Route,
+) -> Result<HashMap<Dimension, Limit>, String> {
+    let mut defaults = HashMap::new();
+    for (dimension, setting) in &config.default {
+        let parsed = parse_dimension(dimension, "default")?;
+        if let Some(limit) = limit_of(setting, "default", dimension)?
+            && applies(&parsed, route)
+        {
+            defaults.insert(parsed, limit);
+        }
+    }
+    Ok(defaults)
+}
+
 fn applies(dimension: &Dimension, route: &Route) -> bool {
     (!dimension.needs_user() || route.access != Access::Anonymous)
         && dimension
@@ -643,6 +680,20 @@ mod tests {
             dimensions(&limiter, "POST /auth/passkey-ceremonies"),
             ["ip", "user"]
         );
+    }
+
+    #[test]
+    fn made_up_methods_share_one_key() {
+        assert_eq!(route_key("post", "/users"), "POST /users");
+        assert_eq!(route_key("FROBNICATE", "/users"), "OTHER /users");
+        assert_eq!(route_key("x1", "/users"), route_key("x2", "/users"));
+    }
+
+    #[test]
+    fn a_route_without_rules_of_its_own_gets_the_defaults_that_need_nothing() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        assert_eq!(dimensions(&limiter, "OTHER /channels/{channel}"), ["ip"]);
+        assert_eq!(dimensions(&limiter, "DELETE /users"), ["ip"]);
     }
 
     fn rules_of<'a>(limiter: &'a RateLimiter, route: &str, dimension: &Dimension) -> Vec<&'a Rule> {
