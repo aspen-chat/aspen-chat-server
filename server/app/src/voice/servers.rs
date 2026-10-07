@@ -52,6 +52,26 @@ pub async fn list_servers_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<
         .await?)
 }
 
+/// Refuses a voice server address that is not `http` or `https`, or not `https` where
+/// `public_url` is: a page loaded over `https` may not open an unencrypted WebSocket, and the
+/// join token and media keys would cross the network readable.
+pub fn check_url(config: &crate::aspen_config::AspenConfig, url: &str) -> crate::Result<()> {
+    check_url_at(config.public_url.starts_with("https:"), url)
+}
+
+fn check_url_at(deployment_https: bool, url: &str) -> crate::Result<()> {
+    let parsed = url::Url::parse(url)
+        .ok()
+        .filter(|parsed| matches!(parsed.scheme(), "http" | "https") && parsed.has_host());
+    let Some(parsed) = parsed else {
+        return Err(crate::Error::Validation(t!("voiceServerUrlInvalid")));
+    };
+    if deployment_https && parsed.scheme() != "https" {
+        return Err(crate::Error::Validation(t!("voiceServerUrlInsecure")));
+    }
+    Ok(())
+}
+
 pub async fn create_server(
     state: &GlobalServerContext,
     name: String,
@@ -59,6 +79,7 @@ pub async fn create_server(
     capacity: i32,
 ) -> crate::Result<VoiceServer> {
     create_server_in(
+        &state.config,
         state.connection_pool.get().await?.as_mut(),
         name,
         url,
@@ -67,13 +88,16 @@ pub async fn create_server(
     .await
 }
 
-/// Registers a server, enabled. A name already taken is a unique violation.
+/// Registers a server, enabled, at an address [`check_url`] allows. A name already taken is a
+/// unique violation.
 pub async fn create_server_in(
+    config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
     name: String,
     url: String,
     capacity: i32,
 ) -> crate::Result<VoiceServer> {
+    check_url(config, &url)?;
     let row = VoiceServer {
         id: VoiceServerId::new(),
         name,
@@ -97,16 +121,27 @@ pub async fn update_server(
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> crate::Result<VoiceServer> {
-    update_server_in(state.connection_pool.get().await?.as_mut(), id, changes).await
+    update_server_in(
+        &state.config,
+        state.connection_pool.get().await?.as_mut(),
+        id,
+        changes,
+    )
+    .await
 }
 
 /// Changes a server. Enabling or disabling it is an operator's decision, which lifts any
-/// suspension for failures, and enabling it also forgets the failures that led to one.
+/// suspension for failures, and enabling it also forgets the failures that led to one. A new
+/// address must be one [`check_url`] allows.
 pub async fn update_server_in(
+    config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> crate::Result<VoiceServer> {
+    if let Some(url) = &changes.url {
+        check_url(config, url)?;
+    }
     let enabled = changes.enabled;
     conn.transaction(|conn| {
         async move {
@@ -647,6 +682,17 @@ pub(super) async fn reap_silent_servers(state: &GlobalServerContext) -> crate::R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A voice server is at an http or https address, and an https deployment's at https.
+    #[test]
+    fn voice_server_addresses_are_checked() {
+        assert!(check_url_at(true, "https://voice-1.example.org").is_ok());
+        assert!(check_url_at(true, "http://voice-1.example.org").is_err());
+        assert!(check_url_at(true, "http://127.0.0.1:9000").is_err());
+        assert!(check_url_at(false, "http://127.0.0.1:9000").is_ok());
+        assert!(check_url_at(false, "wss://voice-1.example.org").is_err());
+        assert!(check_url_at(false, "voice-1.example.org").is_err());
+    }
 
     fn server(
         enabled: bool,

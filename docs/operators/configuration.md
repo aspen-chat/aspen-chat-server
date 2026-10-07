@@ -316,7 +316,9 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 - `aspen-chat-server voice-servers add NAME --url URL --capacity N` registers one, or gives the
   one already registered by that name this address and capacity, so a deployment script may run
   it every time it deploys. `url` is where clients reach it, as
-  `https://voice-1.chat.example.org`; `capacity` is the most people it carries at once, which
+  `https://voice-1.chat.example.org`, an `http` or `https` address, and `https` wherever
+  `public_url` is (here and in the dashboard; browsers on an `https` page refuse unencrypted
+  WebSockets); `capacity` is the most people it carries at once, which
   `voice_server estimate-capacity` suggests.
 - `voice-servers set NAME [--url URL] [--capacity N] [--enabled true|false]` changes one. A
   disabled server is offered to no one joining a call; calls already on it go on.
