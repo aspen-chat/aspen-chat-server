@@ -1261,6 +1261,45 @@ def banned_owners_bots(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def bot_transfers(world: World, check: Checks) -> None:
+    say("a bot changes hands only when its recipient accepts, and its old token ends then")
+    stack = world.stack
+    giver, heir = world.account("giver"), world.account("heir")
+    made = stack.api("POST", "/users/@me/bots", {"name": f"tbot{world.run}"}, giver["token"])
+    bot, old_token = made["bot"]["id"], made["token"]
+
+    def stale() -> None:
+        psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{giver['id']}'",
+             stack.database)
+
+    stale()
+    rotated = stack.request("POST", f"/bots/{bot}/token", token=giver["token"])
+    check("issuing a bot a new token asks for a fresh verification",
+          rotated[0] == 403 and "reauthenticationRequired" in rotated[1], rotated)
+    offered = stack.request("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    check("and so does offering it", offered[0] == 403 and "reauthenticationRequired" in offered[1], offered)
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, giver["token"])
+    stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    check("an offer leaves the bot with its owner",
+          stack.api("GET", f"/users/{bot}", token=giver["token"])["botOwner"] == giver["id"])
+    offers = stack.api("GET", "/users/@me/bot-transfers", token=heir["token"])
+    check("the recipient finds the offer", any(o["bot"]["id"] == bot for o in offers), offers)
+    stack.api("DELETE", f"/bots/{bot}/transfer", token=giver["token"])
+    check("a withdrawn offer cannot be accepted",
+          stack.status("POST", f"/bots/{bot}/transfer/acceptance", token=heir["token"]) == 404)
+    stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    bot_stream = stack.events(old_token)
+    bot_stream.gather(0.5)
+    accepted = stack.api("POST", f"/bots/{bot}/transfer/acceptance", token=heir["token"])
+    bot_stream.gather(1.0)
+    check("accepting makes the recipient its owner", accepted["bot"]["botOwner"] == heir["id"], accepted["bot"])
+    check("closes the stream its old token opened", bot_stream.closed == 4401, bot_stream.closed)
+    check("refuses the old token", stack.status("GET", "/users/@me", token=old_token) == 401)
+    check("and takes the new one", stack.status("GET", "/users/@me", token=accepted["token"]) == 200)
+    check("and its old owner can no longer issue it a token",
+          stack.status("POST", f"/bots/{bot}/token", token=giver["token"]) == 403)
+
+
 def moderator_ranks(world: World, check: Checks) -> None:
     say("moderating the deployment reaches no one ranked at or above the moderator there")
     stack, member = world.stack, world.member
@@ -1842,7 +1881,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, banned_owners_bots, moderator_ranks, ban_deletions, dm_reads,
+             nicknames, review_powers, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

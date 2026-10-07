@@ -440,7 +440,8 @@ user = { requests = 30, per_seconds = 3600, burst = 5 }
 [rate_limits.endpoints."POST /bots/{bot}/token"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
-[rate_limits.endpoints."PUT /bots/{bot}/owner"]
+# Each offer of a bot sends its recipient a notice from the system account.
+[rate_limits.endpoints."PUT /bots/{bot}/transfer"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
 # Reporting a message, a profile, or a nickname: ten back to back, and fifty a day, across all

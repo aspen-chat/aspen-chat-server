@@ -308,6 +308,7 @@ botOwnerMustBeLocal: "A bot must be owned by someone whose account is on this se
 foreignMakeNoBots: "Make bots on your home server."
 botAlreadyYours: "That person already owns this bot."
 botNewOwnerAtLimit: "That person already owns as many bots as they may."
+botTransferOfferedNotice: "%{giver} is offering you their bot %{bot}. To take it, open Settings, then Developer, within %{days} days. Until you accept, it stays theirs; accepting gives it a new token that only you are shown."
 botRoleFixed: "This role belongs to a bot. Remove the bot to remove its role."
 botPrivate: "Only this bot's owner can add it."
 notABot: "Only bots are added this way; people join with an invite."

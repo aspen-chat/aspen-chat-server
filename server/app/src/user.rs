@@ -61,6 +61,7 @@ impl UserPg {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct User {
     pub user_pg: UserPg,
     pub online_status: UserOnlineStatus,

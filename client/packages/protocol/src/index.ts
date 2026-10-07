@@ -164,6 +164,7 @@ export {
   type InviteLookup,
   type SyncListener,
   type SyncStatus,
+  type BotTransfer,
   type MessageHolding,
   type Sent,
   type MessageSearch,

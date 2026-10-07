@@ -57,6 +57,7 @@ type Category = components["schemas"]["Category"];
 type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
+export type BotTransfer = components["schemas"]["BotTransfer"];
 export type MessageHolding = components["schemas"]["MessageHolding"];
 
 /** What became of a message sent: posted, or held by the server for its previews. */
@@ -1720,13 +1721,33 @@ export class AspenSync {
     }
   }
 
-  /** Reads every bot the caller owns into the store (`RecordStore.ownedBots`). */
+  /**
+   * Reads every bot the caller owns into the store (`RecordStore.ownedBots`). A bot the store
+   * still holds as theirs that the answer lacks (accepted by someone it was offered to, whose
+   * owner change reaches only those sharing a community with it) is read again, so its new
+   * owner replaces the stale one.
+   */
   async loadBots(): Promise<void> {
     const result = await this.#client.api.GET("/api/v1/users/@me/bots");
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+    const owned = new Set(result.data.map((bot) => bot.id));
+    const stale = this.store.ownedBots().filter((bot) => !owned.has(bot.id));
     this.store.ingest({ users: result.data });
+    const reread = await Promise.all(
+      stale.map((bot) =>
+        this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: bot.id } } }),
+      ),
+    );
+    const found = reread.flatMap((answer) => (answer.data === undefined ? [] : [answer.data]));
+    this.store.ingest({ users: found });
+    for (const [index, answer] of reread.entries()) {
+      const bot = stale[index];
+      if (answer.response.status === 404 && bot !== undefined) {
+        this.store.forgetUser(bot.id);
+      }
+    }
   }
 
   /**
@@ -1781,16 +1802,54 @@ export class AspenSync {
     this.store.ingest({ users: [result.data] });
   }
 
-  /** Hands a bot the caller owns to someone else; it leaves the caller's list. */
-  async transferBot(botId: string, ownerId: string): Promise<void> {
-    const result = await this.#client.api.PUT("/api/v1/bots/{bot}/owner", {
+  /** The offers of bots made to the caller or by them that still stand, the newest first. */
+  async loadBotTransfers(): Promise<BotTransfer[]> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/bot-transfers");
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data.map((transfer) => transfer.bot) });
+    return result.data;
+  }
+
+  /**
+   * Offers a bot the caller owns to someone else, who owns it once they accept; offering it
+   * again replaces the offer. Needs a recently verified sign-in (`reauthenticationRequired`).
+   */
+  async offerBotTransfer(botId: string, ownerId: string): Promise<BotTransfer> {
+    const result = await this.#client.api.PUT("/api/v1/bots/{bot}/transfer", {
       params: { path: { bot: botId } },
       body: { owner: ownerId },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: [result.data] });
+    return result.data;
+  }
+
+  /** Withdraws the offer of a bot the caller made, or declines one made to them. */
+  async endBotTransfer(botId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/bots/{bot}/transfer", {
+      params: { path: { bot: botId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Accepts a bot offered to the caller: it becomes theirs, with a new token the server shows
+   * only this once, and the old token stops working.
+   */
+  async acceptBotTransfer(botId: string): Promise<{ bot: User; token: string }> {
+    const result = await this.#client.api.POST("/api/v1/bots/{bot}/transfer/acceptance", {
+      params: { path: { bot: botId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: [result.data.bot] });
+    return result.data;
   }
 
   /** The categories a report may be made in, in the order they are offered. */
