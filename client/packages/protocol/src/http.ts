@@ -512,8 +512,10 @@ export class AspenClient {
   }
 
   /**
-   * Mails the reset's code to the account's address, given that whole address. Throws
-   * `ApiProblemError` (`emailMismatch`, `passwordResetExpired`, `tooManyAttempts`).
+   * Mails the reset's code to the account's address when `address` is that whole address,
+   * resolving the same whether or not it is, so the next step can only say a code is on its way
+   * if the address was right. Throws `ApiProblemError` (`passwordResetExpired`,
+   * `tooManyAttempts`).
    */
   async sendPasswordResetCode(reset: string, address: string): Promise<void> {
     const result = await this.api.POST(`${API_PREFIX}/auth/password-resets/{reset}/codes`, {
