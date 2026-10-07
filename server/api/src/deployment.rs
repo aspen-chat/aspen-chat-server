@@ -234,6 +234,7 @@ pub async fn reorder_deployment_roles(
     responses(
         (status = CREATED, description = "Given"),
         (status = OK, description = "Already held"),
+        (status = BAD_REQUEST, description = "`validation`: the user is a bot or from another deployment, which hold no deployment roles", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
         (status = NOT_FOUND, body = Problem),

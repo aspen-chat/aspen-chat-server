@@ -1257,6 +1257,13 @@ def banned_owners_bots(world: World, check: Checks) -> None:
     check("and refuses its token", stack.status("GET", "/users/@me", token=bot_token) == 401)
     world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
     check("lifting the ban restores it", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_id = stack.api("GET", "/users/@me", token=bot_token)["id"]
+    plain = world.as_owner("POST", "/admin/roles", {"name": f"Plain{world.run}", "permissions": []})["id"]
+    check("a bot is given no deployment role",
+          stack.status("PUT", f"/admin/users/{bot_id}/roles/{plain}", token=world.owner["token"]) == 400)
+    check("and its token never opens the dashboard",
+          stack.status("GET", "/admin/overview", token=bot_token) == 403)
+    world.as_owner("DELETE", f"/admin/roles/{plain}")
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
 
