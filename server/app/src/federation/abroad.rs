@@ -432,7 +432,7 @@ async fn arrive(
                 ));
             }
             let banned: bool = user::table
-                .select(user::banned_at.is_not_null())
+                .select(crate::user_ban::banned())
                 .find(existing.id)
                 .first(conn)
                 .await?;
