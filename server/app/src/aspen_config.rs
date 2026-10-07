@@ -512,6 +512,30 @@ impl EmailConfig {
         true
     }
 
+    /// Refuses an `smtp_url` that would send its user and password unencrypted, `smtp://` without
+    /// `tls=required` (which `tls=opportunistic` is not: whoever sits between the servers can
+    /// strip STARTTLS), to anything but this machine, where a development mail catcher listens.
+    fn check_smtp_encrypted(smtp_url: &str) -> Result<(), String> {
+        let Ok(url) = url::Url::parse(smtp_url) else {
+            // `from_url` reports what is wrong with it when the transport is made.
+            return Ok(());
+        };
+        let has_credentials = !url.username().is_empty() || url.password().is_some();
+        let encrypted = url.scheme() == "smtps"
+            || url
+                .query_pairs()
+                .any(|(key, value)| key == "tls" && value == "required");
+        let loopback = url.host().is_some_and(|host| is_loopback_host(&host));
+        if has_credentials && !encrypted && !loopback {
+            return Err(
+                "email.smtp_url would send its user and password unencrypted; use smtps:// \
+                 (port 465) or add ?tls=required (STARTTLS, port 587)"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
     /// Checks `from`, `smtp_url`, and `max_per_second`.
     fn validate(&self) -> Result<(), config::ConfigError> {
         let message = |text: String| config::ConfigError::Message(text);
@@ -521,6 +545,9 @@ impl EmailConfig {
                  server that only queues it"
                     .to_string(),
             ));
+        }
+        if let Some(smtp_url) = &self.smtp_url {
+            Self::check_smtp_encrypted(smtp_url).map_err(message)?;
         }
         if self.max_per_second == Some(0) {
             return Err(message(
@@ -627,10 +654,101 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded
         .voice
         .check_secret(loaded.public_url.starts_with("https:"))?;
+    loaded.check_development_credentials()?;
     if let Some(email) = &loaded.email {
         email.validate()?;
     }
     Ok(loaded)
+}
+
+/// Credentials written into this repository for development (`docker-compose.yaml`, the scripts,
+/// and `MediaS3Config`'s defaults), which anyone can read.
+const DEVELOPMENT_PASSWORDS: &[&str] = &["aspen_test"];
+const DEVELOPMENT_S3_KEYS: &[&str] = &[
+    "aspen_dev_key",
+    "aspen_dev_secret",
+    "GK484e56c38fb7e14b182bf47a",
+    "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027",
+];
+
+/// Whether `host` is this machine: `localhost`, a name under it, or a loopback address.
+pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        // A URL of a scheme `url` does not know (`smtp:`) holds even an address as a name.
+        url::Host::Domain(name) => match name
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+        {
+            Ok(address) => address.is_loopback(),
+            Err(_) => {
+                let name = name.trim_end_matches('.').to_ascii_lowercase();
+                name == "localhost" || name.ends_with(".localhost")
+            }
+        },
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+    }
+}
+
+impl AspenConfig {
+    /// Whether this deployment is one others may reach: `public_url` is `https` at a host that is
+    /// not this machine. Development deployments, `http` or under `localhost`
+    /// (`scripts/dev_federation.py`), may use what is meant only for development.
+    pub fn is_public(&self) -> bool {
+        url::Url::parse(&self.public_url).is_ok_and(|url| {
+            url.scheme() == "https" && url.host().is_some_and(|host| !is_loopback_host(&host))
+        })
+    }
+
+    /// Refuses, at a public deployment ([`AspenConfig::is_public`]), the database, NATS, and
+    /// storage credentials this repository holds for development: whoever reads the repository
+    /// would hold the deployment's data.
+    fn check_development_credentials(&self) -> Result<(), config::ConfigError> {
+        if !self.is_public() {
+            return Ok(());
+        }
+        let refuse = |what: &str| {
+            Err(config::ConfigError::Message(format!(
+                "{what} is a development value published in Aspen's repository; a deployment at \
+                 an https address needs one of its own, a long random string"
+            )))
+        };
+        let database_password = match url::Url::parse(&self.database_url) {
+            Ok(url) => url.password().map(str::to_string),
+            // libpq's `key=value` form.
+            Err(_) => self
+                .database_url
+                .split_whitespace()
+                .find_map(|pair| pair.strip_prefix("password="))
+                .map(|password| password.trim_matches('\'').to_string()),
+        };
+        if database_password.is_some_and(|password| DEVELOPMENT_PASSWORDS.contains(&&*password)) {
+            return refuse("database_url's password");
+        }
+        if self
+            .nats_auth_token
+            .as_deref()
+            .is_some_and(|token| DEVELOPMENT_PASSWORDS.contains(&token))
+        {
+            return refuse("nats_auth_token");
+        }
+        if self
+            .nats
+            .as_ref()
+            .is_some_and(|nats| DEVELOPMENT_PASSWORDS.contains(&&*nats.password))
+        {
+            return refuse("[nats] password");
+        }
+        let s3 = &self.media.s3;
+        if DEVELOPMENT_S3_KEYS.contains(&&*s3.access_key) {
+            return refuse("[media.s3] access_key");
+        }
+        if DEVELOPMENT_S3_KEYS.contains(&&*s3.secret_key) {
+            return refuse("[media.s3] secret_key");
+        }
+        Ok(())
+    }
 }
 
 impl AspenConfig {
@@ -849,6 +967,71 @@ mod tests {
             config("from = \"a@example.org\"\nsmtp_url = \"smtp://x\"\nmax_per_second = 0")
                 .is_err()
         );
+    }
+
+    /// SMTP credentials travel only encrypted, except to this machine.
+    #[test]
+    fn smtp_credentials_need_tls() {
+        let check = EmailConfig::check_smtp_encrypted;
+        assert!(check("smtp://localhost:1025").is_ok());
+        assert!(check("smtp://mail.example.org:25").is_ok());
+        assert!(check("smtps://user:pw@mail.example.org").is_ok());
+        assert!(check("smtp://user:pw@mail.example.org?tls=required").is_ok());
+        assert!(check("smtp://user:pw@127.0.0.1:1025").is_ok());
+        assert!(check("smtp://user:pw@mail.example.org").is_err());
+        assert!(check("smtp://user:pw@mail.example.org?tls=opportunistic").is_err());
+        assert!(check("smtp://user@mail.example.org:587").is_err());
+    }
+
+    /// A public deployment refuses the credentials this repository publishes for development;
+    /// development deployments keep them.
+    #[test]
+    fn a_public_deployment_refuses_development_credentials() {
+        let config = |public_url: &str, extra: &str| -> AspenConfig {
+            let mut config: AspenConfig = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = {public_url:?}\n\
+                         database_url = \"postgres://aspen:own-password@db/aspen\"\n\
+                         nats_url = \"nats://x\"\nnats_auth_token = \"own-token\"\n\
+                         valkey_url = \"redis://x\"\n{extra}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+            config.derive_from_public_url().unwrap();
+            config
+        };
+        let own_s3 = "[media.s3]\naccess_key = \"own\"\nsecret_key = \"own-secret\"\n";
+        let public = "https://chat.example.org";
+        assert!(
+            config(public, own_s3)
+                .check_development_credentials()
+                .is_ok()
+        );
+        // `MediaS3Config`'s defaults are development keys.
+        assert!(config(public, "").check_development_credentials().is_err());
+        for development in ["http://192.168.2.220:8000", "https://alpha.localhost:8443"] {
+            assert!(
+                config(development, "")
+                    .check_development_credentials()
+                    .is_ok()
+            );
+        }
+        let mut database = config(public, own_s3);
+        database.database_url = "postgres://postgres:aspen_test@db:5432".to_string();
+        assert!(database.check_development_credentials().is_err());
+        database.database_url = "host=db user=postgres password=aspen_test".to_string();
+        assert!(database.check_development_credentials().is_err());
+        let mut nats = config(public, own_s3);
+        nats.nats_auth_token = Some("aspen_test".to_string());
+        assert!(nats.check_development_credentials().is_err());
+        let mut s3 = config(public, own_s3);
+        s3.media.s3.access_key = "GK484e56c38fb7e14b182bf47a".to_string();
+        assert!(s3.check_development_credentials().is_err());
     }
 
     /// The domain is the public URL's, and the gates are not set here.
