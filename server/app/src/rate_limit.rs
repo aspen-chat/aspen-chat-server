@@ -268,8 +268,6 @@ pub struct RateLimiter {
 
 /// How often an unreachable Valkey is logged.
 const FAILURE_LOG_INTERVAL_MS: u64 = 30_000;
-/// Longer key parts are hashed, keeping keys short whatever a path parameter holds.
-const MAX_KEY_PART: usize = 64;
 
 impl RateLimiter {
     /// The names of the dimensions `route` is counted along, sorted.
@@ -532,12 +530,11 @@ fn canonical_param(value: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// A path parameter's value or a username as a bucket's key holds it: its SHA-256, so the keys
+/// stay short whatever a value holds, and what a value is (a capability URL's secret, an invite
+/// code, someone's name) is not written to Valkey in the clear.
 fn key_part(value: &str) -> String {
-    if value.len() <= MAX_KEY_PART && !value.contains(':') {
-        value.to_string()
-    } else {
-        data_encoding::HEXLOWER.encode(&Sha256::digest(value.as_bytes()))
-    }
+    data_encoding::HEXLOWER.encode(&Sha256::digest(value.as_bytes()))
 }
 
 fn parse_dimension(name: &str, source: &str) -> Result<Dimension, String> {
@@ -944,9 +941,18 @@ mod tests {
             limiter
                 .key(&rule(Dimension::UserPer("channel".into())), &identity)
                 .unwrap(),
-            format!("rl:b:user_per_channel:{}:c1", user.0)
+            format!("rl:b:user_per_channel:{}:{}", user.0, key_part("c1"))
         );
         assert!(limiter.key(&rule(Dimension::Username), &identity).is_none());
+        // A secret in a path never reaches Valkey as it is.
+        let secret = Identity {
+            params: vec![("secret", "capability-secret")],
+            ..Identity::default()
+        };
+        let key = limiter
+            .key(&rule(Dimension::Per("secret".into())), &secret)
+            .unwrap();
+        assert!(!key.contains("capability-secret"));
         let mapped = Identity {
             ip: Some("::ffff:192.0.2.7".parse().unwrap()),
             ..Identity::default()
