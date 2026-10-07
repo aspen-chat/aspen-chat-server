@@ -178,6 +178,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                         detail: e.to_string(),
                         fatal: true,
                         retry_after_seconds: None,
+                        refused: None,
                     });
                     close(outbox, writer).await;
                     return;
@@ -189,6 +190,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: "the first frame must be identify".to_string(),
                 fatal: true,
                 retry_after_seconds: None,
+                refused: None,
             });
             close(outbox, writer).await;
             return;
@@ -210,13 +212,20 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ),
             fatal: true,
             retry_after_seconds: Some(wait.as_secs().max(1)),
+            refused: None,
         });
         close(outbox, writer).await;
         return;
     }
     let seat = match state
         .rooms
-        .join(channel, user, outbox.clone(), claims.grants())
+        .join(
+            channel,
+            user,
+            outbox.clone(),
+            claims.grants(),
+            claims.sign_in.clone(),
+        )
         .await
     {
         Ok(seat) => seat,
@@ -226,6 +235,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: e.to_string(),
                 fatal: true,
                 retry_after_seconds: None,
+                refused: None,
             });
             close(outbox, writer).await;
             return;
@@ -242,7 +252,15 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         };
         let kind = frame.kind();
         crate::metrics::frame(kind);
-        if let Err(wait) = state.limits.check_frame(kind, &caller) {
+        // Muting and deafening always go through; only lifting them is limited.
+        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened }
+            if state.rooms.quietens(seat, muted, deafened));
+        let limited = if quietens {
+            Ok(())
+        } else {
+            state.limits.check_frame(kind, &caller)
+        };
+        if let Err(wait) = limited {
             crate::metrics::frame_refused(kind);
             outbox.send(&ServerMessage::Error {
                 detail: format!(
@@ -251,6 +269,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 ),
                 fatal: false,
                 retry_after_seconds: Some(wait.as_secs().max(1)),
+                refused: Some(kind.to_string()),
             });
             continue;
         }
@@ -336,6 +355,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: e.to_string(),
                 fatal: false,
                 retry_after_seconds: None,
+                refused: Some(kind.to_string()),
             });
         }
     }

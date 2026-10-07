@@ -156,8 +156,16 @@ async fn command_participant(
 // Who may stay
 
 /// Whose calls a recheck covers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Recheck {
+    /// The user's participants that joined on tokens of sign-ins that ended, as `signInsEnded`
+    /// names them: `ended` alone, or without it every one but `kept`. They leave their calls;
+    /// nothing else about the user's calls changes.
+    SignIns {
+        user: UserId,
+        ended: Option<String>,
+        kept: Option<String>,
+    },
     /// Everyone in a call in one of the community's channels.
     Community(CommunityId),
     /// Everyone in the channel's call.
@@ -181,7 +189,7 @@ pub fn recheck(state: &GlobalServerContext, which: Recheck) {
     tokio::spawn(async move {
         let rechecked = async {
             let mut conn = state.connection_pool.get().await?;
-            recheck_in(&state, conn.as_mut(), which).await
+            recheck_in(&state, conn.as_mut(), which.clone()).await
         };
         if let Err(e) = rechecked.await {
             warn!(?which, error = %e, "could not recheck who may stay in calls");
@@ -222,10 +230,25 @@ pub async fn recheck_in(
                     .filter(channel::parent_category.eq(Some(category))),
             ),
         ),
-        Recheck::User(user) => seats.filter(voice_participant::user.eq(user)),
+        Recheck::User(user) | Recheck::SignIns { user, .. } => {
+            seats.filter(voice_participant::user.eq(user))
+        }
         Recheck::Everyone => seats,
     };
     let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
+    if let Recheck::SignIns { ended, kept, .. } = which {
+        // The voice server knows which sign-in each participant joined on; it decides.
+        for (session, server, _, user) in seats {
+            let command = VoiceCommand::EndSignIns {
+                session: session.0,
+                user: user.0,
+                ended: ended.clone(),
+                kept: kept.clone(),
+            };
+            send_command(state, server, &command).await?;
+        }
+        return Ok(());
+    }
     for (session, server, channel, user) in seats {
         let seat = Seat {
             session,
@@ -290,7 +313,16 @@ async fn recheck_seat(
             Err(e) => return Err(e),
         }
     };
-    let payload = serde_json::to_vec(&command)?;
+    send_command(state, server, &command).await
+}
+
+/// Sends `command` to the voice server `server`.
+async fn send_command(
+    state: &impl Publishing,
+    server: VoiceServerId,
+    command: &VoiceCommand,
+) -> crate::Result<()> {
+    let payload = serde_json::to_vec(command)?;
     state
         .nats()
         .client()
@@ -344,17 +376,20 @@ pub(super) async fn apply_report(
         )
         .await;
     }
-    // Someone who joined on a token issued before a change to what they may do is brought in
-    // line with it once their joining is recorded.
+    // Someone who joined on a token issued before a change to what they may do, or before
+    // the sign-in it was issued to ended, is brought in line with it once their joining is
+    // recorded.
     let joined = match &report {
         VoiceReport::ParticipantJoined {
             session,
             channel,
             user,
+            sign_in,
         } => Some((
             VoiceSessionId::from(*session),
             ChannelId::from(*channel),
             UserId::from(*user),
+            sign_in.clone(),
         )),
         _ => None,
     };
@@ -537,7 +572,7 @@ pub(super) async fn apply_report(
         .scope_boxed()
     })
     .await?;
-    if let Some((session, channel, user)) = joined {
+    if let Some((session, channel, user, sign_in)) = joined {
         let server: Option<VoiceServerId> = voice_session::table
             .select(voice_session::voice_server)
             .filter(voice_session::id.eq(session))
@@ -565,8 +600,37 @@ pub(super) async fn apply_report(
             // The join is recorded; the next change to what they may do brings them in line.
             warn!(session = %session.0, error = %e, "could not recheck a joiner");
         }
+        if let (Some(server), Some(sign_in)) = (server, sign_in)
+            && let Err(e) =
+                end_if_signed_out(state, conn.as_mut(), session, server, user, sign_in).await
+        {
+            warn!(session = %session.0, error = %e, "could not check a joiner's sign-in");
+        }
     }
     Ok(())
+}
+
+/// Takes `user`'s participant in `session` out of the call if the sign-in its join token was
+/// issued to has ended since: its `signInsEnded` may have reached the voice server before
+/// the participant joined.
+async fn end_if_signed_out(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    session: VoiceSessionId,
+    server: VoiceServerId,
+    user: UserId,
+    sign_in: String,
+) -> crate::Result<()> {
+    if crate::login::sign_in_live(conn, user, &sign_in).await? {
+        return Ok(());
+    }
+    let command = VoiceCommand::EndSignIns {
+        session: session.0,
+        user: user.0,
+        ended: Some(sign_in),
+        kept: None,
+    };
+    send_command(state, server, &command).await
 }
 
 /// Whether `report`, which came from voice server `from`, is about what that server holds: a

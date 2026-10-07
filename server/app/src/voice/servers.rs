@@ -302,9 +302,10 @@ fn pick_candidates(mut servers: Vec<VoiceServer>, limit: usize) -> Vec<VoiceServ
 
 pub async fn join_offer(
     state: &GlobalServerContext,
-    user: UserId,
+    caller: &crate::two_factor::Caller,
     channel_id: ChannelId,
 ) -> crate::Result<JoinOffer> {
+    let user = caller.user;
     let mut conn = state.connection_pool.get().await?;
     let ty: ChannelType = channel::table
         .select(channel::ty)
@@ -391,6 +392,7 @@ pub async fn join_offer(
         share_screen,
         transfer_files,
         camera,
+        sign_in: caller.sign_in_held(),
     };
     Ok(JoinOffer {
         session,

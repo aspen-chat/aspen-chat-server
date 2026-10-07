@@ -130,6 +130,20 @@ export function CallBar() {
           </Button>
         </Tooltip>
       </div>
+      {call.status === "connected" && call.stateRefused !== null && (
+        <CallProblem
+          text={
+            call.stateRefused.retryAfterSeconds === null
+              ? m.voice.stateRefused
+              : format(m.voice.stateRefusedWait, {
+                  wait: seconds.format(call.stateRefused.retryAfterSeconds),
+                })
+          }
+          onDismiss={() => {
+            sync.voice.clearStateRefusal();
+          }}
+        />
+      )}
       {call.status === "connected" && call.cameraError !== null && (
         <CameraProblem failure={call.cameraError} />
       )}
@@ -224,6 +238,19 @@ function CameraProblem({ failure }: { failure: CameraFailure }) {
     unsent: m.voice.cameraUnsent,
   }[failure];
   return (
+    <CallProblem
+      text={text}
+      onDismiss={() => {
+        sync.voice.clearCameraError();
+      }}
+    />
+  );
+}
+
+/** Something in the call that did not work, under the bar, until dismissed. */
+function CallProblem({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  const m = useMessages();
+  return (
     <div className="mt-2 flex items-start gap-2 rounded-md bg-danger-soft px-2 py-1.5 text-xs text-danger">
       <WarningCircleIcon size={16} aria-hidden="true" className="mt-px shrink-0" />
       <p role="alert" className="min-w-0 flex-1">
@@ -232,9 +259,7 @@ function CameraProblem({ failure }: { failure: CameraFailure }) {
       <Tooltip text={m.files.dismiss}>
         <Button
           aria-label={m.files.dismiss}
-          onPress={() => {
-            sync.voice.clearCameraError();
-          }}
+          onPress={onDismiss}
           className="shrink-0 rounded outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <XIcon size={14} aria-hidden="true" />

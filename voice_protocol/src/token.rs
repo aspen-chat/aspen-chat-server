@@ -37,6 +37,11 @@ pub struct JoinClaims {
     /// issued. A token without it grants nothing.
     #[serde(default)]
     pub camera: bool,
+    /// The sign-in the token was issued to (the API server's `login::sign_in_id`), so the
+    /// participant it admits leaves the call when that sign-in ends
+    /// (`VoiceCommand::EndSignIns`). A bot's token, which belongs to no sign-in, has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
 }
 
 impl JoinClaims {
@@ -151,6 +156,7 @@ mod tests {
             share_screen: false,
             transfer_files: false,
             camera: false,
+            sign_in: Some("0123456789abcdef0123456789abcdef".to_string()),
         }
     }
 

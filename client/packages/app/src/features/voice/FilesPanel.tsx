@@ -239,6 +239,8 @@ function Transfer({ transfer }: { transfer: TransferState }) {
         return m.files.failed;
       case "left":
         return format(m.files.left, { handle });
+      case "notPermitted":
+        return sending ? m.files.notPermittedSelf : format(m.files.notPermittedPeer, { handle });
     }
   })();
   return (

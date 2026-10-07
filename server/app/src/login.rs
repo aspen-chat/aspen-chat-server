@@ -510,6 +510,27 @@ pub fn sign_in_id(refresh_digest: &str) -> String {
 /// follows it.
 pub const SIGN_IN_ID_IS_SQL: &str = "substr(refresh_token.token, 1, 32) = ";
 
+/// Whether `user`'s sign-in named `sign_in` (`sign_in_id`) is live: its refresh token has not
+/// expired or been revoked.
+pub async fn sign_in_live(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    sign_in: &str,
+) -> crate::Result<bool> {
+    use schema::refresh_token;
+    Ok(diesel::select(diesel::dsl::exists(
+        refresh_token::table
+            .filter(refresh_token::user.eq(user))
+            .filter(refresh_token::expires.gt(Utc::now().naive_utc()))
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(SIGN_IN_ID_IS_SQL)
+                    .bind::<diesel::sql_types::Text, _>(sign_in),
+            ),
+    ))
+    .get_result(conn)
+    .await?)
+}
+
 /// Tells `user`'s event streams that sign-ins ended: `ended` alone, or without it every one but
 /// `kept`. The streams of those sign-ins close.
 async fn announce_ended(

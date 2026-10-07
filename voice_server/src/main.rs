@@ -88,27 +88,41 @@ async fn main() -> anyhow::Result<()> {
     }
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
-    // The API server refuses these at an `https` address, so a voice server of a public
-    // deployment cannot match them; this server cannot tell which it serves, and warns.
-    if config.token_secret == "aspen_dev_voice_secret" || config.token_secret.len() < 32 {
-        tracing::warn!(
-            "token_secret is the development value or shorter than 32 bytes; whoever knows it can \
-             join any call, so a public deployment needs a long random one"
-        );
-    }
+    config.check_secret()?;
+    config.transfer.check(&config.rtc)?;
     let limits = Arc::new(
         limits::Limits::new(&config.rate_limits)
             .map_err(|message| anyhow::anyhow!("rate limits: {message}"))?,
     );
+    // Listening on loopback means a proxy on this machine passes every client on, and without
+    // it trusted every client has the proxy's address: the per-address limits then count
+    // everyone together, and a few clients lock out the rest.
+    if config.listen_addr.ip().is_loopback() && config.rate_limits.trusted_proxies.is_empty() {
+        tracing::warn!(
+            "listen_addr is a loopback address but [rate_limits] trusted_proxies is empty: every              client behind the proxy counts as the proxy's address, so the per-address limits              apply to everyone at once; list the proxy (trusted_proxies = [\"127.0.0.1\"])"
+        );
+    }
 
     let manager = WorkerManager::new();
     let mut workers = Vec::new();
+    // A worker that dies takes its calls' media with it and would leave their rooms looking
+    // alive; the server stops instead, telling everyone, so their clients rejoin and whatever
+    // supervises the process starts it again.
+    let worker_died = Arc::new(tokio::sync::Notify::new());
     for _ in 0..config.workers.max(1) {
         let mut settings = WorkerSettings::default();
         settings.log_level = WorkerLogLevel::Warn;
         settings.log_tags = vec![WorkerLogTag::Info];
         settings.rtc_port_range = config.rtc.min_port..=config.rtc.max_port;
-        workers.push(manager.create_worker(settings).await?);
+        let worker = manager.create_worker(settings).await?;
+        let died = Arc::clone(&worker_died);
+        worker
+            .on_dead(move |exit| {
+                tracing::error!(?exit, "a mediasoup worker died; stopping the voice server");
+                died.notify_one();
+            })
+            .detach();
+        workers.push(worker);
     }
     info!(workers = workers.len(), "mediasoup workers started");
 
@@ -217,10 +231,27 @@ async fn main() -> anyhow::Result<()> {
         server = config.id.to_string(),
         "voice server listening"
     );
-    serve(listener, app, config.rate_limits.max_connections).await;
+    let stopped = serve(
+        listener,
+        app,
+        config.rate_limits.max_connections,
+        worker_died.notified(),
+    )
+    .await;
     rooms.shutdown().await;
     relay.shutdown().await;
-    Ok(())
+    match stopped {
+        Stopped::Asked => Ok(()),
+        Stopped::WorkerDied => anyhow::bail!("a mediasoup worker died"),
+    }
+}
+
+/// Why `serve` returned.
+enum Stopped {
+    /// The process was told to stop.
+    Asked,
+    /// A mediasoup worker died.
+    WorkerDied,
 }
 
 /// How long a connection has to send a request's headers, from when it opens or its last
@@ -228,19 +259,29 @@ async fn main() -> anyhow::Result<()> {
 /// and sends nothing, cannot hold them.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Serves `app` on `listener` until the process is told to stop: at most `max_connections` at
-/// once (past that, new ones wait in the listen backlog), each given `HEADER_READ_TIMEOUT` for
-/// every request's headers, with WebSocket upgrades. Each request carries its peer's address as
-/// axum's `ConnectInfo`.
-async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: usize) {
+/// Serves `app` on `listener` until the process is told to stop or `worker_died` completes:
+/// at most `max_connections` at once (past that, new ones wait in the listen backlog), each
+/// given `HEADER_READ_TIMEOUT` for every request's headers, with WebSocket upgrades. Each
+/// request carries its peer's address as axum's `ConnectInfo`.
+async fn serve(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    max_connections: usize,
+    worker_died: impl std::future::Future<Output = ()>,
+) -> Stopped {
     use hyper_util::rt::{TokioIo, TokioTimer};
     use tower::ServiceExt as _;
     let permits = Arc::new(tokio::sync::Semaphore::new(max_connections.max(1)));
-    let mut stopping = std::pin::pin!(tokio::signal::ctrl_c());
-    loop {
+    let mut stopping = std::pin::pin!(async {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => Stopped::Asked,
+            () = worker_died => Stopped::WorkerDied,
+        }
+    });
+    let stopped = loop {
         let permit = tokio::select! {
             permit = Arc::clone(&permits).acquire_owned() => permit.expect("never closed"),
-            _ = &mut stopping => break,
+            stopped = &mut stopping => break stopped,
         };
         let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
@@ -252,7 +293,7 @@ async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: 
                     continue;
                 }
             },
-            _ = &mut stopping => break,
+            stopped = &mut stopping => break stopped,
         };
         // Signalling frames are small and each is sent as it is written; with Nagle's algorithm
         // on, one written while the previous is unacknowledged waits for the client's delayed
@@ -279,6 +320,7 @@ async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: 
             }
             drop(permit);
         });
-    }
+    };
     info!("shutting down");
+    stopped
 }

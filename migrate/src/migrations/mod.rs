@@ -99,3 +99,4 @@ pub mod m20261007_135448_user_foreign_deployment_domain;
 pub mod m20261007_141110_attachment_sent;
 pub mod m20261007_141409_sign_in_created_at;
 pub mod m20261007_142523_plugin_timer_scope;
+pub mod m20261007_144835_transfer_outcome_not_permitted;

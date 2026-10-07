@@ -99,4 +99,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261007_141110_attachment_sent::M,
     &migrations::m20261007_141409_sign_in_created_at::M,
     &migrations::m20261007_142523_plugin_timer_scope::M,
+    &migrations::m20261007_144835_transfer_outcome_not_permitted::M,
 ];

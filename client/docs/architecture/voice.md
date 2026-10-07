@@ -19,8 +19,8 @@
   voice server shares, so it is loaded once rather than for every call. A rejoin keeps the
   microphone the same way. Every request the call waits on an answer to (each transport, its
   connection, each producer) waits at most `READY_TIMEOUT_MS`, and an `error` frame arriving
-  first refuses it, since the voice server answers a request it will not honour with one and
-  its error frames do not say which request they answer. A refused request fails the join as
+  first refuses it, since the voice server answers a request it will not honour with one, and
+  while a join's requests are in flight that is the one refused (`refused` names its type). A refused request fails the join as
   a `VoiceRequestRefused`: `errorKind` is `refused`, with `retryAfterSeconds` when the voice
   server turned the user away for going too fast (a fatal `error` at `identify` with a wait
   counts the same), and the call bar says how long to wait. A refusal is the user's to wait
@@ -91,8 +91,16 @@
   the user presses Join, so joining and a failure to join are visible there. `ChannelHeader` is the bar both
   channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
   (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's
-  own events. A `participantState` frame about the user themself overwrites `muted` and
-  `deafened` in the call state, which is how a server mute shows on their own controls; a
+  own events. Muting and deafening show at once and disable the microphone's track locally
+  (`#holdMicrophone`, which keeps it disabled whenever `muted` is shown), and the voice server
+  never refuses them; unmuting and undeafening are only asked for (`#asked`) and show once a
+  `participantState` frame about the user themself says the server did them. That frame sets
+  `muted` and `deafened` in the call state, which is how a server mute shows on their own
+  controls, but never shows the user less silenced than they have since asked to be, so an
+  answer to an earlier request cannot reopen a microphone they just muted. A non-fatal `error`
+  with `refused: "setState"` leaves the user as shown and sets `stateRefused` (with any
+  `retryAfterSeconds`), which the call bar shows under its buttons until they try again,
+  dismiss it (`clearStateRefusal`), or the call ends; a
   `kicked` frame with reason `kicked` sets `endedReason: "kicked"` for `VoiceEndedDialog`,
-  `replaced` (another of their own clients took over) ends the call silently, and
+  `replaced` (another of their own clients took over) and `signedOut` (the sign-in it joined with ended, which signs this client out too) end the call silently, and
   `serverStopping` rejoins.

@@ -103,6 +103,11 @@ pub enum VoiceReport {
         session: Uuid,
         channel: Uuid,
         user: Uuid,
+        /// The sign-in their join token was issued to (`JoinClaims::sign_in`), which the API
+        /// server checks is still live, so a token issued before its sign-in ended and used
+        /// after cannot keep them in the call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sign_in: Option<String>,
     },
     /// A user disconnected or was removed.
     ParticipantLeft {
@@ -238,11 +243,50 @@ pub enum VoiceCommand {
     /// recorded. Sent for a room the API server will not record because the channel's call goes
     /// on on another server that is still reporting.
     Close { session: Uuid },
+    /// Some of a user's sign-ins ended, as `signInsEnded` says: `ended` alone, or without it
+    /// every one but `kept`. Their participant in the session leaves (`KickReason::SignedOut`)
+    /// if it joined on a token of one of those sign-ins, or of none (a bot's) when every
+    /// sign-in but `kept` ended.
+    EndSignIns {
+        session: Uuid,
+        user: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ended: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept: Option<String>,
+    },
+}
+
+impl VoiceCommand {
+    /// Whether `EndSignIns` with `ended` and `kept` ends the participant who joined on a token
+    /// of `sign_in`.
+    pub fn ends_sign_in(ended: Option<&str>, kept: Option<&str>, sign_in: Option<&str>) -> bool {
+        match ended {
+            Some(ended) => sign_in == Some(ended),
+            None => kept.is_none() || sign_in != kept,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ending_sign_ins_reaches_the_participants_of_those_sign_ins() {
+        let ends = VoiceCommand::ends_sign_in;
+        // One sign-in ended: only a participant of it leaves.
+        assert!(ends(Some("a"), None, Some("a")));
+        assert!(!ends(Some("a"), None, Some("b")));
+        assert!(!ends(Some("a"), None, None));
+        // Every one but `kept`: everyone else leaves, a bot's participant included.
+        assert!(!ends(None, Some("a"), Some("a")));
+        assert!(ends(None, Some("a"), Some("b")));
+        assert!(ends(None, Some("a"), None));
+        // Every one.
+        assert!(ends(None, None, Some("a")));
+        assert!(ends(None, None, None));
+    }
 
     #[test]
     fn reports_are_tagged_by_type() {
@@ -293,6 +337,7 @@ mod tests {
             session: Uuid::now_v7(),
             channel,
             user: Uuid::now_v7(),
+            sign_in: None,
         };
         assert_eq!(
             joined.subject(server),
