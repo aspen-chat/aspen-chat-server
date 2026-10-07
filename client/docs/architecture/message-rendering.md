@@ -6,7 +6,11 @@
   nesting, so a body nesting more than `MAX_NESTING` (32) levels deep is shown as its plain
   text (`src/features/messages/markdownLimits.ts`): one whose lines open that many quotes or
   lists at once is never parsed (`opensTooDeeply`), and any other is caught once parsed, with a
-  walk of its own (`remarkLimits`). Whatever still fails to render falls back to plain text in
+  walk of its own (`remarkLimits`). A table's rows keep the cells written (`tableRow`, in
+  place of the default handler, which pads every row to the header's width, so a wide header
+  over many short rows would make millions of cells), and a table wider than
+  `MAX_TABLE_COLUMNS` (64) or larger than `MAX_TABLE_CELLS` (5000) shows as its source in a
+  code block. Whatever still fails to render falls back to plain text in
   an error boundary (`src/features/layout/ErrorBoundary.tsx`) around the Markdown and around
   each `MessageBody`, and a route that fails to draw shows `RouteError` in its place (the
   router's `defaultErrorComponent`), so one message cannot blank the app. Only an absolute `http:`, `https:`, or `mailto:` address

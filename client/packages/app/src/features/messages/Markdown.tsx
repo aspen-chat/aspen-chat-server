@@ -19,7 +19,7 @@ import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
-import { opensTooDeeply, remarkLimits } from "@/features/messages/markdownLimits";
+import { opensTooDeeply, remarkLimits, tableRow } from "@/features/messages/markdownLimits";
 import { MentionContext } from "@/features/messages/mentionContext";
 import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
 import { remarkMentions } from "@/features/messages/remarkMentions";
@@ -244,6 +244,7 @@ export function Markdown({
               remarkCustomEmoji,
               remarkBareLinks,
             ]}
+            remarkRehypeOptions={REMARK_REHYPE_OPTIONS}
             components={components}
             skipHtml
           >
@@ -254,6 +255,9 @@ export function Markdown({
     </div>
   );
 }
+
+/** Table rows keep the cells written (`tableRow`). */
+const REMARK_REHYPE_OPTIONS = { handlers: { tableRow } };
 
 const NO_MENTIONS: Mentions = { users: [], roles: [], everyone: false };
 
