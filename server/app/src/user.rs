@@ -668,26 +668,44 @@ impl Retired {
     }
 }
 
-/// When the sign-in whose refresh token's digest is `refresh_digest` ends by itself, for closing
-/// what it holds open then (an event stream). A bot's token, which has no refresh token, never
-/// expires: `Ok(None)`. A sign-in that is gone already ends now.
-pub async fn sign_in_expires(
+/// When the caller's sign-in began and when it ends by itself.
+pub struct SignInTimes {
+    /// For closing what it holds open then (an event stream). A bot's token, which has no
+    /// refresh token, never expires: `None`. A sign-in that is gone already ends now.
+    pub expires: Option<chrono::DateTime<Utc>>,
+    /// `refresh_token.created_at`, or for a bot the making of its current token; `None` when
+    /// gone.
+    pub began: Option<chrono::DateTime<Utc>>,
+}
+
+/// When `caller`'s sign-in began and when it ends by itself.
+pub async fn sign_in_times(
     state: &GlobalServerContext,
-    refresh_digest: &str,
-) -> crate::Result<Option<chrono::DateTime<Utc>>> {
-    if refresh_digest.is_empty() {
-        return Ok(None);
-    }
+    caller: &crate::two_factor::Caller,
+) -> crate::Result<SignInTimes> {
     let mut conn = state.connection_pool.get().await?;
-    let expires: Option<chrono::NaiveDateTime> = refresh_token::table
-        .select(refresh_token::expires)
-        .filter(refresh_token::token.eq(refresh_digest))
+    if caller.refresh_digest.is_empty() {
+        let began = schema::bot_token::table
+            .select(schema::bot_token::created_at)
+            .filter(schema::bot_token::bot.eq(caller.user))
+            .first(conn.as_mut())
+            .await
+            .optional()?;
+        return Ok(SignInTimes {
+            expires: None,
+            began,
+        });
+    }
+    let found: Option<(chrono::NaiveDateTime, chrono::DateTime<Utc>)> = refresh_token::table
+        .select((refresh_token::expires, refresh_token::created_at))
+        .filter(refresh_token::token.eq(&caller.refresh_digest))
         .first(conn.as_mut())
         .await
         .optional()?;
-    Ok(Some(
-        expires.map_or_else(Utc::now, |expires| expires.and_utc()),
-    ))
+    Ok(SignInTimes {
+        expires: Some(found.map_or_else(Utc::now, |(expires, _)| expires.and_utc())),
+        began: found.map(|(_, began)| began),
+    })
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.

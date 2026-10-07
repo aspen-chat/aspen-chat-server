@@ -79,6 +79,13 @@ pub mod api {
     pub const ATTACHMENT_PREVIEWS_FAILED: &str = "aspen_attachment_previews_failed_total";
     /// How long making one attachment preview took, kept or not, by `kind`.
     pub const ATTACHMENT_PREVIEW_DURATION: &str = "aspen_attachment_preview_duration_seconds";
+    /// Pushes to phones, by `outcome`: `accepted`, `gone` (the subscription was dropped),
+    /// `unanswered` (no answer in time, or no connection), `failed` (refused, or not sent),
+    /// `suspended` (skipped, its push service having gone unanswered too often), and `dropped`
+    /// (its origin had too many waiting).
+    pub const PUSHES: &str = "aspen_pushes_total";
+    /// Pushes queued on this server and not yet answered.
+    pub const PUSHES_WAITING: &str = "aspen_pushes_waiting";
 }
 
 /// Voice server metrics.

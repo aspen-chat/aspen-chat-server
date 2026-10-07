@@ -127,11 +127,13 @@ not the address clients can reach (behind NAT it must be the public one).
 
 **Phones are not woken.** The app registers each phone when it signs in, and the server then
 calls the phone's relay over HTTPS. Check that `[push] enabled` is on and that the server can
-reach the relay the phones' app names over HTTPS (its address appears in the log beside any
-push that failed). The log warns
+reach the relay the phones' app names over HTTPS (the log warns of any push that failed by its
+subscription, and names the relay's address at `debug`, `ASPEN_LOG=aspen_app::push=debug`). The log warns
 of every push a relay refuses: `quotaExhausted` means the deployment has sent more pushes this
 month than its tier with that relay allows, and pushes resume next month or when its tier is
-raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
+raised. A relay that does not answer within three seconds, or cannot be connected to, five times
+in a row for one phone has that phone skipped for an hour; `aspen_pushes_total` counts pushes by
+outcome (`unanswered`, `suspended`, and `dropped` among them). Nobody is woken for a message while they are using Aspen on another device, in a muted
 channel, or by someone they blocked.
 
 **A voice server was suspended** (the log says `voice server suspended after failures from

@@ -817,9 +817,22 @@ def presence(world: World, check: Checks) -> None:
     check("someone who shares nothing with them sees them offline",
           status_of(stranger["token"], world.owner["id"]) == "offline"
           and profile_status(stranger["token"], world.owner["id"]) == "offline")
+    counted = world.channel("presence-count")
+    made = world.stack.api("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, world.member["token"])
+    dm = made.get("id") or made["data"]["id"]
+
+    def online_in(channel: str) -> int:
+        return world.stack.api("GET", f"/channels/{channel}/presence", token=world.member["token"])["online"]
+
+    world.as_owner("GET", "/users/@me")
+    owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
+    in_channel, in_dm = online_in(counted), online_in(dm)
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
     check("once the owner blocks the member, the member sees them offline",
           status_of(world.member["token"], world.owner["id"]) == "offline")
+    check("and counted in no channel's presence",
+          online_in(counted) == in_channel - owner_counted and online_in(dm) == in_dm - owner_counted,
+          (in_channel, in_dm, owner_counted, online_in(counted), online_in(dm)))
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
     check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
     world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")

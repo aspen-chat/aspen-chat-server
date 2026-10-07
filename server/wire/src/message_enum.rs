@@ -147,10 +147,13 @@ enum MessageEnumSource {
     // password or second factor, or all of them. Sign-ins are named by `app::login::sign_in_id`.
     // `ended` names the one that ended; without it, every sign-in but `kept` did. Event streams
     // of an ended sign-in receive this and close as unauthorized; no other stream receives it.
+    // `at` is when the sign-ins ended: a sign-in begun at or after it is not one of them, and its
+    // streams neither receive it nor close.
     #[message_gen(custom_event)]
     SignInsEnded {
         ended: Option<String>,
         kept: Option<String>,
+        at: chrono::DateTime<Utc>,
     },
     // What the user may do across the deployment changed: a deployment role of theirs was
     // given, taken, changed, or deleted. See `app::deployment`.
@@ -160,11 +163,13 @@ enum MessageEnumSource {
     },
     // The user was banned from the deployment: each of their event streams closes after this,
     // and they cannot sign in again until `until` passes, or until the ban is lifted. See
-    // `app::user_ban`.
+    // `app::user_ban`. `at` is when the ban was made: streams of a sign-in begun at or after it,
+    // once the ban was lifted or ran out, neither receive it nor close.
     #[message_gen(custom_event)]
     AccountBanned {
         reason: Option<String>,
         until: Option<chrono::DateTime<Utc>>,
+        at: chrono::DateTime<Utc>,
     },
     // What awaits review changed: a report was made, or the case `case` was resolved,
     // dismissed, or restored. Sent to each holder of Review reports, with how many cases are

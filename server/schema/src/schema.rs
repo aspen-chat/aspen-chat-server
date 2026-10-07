@@ -682,6 +682,7 @@ diesel::table! {
         user -> Uuid,
         verified_at -> Timestamptz,
         method -> Text,
+        created_at -> Timestamptz,
     }
 }
 

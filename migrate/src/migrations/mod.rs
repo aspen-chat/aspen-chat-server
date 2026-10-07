@@ -97,4 +97,5 @@ pub mod m20261006_154221_voice_server_suspension;
 pub mod m20261007_120000_server_secret;
 pub mod m20261007_135448_user_foreign_deployment_domain;
 pub mod m20261007_141110_attachment_sent;
+pub mod m20261007_141409_sign_in_created_at;
 pub mod m20261007_142523_plugin_timer_scope;
