@@ -304,7 +304,7 @@ pub struct FederationConfig {
     pub domain: Option<String>,
     /// How often this deployment asks the homes of the users from elsewhere signed in here
     /// whether they are still in good standing there, and reads again the documents of the
-    /// deployments a gate admits (`app::federation::standing`): an hour.
+    /// deployments in use that a gate admits (`app::federation::standing`): an hour.
     #[default = 3600]
     pub standing_interval_seconds: u64,
     /// How long a home may go unreached before its users' sessions here end: a day.

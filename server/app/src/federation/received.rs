@@ -9,7 +9,7 @@ use crate::context::GlobalServerContext;
 use crate::federation::protocol::Protocol;
 use crate::federation::{
     ContactOutcome, Direction, Domain, FederatedDeployment, FederationList, Subject, admits,
-    contact, jws, lists_of, own_domain,
+    contact_verifying, jws, lists_of, own_domain,
 };
 use crate::t;
 use aspen_schema::federated_deployment;
@@ -140,25 +140,22 @@ pub async fn receive<T: Statement>(
         _ => {
             // A key never pinned, or one the sender has since handed over from: contacting it
             // pins or follows the handover, and a key that changed unannounced stays refused.
-            let (listed, outcome) = contact(state, &from).await?;
+            // Nothing is recorded unless the statement verifies against the key it presents.
+            let (listed, outcome, claims) = contact_verifying(state, &from, |key| {
+                unverified.verify::<T>(T::TYPE, key).map_err(|_| {
+                    invalid(
+                        Some(&from),
+                        t!("statementSignature", domain = from.as_str()),
+                    )
+                })
+            })
+            .await?;
             if outcome == ContactOutcome::KeyChanged {
                 return Err(invalid(
                     Some(&from),
                     t!("statementKeyChanged", domain = from.as_str()),
                 ));
             }
-            let key = listed.deployment.public_key.clone().ok_or_else(|| {
-                invalid(
-                    Some(&from),
-                    t!("statementKeyChanged", domain = from.as_str()),
-                )
-            })?;
-            let claims = unverified.verify::<T>(T::TYPE, &key).map_err(|_| {
-                invalid(
-                    Some(&from),
-                    t!("statementSignature", domain = from.as_str()),
-                )
-            })?;
             (claims, listed.deployment)
         }
     };

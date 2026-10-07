@@ -26,7 +26,7 @@ pub mod protocol;
 pub mod received;
 pub mod standing;
 
-pub use contact::{ContactOutcome, contact, fetch_document, record_contact};
+pub use contact::{ContactOutcome, contact, contact_verifying, fetch_document, record_contact};
 pub use directory::lists_of;
 pub use directory::{
     FederatedDeployment, Listed, Origin, accept_key, add, get, list, list_all, remove, set_listed,

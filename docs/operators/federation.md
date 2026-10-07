@@ -83,7 +83,9 @@ aspen-chat-server federation list-add friends.example.net usersEmigrationAllow
 ```
 
 A deployment is also recorded the first time it is in contact, as when one of its people signs
-in here.
+in here. One recorded that way that nobody uses (no one of yours uses it, none of its people are
+here, it is on no list, and has no note) is forgotten thirty days after it was last contacted,
+unless it is waiting for you to accept a new key; give it a note to keep it.
 
 `aspen-chat-server federation remove <domain>` (or Forget in the dashboard) forgets a deployment,
 its key and the lists it is on. A deployment on a block list cannot be forgotten, since that
@@ -106,8 +108,9 @@ From then on:
   domain.
 
 While any gate is open, this deployment reads again, about every `[federation]
-standing_interval_seconds`, the document of each deployment it federates with, so it notices a
-replaced key within about that long even when nothing else contacts that deployment.
+standing_interval_seconds`, the document of each deployment it federates with and that is in
+use (one you added, noted, or listed, one whose people are here, or one your people use), so it
+notices a replaced key within about that long even when nothing else contacts that deployment.
 
 To replace your own key:
 
