@@ -102,3 +102,4 @@ pub mod m20261007_142523_plugin_timer_scope;
 pub mod m20261007_144835_transfer_outcome_not_permitted;
 pub mod m20261007_181601_plugin_quota_per_owner;
 pub mod m20261007_181608_deployment_roles_own_people_only;
+pub mod m20261007_183427_upload_quota;

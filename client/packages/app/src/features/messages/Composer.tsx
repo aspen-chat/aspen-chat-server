@@ -68,6 +68,9 @@ interface Pending {
 
 let nextKey = 1;
 
+/** The most attachments the server takes in one message (`app::message::MAX_ATTACHMENTS`). */
+const MAX_ATTACHMENTS = 50;
+
 /** How long typing pauses before the draft is kept. */
 const DRAFT_SAVE_DELAY_MS = 400;
 
@@ -240,8 +243,13 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
   }, []);
 
   function attach(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
+    const chosen = Array.from(event.target.files ?? []);
     event.target.value = "";
+    // The server takes at most `MAX_ATTACHMENTS` in one message; files past that are not uploaded.
+    const files = chosen.slice(0, Math.max(0, MAX_ATTACHMENTS - pending.length));
+    if (files.length < chosen.length) {
+      setError(format(m.tooManyAttachments, { max: String(MAX_ATTACHMENTS) }));
+    }
     for (const file of files) {
       const key = nextKey++;
       let thumbnail: string | null = null;

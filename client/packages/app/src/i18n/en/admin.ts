@@ -215,6 +215,9 @@ export const admin = {
   everyoneMentionLimitHint:
     "A community this large has Mention everyone taken from its everyone role, and its owner is told why. 0 never.",
   customEmojiLimit: "Custom emoji per community",
+  uploadQuotaGib: "GiB each person may upload a day",
+  uploadQuotaGibHint:
+    "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
   fileTransfersAllowed: "People may send files in calls",
   fileTransfersAllowedHint:
     "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",

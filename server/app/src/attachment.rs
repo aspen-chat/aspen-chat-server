@@ -367,6 +367,7 @@ pub async fn init_upload(
         preview_height: None,
     };
     let mut conn = state.connection_pool.get().await?;
+    crate::upload_quota::reserve(state, conn.as_mut(), caller, byte_size).await?;
     diesel::insert_into(attachment::table)
         .values(&row)
         .execute(conn.as_mut())

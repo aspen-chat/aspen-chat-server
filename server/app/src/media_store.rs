@@ -537,6 +537,9 @@ pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
                 Ok(swept) => tracing::info!(swept, "deleted attachments never sent"),
                 Err(e) => tracing::warn!(error = %e, "could not sweep attachments never sent"),
             }
+            if let Err(e) = crate::upload_quota::prune(&state).await {
+                tracing::warn!(error = %e, "could not prune the record of uploads");
+            }
         }
     });
 }

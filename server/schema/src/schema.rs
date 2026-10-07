@@ -253,6 +253,7 @@ diesel::table! {
         email_required -> Bool,
         email_verification_required -> Bool,
         newsletter_enabled -> Bool,
+        upload_quota_gib -> Int4,
     }
 }
 
@@ -781,6 +782,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    upload_usage (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        bytes -> Int8,
+        at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     user (id) {
         id -> Uuid,
         name -> Text,
@@ -1030,6 +1040,7 @@ diesel::joinable!(report_case -> community (community));
 diesel::joinable!(report_case -> message (message));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
+diesel::joinable!(upload_usage -> user (user_id));
 diesel::joinable!(user -> plugin (plugin));
 diesel::joinable!(user_annotation -> plugin (plugin));
 diesel::joinable!(user_annotation -> user (user));
@@ -1113,6 +1124,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     server_secret,
     session,
     totp_secret,
+    upload_usage,
     user,
     user_annotation,
     user_block,

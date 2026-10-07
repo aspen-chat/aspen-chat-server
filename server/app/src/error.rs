@@ -136,6 +136,14 @@ pub enum Error {
     Totp(String),
     #[error("the server is too busy to do this now")]
     Busy,
+    /// An upload would take its uploader past the deployment's daily quota
+    /// (`app::upload_quota`); `detail` names the quota and when there will be room, which
+    /// `retry_after` gives too, unless the file alone is larger than the quota.
+    #[error("upload quota exceeded")]
+    UploadQuotaExceeded {
+        detail: Cow<'static, str>,
+        retry_after: Option<std::time::Duration>,
+    },
     /// Another deployment could not be reached, or did not answer as a deployment does; the
     /// reason is localized for the administrator who asked.
     #[error("another deployment could not be reached: {0}")]

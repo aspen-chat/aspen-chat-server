@@ -72,6 +72,7 @@ voiceNoServers: "No voice server can take a call right now. Try again in a minut
 
 # React
 reactMustBeSingleEmoji: "React must be a single emoji."
+reactTooManyDistinct: "A message may carry at most %{max} different reactions. Add to one already there instead."
 
 # Messages
 messageLimitOutOfRange: "limit must be between 1 and %{max}."
@@ -102,6 +103,8 @@ firstTextChannelName: "general"
 firstVoiceChannelName: "lobby"
 channelTypeNotCreatable: "Only text and voice channels can be created here; threads and DMs have endpoints of their own."
 messageContentLength: "A message may be at most %{max} characters. Shorten it, or split it into several messages."
+messageTooManyAttachments: "A message may carry at most %{max} attachments. Send the rest in another message."
+messageNestingTooDeep: "A message may nest quotes and lists at most %{max} levels deep. Flatten it and send it again."
 communityNameLength: "A community's name must be 1 to %{max} characters, not counting spaces around it."
 channelNameLength: "A channel's name must be 1 to %{max} characters, not counting spaces around it."
 categoryNameLength: "A category's name must be 1 to %{max} characters, not counting spaces around it."
@@ -164,6 +167,7 @@ openGraphInvite: "You're invited to join %{community} on %{deployment}."
 openGraphIcon: "The icon of %{name}"
 openGraphAspenIcon: "The Aspen logo: three leaves above a trunk"
 problemRateLimited: "You're doing that too often. Wait a moment and try again."
+problemUploadQuotaExceeded: "You have uploaded as much as you may for now."
 problemServerBusy: "The server is busy right now. Wait a moment and try again."
 rateLimitsUnavailable: "This server cannot count its rate limits right now, so it refuses sign-ins, codes, and invites until it can. Try again in a moment; if it lasts, tell the deployment's administrators that the server cannot reach Valkey."
 problemDeploymentUnreachable: "The other deployment could not be reached."
@@ -523,3 +527,6 @@ messageNotEditable: "This message records something Aspen keeps, such as a poll,
 pluginWouldRewrite: "The %{plugin} plugin would change this text, which can only be sent as you wrote it. Change it yourself and try again."
 federationRemoveBlocked: "%{domain} is on the list %{list}, and forgetting it would take it off and let it in wherever a gate blocks only those listed. Take it off its block lists first if you mean to admit it."
 statementKeyPending: "%{domain} now presents a different key from the one this server trusts, with nothing vouching for it, so this server refuses everything from %{domain} until its administrators accept the new key. They should confirm the new key with %{domain}'s administrators and accept it under Administration, Federation, or with aspen-chat-server federation accept-key."
+uploadQuotaExceededHours: "You can upload at most %{limit} GiB a day, and you have reached it. There will be room for this file in about %{hours} hours."
+uploadQuotaExceededMinutes: "You can upload at most %{limit} GiB a day, and you have reached it. There will be room for this file in about %{minutes} minutes."
+uploadQuotaFileTooLarge: "You can upload at most %{limit} GiB a day, and this file alone is larger. Send a smaller one, or ask the deployment's administrators to raise the limit."
