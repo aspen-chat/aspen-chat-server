@@ -2,7 +2,8 @@
 //!
 //! Aspen is the authoritative source of link-preview metadata and thumbnails
 //! for every message body: URL extraction, outbound HTTP, HTML parsing, and
-//! image storage all happen here so the user's IP is never exposed to a
+//! image storage all happen on the server (fetching and parsing pages in
+//! `aspen_link_preview`) so the user's IP is never exposed to a
 //! third-party origin just by rendering a chat message, and so every
 //! connected client (across platforms) paints the same card from the same
 //! metadata.
@@ -55,11 +56,7 @@
 //! preview row owns a fresh S3 object, which keeps the delete lifecycle
 //! trivial (no ref-counting, no orphan sweeps).
 
-mod fetch;
-mod html_meta;
-mod reddit;
 mod urls;
-mod video;
 
 pub use urls::{extract_preview_urls, extract_urls};
 
@@ -68,14 +65,14 @@ use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::MediaStore;
 use crate::app::{self, LinkPreviewImageId, MessageId, UserId};
+use aspen_link_preview::fetch::{fetch_metadata, http_client, may_fetch};
+use aspen_link_preview::html_meta::ParsedMetadata;
 use aspen_schema::message_link_preview;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable};
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use fetch::{fetch_metadata, http_client, may_fetch};
 use futures_util::stream::StreamExt;
-use html_meta::ParsedMetadata;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;

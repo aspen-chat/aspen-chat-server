@@ -1,0 +1,15 @@
+[package]
+name = "aspen_outbound"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Requests the API server makes to other hosts on others' behalf, kept off private and internal addresses."
+
+[dependencies]
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "stream", "gzip", "brotli", "http2", "json"] }
+url = "2.5.8"
+thiserror = "2.0.18"
+tokio = { version = "1.44.2", features = ["net"] }
+
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "net"] }

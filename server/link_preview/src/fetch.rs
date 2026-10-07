@@ -1,10 +1,10 @@
 //! Outbound requests for previews: the shared HTTP client, the process-local metadata cache,
 //! and fetching a page's metadata under byte and time limits.
 
-use super::html_meta::{ParsedMetadata, parse_html_metadata};
-use super::reddit;
-use super::video::{fetch_video_embed, video_provider_for};
-use crate::app::outbound::{self, PublicResolver};
+use crate::html_meta::{ParsedMetadata, parse_html_metadata};
+use crate::reddit;
+use crate::video::{fetch_video_embed, video_provider_for};
+use aspen_outbound::{self as outbound, PublicResolver};
 use futures_util::stream::StreamExt;
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -16,7 +16,7 @@ use url::Url;
 
 /// Maximum number of HTML bytes we'll read from any single URL while looking
 /// for metadata. Just enough that almost every real site's `<head>` fits.
-pub(super) const MAX_METADATA_BYTES: usize = 256 * 1024;
+pub const MAX_METADATA_BYTES: usize = 256 * 1024;
 
 /// End-to-end timeout for a single metadata fetch, including redirect chasing.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -44,14 +44,14 @@ const MAX_REDIRECTS: usize = 10;
 /// only at the web's ports, 80 and 443 (a URL naming none takes its scheme's). A host's public
 /// address can reach more of it than its web server, this server's own included (its NATS, its
 /// database, its metrics), so a message may not name another port.
-pub(super) fn may_fetch(url: &Url) -> bool {
+pub fn may_fetch(url: &Url) -> bool {
     outbound::may_fetch(url) && matches!(url.port_or_known_default(), Some(80 | 443))
 }
 
 /// The client every preview fetch is made with: public addresses only, as names resolve and as
 /// URLs and redirects name them (`app::outbound`), at the web's ports; a request for a URL must
 /// still be checked with [`may_fetch`] before it is made.
-pub(super) fn http_client() -> &'static reqwest::Client {
+pub fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -102,13 +102,13 @@ fn cache_put(url: String, value: Option<ParsedMetadata>) {
 
 /// A lookup's metadata, and whether it may be cached. A lookup cut short by the other side's
 /// rate limit may not, so a later mention of the link gets the whole preview.
-pub(super) struct Lookup {
-    pub(super) metadata: Option<ParsedMetadata>,
-    pub(super) lasting: bool,
+pub struct Lookup {
+    pub metadata: Option<ParsedMetadata>,
+    pub lasting: bool,
 }
 
 impl Lookup {
-    pub(super) fn lasting(metadata: Option<ParsedMetadata>) -> Self {
+    pub fn lasting(metadata: Option<ParsedMetadata>) -> Self {
         Self {
             metadata,
             lasting: true,
@@ -121,7 +121,7 @@ impl Lookup {
 /// Returns `None` if the fetch failed or the response wasn't preview-worthy.
 /// The intermediate byte buffer is capped at [`MAX_METADATA_BYTES`] and we
 /// only decode bodies whose `Content-Type` starts with `text/`.
-pub(super) async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
+pub async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
     if !may_fetch(url) {
         info!(url = url.as_str(), "preview generation: URL refused");
         return None;
@@ -223,7 +223,7 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
 }
 
 /// Reads at most `cap` bytes of a response body, dropping the rest; `None` on a read error.
-pub(super) async fn read_capped(response: reqwest::Response, cap: usize) -> Option<Vec<u8>> {
+pub async fn read_capped(response: reqwest::Response, cap: usize) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {

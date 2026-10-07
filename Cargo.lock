@@ -407,8 +407,10 @@ dependencies = [
  "askama 0.16.1",
  "aspen_bench_protocol",
  "aspen_limits",
+ "aspen_link_preview",
  "aspen_locale",
  "aspen_metrics",
+ "aspen_outbound",
  "aspen_plugin_runtime",
  "aspen_previews",
  "aspen_schema",
@@ -570,6 +572,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspen_link_preview"
+version = "0.1.0"
+dependencies = [
+ "aspen_outbound",
+ "aspen_wire",
+ "futures-util",
+ "html5ever",
+ "lru 0.17.0",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aspen_locale"
 version = "0.1.0"
 dependencies = [
@@ -590,6 +609,16 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aspen_outbound"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
 ]
 
 [[package]]

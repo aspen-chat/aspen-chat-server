@@ -1,7 +1,7 @@
 //! Reading a page's preview metadata (Open Graph, Twitter Card, `<title>`, description, and
 //! `theme-color`) out of its `<head>` with `html5ever`'s tokenizer.
 
-use crate::api::link_preview::VideoEmbed;
+use aspen_wire::link_preview::VideoEmbed;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{
     BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
@@ -9,17 +9,17 @@ use html5ever::tokenizer::{
 use std::cell::RefCell;
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct ParsedMetadata {
-    pub(super) title: Option<String>,
-    pub(super) description: Option<String>,
-    pub(super) site_name: Option<String>,
-    pub(super) image_url: Option<String>,
-    pub(super) theme_color: Option<String>,
+pub struct ParsedMetadata {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub site_name: Option<String>,
+    pub image_url: Option<String>,
+    pub theme_color: Option<String>,
     /// The URL itself served an image rather than a page. `image_url` is that URL, and the
     /// preview has no text: clients show the picture inline, as they would an attachment.
-    pub(super) direct_image: bool,
+    pub direct_image: bool,
     /// A player for the link, when it is a video on an allowlisted provider.
-    pub(super) video: Option<VideoEmbed>,
+    pub video: Option<VideoEmbed>,
 }
 
 impl ParsedMetadata {
@@ -33,7 +33,7 @@ impl ParsedMetadata {
     /// one text field the card is a coloured rectangle whose subject is
     /// anyone's guess. A link that is itself an image is the exception: the
     /// picture is the whole point, and clients show it inline.
-    pub(super) fn has_content(&self) -> bool {
+    pub fn has_content(&self) -> bool {
         self.direct_image
             || self.video.is_some()
             || self.title.is_some()
@@ -229,7 +229,7 @@ impl TokenSink for MetaSink {
     }
 }
 
-pub(super) fn parse_html_metadata(body: &str) -> ParsedMetadata {
+pub fn parse_html_metadata(body: &str) -> ParsedMetadata {
     let sink = MetaSink {
         state: RefCell::new(MetaState::new()),
     };

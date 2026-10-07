@@ -1,8 +1,8 @@
 //! Video embeds: the `VIDEO_PROVIDERS` allowlist, the players built from page URLs, and the
 //! providers' oEmbed answers.
 
-use super::fetch::{MAX_METADATA_BYTES, http_client, read_capped};
-use crate::api::link_preview::VideoEmbed;
+use crate::fetch::{MAX_METADATA_BYTES, http_client, read_capped};
+use aspen_wire::link_preview::VideoEmbed;
 use tracing::warn;
 use url::Url;
 
@@ -27,7 +27,7 @@ enum Player {
 /// server only calls the oEmbed endpoints named here, never one a page advertises, and only
 /// produces player URLs on hosts named here or built by the functions here. Clients keep the
 /// matching list of player hosts and frame nothing else.
-pub(super) struct VideoProvider {
+pub struct VideoProvider {
     /// Hosts of pages the provider serves videos on, matched exactly.
     page_hosts: &'static [&'static str],
     /// Host suffixes matched with a leading dot, for providers that give each account a
@@ -219,7 +219,7 @@ const VIDEO_PROVIDERS: &[VideoProvider] = &[
     },
 ];
 
-pub(super) fn video_provider_for(url: &Url) -> Option<&'static VideoProvider> {
+pub fn video_provider_for(url: &Url) -> Option<&'static VideoProvider> {
     let host = url.host_str()?.to_ascii_lowercase();
     VIDEO_PROVIDERS.iter().find(|p| {
         p.page_hosts.contains(&host.as_str())
@@ -385,11 +385,11 @@ struct OembedResponse {
     height: Option<u32>,
 }
 
-pub(super) struct VideoEmbedMetadata {
-    pub(super) embed: VideoEmbed,
-    pub(super) title: Option<String>,
-    pub(super) provider_name: Option<String>,
-    pub(super) thumbnail_url: Option<String>,
+pub struct VideoEmbedMetadata {
+    pub embed: VideoEmbed,
+    pub title: Option<String>,
+    pub provider_name: Option<String>,
+    pub thumbnail_url: Option<String>,
 }
 
 async fn fetch_oembed(endpoint: &str, url: &Url) -> Option<OembedResponse> {
@@ -413,10 +413,7 @@ async fn fetch_oembed(endpoint: &str, url: &Url) -> Option<OembedResponse> {
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(super) async fn fetch_video_embed(
-    provider: &VideoProvider,
-    url: &Url,
-) -> Option<VideoEmbedMetadata> {
+pub async fn fetch_video_embed(provider: &VideoProvider, url: &Url) -> Option<VideoEmbedMetadata> {
     let oembed = match provider.oembed_endpoint {
         Some(endpoint) => fetch_oembed(endpoint, url).await,
         None => None,

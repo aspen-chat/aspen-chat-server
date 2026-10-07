@@ -62,7 +62,7 @@
   a plugin shown the message is shown it in the attachment's record (`spec/plugin.wit`).
 - Video links get a card with a play control (`src/features/messages/VideoCard.tsx`). The
   server only sends a player for providers in its `VIDEO_PROVIDERS` table
-  (`server/src/app/link_preview/video.rs`), and `src/features/messages/video.ts` keeps the matching
+  (`server/link_preview/src/video.rs`), and `src/features/messages/video.ts` keeps the matching
   list of player hosts the client will frame; extend both together. Twitch's player needs the
   embedding hostname as `parent`, which `playerSrc` adds. The player iframe is sandboxed and
   only created after the reader presses play.
@@ -71,7 +71,7 @@
   picture beneath them, as wide as the picture or the card, whichever is narrower, and at most
   320px tall as a message's pictures are, with the page's theme colour down its edge. The server writes each field as it
   is shown; a Reddit post's site name is `r/{subreddit} · u/{author}`
-  (`server/src/app/link_preview/reddit.rs`).
+  (`server/link_preview/src/reddit.rs`).
 - What the deployment's plugins say about a message shows beneath it as chips
   (`MessageAnnotations`), and a message a plugin changed is marked "(changed by …)" beside the
   edited mark (`AlteredBy`); see Plugins.

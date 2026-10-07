@@ -15,8 +15,8 @@
 //! spent, previews go without the page until the allowance resets, and such a preview is not
 //! cached, so a later mention of the link gets the picture.
 
-use super::fetch::{Lookup, http_client, read_capped};
-use super::html_meta::ParsedMetadata;
+use crate::fetch::{Lookup, http_client, read_capped};
+use crate::html_meta::ParsedMetadata;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::states::RawKind;
 use html5ever::tokenizer::{
@@ -67,7 +67,7 @@ const DEFAULT_PAUSE: Duration = Duration::from_secs(60);
 const MAX_PAUSE: Duration = Duration::from_secs(15 * 60);
 
 /// Whether `url` is a page on Reddit, which only this module previews.
-pub(super) fn is_reddit(url: &Url) -> bool {
+pub fn is_reddit(url: &Url) -> bool {
     url.host_str()
         .is_some_and(|host| PAGE_HOSTS.contains(&host.to_ascii_lowercase().as_str()))
 }
@@ -159,7 +159,7 @@ async fn follow_to_post(url: &Url) -> Option<PostRef> {
     }
 }
 
-pub(super) async fn fetch_metadata(url: &Url) -> Lookup {
+pub async fn fetch_metadata(url: &Url) -> Lookup {
     let post = match target_of(url) {
         Target::Post(post) => Some(post),
         Target::Redirect => follow_to_post(url).await,
@@ -223,7 +223,7 @@ async fn fetch_oembed(post: &PostRef) -> Result<OembedResponse, bool> {
     if !status.is_success() {
         return Err(status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS);
     }
-    let bytes = read_capped(response, super::fetch::MAX_METADATA_BYTES)
+    let bytes = read_capped(response, crate::fetch::MAX_METADATA_BYTES)
         .await
         .ok_or(false)?;
     let oembed: OembedResponse = serde_json::from_slice(&bytes).map_err(|_| true)?;
