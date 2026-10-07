@@ -63,6 +63,71 @@ const MAX_THEME_COLORS: usize = 8;
 /// The most bytes of `<title>` text kept, far more than a card shows.
 const MAX_TITLE_BYTES: usize = 4096;
 
+/// The most characters of a preview's title, description, and site name a card is given; the
+/// rest is cut, with an ellipsis.
+pub const MAX_TITLE_CHARS: usize = 300;
+pub const MAX_DESCRIPTION_CHARS: usize = 1000;
+pub const MAX_SITE_NAME_CHARS: usize = 100;
+
+/// The longest `theme-color` kept, in bytes.
+const MAX_THEME_COLOR_BYTES: usize = 64;
+
+/// The CSS colour functions a `theme-color` may be written with.
+const COLOR_FUNCTIONS: [&str; 9] = [
+    "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch",
+];
+
+/// `text` cut to `max_chars` characters, with an ellipsis when anything was cut.
+fn cut(text: String, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((end, _)) => {
+            let mut cut = text[..end].trim_end().to_owned();
+            cut.push('…');
+            cut
+        }
+        None => text,
+    }
+}
+
+/// `value` when it is a CSS colour as a page's `theme-color` gives one: a hex colour of 3, 4, 6,
+/// or 8 digits, a colour keyword (letters alone), or one of [`COLOR_FUNCTIONS`] of numbers,
+/// percentages, angles, and separators. Clients set it as a style, so nothing else is passed on.
+fn css_color(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_THEME_COLOR_BYTES {
+        return None;
+    }
+    let valid = if let Some(hex) = value.strip_prefix('#') {
+        matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    } else if let Some((function, rest)) = value.split_once('(') {
+        COLOR_FUNCTIONS.contains(&function.to_ascii_lowercase().as_str())
+            && rest.strip_suffix(')').is_some_and(|args| {
+                args.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || matches!(b, b'.' | b',' | b'%' | b'/' | b' ' | b'-' | b'+')
+                })
+            })
+    } else {
+        value.bytes().all(|b| b.is_ascii_alphabetic())
+    };
+    valid.then(|| value.to_owned())
+}
+
+impl ParsedMetadata {
+    /// The metadata as a card is given it: its texts cut to [`MAX_TITLE_CHARS`],
+    /// [`MAX_DESCRIPTION_CHARS`], and [`MAX_SITE_NAME_CHARS`], and its theme colour kept only
+    /// when it is a CSS colour.
+    pub fn bounded(self) -> Self {
+        Self {
+            title: self.title.map(|t| cut(t, MAX_TITLE_CHARS)),
+            description: self.description.map(|d| cut(d, MAX_DESCRIPTION_CHARS)),
+            site_name: self.site_name.map(|s| cut(s, MAX_SITE_NAME_CHARS)),
+            theme_color: self.theme_color.as_deref().and_then(css_color),
+            ..self
+        }
+    }
+}
+
 #[derive(Default)]
 struct MetaState {
     /// `(key_lower, value)` pairs of [`KNOWN_KEYS`], first writer wins so the HTML's first
@@ -329,6 +394,45 @@ mod tests {
         assert_eq!(state.meta.len(), 1);
         assert_eq!(state.theme_colors.len(), MAX_THEME_COLORS);
         assert_eq!(state.into_metadata().title.as_deref(), Some("Late"));
+    }
+
+    #[test]
+    fn bounded_cuts_texts_and_keeps_only_colours() {
+        let meta = ParsedMetadata {
+            title: Some("t".repeat(MAX_TITLE_CHARS + 5)),
+            description: Some("短".repeat(MAX_DESCRIPTION_CHARS)),
+            site_name: Some("s".repeat(MAX_SITE_NAME_CHARS + 1)),
+            theme_color: Some("red; background: url(x)".to_owned()),
+            ..ParsedMetadata::default()
+        }
+        .bounded();
+        assert_eq!(meta.title.unwrap().chars().count(), MAX_TITLE_CHARS + 1);
+        assert_eq!(
+            meta.description.unwrap().chars().count(),
+            MAX_DESCRIPTION_CHARS
+        );
+        assert!(meta.site_name.unwrap().ends_with('…'));
+        assert_eq!(meta.theme_color, None);
+        for colour in [
+            "#fff",
+            "#A1b2C3",
+            "#11223344",
+            "rebeccapurple",
+            "rgb(1, 2, 3)",
+            "oklch(70% 0.1 200 / 50%)",
+        ] {
+            assert_eq!(css_color(colour).as_deref(), Some(colour), "{colour}");
+        }
+        for not_colour in [
+            "#12345",
+            "url(x)",
+            "rgb(1,2,3",
+            "red blue",
+            "var(--x)",
+            "expression(alert(1))",
+        ] {
+            assert_eq!(css_color(not_colour), None, "{not_colour}");
+        }
     }
 
     #[test]

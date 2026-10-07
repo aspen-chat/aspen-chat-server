@@ -130,11 +130,12 @@ pub async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
     if let Some(cached) = cache_get(&cache_key) {
         return cached;
     }
-    let lookup = if reddit::is_reddit(url) {
+    let mut lookup = if reddit::is_reddit(url) {
         reddit::fetch_metadata(url).await
     } else {
         Lookup::lasting(fetch_metadata_uncached(url).await)
     };
+    lookup.metadata = lookup.metadata.map(ParsedMetadata::bounded);
     if lookup.lasting {
         cache_put(cache_key, lookup.metadata.clone());
     }
