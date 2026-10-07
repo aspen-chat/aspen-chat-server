@@ -2,7 +2,6 @@
 //! lists a deployment may be on ([`FederationList`]), and whether the gates admit a crossing
 //! ([`admits`]).
 
-use crate::app;
 use diesel::{AsExpression, FromSqlRow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -42,8 +41,8 @@ pub enum Gate {
     Unknown,
 }
 
-app::wire_name_traits!(Gate);
-app::text_sql_traits!(Gate);
+aspen_wire::wire_name_traits!(Gate);
+aspen_wire::text_sql_traits!(Gate);
 
 /// Who may cross between this deployment and others, one direction at a time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -162,8 +161,8 @@ pub enum FederationList {
     BotsSharedBlock,
 }
 
-app::wire_name_traits!(FederationList);
-app::text_sql_traits!(FederationList);
+aspen_wire::wire_name_traits!(FederationList);
+aspen_wire::text_sql_traits!(FederationList);
 
 impl FederationList {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;

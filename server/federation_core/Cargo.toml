@@ -1,0 +1,18 @@
+[package]
+name = "aspen_federation_core"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The parts of federation that need nothing of the server: signed statements between deployments, and the gates and shared list."
+
+[dependencies]
+aspen_wire = { version = "0.1.0", path = "../wire" }
+base64 = "0.22.1"
+diesel = { version = "2.2.10", features = ["postgres"] }
+ring = "0.17.14"
+schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid", "yaml"] }
+strum = { version = "0.28.0", features = ["derive"] }
+thiserror = "2.0.18"

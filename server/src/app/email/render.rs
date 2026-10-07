@@ -9,68 +9,14 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::t;
 use askama::Template;
+use aspen_email_templates::{Html, Text, Unsubscribe};
+pub(super) use aspen_email_templates::{Item, Letter, Section};
 use aspen_schema::user;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use lettre::Message;
 use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, MultiPart};
-
-/// Everything a piece of mail may say, top to bottom.
-#[derive(Debug, Default)]
-pub(super) struct Letter {
-    pub subject: String,
-    /// The language it is written in, and its direction.
-    pub lang: String,
-    pub dir: &'static str,
-    /// The deployment's name, above it.
-    pub deployment: String,
-    pub title: String,
-    pub intro: Vec<String>,
-    /// A code to type, shown large.
-    pub code: Option<String>,
-    /// A newsletter's body, as HTML made from its Markdown and as the Markdown itself.
-    pub body_html: Option<String>,
-    pub body_text: Option<String>,
-    pub sections: Vec<Section>,
-    pub outro: Vec<String>,
-    pub footer: Vec<String>,
-    pub unsubscribe: Option<Unsubscribe>,
-}
-
-/// A digest's conversation: where it is, what arrived there, and how much more did.
-#[derive(Debug)]
-pub(super) struct Section {
-    pub heading: String,
-    pub link: String,
-    pub items: Vec<Item>,
-    pub more: Option<String>,
-}
-
-#[derive(Debug)]
-pub(super) struct Item {
-    pub author: String,
-    pub time: String,
-    pub text: String,
-}
-
-#[derive(Debug)]
-pub(super) struct Unsubscribe {
-    pub label: String,
-    pub url: String,
-}
-
-#[derive(Template)]
-#[template(path = "email/letter.html")]
-struct Html<'a> {
-    letter: &'a Letter,
-}
-
-#[derive(Template)]
-#[template(path = "email/letter.txt")]
-struct Text<'a> {
-    letter: &'a Letter,
-}
 
 /// The message `mail` makes for `recipient`. `None` when there is nothing to send: a newsletter
 /// post that no longer exists.

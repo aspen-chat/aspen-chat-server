@@ -2,7 +2,7 @@
 
 Email is optional, twice over. A deployment sends mail only when `[email]` is in `aspen.toml` (`app::email::Mailer`, made once per API server, `GlobalServerContext::mailer`); without it, accounts have no address, `GET /deployment` says `email.available: false`, and the deployment settings that need mail cannot be turned on (`emailSettingNeedsMail`, checked in `app::deployment_settings::update` from the dashboard and the terminal alike). And an account need not have an address unless the deployment's administrators set `email_required`.
 
-Mail is sent by `lettre` over SMTP, written from one template (`server/templates/email/letter.html` and `letter.txt`, compiled by `askama`, which escapes the HTML version) as both HTML and plain text, in the language the account last used (`user_email.locale`, the request's negotiated locale when the address or its preferences were last written).
+Mail is sent by `lettre` over SMTP, written from one template (`server/templates/email/letter.html` and `letter.txt`, compiled by `askama` in the `aspen_email_templates` crate, which escapes the HTML version) as both HTML and plain text, in the language the account last used (`user_email.locale`, the request's negotiated locale when the address or its preferences were last written).
 
 ## Addresses
 

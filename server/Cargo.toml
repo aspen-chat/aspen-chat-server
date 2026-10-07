@@ -84,6 +84,9 @@ aspen_wire = { version = "0.1.0", path = "wire", features = ["clap"] }
 aspen_plugin_runtime = { version = "0.1.0", path = "plugin_runtime" }
 aspen_outbound = { version = "0.1.0", path = "outbound" }
 aspen_link_preview = { version = "0.1.0", path = "link_preview" }
+aspen_webpush = { version = "0.1.0", path = "webpush" }
+aspen_federation_core = { version = "0.1.0", path = "federation_core" }
+aspen_email_templates = { version = "0.1.0", path = "email_templates" }
 aspen_bench_protocol = { version = "0.1.0", path = "../bench_protocol" }
 smart-default = "0.7.1"
 strum = { version = "0.28.0", features = ["derive"] }

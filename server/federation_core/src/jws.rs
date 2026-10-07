@@ -2,7 +2,7 @@
 //! deployment signs for another. Each kind of statement has its own `typ`, checked when it is
 //! verified, so a statement of one kind is never accepted as another.
 
-use crate::app::FederationKeyId;
+use aspen_wire::FederationKeyId;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};

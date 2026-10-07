@@ -10,7 +10,7 @@
 //! message deleted, so the phone can take its notification down. What it woke whom for is kept
 //! in Valkey for [`REMEMBERED`].
 
-pub mod webpush;
+pub use aspen_webpush as webpush;
 
 use crate::app::channel::Channel;
 use crate::app::context::GlobalServerContext;

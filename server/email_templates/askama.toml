@@ -1,0 +1,3 @@
+# The templates are the server's, beside the web client's.
+[general]
+dirs = ["../templates"]

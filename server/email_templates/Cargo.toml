@@ -1,0 +1,9 @@
+[package]
+name = "aspen_email_templates"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Mail as the API server writes it: one letter, set as HTML and as plain text."
+
+[dependencies]
+askama = "0.16.1"

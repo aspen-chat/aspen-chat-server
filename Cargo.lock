@@ -406,6 +406,8 @@ dependencies = [
  "argon2",
  "askama 0.16.1",
  "aspen_bench_protocol",
+ "aspen_email_templates",
+ "aspen_federation_core",
  "aspen_limits",
  "aspen_link_preview",
  "aspen_locale",
@@ -414,6 +416,7 @@ dependencies = [
  "aspen_plugin_runtime",
  "aspen_previews",
  "aspen_schema",
+ "aspen_webpush",
  "aspen_wire",
  "async-nats",
  "aws-config",
@@ -558,6 +561,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspen_email_templates"
+version = "0.1.0"
+dependencies = [
+ "askama 0.16.1",
+]
+
+[[package]]
+name = "aspen_federation_core"
+version = "0.1.0"
+dependencies = [
+ "aspen_wire",
+ "base64 0.22.1",
+ "diesel",
+ "ring",
+ "schemars",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.18",
+ "utoipa",
+]
+
+[[package]]
 name = "aspen_limits"
 version = "0.1.0"
 dependencies = [
@@ -652,6 +678,17 @@ name = "aspen_schema"
 version = "0.1.0"
 dependencies = [
  "diesel",
+]
+
+[[package]]
+name = "aspen_webpush"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
