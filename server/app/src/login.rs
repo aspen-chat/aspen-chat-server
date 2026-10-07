@@ -845,7 +845,10 @@ mod tests {
 
     #[test]
     fn new_password_lengths() {
-        assert_eq!(check_new_password("short"), Err(PasswordRequirement::Length));
+        assert_eq!(
+            check_new_password("short"),
+            Err(PasswordRequirement::Length)
+        );
         assert_eq!(check_new_password("long enough"), Ok(()));
         assert_eq!(check_new_password(&"x".repeat(PASSWORD_MAX_BYTES)), Ok(()));
         assert_eq!(

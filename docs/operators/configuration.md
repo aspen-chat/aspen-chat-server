@@ -62,8 +62,10 @@ most once a minute. An event stream's connection counts for as long as it is ope
 | --- | --- | --- |
 | `max` | `100000` | The most connections the server holds open at once. Keep it below the process's open file limit (`LimitNOFILE` under systemd, `--ulimit nofile` in Docker), with room for its connections to PostgreSQL, NATS, Valkey, and storage. |
 | `max_per_ip` | `512` | The most one address holds open at once; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network. A browser holds one or two, so this suits a few hundred people behind one address; raise it if a school's or an office's network sends many more. Reverse proxies listed in `[rate_limits] trusted_proxies` count only toward `max`, so when every client arrives through one, limit connections per client there. |
+| `max_per_network` | `4096` | The most one network, an IPv4 /24 or an IPv6 /48, holds open at once, alongside `max_per_ip`, so whoever holds many addresses in one block cannot take the server's connections by spreading over them. Raise it if many of your people share one carrier-grade NAT block. Trusted proxies count only toward `max`. |
 | `handshake_seconds` | `10` | How long a client has to finish its TLS handshake. |
 | `header_read_seconds` | `30` | How long an HTTP/1.1 client has to send a request's headers, which is also how long a kept-alive connection may sit idle. An idle HTTP/2 connection is pinged every 30 seconds and closed when a ping goes 20 seconds unanswered. |
+| `idle_seconds` | `120` | How long a connection may stay open with no request in it before the server closes it (an HTTP/2 connection is sent GOAWAY). Clients open a new one when they next need it. An event stream's WebSocket is not an HTTP connection once it opens, and is not closed by this. |
 
 ## `[media]`
 
