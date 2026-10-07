@@ -135,20 +135,25 @@ function readTheme(): DrawnTheme {
   const probe = document.createElement("span");
   probe.style.display = "none";
   document.body.append(probe);
+  const declared = getComputedStyle(document.documentElement);
   const colors: Record<string, string> = {};
   for (const token of THEME_TOKENS) {
+    // An undeclared token would read as the probe's inherited ink, a colour views draw with
+    // the wrong partner (a button's label in the ink its fill is chosen against).
+    if (declared.getPropertyValue(`--color-${token}`) === "") {
+      console.error(`the theme declares no --color-${token} for plugins' views`);
+    }
     probe.style.color = `var(--color-${token})`;
     colors[token] = getComputedStyle(probe).color;
   }
   probe.style.color = "light-dark(rgb(0, 0, 0), rgb(255, 255, 255))";
   const scheme = getComputedStyle(probe).color === "rgb(255, 255, 255)" ? "dark" : "light";
   probe.remove();
-  const root = getComputedStyle(document.documentElement);
   return {
     colors,
     fonts: {
-      sans: root.getPropertyValue("--font-sans").trim(),
-      mono: root.getPropertyValue("--font-mono").trim(),
+      sans: declared.getPropertyValue("--font-sans").trim(),
+      mono: declared.getPropertyValue("--font-mono").trim(),
     },
     scheme,
     chosen: chosenAliases(),

@@ -1,6 +1,6 @@
 [package]
 name = "aspen_blackjack"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "MPL-2.0"
 description = "An example Aspen plugin: blackjack tables, a kind of channel where members play for chips that are not money"

@@ -1,6 +1,6 @@
 {
   "id": "org.aspenchat.blackjack",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 1,
   "component": "target/wasm32-wasip2/release/aspen_blackjack.wasm",
   "assets": "views",

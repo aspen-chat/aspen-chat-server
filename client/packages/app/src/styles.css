@@ -8,12 +8,14 @@
  * palette is a block of CSS variables and nothing else. `@theme inline` makes each token a utility
  * (`bg-surface`, `text-ink-muted`, `border-line`, `bg-accent`) that reads the variable at use, so
  * changing `data-theme` on <html> restyles the page without a rebuild. Every value is a
- * `light-dark()` pair: the palette chooses the hues, the OS chooses light or dark.
+ * `light-dark()` pair: the palette chooses the hues, the OS chooses light or dark. `static` emits
+ * every token's variable, read or not, since a plugin's view is handed the colours by reading
+ * them (`PluginChannel.tsx`, `THEME_TOKENS`).
  *
  * Every ink, faint included, reaches 4.5:1 (WCAG AA for small text) on each surface text is
  * drawn on, in every palette and both schemes; `e2e/accessibility.spec.ts` checks it with axe.
  */
-@theme inline {
+@theme inline static {
   /* Text is drawn in Inclusive Sans and code in Intel One Mono, both bundled (`main.tsx`),
      unless the user chose a font of their own on this install (`theme/fonts.ts`), which comes
      first. What that lacks falls back to the bundled face, then to bundled Noto faces
