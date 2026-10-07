@@ -966,6 +966,12 @@ describe("VoiceCall", () => {
     const socket = FakeSocket.instances[0];
     socket?.frame({ type: "participantState", user: me, muted: true, deafened: false });
     expect(call.state.muted).toBe(true);
+    // The community's mute, as its event tells, until a moderator lifts it.
+    expect(call.state.serverMuted).toBe(false);
+    call.setServerMuted(true);
+    expect(call.state.serverMuted).toBe(true);
+    call.setServerMuted(false);
+    expect(call.state.serverMuted).toBe(false);
     socket?.frame({ type: "participantState", user: "someone-else", muted: false, deafened: true });
     expect(call.state).toMatchObject({ muted: true, deafened: false });
     socket?.frame({ type: "kicked", reason: "replaced" });

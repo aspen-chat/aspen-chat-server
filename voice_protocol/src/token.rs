@@ -42,6 +42,10 @@ pub struct JoinClaims {
     /// (`VoiceCommand::EndSignIns`). A bot's token, which belongs to no sign-in, has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<String>,
+    /// Whether a moderator's mute of them stands where the call is, so the participant the
+    /// token admits is muted from the start (`VoiceCommand::Mute` changes it after).
+    #[serde(default)]
+    pub server_muted: bool,
 }
 
 impl JoinClaims {
@@ -157,6 +161,7 @@ mod tests {
             transfer_files: false,
             camera: false,
             sign_in: Some("0123456789abcdef0123456789abcdef".to_string()),
+            server_muted: false,
         }
     }
 

@@ -219,13 +219,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
     }
     let seat = match state
         .rooms
-        .join(
-            channel,
-            user,
-            outbox.clone(),
-            claims.grants(),
-            claims.sign_in.clone(),
-        )
+        .join(channel, user, outbox.clone(), (&claims).into())
         .await
     {
         Ok(seat) => seat,

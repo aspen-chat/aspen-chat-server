@@ -113,6 +113,11 @@ export interface VoiceCallState {
   readonly muted: boolean;
   readonly deafened: boolean;
   /**
+   * Whether a moderator's mute of the user stands in the call's community, which keeps them
+   * muted in every call there, whatever they ask, until a moderator lifts it.
+   */
+  readonly serverMuted: boolean;
+  /**
    * Whether the channel lets the user send their microphone (Speak) and share a screen
    * (Share screen), as the join offer said; without Speak they join to listen.
    */
@@ -199,6 +204,7 @@ const IDLE: VoiceCallState = {
   session: null,
   muted: false,
   deafened: false,
+  serverMuted: false,
   canSpeak: false,
   canShare: false,
   canCamera: false,
@@ -463,6 +469,16 @@ export class VoiceCall {
 
   setDeafened(deafened: boolean): void {
     this.#ask({ ...this.#asked, deafened });
+  }
+
+  /**
+   * Follows a moderator's mute of the user in the call's community being made or lifted, as
+   * its event says; the voice server applies it to the call itself.
+   */
+  setServerMuted(serverMuted: boolean): void {
+    if (this.#state.status !== "idle" && this.#state.serverMuted !== serverMuted) {
+      this.#set({ serverMuted });
+    }
   }
 
   /** Forgets a refusal to unmute or undeafen once the user has seen it. */
@@ -938,6 +954,7 @@ export class VoiceCall {
       canShare: offer.shareScreen,
       canCamera: offer.useCamera,
       canTransfer: offer.transferFiles,
+      serverMuted: offer.serverMuted ?? false,
     });
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.

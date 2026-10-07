@@ -598,6 +598,22 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         banned_at: chrono::DateTime<Utc>,
     },
+    /// A moderator's mute of someone in a community's calls (`app::voice::mutes`): while it
+    /// stands their microphone is paused in every call of the community, joins and rejoins
+    /// included, whatever they ask, until a moderator lifts it. Made and lifted through `PUT` and
+    /// `DELETE /communities/{community}/voice-mutes/{user}` (or the participant's `muted`); its
+    /// events reach holders of Manage calls and the muted person.
+    #[message_gen(no_commands)]
+    VoiceMute {
+        #[message_gen(id = "client_authoritative")]
+        community: CommunityId,
+        #[message_gen(id)]
+        user: UserId,
+        #[message_gen(server_authoritative)]
+        muted_by: Option<UserId>,
+        #[message_gen(server_authoritative)]
+        muted_at: chrono::DateTime<Utc>,
+    },
     // What a plugin says about a message: one of each kind per plugin and message, published
     // in the message's channel, so whoever may read the message sees it and nobody else does.
     // Clients draw it from the plugin's catalogue (`GET /plugins`). See

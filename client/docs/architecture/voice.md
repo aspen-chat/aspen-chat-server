@@ -89,7 +89,7 @@
   (`@capacitor/screen-orientation`, `useOrientationLock`) and is freed again after; a desktop
   refuses the lock and nothing changes. On a narrow screen the call bar shows under the voice channel from the moment
   the user presses Join, so joining and a failure to join are visible there. `ChannelHeader` is the bar both
-  channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`) and remove
+  channel screens share. Moderation lives in that same menu: server mute or unmute (`AspenSync.muteVoiceParticipant`; the mute is the community's and outlasts the call, so the menu reads it from the community's mutes, `useVoiceMuted`, which holders of Manage calls also see and lift under the community's members, `VoiceMutedList`, and the muted user's call bar shows it from `VoiceCallState.serverMuted`, which the join offer and the `voiceMute` events about them set) and remove
   (`kickVoiceParticipant`), both `202 Accepted` calls whose effect arrives as the participant's
   own events. Muting and deafening show at once and disable the microphone's track locally
   (`#holdMicrophone`, which keeps it disabled whenever `muted` is shown), and the voice server

@@ -32,10 +32,12 @@ use voice_protocol::signal::KickReason;
 // ---------------------------------------------------------------------------------------------
 // Moderation
 
-/// Server-mutes or unmutes someone in a channel's call. The voice server holding the call
-/// applies it and reports the new state, which becomes the participant's `update` event; the
-/// record returned is the state as recorded before the command lands. Takes Manage calls and
-/// ranking above them, who may not be the owner.
+/// Server-mutes or unmutes someone in a channel's call: the mute is the community's
+/// (`super::mutes`), so it stands in every call of the community until lifted. The voice server
+/// holding the call applies it and reports the new state, which becomes the participant's
+/// `update` event; the record returned is the state as recorded before the command lands. Takes
+/// being able to view the channel, and Manage calls in the community over someone ranking below
+/// the caller, who may not be the owner.
 pub async fn mute_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -43,12 +45,34 @@ pub async fn mute_participant(
     user: UserId,
     muted: bool,
 ) -> crate::Result<message_enum::VoiceParticipant> {
-    command_participant(state, caller, channel, user, |session| VoiceCommand::Mute {
-        session: session.0,
-        user: user.0,
-        muted,
-    })
-    .await
+    let (community, participant) = {
+        let mut conn = state.connection_pool.get().await?;
+        let access = channel_access(state, conn.as_mut(), caller, channel).await?;
+        // A DM's call has no moderators.
+        let Some(community) = access.community.as_ref().map(|c| c.community) else {
+            return Err(missing(Permissions::MANAGE_CALLS));
+        };
+        let session = session_on_channel(conn.as_mut(), channel)
+            .await?
+            .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))?;
+        let participant: VoiceParticipant = voice_participant::table
+            .select(VoiceParticipant::as_select())
+            .filter(
+                voice_participant::session
+                    .eq(session.id)
+                    .and(voice_participant::user.eq(user)),
+            )
+            .first(conn.as_mut())
+            .await?;
+        (community, participant)
+    };
+    let (_, changed) = super::mutes::set_muted(state, caller, community, user, muted).await?;
+    // A change is announced, and the announcement rechecks their calls; one that changed
+    // nothing still brings their calls in line with the mute as it stands.
+    if !changed {
+        recheck(state, Recheck::User(user));
+    }
+    Ok(participant_record(&participant, channel))
 }
 
 /// Removes someone from a channel's call. The voice server disconnects them, telling them
@@ -300,20 +324,36 @@ async fn recheck_seat(
         user: user.0,
         reason: Some(KickReason::AccessLost),
     };
-    let command = if !present {
-        removed
-    } else {
+    let access = if present {
         match channel_access(state, conn, user, channel).await {
-            Ok(access) if access.has(Permissions::JOIN_VOICE) => VoiceCommand::Grant {
-                session: session.0,
-                user: user.0,
-                grants: super::servers::grants_of(file_transfers, &access),
-            },
-            Ok(_) | Err(crate::Error::Diesel(diesel::result::Error::NotFound)) => removed,
+            Ok(access) if access.has(Permissions::JOIN_VOICE) => Some(access),
+            Ok(_) | Err(crate::Error::Diesel(diesel::result::Error::NotFound)) => None,
             Err(e) => return Err(e),
         }
+    } else {
+        None
     };
-    send_command(state, server, &command).await
+    let Some(access) = access else {
+        return send_command(state, server, &removed).await;
+    };
+    let grant = VoiceCommand::Grant {
+        session: session.0,
+        user: user.0,
+        grants: super::servers::grants_of(file_transfers, &access),
+    };
+    send_command(state, server, &grant).await?;
+    // A moderator's mute as it stands in the community (`super::mutes`); a DM's call has none.
+    // The voice server changes nothing when it already stands as said.
+    let muted = match access.community.as_ref() {
+        Some(community) => super::mutes::is_muted(conn, community.community, user).await?,
+        None => false,
+    };
+    let mute = VoiceCommand::Mute {
+        session: session.0,
+        user: user.0,
+        muted,
+    };
+    send_command(state, server, &mute).await
 }
 
 /// Sends `command` to the voice server `server`.

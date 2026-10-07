@@ -8,6 +8,7 @@
 //! one server while anyone is in the call; it is created by the first report of a participant
 //! and ends when the last one leaves, so the channel can land anywhere the next time.
 
+pub mod mutes;
 mod reports;
 mod ring;
 mod servers;

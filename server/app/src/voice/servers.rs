@@ -263,6 +263,9 @@ pub struct JoinOffer {
     pub share_screen: bool,
     pub transfer_files: bool,
     pub camera: bool,
+    /// Whether a moderator's mute of them stands in the channel's community
+    /// (`super::mutes`), which the token carries so they join muted.
+    pub server_muted: bool,
 }
 
 /// Whether a server is offered to a joiner: enabled, not suspended, with room, and heard from
@@ -382,6 +385,10 @@ pub async fn join_offer(
         camera,
         transfer_files,
     } = grants_of(state.settings().file_transfers, &access);
+    let server_muted = match access.community.as_ref() {
+        Some(community) => super::mutes::is_muted(conn.as_mut(), community.community, user).await?,
+        None => false,
+    };
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,
@@ -393,6 +400,7 @@ pub async fn join_offer(
         transfer_files,
         camera,
         sign_in: caller.sign_in_held(),
+        server_muted,
     };
     Ok(JoinOffer {
         session,
@@ -403,6 +411,7 @@ pub async fn join_offer(
         share_screen,
         transfer_files,
         camera,
+        server_muted,
     })
 }
 
