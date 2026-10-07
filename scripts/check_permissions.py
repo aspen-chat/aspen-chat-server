@@ -1160,6 +1160,25 @@ def ban_ranks(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+def banned_owners_bots(world: World, check: Checks) -> None:
+    say("a ban from the deployment shuts out the banned person's bots until it is lifted")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "banUsers")
+    bot_token = stack.api("POST", "/users/@me/bots", {"name": f"bot{world.run}"}, member["token"])["token"]
+    check("the member's bot works", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_stream = stack.events(bot_token)
+    bot_stream.gather(0.5)
+    world.as_owner("PUT", f"/admin/users/{member['id']}/ban", {"reason": "checking bots"})
+    bot_stream.gather(1.0)
+    check("banning its owner closes the bot's stream as banned", bot_stream.closed == 4410, bot_stream.closed)
+    check("and refuses its token", stack.status("GET", "/users/@me", token=bot_token) == 401)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
+    check("lifting the ban restores it", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
 def ban_deletions(world: World, check: Checks) -> None:
     say("a ban's deletion window reaches only channels the banner may view")
     stack, member = world.stack, world.member
@@ -1671,7 +1690,7 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, ban_deletions, dm_reads,
+             nicknames, review_powers, ban_ranks, banned_owners_bots, ban_deletions, dm_reads,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

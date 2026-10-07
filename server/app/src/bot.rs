@@ -60,7 +60,7 @@ pub async fn user_for_token(
                 .eq(digest(token))
                 .and(user::bot)
                 .and(user::deleted_at.is_null())
-                .and(diesel::dsl::not(crate::user_ban::banned())),
+                .and(diesel::dsl::not(crate::user_ban::shut_out())),
         )
         .first(conn.as_mut())
         .await

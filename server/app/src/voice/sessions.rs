@@ -261,11 +261,13 @@ async fn recheck_seat(
         channel,
         user,
     } = seat;
+    // Gone, banned, or a bot whose owner is banned.
     let present: bool = diesel::select(diesel::dsl::exists(
         user_table::table.filter(
             user_table::id
                 .eq(user)
-                .and(user_table::deleted_at.is_null()),
+                .and(user_table::deleted_at.is_null())
+                .and(diesel::dsl::not(crate::user_ban::shut_out())),
         ),
     ))
     .get_result(conn)
@@ -275,7 +277,7 @@ async fn recheck_seat(
         user: user.0,
         reason: Some(KickReason::AccessLost),
     };
-    let command = if !present || crate::user_ban::standing(conn, user).await?.is_some() {
+    let command = if !present {
         removed
     } else {
         match channel_access(state, conn, user, channel).await {
