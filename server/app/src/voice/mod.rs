@@ -8,6 +8,7 @@
 //! one server while anyone is in the call; it is created by the first report of a participant
 //! and ends when the last one leaves, so the channel can land anywhere the next time.
 
+pub mod mutes;
 mod reports;
 mod ring;
 mod servers;
@@ -37,6 +38,35 @@ use diesel::{
 };
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use tracing::error;
+
+/// Answers voice servers asking for the public half of the join token key
+/// (`voice_protocol::control::TOKEN_KEY_SUBJECT`), for as long as the server runs. Every API
+/// server answers, in one queue group, so any one of them up is enough. A voice server's NATS
+/// user may receive replies only on its own inbox, and nothing but the API servers may publish
+/// there, so the key it is given is the API servers'.
+pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Result<()> {
+    use futures_util::StreamExt;
+    let client = state.nats_context.client();
+    let mut requests = client
+        .queue_subscribe(
+            voice_protocol::control::TOKEN_KEY_SUBJECT,
+            "aspen_api".to_string(),
+        )
+        .await?;
+    let answer = serde_json::to_vec(&state.join_token_key.public())?;
+    tokio::spawn(async move {
+        while let Some(request) = requests.next().await {
+            let Some(reply) = request.reply else {
+                continue;
+            };
+            if let Err(e) = client.publish(reply, answer.clone().into()).await {
+                error!(error = %e, "could not answer a voice server asking for the join token key");
+            }
+        }
+        error!("stopped answering voice servers asking for the join token key");
+    });
+    Ok(())
+}
 
 /// How often sessions whose server went silent are ended.
 const REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);

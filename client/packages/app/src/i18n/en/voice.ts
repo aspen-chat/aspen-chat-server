@@ -91,6 +91,8 @@ export const voice = {
   participantActions: "Actions for {name}",
   serverMute: "Server mute",
   serverUnmute: "Server unmute",
+  serverMutedYou:
+    "A moderator muted you in this community's calls. You stay muted until a moderator unmutes you.",
   removeFromCall: "Remove from call",
   volume: "Volume",
   muteForMe: "Mute for me",

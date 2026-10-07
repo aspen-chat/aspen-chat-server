@@ -114,6 +114,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::BenchCommand,
     },
+    /// Operator commands for the files kept of deleted messages for reviewing reports.
+    Attachments {
+        #[clap(subcommand)]
+        action: operator::AttachmentsCommand,
+    },
     /// Operator commands for deployment roles: the first administrator, and the top role.
     Admin {
         #[clap(subcommand)]
@@ -217,6 +222,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Limits { action } => operator::limits(&config, action).await,
             Command::Bench { action } => operator::bench(&config, action).await,
             Command::Admin { action } => operator::admin(&config, action).await,
+            Command::Attachments { action } => operator::attachments(&config, action).await,
             Command::Invites { action } => operator::invites(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
             Command::Federation { action } => operator::federation(&config, action).await,

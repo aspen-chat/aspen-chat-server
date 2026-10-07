@@ -74,9 +74,6 @@ region = "us-east-1"
 access_key = "…"
 secret_key = "…"
 
-[voice]
-token_secret = "a long random string, shared with every voice server"
-
 [web_client]
 dir = "/srv/aspen/dist"
 ```
@@ -233,12 +230,10 @@ aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.o
 
 It may be run again with the same arguments, so a deployment script can run it every time; the
 dashboard registers servers too. Its id is then in the database
-(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id, the same
-`token_secret`, and NATS:
+(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id and NATS:
 
 ```toml
 id = "…"
-token_secret = "the same string as [voice] token_secret"
 nats_url = "nats.internal:4222"
 listen_addr = "127.0.0.1:9000"
 
@@ -280,6 +275,7 @@ authorization {
         publish: { allow: [
           "aspen.voice.report.*.VOICE_SERVER_ID",
           "aspen.voice.speaking.*.VOICE_SERVER_ID",
+          "aspen.voice.token-key",
           "$JS.API.INFO",
           "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
           "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
@@ -300,8 +296,13 @@ authorization {
 
 That lets the voice server publish its own reports (`aspen.voice.report.{lane}.{id}` and
 `aspen.voice.speaking.{lane}.{id}`), receive its own commands, follow a suspension of rate limits
-(the key-value bucket `aspen_rate_limits`), and receive the replies to its own requests, which it
-asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The API servers apply a
+(the key-value bucket `aspen_rate_limits`), ask the API servers for the public half of the key
+they sign join tokens with (`aspen.voice.token-key`), and receive the replies to its own
+requests, which it asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The key
+itself is made by the first API server to start and kept in the database, so a voice server can
+check the tokens that let people into calls but never make one, and no secret needs copying to
+it. A voice server that cannot reach an API server at startup keeps asking every few seconds, and
+turns joins away until one answers. The API servers apply a
 report only when it came on a subject naming the server it is about, and only when the call or
 channel it is about is that server's, so a voice server taken over can misreport its own calls and
 no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
@@ -335,7 +336,8 @@ aspen-chat-server admin grant <username>
 ```
 
 It needs the database and NATS, as the servers do: it announces the change to the account's open
-apps. It gives that account the deployment's top role, making an Administrator role with every
+apps. The account must be a person's on this deployment: bots and users from other deployments
+hold no deployment roles, and the command refuses them. It gives that account the deployment's top role, making an Administrator role with every
 permission but the moderation ones if there is none: `moderateCommunities` (reading everything in
 any community or DM, the record of files sent in calls, and taking things out; it includes
 `removeContent`), `reviewReports` (the reports people make of messages, profiles, and
@@ -413,19 +415,40 @@ password and every event cross the network readable.
 ### The storage's read path
 
 `public_base_url` is fetched by everyone's apps without credentials, so it must allow exactly
-one thing: reading an object by its name (S3's `GetObject`). It must not list the bucket, which
-would hand anyone every attachment ever posted, nor take writes or deletions.
+one thing: reading an object by its name (S3's `GetObject`), and only under the four prefixes
+clients read: `attachments/`, `attachment-previews/`, `icons/`, and `link-preview-images/`. It
+must not list the bucket, which would hand anyone every attachment ever posted, nor take writes
+or deletions, and it must never serve `evidence/`, where the files of deleted messages and
+attachments taken off their messages are kept for reviewing reports (reviewers read them through
+links the server signs for ten minutes), nor `uploads/`, where uploads wait to be confirmed.
 
-- **AWS S3** (or anything taking its policies): a bucket policy allowing `s3:GetObject` on
-  `arn:aws:s3:::BUCKET/*` to `*`, and nothing else; not `s3:ListBucket`.
-- **MinIO**: `mc anonymous set download` also grants listing. Set a policy of your own with
-  `mc anonymous set-json`, holding only the `s3:GetObject` statement above.
-- **Garage**: its website endpoint (`s3_web`, `garage bucket website --allow BUCKET`) serves
-  objects and does not list them.
+- **AWS S3** (or anything taking its policies): a bucket policy allowing `s3:GetObject` to `*` on
+  `arn:aws:s3:::BUCKET/attachments/*`, `arn:aws:s3:::BUCKET/attachment-previews/*`,
+  `arn:aws:s3:::BUCKET/icons/*`, and `arn:aws:s3:::BUCKET/link-preview-images/*`, and nothing
+  else; not `s3:ListBucket`, and not `BUCKET/*`.
+- **MinIO**: `mc anonymous set download` grants listing and the whole bucket. Set a policy of
+  your own with `mc anonymous set-json`, holding only the statement above.
+- **Garage**: its website endpoint (`s3_web`, `garage bucket website --allow BUCKET`) lists
+  nothing but serves every object, so put a reverse proxy or CDN before it that passes only
+  paths under the four prefixes and refuses the rest.
 - **SeaweedFS**: give the S3 gateway an anonymous identity allowed only `Read` on the bucket
-  (`"actions": ["Read:BUCKET"]` in its S3 configuration) and serve `public_base_url` from the S3
-  gateway or a CDN before it. **Never expose the filer** (port 8888): it lists directories and
-  takes uploads and deletions from anyone.
+  (`"actions": ["Read:BUCKET"]` in its S3 configuration), which reaches every object, so serve
+  `public_base_url` through a reverse proxy or CDN that passes only paths under the four
+  prefixes. **Never expose the filer** (port 8888): it lists directories and takes uploads and
+  deletions from anyone.
+
+A proxy rule for the prefixes, in Caddy (`handle` blocks are tried in order):
+
+```
+media.chat.example.org {
+    @public path_regexp ^/aspen-media/(attachments|attachment-previews|icons|link-preview-images)/[^/]+$
+    handle @public {
+        header X-Content-Type-Options nosniff
+        reverse_proxy 127.0.0.1:3902
+    }
+    respond 404
+}
+```
 
 Serve `public_base_url` from an origin of its own (`https://media.chat.example.org`), never under
 `public_url`'s, so nothing posted can act as your deployment's pages, and have it (or the CDN
@@ -447,8 +470,18 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$S3/write-check"    # 
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$OBJECT"           # 403 or 405
 ```
 
+and, with the AWS command line and the deployment's storage key pair, that the read path keeps
+`evidence/` to itself (`ENDPOINT` is `[media.s3] endpoint`):
+
+```
+echo check | aws --endpoint-url "$ENDPOINT" s3 cp - s3://aspen-media/evidence/read-check
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/evidence/read-check"  # 403 or 404, never 200
+aws --endpoint-url "$ENDPOINT" s3 rm s3://aspen-media/evidence/read-check
+```
+
 A `200` for a listing shows the bucket's contents to anyone; one for a write lets anyone put
-files at your media address.
+files at your media address; one for `evidence/` lets anyone holding an old link read what was
+deleted.
 
 ## Upgrading
 
@@ -461,3 +494,21 @@ files at your media address.
 
 People's event streams reconnect by themselves when an API server restarts, and pick up exactly
 where they left off.
+
+### From shared-secret join tokens
+
+Deployments whose `aspen.toml` has a `[voice] token_secret` signed join tokens with that secret.
+API servers now sign them with a key of their own and ignore the setting, so upgrade the voice
+servers first, while they still have the secret, then the API servers:
+
+1. Run `aspen-migrate up`, then restart each voice server on the new build with its
+   `token_secret` still in `voice_server.toml`. It takes both kinds of token, and warns that the
+   secret is set.
+2. Restart the API servers on the new build. The first to start makes the key; each answers the
+   voice servers asking for it, and every join token from then on is signed with it.
+3. Take `token_secret` out of every `voice_server.toml` and out of `aspen.toml`, and restart the
+   voice servers. A voice server without it refuses tokens of the old kind.
+
+Calls go on throughout, apart from those on each voice server as it restarts, whose clients
+rejoin on their own. Add `aspen.voice.token-key` to each voice server's NATS permissions (above)
+before step 1.

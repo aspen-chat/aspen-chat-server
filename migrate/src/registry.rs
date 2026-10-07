@@ -100,5 +100,10 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261007_141409_sign_in_created_at::M,
     &migrations::m20261007_142523_plugin_timer_scope::M,
     &migrations::m20261007_144835_transfer_outcome_not_permitted::M,
-    &migrations::m20261007_182423_bot_transfer::M,
+    &migrations::m20261007_181601_plugin_quota_per_owner::M,
+    &migrations::m20261007_181608_deployment_roles_own_people_only::M,
+    &migrations::m20261007_181834_voice_mute::M,
+    &migrations::m20261007_182216_attachment_evidence::M,
+    &migrations::m20261007_183427_upload_quota::M,
+    &migrations::m20261007_192833_bot_transfer::M,
 ];

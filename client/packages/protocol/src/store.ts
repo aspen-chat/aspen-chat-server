@@ -69,6 +69,7 @@ import type {
   Poll,
   Role,
   ServerEvent,
+  VoiceMute,
   VoiceParticipant,
   VoiceRing,
   VoiceSession,
@@ -108,6 +109,7 @@ const MAX_ARRIVALS = 200;
 const EMPTY_OVERRIDES: readonly never[] = [];
 const NO_ANNOTATIONS: readonly never[] = [];
 const NO_PLUGINS: readonly PluginInfo[] = [];
+const NO_TYPERS: readonly string[] = [];
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
 
@@ -191,6 +193,11 @@ export class RecordStore {
   readonly #customEmoji = new Map<string, CustomEmoji>();
   /** The standing bans of the communities whose bans a read has brought, by community then user. */
   readonly #bans = new Map<string, Map<string, CommunityBan>>();
+  /**
+   * The standing server mutes of the communities whose mutes a read has brought, by community
+   * then user.
+   */
+  readonly #voiceMutes = new Map<string, Map<string, VoiceMute>>();
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
@@ -220,6 +227,11 @@ export class RecordStore {
   readonly #pins = new Map<string, Map<string, Pin>>();
   /** How many people are online in each channel whose count has been read. */
   readonly #channelOnline = new Map<string, number>();
+  /**
+   * Who is typing in each channel, `channel -> user -> until` (by `now()`), in the order they
+   * began. Never read from the server: only the event stream's `ephemeral` frames tell of it.
+   */
+  readonly #typing = new Map<string, Map<string, number>>();
   /** When messages that arrived while the app was open came, for drawing them arriving. */
   readonly #arrivals = new Map<string, number>();
   /** When messages deleted while the app was open went, for drawing them going. */
@@ -486,6 +498,28 @@ export class RecordStore {
       return held === undefined
         ? undefined
         : Array.from(held.values()).sort((a, b) => b.bannedAt.localeCompare(a.bannedAt));
+    });
+  }
+
+  /**
+   * Topic `voiceMutes:<communityId>`: the community's standing server mutes, newest first, or
+   * `undefined` before a read has brought them (`AspenSync.loadVoiceMutes`); events then keep
+   * them.
+   */
+  voiceMutes(communityId: string): readonly VoiceMute[] | undefined {
+    return this.#memoized(`voiceMutes:${communityId}`, () => {
+      const held = this.#voiceMutes.get(communityId);
+      return held === undefined
+        ? undefined
+        : Array.from(held.values()).sort((a, b) => b.mutedAt.localeCompare(a.mutedAt));
+    });
+  }
+
+  /** Keeps a read's whole list of a community's standing server mutes. */
+  replaceVoiceMutes(communityId: string, mutes: readonly VoiceMute[]): void {
+    this.#batch(() => {
+      this.#voiceMutes.set(communityId, new Map(mutes.map((m) => [m.user, m])));
+      this.#touch(`voiceMutes:${communityId}`);
     });
   }
 
@@ -971,6 +1005,79 @@ export class RecordStore {
     );
   }
 
+  /**
+   * Topic `typing:<channelId>`: who is typing in the channel, in the order they began, leaving
+   * out the caller and anyone they block on any deployment (`silenced`).
+   */
+  typers(channelId: string): readonly string[] {
+    return this.#memoized(`typing:${channelId}`, () => {
+      const typing = this.#typing.get(channelId);
+      if (typing === undefined) {
+        return NO_TYPERS;
+      }
+      return [...typing.keys()].filter((id) => id !== this.#myUserId && !this.silenced(id));
+    });
+  }
+
+  /**
+   * Notes that someone is typing in a channel until `until` (by `now()`), keeping their place
+   * among those already typing, or, with `null`, that they stopped.
+   */
+  noteTyping(channelId: string, userId: string, until: number | null): void {
+    this.#batch(() => {
+      let typing = this.#typing.get(channelId);
+      if (until === null) {
+        if (typing?.delete(userId) !== true) {
+          return;
+        }
+        if (typing.size === 0) {
+          this.#typing.delete(channelId);
+        }
+      } else {
+        if (typing === undefined) {
+          typing = new Map();
+          this.#typing.set(channelId, typing);
+        }
+        typing.set(userId, until);
+      }
+      this.#touch(`typing:${channelId}`);
+    });
+  }
+
+  /**
+   * Lets go of everyone whose typing ran out by `now`; returns when the next of those still
+   * typing runs out, or `null` when nobody is.
+   */
+  expireTyping(now: number): number | null {
+    let next: number | null = null;
+    this.#batch(() => {
+      for (const [channelId, typing] of this.#typing) {
+        for (const [userId, until] of typing) {
+          if (until <= now) {
+            typing.delete(userId);
+            this.#touch(`typing:${channelId}`);
+          } else if (next === null || until < next) {
+            next = until;
+          }
+        }
+        if (typing.size === 0) {
+          this.#typing.delete(channelId);
+        }
+      }
+    });
+    return next;
+  }
+
+  /** Forgets who is typing anywhere, once the connection that told of it is gone. */
+  forgetTyping(): void {
+    this.#batch(() => {
+      for (const channelId of this.#typing.keys()) {
+        this.#touch(`typing:${channelId}`);
+      }
+      this.#typing.clear();
+    });
+  }
+
   /** Topic `blocks`: everyone the caller has blocked. */
   blockedUsers(): readonly string[] {
     return this.#memoized("blocks", () => Array.from(this.#blocked));
@@ -1301,6 +1408,10 @@ export class RecordStore {
         this.#touch(`bans:${id}`);
       }
       this.#bans.clear();
+      for (const id of this.#voiceMutes.keys()) {
+        this.#touch(`voiceMutes:${id}`);
+      }
+      this.#voiceMutes.clear();
       const listed = new Set(communities.map((c) => c.id));
       for (const id of this.#myCommunities) {
         if (!listed.has(id)) {
@@ -1892,6 +2003,7 @@ export class RecordStore {
       this.#roles.clear();
       this.#customEmoji.clear();
       this.#bans.clear();
+      this.#voiceMutes.clear();
       this.#pins.clear();
       this.#channelOnline.clear();
       this.#forgetCommands();
@@ -1958,6 +2070,19 @@ export class RecordStore {
               held.delete(event.user);
             }
             this.#touch(`bans:${event.community}`);
+          }
+          break;
+        }
+        case "voiceMute": {
+          // Only a community whose mutes were read is followed; the rest are read when shown.
+          const held = this.#voiceMutes.get(event.community);
+          if (held !== undefined) {
+            if (event.type === "create") {
+              held.set(event.user, created(event));
+            } else {
+              held.delete(event.user);
+            }
+            this.#touch(`voiceMutes:${event.community}`);
           }
           break;
         }
@@ -2100,6 +2225,8 @@ export class RecordStore {
             this.#appendToWindow(message);
             this.#noteDmActivity(message.channelId, message.id);
             this.#noteNewMessage(message);
+            // Whoever posted has stopped typing it, whether or not they said so first.
+            this.noteTyping(message.channelId, message.author, null);
           } else if (event.type === "update") {
             const message = this.#messages.get(event.id);
             if (message !== undefined) {
@@ -2391,6 +2518,12 @@ export class RecordStore {
   #touch(topic: Topic): void {
     this.#memo.delete(topic);
     this.#dirty.add(topic);
+    // Who is shown typing leaves out whoever is silenced.
+    if (topic === "silenced") {
+      for (const channelId of this.#typing.keys()) {
+        this.#touch(`typing:${channelId}`);
+      }
+    }
   }
 
   #batch(write: () => void): void {
@@ -2777,6 +2910,13 @@ export class RecordStore {
       // afresh if the permission comes back.
       if (this.access(communityId)?.has("banMembers") !== true && this.#bans.delete(communityId)) {
         this.#touch(`bans:${communityId}`);
+      }
+      // Likewise server mutes without Manage calls.
+      if (
+        this.access(communityId)?.has("manageCalls") !== true &&
+        this.#voiceMutes.delete(communityId)
+      ) {
+        this.#touch(`voiceMutes:${communityId}`);
       }
     }
   }

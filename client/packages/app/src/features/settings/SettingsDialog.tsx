@@ -47,6 +47,7 @@ import { DeveloperSection } from "@/features/settings/DeveloperSection";
 import { FontsSection } from "@/features/settings/FontsSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
 import { NotificationsSection } from "@/features/settings/NotificationsSection";
+import { PrivacySection } from "@/features/settings/PrivacySection";
 import { type AudioDevice } from "@/features/settings/audioDevices";
 import {
   type DeviceAccess,
@@ -70,8 +71,8 @@ import { ZoomSlider } from "@/features/settings/ZoomSlider";
  * sounds, kept with this install; the appearance: the theme, palette, contrast, zoom, and whether
  * names take their roles' colours, kept with this install, and the message text size, line spacing,
  * and animation speed, kept with the account; whether new messages are read out, and the fonts text
- * and code are drawn in, kept with this install; the language, kept with the account; the
- * people the user has blocked; developer mode, with the user's bots; and, beneath them, the way
+ * and code are drawn in, kept with this install; the language, kept with the account; whether
+ * others see the user typing, kept with the account; the people the user has blocked; developer mode, with the user's bots; and, beneath them, the way
  * out of the account and the button that opens About Aspen. Sections for account-wide
  * preferences slot in beside them.
  */
@@ -93,7 +94,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                 <DialogHeading>{m.settings.title}</DialogHeading>
                 <PlaneColumns>
                   <section aria-labelledby="settings-account" className={planeClass}>
-                    <h3 id="settings-account" className="text-sm font-semibold text-ink-muted">
+                    <h3 id="settings-account" className="text-lg font-semibold text-ink-muted">
                       {m.settings.account}
                     </h3>
                     <SecurityDialog />
@@ -101,7 +102,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   </section>
                   <AudioSection />
                   <section aria-labelledby="settings-appearance" className={planeClass}>
-                    <h3 id="settings-appearance" className="text-sm font-semibold text-ink-muted">
+                    <h3 id="settings-appearance" className="text-lg font-semibold text-ink-muted">
                       {m.settings.appearance}
                     </h3>
                     <ThemePicker />
@@ -115,6 +116,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                   <FontsSection />
                   <NotificationsSection />
                   <LanguageSection />
+                  <PrivacySection />
                   <BlockedUsersSection />
                   <OtherServersSection />
                   <DeveloperSection />
@@ -148,7 +150,7 @@ function AudioSection() {
   const outputs = canChooseOutput();
   return (
     <section aria-labelledby="settings-audio" className={planeClass}>
-      <h3 id="settings-audio" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-audio" className="text-lg font-semibold text-ink-muted">
         {m.settings.audio}
       </h3>
       <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />

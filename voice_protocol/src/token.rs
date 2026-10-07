@@ -1,6 +1,8 @@
 //! The join token: what a client presents to a voice server to prove the API server let it
-//! into a channel. It is the base64url-encoded claims, a dot, and a base64url-encoded
-//! HMAC-SHA256 of those bytes under the secret both servers hold.
+//! into a channel. The API servers sign it with an Ed25519 key of their own (`sign`), whose
+//! public half the voice servers ask them for over NATS (`control::TOKEN_KEY_SUBJECT`), so a
+//! voice server can check a token but never make one. A voice server given `token_secret` also
+//! takes the shared-secret form (`verify_shared`).
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -42,6 +44,10 @@ pub struct JoinClaims {
     /// (`VoiceCommand::EndSignIns`). A bot's token, which belongs to no sign-in, has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<String>,
+    /// Whether a moderator's mute of them stands where the call is, so the participant the
+    /// token admits is muted from the start (`VoiceCommand::Mute` changes it after).
+    #[serde(default)]
+    pub server_muted: bool,
 }
 
 impl JoinClaims {
@@ -85,10 +91,12 @@ impl Grants {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TokenError {
-    #[error("the token is not two base64url parts joined by a dot")]
+    #[error("the token is not a key id, claims, and signature joined by dots")]
     Malformed,
     #[error("the token's signature does not match")]
     BadSignature,
+    #[error("the token is signed with a key this server does not know")]
+    UnknownKey,
     #[error("the token expired")]
     Expired,
     #[error("the token is not for this server")]
@@ -97,24 +105,75 @@ pub enum TokenError {
     Used,
 }
 
-type HmacSha256 = Hmac<Sha256>;
-
-/// Signs `claims` under `secret`.
-pub fn sign(claims: &JoinClaims, secret: &[u8]) -> String {
-    let payload = serde_json::to_vec(claims).expect("claims serialize");
-    let mut mac = HmacSha256::new_from_slice(secret).expect("any key length is valid for HMAC");
-    mac.update(&payload);
-    let signature = mac.finalize().into_bytes();
-    format!(
-        "{}.{}",
-        URL_SAFE_NO_PAD.encode(payload),
-        URL_SAFE_NO_PAD.encode(signature)
-    )
+/// Names a signing key by its public half: the first twelve bytes of its SHA-256, base64url.
+/// A token names the key it is signed with by this, so a voice server finds which key to verify
+/// it with (`control::TokenKey`).
+pub fn key_id(public_key: &[u8]) -> String {
+    use sha2::Digest;
+    URL_SAFE_NO_PAD.encode(&Sha256::digest(public_key)[..12])
 }
 
-/// Verifies `token` under `secret` for `server` at time `now` (seconds since the Unix epoch)
-/// and returns its claims. The signature is checked before anything else is read.
+/// Signs `claims` with the API servers' join token key: the key's id, the base64url claims, and
+/// the base64url Ed25519 signature of the first two parts as they stand, joined by dots.
+pub fn sign(claims: &JoinClaims, key: &ring::signature::Ed25519KeyPair) -> String {
+    use ring::signature::KeyPair;
+    let payload = serde_json::to_vec(claims).expect("claims serialize");
+    let signed = format!(
+        "{}.{}",
+        key_id(key.public_key().as_ref()),
+        URL_SAFE_NO_PAD.encode(payload)
+    );
+    let signature = key.sign(signed.as_bytes());
+    format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref()))
+}
+
+/// The id of the key `token` says it is signed with, or `None` when it is not a signed token
+/// (a shared-secret one has two parts).
+pub fn key_of(token: &str) -> Option<&str> {
+    let mut parts = token.split('.');
+    let (Some(key), Some(_), Some(_), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    Some(key)
+}
+
+/// Verifies a signed `token` with `public_key`, the Ed25519 key its id names, for `server` at
+/// time `now` (seconds since the Unix epoch), and returns its claims. The signature is checked
+/// before the claims are read.
 pub fn verify(
+    token: &str,
+    public_key: &[u8],
+    server: Uuid,
+    now: i64,
+) -> Result<JoinClaims, TokenError> {
+    let key = key_of(token).ok_or(TokenError::Malformed)?;
+    if key != key_id(public_key) {
+        return Err(TokenError::UnknownKey);
+    }
+    let (signed, signature) = token.rsplit_once('.').ok_or(TokenError::Malformed)?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| TokenError::Malformed)?;
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key)
+        .verify(signed.as_bytes(), &signature)
+        .map_err(|_| TokenError::BadSignature)?;
+    let (_, payload) = signed.split_once('.').ok_or(TokenError::Malformed)?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| TokenError::Malformed)?;
+    let claims: JoinClaims = serde_json::from_slice(&payload).map_err(|_| TokenError::Malformed)?;
+    admits(claims, server, now)
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Verifies a token of the shared-secret form (the base64url claims, a dot, and their
+/// HMAC-SHA256 under `secret`), which a voice server accepts only while it is given
+/// `token_secret`, so that it takes the tokens of API servers that do not yet sign with a key
+/// of their own. The signature is checked before anything else is read.
+pub fn verify_shared(
     token: &str,
     secret: &[u8],
     server: Uuid,
@@ -132,6 +191,11 @@ pub fn verify(
     mac.verify_slice(&signature)
         .map_err(|_| TokenError::BadSignature)?;
     let claims: JoinClaims = serde_json::from_slice(&payload).map_err(|_| TokenError::Malformed)?;
+    admits(claims, server, now)
+}
+
+/// The claims, if they admit their holder to `server` at `now`.
+fn admits(claims: JoinClaims, server: Uuid, now: i64) -> Result<JoinClaims, TokenError> {
     if claims.expires_at <= now {
         return Err(TokenError::Expired);
     }
@@ -157,35 +221,89 @@ mod tests {
             transfer_files: false,
             camera: false,
             sign_in: Some("0123456789abcdef0123456789abcdef".to_string()),
+            server_muted: false,
         }
     }
 
+    fn key() -> ring::signature::Ed25519KeyPair {
+        let document =
+            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+                .unwrap();
+        ring::signature::Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap()
+    }
+
     #[test]
-    fn round_trips_and_refuses_what_it_should() {
+    fn signed_tokens_round_trip_and_refuse_what_they_should() {
+        use ring::signature::KeyPair;
+        let (key, other) = (key(), key());
+        let public = key.public_key().as_ref().to_vec();
         let claims = claims();
-        let token = sign(&claims, b"secret");
+        let token = sign(&claims, &key);
         let server = claims.servers[1];
-        assert_eq!(verify(&token, b"secret", server, 999), Ok(claims.clone()));
+        assert_eq!(key_of(&token), Some(key_id(&public).as_str()));
+        assert_eq!(verify(&token, &public, server, 999), Ok(claims.clone()));
         assert_eq!(
-            verify(&token, b"secret", server, 1_000),
+            verify(&token, &public, server, 1_000),
             Err(TokenError::Expired)
         );
         assert_eq!(
-            verify(&token, b"other", server, 999),
-            Err(TokenError::BadSignature)
+            verify(&token, other.public_key().as_ref(), server, 999),
+            Err(TokenError::UnknownKey)
         );
         assert_eq!(
-            verify(&token, b"secret", Uuid::now_v7(), 999),
+            verify(&token, &public, Uuid::now_v7(), 999),
             Err(TokenError::WrongServer)
         );
-        let mut forged = token.clone();
-        forged.replace_range(0..4, "AAAA");
+        // Claims changed under the signature, or another key's signature under this key's id.
+        let (signed, _) = token.rsplit_once('.').unwrap();
+        let (kid, payload) = signed.split_once('.').unwrap();
+        let mut changed = claims.clone();
+        changed.speak = false;
+        let forged = format!(
+            "{kid}.{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&changed).unwrap()),
+            token.rsplit_once('.').unwrap().1
+        );
         assert_eq!(
-            verify(&forged, b"secret", server, 999),
+            verify(&forged, &public, server, 999),
+            Err(TokenError::BadSignature)
+        );
+        let impostor = sign(&claims, &other);
+        let (_, rest) = impostor.split_once('.').unwrap();
+        assert_eq!(
+            verify(&format!("{kid}.{rest}"), &public, server, 999),
+            Err(TokenError::BadSignature)
+        );
+        assert_ne!(payload, "");
+        assert_eq!(key_of("one.two"), None);
+        assert_eq!(
+            verify("one.two", &public, server, 999),
+            Err(TokenError::Malformed)
+        );
+    }
+
+    #[test]
+    fn shared_secret_tokens_are_checked_under_the_secret() {
+        let claims = claims();
+        let payload = serde_json::to_vec(&claims).unwrap();
+        let mut mac = HmacSha256::new_from_slice(b"secret").unwrap();
+        mac.update(&payload);
+        let token = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(&payload),
+            URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+        );
+        let server = claims.servers[0];
+        assert_eq!(
+            verify_shared(&token, b"secret", server, 999),
+            Ok(claims.clone())
+        );
+        assert_eq!(
+            verify_shared(&token, b"other", server, 999),
             Err(TokenError::BadSignature)
         );
         assert_eq!(
-            verify("nodot", b"secret", server, 999),
+            verify_shared("nodot", b"secret", server, 999),
             Err(TokenError::Malformed)
         );
     }

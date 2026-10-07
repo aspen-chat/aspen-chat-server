@@ -206,6 +206,8 @@ endpoints = [
   "DELETE /invites/{code}",
   "PATCH /channels/{channel}/voice/participants/{user}",
   "DELETE /channels/{channel}/voice/participants/{user}",
+  "PUT /communities/{community}/voice-mutes/{user}",
+  "DELETE /communities/{community}/voice-mutes/{user}",
   "POST /voice-servers",
   "PATCH /voice-servers/{server}",
   "DELETE /voice-servers/{server}",

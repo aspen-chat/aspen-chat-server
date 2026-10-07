@@ -44,6 +44,12 @@ pub fn stored_key(s: &str) -> Option<String> {
         .or_else(|| crate::custom_emoji::referenced(s).map(crate::custom_emoji::reference))
 }
 
+/// The most different emoji one message may carry as reactions; adding to one already there is
+/// always allowed.
+pub const MAX_DISTINCT_PER_MESSAGE: usize = 50;
+
+/// Adds `author`'s reaction to a message, refused when it would be the message's
+/// [`MAX_DISTINCT_PER_MESSAGE`] + 1st different emoji.
 pub async fn create_react(
     state: &GlobalServerContext,
     author: UserId,
@@ -105,6 +111,25 @@ pub async fn create_react(
         let react = &react;
         let event = &event;
         async move {
+            // The message is locked so two new emoji cannot both find room for one more.
+            aspen_schema::message::table
+                .select(aspen_schema::message::id)
+                .filter(aspen_schema::message::id.eq(message_id))
+                .for_no_key_update()
+                .first::<MessageId>(conn.as_mut())
+                .await?;
+            let present: Vec<String> = react::table
+                .select(react::emoji)
+                .filter(react::message.eq(message_id))
+                .distinct()
+                .load(conn.as_mut())
+                .await?;
+            if !present.contains(&react.emoji) && present.len() >= MAX_DISTINCT_PER_MESSAGE {
+                return Err(crate::Error::Validation(t!(
+                    "reactTooManyDistinct",
+                    max = MAX_DISTINCT_PER_MESSAGE
+                )));
+            }
             diesel::insert_into(react::table)
                 .values(react)
                 .execute(conn.as_mut())

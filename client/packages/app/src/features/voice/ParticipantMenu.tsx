@@ -12,7 +12,14 @@ import {
   SliderOutput,
 } from "react-aria-components";
 import { SliderRail } from "@/features/layout/SliderRail";
-import { useBlocked, useChannelCan, usePreference, useSync } from "@/api/hooks";
+import {
+  useBlocked,
+  useChannel,
+  useChannelCan,
+  usePreference,
+  useSync,
+  useVoiceMuted,
+} from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -56,6 +63,9 @@ export function ParticipantMenu({
   const streamMutedForMe = usePreference(streamMuted(userId));
   const blocked = useBlocked(userId);
   const moderate = useChannelCan(channelId, "manageCalls");
+  // The community's mute, which outlasts the call; the participant's record until it is read.
+  const serverMuted =
+    useVoiceMuted(useChannel(channelId)?.community ?? null, userId, moderate) ?? muted;
   const label = format(m.voice.participantActions, { name });
   return (
     <Popover
@@ -96,7 +106,9 @@ export function ParticipantMenu({
                 void sync.setStreamMuted(userId, !streamMutedForMe).catch(() => undefined);
               } else if (key === "serverMute") {
                 onOpenChange(false);
-                void sync.muteVoiceParticipant(channelId, userId, !muted).catch(() => undefined);
+                void sync
+                  .muteVoiceParticipant(channelId, userId, !serverMuted)
+                  .catch(() => undefined);
               } else if (key === "kick") {
                 onOpenChange(false);
                 void sync.kickVoiceParticipant(channelId, userId).catch(() => undefined);
@@ -116,7 +128,7 @@ export function ParticipantMenu({
             {moderate && (
               <>
                 <MenuItem id="serverMute" className={itemClass}>
-                  {muted ? m.voice.serverUnmute : m.voice.serverMute}
+                  {serverMuted ? m.voice.serverUnmute : m.voice.serverMute}
                 </MenuItem>
                 <MenuItem id="kick" className={itemClass} data-danger="true">
                   {m.voice.removeFromCall}

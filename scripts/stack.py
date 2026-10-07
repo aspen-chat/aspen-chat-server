@@ -35,7 +35,6 @@ from web_client import stand_in
 REPO = Path(__file__).resolve().parent.parent
 # The NATS docker-compose.yaml runs, which a stack runs one of its own of.
 NATS_IMAGE = "nats:2.11-alpine"
-TOKEN_SECRET = "throwaway-stack-voice-secret-at-least-32-bytes"
 # The S3 credentials docker-compose.yaml gives SeaweedFS.
 S3_ACCESS_KEY = "GK484e56c38fb7e14b182bf47a"
 S3_SECRET_KEY = "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027"
@@ -247,13 +246,10 @@ class Stack:
             f'listen_addr = "127.0.0.1:{p.api_metrics}"\n'
             "[web_client]\n"
             f"dir = {json.dumps(str(stand_in(self.work / 'web-client')))}\n"
-            "[voice]\n"
-            f'token_secret = "{TOKEN_SECRET}"\n'
         )
         if self.voice_id:
             (self.work / "voice_server.toml").write_text(
                 f'id = "{self.voice_id}"\n'
-                f'token_secret = "{TOKEN_SECRET}"\n'
                 f'nats_url = "nats://127.0.0.1:{p.nats}"\n'
                 'nats_auth_token = "aspen_test"\n'
                 f'listen_addr = "127.0.0.1:{p.voice}"\n'
@@ -361,9 +357,14 @@ class EventStream:
         if not ready or ready.get("type") != "ready":
             raise Failed(f"the event stream answered {ready}, closed {self.socket.closed}")
         self.events: list[dict] = []
+        self.ephemeral: list[dict] = []
+
+    def send(self, message: dict) -> None:
+        self.socket.send(message)
 
     def gather(self, seconds: float = 1.0) -> list[dict]:
-        """Everything that arrives within `seconds`, added to `events` and returned."""
+        """Every event that arrives within `seconds`, added to `events` and returned. What happens
+        and is never kept (`ephemeral` frames: who is typing) is added to `ephemeral`."""
         got = []
         deadline = time.monotonic() + seconds
         while (left := deadline - time.monotonic()) > 0:
@@ -374,6 +375,8 @@ class EventStream:
                 continue
             if frame.get("type") == "event":
                 got.append(frame["event"])
+            elif frame.get("type") == "ephemeral":
+                self.ephemeral.append(frame["event"])
         self.events.extend(got)
         return got
 

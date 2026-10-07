@@ -16,6 +16,7 @@ import type {
   ChannelVoice,
   Community,
   CommunityBan,
+  VoiceMute,
   CommunityPermissions,
   CommunityPlugin,
   CustomEmoji,
@@ -98,6 +99,26 @@ export function useCategories(communityId: string): readonly Category[] {
 
 export function useChannel(id: string): Channel | undefined {
   return useTopic(`channel:${id}`, (s) => s.channel(id));
+}
+
+/**
+ * A channel by id, read on demand when the store lacks it (`AspenSync.ensureChannel`), such as
+ * a DM from before the last listing.
+ */
+export function useChannelOnDemand(id: string): Channel | undefined {
+  const sync = useSync();
+  const channel = useChannel(id);
+  useEffect(() => {
+    if (channel === undefined) {
+      sync.ensureChannel(id);
+    }
+  }, [sync, id, channel]);
+  return channel;
+}
+
+/** Whether a channel read on demand is still on its way: neither arrived nor refused. */
+export function useChannelLoading(id: string): boolean {
+  return useTopic(`channel:${id}`, (s) => s.channel(id) === undefined && !s.missing("channel", id));
 }
 
 /**
@@ -422,6 +443,14 @@ export function useBlocked(userId: string | undefined): boolean {
 }
 
 /**
+ * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
+ * they block.
+ */
+export function useTypers(channelId: string): readonly string[] {
+  return useTopic(`typing:${channelId}`, (s) => s.typers(channelId));
+}
+
+/**
  * The other person of a one-to-one DM (or of the DM a thread is in) whom the caller blocked,
  * so that nothing may be written there; `null` otherwise.
  */
@@ -620,6 +649,43 @@ export function useBans(communityId: string): readonly CommunityBan[] | undefine
     }
   }, [sync, communityId, bans]);
   return bans;
+}
+
+/**
+ * A community's standing server mutes, newest first, read on first use for a holder of Manage
+ * calls; `undefined` until read.
+ */
+export function useVoiceMutes(communityId: string): readonly VoiceMute[] | undefined {
+  const sync = useSync();
+  const mutes = useTopic(`voiceMutes:${communityId}`, (s) => s.voiceMutes(communityId));
+  useEffect(() => {
+    if (mutes === undefined) {
+      void sync.loadVoiceMutes(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, mutes]);
+  return mutes;
+}
+
+/**
+ * Whether a moderator's mute of `userId` stands in `communityId`'s calls, from the community's
+ * mutes, which are read when `load` (the caller holds Manage calls); `undefined` while unknown.
+ */
+export function useVoiceMuted(
+  communityId: string | null,
+  userId: string,
+  load: boolean,
+): boolean | undefined {
+  const sync = useSync();
+  const id = communityId ?? "";
+  const mutes = useTopic(`voiceMutes:${id}`, (s) =>
+    communityId === null ? undefined : s.voiceMutes(communityId),
+  );
+  useEffect(() => {
+    if (load && communityId !== null && mutes === undefined) {
+      void sync.loadVoiceMutes(communityId).catch(() => undefined);
+    }
+  }, [sync, communityId, mutes, load]);
+  return mutes?.some((mute) => mute.user === userId);
 }
 
 /** The roles a member holds besides everyone's, or `undefined` while unknown. */

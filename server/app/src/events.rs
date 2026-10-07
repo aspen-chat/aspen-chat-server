@@ -37,7 +37,7 @@ use crate::{CategoryId, ChannelId, CommunityId, MessageId, UserId, VoiceSessionI
 use aspen_schema::{
     category, channel, community_user, dm_recipient, invite, message, voice_session,
 };
-use aspen_wire::message_enum::server_event::ServerEvent;
+use aspen_wire::message_enum::server_event::{ServerEvent, VoiceMuteEvent};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::future::try_join_all;
@@ -165,6 +165,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::Role(_)
         | ServerEvent::CustomEmoji(_)
         | ServerEvent::CommunityBan(_)
+        | ServerEvent::VoiceMute(_)
         | ServerEvent::ChannelOverride(_)
         | ServerEvent::CategoryOverride(_)
         | ServerEvent::CommunityPlugin(_)
@@ -473,6 +474,14 @@ async fn audience(
     if let ServerEvent::CommunityBan(_) = event {
         return Ok(Some((Permission::BanMembers, None)));
     }
+    // A moderator's mute reaches those who may mute, and the person muted.
+    if let ServerEvent::VoiceMute(
+        VoiceMuteEvent::Create(aspen_wire::message_enum::VoiceMute { user, .. })
+        | VoiceMuteEvent::Delete { user, .. },
+    ) = event
+    {
+        return Ok(Some((Permission::ManageCalls, Some(*user))));
+    }
     // A community's settings for a plugin are its managers' to read.
     if let ServerEvent::CommunityPlugin(_) = event {
         return Ok(Some((Permission::ManagePlugins, None)));
@@ -657,6 +666,11 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
             scoped_user.map(Recheck::User).into_iter().collect()
         }
         ServerEvent::User(UserEvent::Delete { id }) => vec![Recheck::User(*id)],
+        // A moderator's mute reaches the calls the person is in through their recheck.
+        ServerEvent::VoiceMute(
+            VoiceMuteEvent::Create(aspen_wire::message_enum::VoiceMute { user, .. })
+            | VoiceMuteEvent::Delete { user, .. },
+        ) => vec![Recheck::User(*user)],
         // A participant who joined on a token of an ended sign-in leaves the call with it.
         ServerEvent::SignInsEnded { ended, kept, .. } => scoped_user
             .map(|user| Recheck::SignIns {
@@ -993,6 +1007,55 @@ pub async fn publish_event(
     scope: EventScope,
     event: &ServerEvent,
 ) -> crate::Result<()> {
+    let sent = send_event(state, conn, scope, event).await?;
+    acknowledged(sent).await
+}
+
+/// Publishes several events, in order, as `publish_event` publishes one, waiting for the stream
+/// to hold every copy of all of them once they are all sent rather than after each. The copies
+/// leave on this server's one NATS connection in the order given, and the stream keeps them in
+/// the order they arrive, so readers see the events in that order; a change that announces many
+/// records at once (a renumbering) then waits one round trip rather than one per record.
+pub async fn publish_events(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    events: Vec<(EventScope, ServerEvent)>,
+) -> crate::Result<()> {
+    let mut sent = Vec::new();
+    for (scope, event) in events {
+        sent.extend(send_event(state, conn, scope, &event).await?);
+    }
+    acknowledged(sent).await
+}
+
+/// One copy of an event handed to NATS, with when it was sent, awaiting the stream's
+/// acknowledgement.
+type Sent = (
+    std::time::Instant,
+    async_nats::jetstream::context::PublishAckFuture,
+);
+
+/// Waits for the stream to acknowledge every copy in `sent`.
+async fn acknowledged(sent: Vec<Sent>) -> crate::Result<()> {
+    try_join_all(sent.into_iter().map(|(started, ack)| async move {
+        ack.await?;
+        metrics::histogram!(aspen_metrics::api::EVENT_PUBLISH_DURATION)
+            .record(started.elapsed().as_secs_f64());
+        metrics::counter!(aspen_metrics::api::EVENTS_PUBLISHED).increment(1);
+        Ok::<(), crate::Error>(())
+    }))
+    .await?;
+    Ok(())
+}
+
+/// Routes an event and hands each of its copies to NATS, in order, returning them to be
+/// acknowledged (`acknowledged`).
+async fn send_event(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    scope: EventScope,
+    event: &ServerEvent,
+) -> crate::Result<Vec<Sent>> {
     let expected = expected_kind(event);
     if scope.kind() != expected {
         return Err(crate::Error::EventRouting(format!(
@@ -1066,30 +1129,24 @@ pub async fn publish_event(
             headers.insert(CREATOR_HEADER, creator.0.to_string().as_str());
         }
     }
-    let publishes = subjects.into_iter().filter_map(|subject| {
+    let mut sent = Vec::with_capacity(subjects.len());
+    for subject in subjects {
         let payload = match &community_copy {
             // A membership event with nothing left for the community is not sent to it.
-            Some((community, copy)) if *community == subject => {
-                bytes::Bytes::from(copy.clone()?.into_bytes())
-            }
+            Some((community, copy)) if *community == subject => match copy {
+                Some(copy) => bytes::Bytes::from(copy.clone().into_bytes()),
+                None => continue,
+            },
             _ => payload.clone(),
         };
-        let headers = headers.clone();
-        Some(async move {
-            let started = std::time::Instant::now();
-            state
-                .nats()
-                .publish_with_headers(subject, headers, payload)
-                .await?
-                .await?;
-            metrics::histogram!(aspen_metrics::api::EVENT_PUBLISH_DURATION)
-                .record(started.elapsed().as_secs_f64());
-            metrics::counter!(aspen_metrics::api::EVENTS_PUBLISHED).increment(1);
-            Ok::<(), crate::Error>(())
-        })
-    });
-    try_join_all(publishes).await?;
-    Ok(())
+        let started = std::time::Instant::now();
+        let ack = state
+            .nats()
+            .publish_with_headers(subject, headers.clone(), payload)
+            .await?;
+        sent.push((started, ack));
+    }
+    Ok(sent)
 }
 
 #[cfg(test)]

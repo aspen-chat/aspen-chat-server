@@ -177,7 +177,6 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
 | `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it for `failure_window_seconds`, after which it takes calls again on its own (an administrator enabling it ends the suspension sooner). Only this deployment's people whom a join offer sent to that server within the token's lifetime and a minute count, and not those who joined a call there within the window; bots and people from other deployments never do. The last server taking calls is never suspended. |
 | `failure_window_seconds` | `3600` | How long failures are counted, and how long a suspension lasts. |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
@@ -319,6 +318,7 @@ anyone has an account.
 | `bots-max-per-user` | `25` | The most bots one person may own. |
 | `everyone-mention-limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the deployment's own account (which cannot be signed in to, messaged, or blocked) and may turn it back on. `0` never turns it off. |
 | `custom-emoji-limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
+| `upload-quota-gib` | `25` | How many GiB one person may upload, attachments and pictures together, in any 24 hours. Each upload counts with the size it was started for, whether or not it is then sent or deleted; past the limit, an upload is refused with when there will be room. `0` sets no limit. |
 | `email-required` | `false` | Creating an account takes an email address. Needs `[email]`. It binds registration only: accounts made before it was turned on are not asked for one. |
 | `email-verification-required` | `false` | An account that has an email address must verify it, by the code mailed to it, before it can use the deployment; until then it can only verify, change, or resend its address, or sign out. Turned on, the apps of those with an unverified address are asked at once. Accounts without an address are not affected unless `email-required` is on too, and then only once they give one. Needs `[email]`. |
 | `newsletter-enabled` | `false` | The deployment has a newsletter: people may subscribe at registration (unticked by default) and in their account settings, and holders of Send newsletters write and send posts under **Newsletter** in the dashboard. Only verified addresses receive it, and each piece carries an unsubscribe link. Needs `[email]`. |
@@ -351,8 +351,8 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | Setting | Default | |
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
-| `token_secret` | required | The API servers' `[voice] token_secret`. The server refuses to start when it is the development value or shorter than 32 bytes, unless `development` is set. |
-| `development` | `false` | Lets the server start with a development or short `token_secret`, for a development machine whose API server uses its default. Never on a deployment people use: whoever knows the secret can join any call. |
+| `token_secret` | | Only while upgrading from API servers that signed join tokens with a shared secret ([Upgrading](installing.md#from-shared-secret-join-tokens)): the server then also takes tokens signed with it, and warns at startup. Leave it out otherwise: join tokens are signed with the API servers' key, which the server asks them for over NATS. It refuses to start with the old development value or one shorter than 32 bytes, unless `development` is set. |
+| `development` | `false` | Lets the server start with a development or short `token_secret`. Never on a deployment people use: whoever knows the secret can join any call. |
 | `nats_url` | required | The same NATS as the API servers. |
 | `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
 | `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |

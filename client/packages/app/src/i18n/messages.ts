@@ -37,6 +37,7 @@ import { qr } from "./en/qr";
 import { reports } from "./en/reports";
 import { roles } from "./en/roles";
 import { search } from "./en/search";
+import { selfLinks } from "./en/selfLinks";
 import { security } from "./en/security";
 import { settings } from "./en/settings";
 import { status } from "./en/status";
@@ -45,6 +46,7 @@ import { system } from "./en/system";
 import { tagging } from "./en/tagging";
 import { contrastModes, themeModes } from "./en/themeModes";
 import { threads } from "./en/threads";
+import { typing } from "./en/typing";
 import { twoFactor } from "./en/twoFactor";
 import { voice } from "./en/voice";
 
@@ -107,6 +109,7 @@ export const en = {
   bots,
   blocking,
   threads,
+  typing,
   dms,
   changeServer: "Change",
   continue: "Continue",
@@ -260,6 +263,7 @@ export const en = {
     "Say what it shows, for people who can't see it. Screen readers read this in its place, and the gallery shows it beneath.",
   attachmentDescribed: "Described",
   describeFailed: "The description could not be saved: {reason}",
+  tooManyAttachments: "A message may carry at most {max} attachments. Send the rest in another message.",
   imageAlt: "Image: {name}",
   openImage: "Open image",
   viewAllImages: "View all {count} images",
@@ -296,6 +300,7 @@ export const en = {
   palettes,
   syncStatus,
   reports,
+  selfLinks,
 } as const;
 
 /** A catalogue: the shape of `en`, with any text in place of its strings. */

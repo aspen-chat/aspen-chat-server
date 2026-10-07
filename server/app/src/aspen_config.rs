@@ -387,16 +387,12 @@ pub struct PluginsConfig {
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the
-/// dashboard or the terminal (`aspen-chat-server voice-servers`). Its `Debug` leaves out
-/// `token_secret`.
-#[derive(Clone, Deserialize, SmartDefault)]
+/// dashboard or the terminal (`aspen-chat-server voice-servers`). Join tokens are signed with
+/// the deployment's join token key (`app::server_secret::JoinTokenKey`), which is in the
+/// database, not here.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct VoiceConfig {
-    /// Shared with every voice server; signs the join tokens they verify. The default is
-    /// public, for development: a deployment at an `https` address refuses to start with it or
-    /// with any secret shorter than `MIN_TOKEN_SECRET_BYTES` (`VoiceConfig::check_secret`).
-    #[default(DEVELOPMENT_TOKEN_SECRET.to_string())]
-    pub token_secret: String,
     /// Distinct users whose session creation failed within `failure_window_seconds` before a
     /// server is disabled.
     #[default = 5]
@@ -553,64 +549,6 @@ impl AspenConfig {
                 "give either nats_auth_token or [nats] user and password, not both".to_string(),
             )),
         }
-    }
-}
-
-/// The `[voice] token_secret` a development server takes when none is given. It is in the
-/// source, so anyone could sign join tokens with it.
-const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
-
-/// The shortest `[voice] token_secret` an `https` deployment accepts: as long as the HMAC-SHA256
-/// key it is, so it cannot be guessed more easily than the signature forged.
-const MIN_TOKEN_SECRET_BYTES: usize = 32;
-
-impl std::fmt::Debug for VoiceConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            token_secret: _,
-            failure_threshold,
-            failure_window_seconds,
-            join_token_ttl_seconds,
-            candidate_limit,
-            offer_silence_seconds,
-            session_silence_seconds,
-            idle_session_seconds,
-        } = self;
-        f.debug_struct("VoiceConfig")
-            .field("token_secret", &Redacted)
-            .field("failure_threshold", failure_threshold)
-            .field("failure_window_seconds", failure_window_seconds)
-            .field("join_token_ttl_seconds", join_token_ttl_seconds)
-            .field("candidate_limit", candidate_limit)
-            .field("offer_silence_seconds", offer_silence_seconds)
-            .field("session_silence_seconds", session_silence_seconds)
-            .field("idle_session_seconds", idle_session_seconds)
-            .finish()
-    }
-}
-
-impl VoiceConfig {
-    /// Refuses, at an `https` address, the development secret or one shorter than
-    /// `MIN_TOKEN_SECRET_BYTES`: whoever knows or guesses it signs their own way into any call.
-    /// An `http` address is development's, and keeps the default for convenience.
-    fn check_secret(&self, https: bool) -> Result<(), config::ConfigError> {
-        if !https {
-            return Ok(());
-        }
-        if self.token_secret == DEVELOPMENT_TOKEN_SECRET {
-            return Err(config::ConfigError::Message(
-                "[voice] token_secret is the public development value; set it to a long random \
-                 string, the same on every voice server"
-                    .to_string(),
-            ));
-        }
-        if self.token_secret.len() < MIN_TOKEN_SECRET_BYTES {
-            return Err(config::ConfigError::Message(format!(
-                "[voice] token_secret is shorter than {MIN_TOKEN_SECRET_BYTES} bytes; set it to a \
-                 long random string (`openssl rand -base64 48`), the same on every voice server"
-            )));
-        }
-        Ok(())
     }
 }
 
@@ -835,9 +773,6 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.derive_from_public_url()?;
     loaded.check_nats()?;
-    loaded
-        .voice
-        .check_secret(loaded.public_url.starts_with("https:"))?;
     loaded.check_development_credentials()?;
     loaded.check_federation_development()?;
     if let Some(email) = &loaded.email {
@@ -1104,24 +1039,6 @@ mod tests {
         assert_eq!(config.limits.max_communities_per_user, 500);
         assert!(config.metrics.enabled);
         assert_eq!(config.event_queue_size, 512);
-        assert_eq!(
-            config.voice.token_secret,
-            VoiceConfig::default().token_secret
-        );
-    }
-
-    /// An `https` deployment needs a voice token secret of its own, long enough; development
-    /// at an `http` address may keep the default.
-    #[test]
-    fn an_https_deployment_needs_its_own_voice_secret() {
-        let voice = |secret: &str| VoiceConfig {
-            token_secret: secret.to_string(),
-            ..VoiceConfig::default()
-        };
-        assert!(VoiceConfig::default().check_secret(false).is_ok());
-        assert!(VoiceConfig::default().check_secret(true).is_err());
-        assert!(voice("short").check_secret(true).is_err());
-        assert!(voice(&"x".repeat(32)).check_secret(true).is_ok());
     }
 
     /// NATS signs the server in by token or as a user, and the settings give exactly one.
@@ -1298,8 +1215,6 @@ mod tests {
                 [nats]
                 user = "aspen"
                 password = "nats-user-secret"
-                [voice]
-                token_secret = "voice-secret"
                 [media.s3]
                 secret_key = "s3-secret"
                 [email]
@@ -1319,7 +1234,6 @@ mod tests {
             "nats-secret",
             "valkey-secret",
             "nats-user-secret",
-            "voice-secret",
             "s3-secret",
             "smtp-secret",
         ] {

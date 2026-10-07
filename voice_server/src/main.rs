@@ -10,6 +10,7 @@ mod outbox;
 mod reporter;
 mod rooms;
 mod signalling;
+mod token_keys;
 mod transfer;
 
 use anyhow::Context;
@@ -89,6 +90,12 @@ async fn main() -> anyhow::Result<()> {
     let config =
         config::load_config().context("failed to load voice_server.toml or environment")?;
     config.check_secret()?;
+    if config.token_secret.is_some() {
+        tracing::warn!(
+            "token_secret is set, so this server also takes join tokens of the shared-secret \
+             form; leave it out once every API server signs join tokens with its key"
+        );
+    }
     config.transfer.check(&config.rtc)?;
     let limits = Arc::new(
         limits::Limits::new(&config.rate_limits)
@@ -136,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
+    let token_keys = token_keys::TokenKeys::start(reporter.client());
     let announced_address = config.rtc.resolved_announced_address()?;
     if let Some(address) = &announced_address {
         if address
@@ -204,7 +212,8 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = signalling::AppState {
         server: config.id,
-        token_secret: config.token_secret.clone().into(),
+        token_secret: config.token_secret.as_deref().map(Arc::from),
+        token_keys,
         rooms: Arc::clone(&rooms),
         limits,
         used_tokens: Arc::default(),

@@ -17,7 +17,7 @@ export function DeveloperSection() {
   const wizard = usePreference(ID_WIZARD);
   return (
     <section aria-labelledby="settings-developer" className={planeClass}>
-      <h3 id="settings-developer" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-developer" className="text-lg font-semibold text-ink-muted">
         {m.bots.developerMode}
       </h3>
       <ChoiceCheckbox

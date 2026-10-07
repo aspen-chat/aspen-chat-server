@@ -72,6 +72,25 @@ pub fn attachment_to_api(
     }
 }
 
+/// An attachment as a review reads it: one kept as evidence (`app::attachment::evidence`) at
+/// URLs signed for `app::attachment::evidence::URL_LIFETIME`, which the anonymous read path does
+/// not serve, and any other as everyone reads it.
+pub async fn attachment_for_review(
+    state: &GlobalServerContext,
+    row: app::attachment::Attachment,
+) -> ApiResult<Attachment> {
+    if row.evidence_at.is_none() {
+        return Ok(attachment_to_api(state, row));
+    }
+    let (original, preview_url) = app::attachment::evidence::signed_urls(state, &row).await?;
+    let mut attachment = attachment_to_api(state, row);
+    attachment.download_url = original;
+    if let (Some(preview), Some(url)) = (attachment.preview.as_mut(), preview_url) {
+        preview.url = url;
+    }
+    Ok(attachment)
+}
+
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentUploadInitRequest {

@@ -50,6 +50,8 @@ pub struct GlobalServerContext {
     pub push_client: reqwest::Client,
     /// What mailed codes are kept as digests under (`app::server_secret`).
     pub code_key: crate::server_secret::CodeKey,
+    /// What join tokens are signed with (`app::server_secret`).
+    pub join_token_key: crate::server_secret::JoinTokenKey,
     /// This server's copy of the deployment's settings (`app::deployment_settings`).
     pub settings: crate::deployment_settings::SettingsCache,
     /// The plugins this server runs (`app::plugin`).
@@ -137,7 +139,7 @@ impl GlobalServerContext {
             }
             .build()?
         };
-        let (settings, code_key) = {
+        let (settings, code_key, join_token_key) = {
             let mut conn = connection_pool.get().await?;
             crate::deployment_settings::pin_domain(
                 conn.as_mut(),
@@ -147,6 +149,7 @@ impl GlobalServerContext {
             (
                 crate::deployment_settings::load(conn.as_mut()).await?,
                 crate::server_secret::CodeKey::load(conn.as_mut()).await?,
+                crate::server_secret::JoinTokenKey::load(conn.as_mut()).await?,
             )
         };
 
@@ -171,6 +174,7 @@ impl GlobalServerContext {
             federation_client,
             push_client,
             code_key,
+            join_token_key,
             settings: crate::deployment_settings::SettingsCache::new(settings),
             plugins: Arc::new(crate::plugin::Plugins::new(&config.plugins)?),
             mailer,
@@ -182,12 +186,14 @@ impl GlobalServerContext {
 /// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
 /// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
 /// dispatcher, the mail sender and digest scheduler, the attachment preview maker and held
-/// message releaser, the sweeper of staging uploads, and the plugins with their observers,
+/// message releaser, the sweeper of staging uploads, the mover of evidence off the public read
+/// path, and the plugins with their observers,
 /// making the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), crate::Error> {
     crate::deployment_settings::spawn_watcher(context.clone());
     crate::poll::spawn_closer(context.clone());
     crate::voice::spawn_report_listener(context.clone()).await?;
+    crate::voice::spawn_token_key_answerer(context.clone()).await?;
     crate::voice::spawn_reaper(context.clone());
     crate::fleet::spawn_heartbeat(context.clone());
     if context.config.federation.domain.is_some() {
@@ -201,6 +207,7 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     crate::attachment::preview::spawn_maker(context.clone());
     crate::message::held::spawn_releaser(context.clone());
     crate::media_store::spawn_upload_sweeper(context.clone());
+    crate::attachment::evidence::spawn_mover(context.clone());
     crate::plugin::registry::start(context).await?;
     Ok(())
 }

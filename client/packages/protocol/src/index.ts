@@ -155,6 +155,8 @@ export {
 } from "./admin";
 export {
   ACTIVITY_INTERVAL_MS,
+  TYPING_EXPIRY_MS,
+  TYPING_REFRESH_MS,
   AspenSync,
   EVENT_REPLAY_WINDOW_MS,
   MESSAGE_AROUND_RADIUS,
@@ -189,6 +191,7 @@ export type {
   PollOptionResult,
   PollWriteIn,
   CommunityBan,
+  VoiceMute,
   CommunityPlugin,
   CustomEmoji,
   MessageAnnotation,
@@ -288,6 +291,7 @@ export {
   NOTIFICATION_SOUNDS,
   NAME_COLORS,
   DEVELOPER_MODE,
+  TYPING_NOTICES,
   ID_WIZARD,
   LANGUAGE,
   MAX_MOTION_SPEED,
