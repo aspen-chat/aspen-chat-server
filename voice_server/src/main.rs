@@ -105,12 +105,24 @@ async fn main() -> anyhow::Result<()> {
 
     let manager = WorkerManager::new();
     let mut workers = Vec::new();
+    // A worker that dies takes its calls' media with it and would leave their rooms looking
+    // alive; the server stops instead, telling everyone, so their clients rejoin and whatever
+    // supervises the process starts it again.
+    let worker_died = Arc::new(tokio::sync::Notify::new());
     for _ in 0..config.workers.max(1) {
         let mut settings = WorkerSettings::default();
         settings.log_level = WorkerLogLevel::Warn;
         settings.log_tags = vec![WorkerLogTag::Info];
         settings.rtc_port_range = config.rtc.min_port..=config.rtc.max_port;
-        workers.push(manager.create_worker(settings).await?);
+        let worker = manager.create_worker(settings).await?;
+        let died = Arc::clone(&worker_died);
+        worker
+            .on_dead(move |exit| {
+                tracing::error!(?exit, "a mediasoup worker died; stopping the voice server");
+                died.notify_one();
+            })
+            .detach();
+        workers.push(worker);
     }
     info!(workers = workers.len(), "mediasoup workers started");
 
@@ -219,10 +231,27 @@ async fn main() -> anyhow::Result<()> {
         server = config.id.to_string(),
         "voice server listening"
     );
-    serve(listener, app, config.rate_limits.max_connections).await;
+    let stopped = serve(
+        listener,
+        app,
+        config.rate_limits.max_connections,
+        worker_died.notified(),
+    )
+    .await;
     rooms.shutdown().await;
     relay.shutdown().await;
-    Ok(())
+    match stopped {
+        Stopped::Asked => Ok(()),
+        Stopped::WorkerDied => anyhow::bail!("a mediasoup worker died"),
+    }
+}
+
+/// Why `serve` returned.
+enum Stopped {
+    /// The process was told to stop.
+    Asked,
+    /// A mediasoup worker died.
+    WorkerDied,
 }
 
 /// How long a connection has to send a request's headers, from when it opens or its last
@@ -230,19 +259,29 @@ async fn main() -> anyhow::Result<()> {
 /// and sends nothing, cannot hold them.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Serves `app` on `listener` until the process is told to stop: at most `max_connections` at
-/// once (past that, new ones wait in the listen backlog), each given `HEADER_READ_TIMEOUT` for
-/// every request's headers, with WebSocket upgrades. Each request carries its peer's address as
-/// axum's `ConnectInfo`.
-async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: usize) {
+/// Serves `app` on `listener` until the process is told to stop or `worker_died` completes:
+/// at most `max_connections` at once (past that, new ones wait in the listen backlog), each
+/// given `HEADER_READ_TIMEOUT` for every request's headers, with WebSocket upgrades. Each
+/// request carries its peer's address as axum's `ConnectInfo`.
+async fn serve(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    max_connections: usize,
+    worker_died: impl std::future::Future<Output = ()>,
+) -> Stopped {
     use hyper_util::rt::{TokioIo, TokioTimer};
     use tower::ServiceExt as _;
     let permits = Arc::new(tokio::sync::Semaphore::new(max_connections.max(1)));
-    let mut stopping = std::pin::pin!(tokio::signal::ctrl_c());
-    loop {
+    let mut stopping = std::pin::pin!(async {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => Stopped::Asked,
+            () = worker_died => Stopped::WorkerDied,
+        }
+    });
+    let stopped = loop {
         let permit = tokio::select! {
             permit = Arc::clone(&permits).acquire_owned() => permit.expect("never closed"),
-            _ = &mut stopping => break,
+            stopped = &mut stopping => break stopped,
         };
         let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
@@ -254,7 +293,7 @@ async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: 
                     continue;
                 }
             },
-            _ = &mut stopping => break,
+            stopped = &mut stopping => break stopped,
         };
         // Signalling frames are small and each is sent as it is written; with Nagle's algorithm
         // on, one written while the previous is unacknowledged waits for the client's delayed
@@ -281,6 +320,7 @@ async fn serve(listener: tokio::net::TcpListener, app: Router, max_connections: 
             }
             drop(permit);
         });
-    }
+    };
     info!("shutting down");
+    stopped
 }
