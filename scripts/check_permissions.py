@@ -895,6 +895,9 @@ def presence(world: World, check: Checks) -> None:
           (in_channel, in_dm, owner_counted, online_in(counted), online_in(dm)))
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
     check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+    # A DM between them shares their presence whatever their communities; the database stands in
+    # for one they never had, so that the community alone is what the removal takes away.
+    psql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'", world.stack.database)
     world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
     world.stream.gather(0.5)
     check("removed from the community, the member sees the owner offline",
@@ -1593,13 +1596,15 @@ def calendar_channels(world: World, check: Checks) -> None:
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
 
+    # The ban ended the member's sign-ins; they sign in again to go on.
+    member = world.sign_in(world.member["name"])["token"]
     # An event is deleted by whoever added it, or by someone who may manage messages.
-    mine = stack.api("POST", events, {"title": "Mine", "start": soon}, world.member["token"])["id"]
+    mine = stack.api("POST", events, {"title": "Mine", "start": soon}, member)["id"]
     owners = world.as_owner("POST", events, {"title": "Theirs", "start": soon})["id"]
     check("a member may not delete someone else's event",
-          stack.status("DELETE", f"{events}/{owners}", token=world.member["token"]) == 403)
+          stack.status("DELETE", f"{events}/{owners}", token=member) == 403)
     check("but may delete their own",
-          stack.status("DELETE", f"{events}/{mine}", token=world.member["token"]) == 204)
+          stack.status("DELETE", f"{events}/{mine}", token=member) == 204)
     check("and its reminder goes with it",
           psql(f"SELECT count(*) FROM plugin_timer WHERE key = 'remind:{mine}'", stack.database) == "0")
     # Deleting the calendar deletes the reminders set in it, with its events.
