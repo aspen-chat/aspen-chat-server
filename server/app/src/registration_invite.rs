@@ -76,6 +76,13 @@ impl RegistrationInvite {
     }
 }
 
+/// The start of `code`, which is all a log names of it: enough to tell invites apart, too
+/// little to register with, since whoever reads the logs should not be able to.
+pub fn logged_code(code: &str) -> &str {
+    let end = code.char_indices().nth(4).map_or(code.len(), |(at, _)| at);
+    &code[..end]
+}
+
 /// How many accounts an invite makes, for how long, and what it is for.
 pub struct Terms {
     pub max_uses: i32,
@@ -400,6 +407,14 @@ pub async fn join_invited(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A log names only the start of a code, whatever its letters.
+    #[test]
+    fn logs_name_only_the_start_of_a_code() {
+        assert_eq!(logged_code("abcdefghij"), "abcd");
+        assert_eq!(logged_code("ab"), "ab");
+        assert_eq!(logged_code("éèêëì"), "éèêë");
+    }
 
     fn invite() -> RegistrationInvite {
         RegistrationInvite {

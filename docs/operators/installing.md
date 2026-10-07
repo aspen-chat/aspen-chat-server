@@ -22,8 +22,11 @@ development, with passwords written into it; it is not a production setup.
 - **Object storage that speaks S3**: SeaweedFS, Garage, MinIO, or AWS S3. It needs a bucket, a
   key pair that may read, write, delete, and list in it, and two things clients reach directly: the S3 API (they
   upload to presigned URLs, so it must allow your deployment's origin and the apps' by CORS) and an anonymous
-  read path for downloads (a public bucket, a website endpoint, or a CDN in front of one). See
-  [`[media.s3]`](configuration.md#medias3).
+  read path for downloads (a website endpoint, or a CDN in front of the bucket) that allows
+  anonymous reads of objects and nothing else. See [`[media.s3]`](configuration.md#medias3) and
+  [The storage's read path](#the-storages-read-path).
+
+None of the four belongs on the internet: see [Network exposure](#network-exposure).
 
 ## 2. Building
 
@@ -359,6 +362,86 @@ endpoints, then cleans up. It needs the services from `docker-compose.yaml`.
 
 Both servers export Prometheus metrics on loopback (`127.0.0.1:9464` and `127.0.0.1:9465`);
 scrape them from the same machine, and keep them off public interfaces.
+
+## Network exposure
+
+Only these need to be reachable by the people using the deployment:
+
+| What | Where |
+| --- | --- |
+| The API servers (or the reverse proxy before them) | TCP 443 at `public_url` |
+| Each voice server's signalling | TCP 443 at its registered `url`, through its TLS proxy |
+| Each voice server's media | UDP and TCP `min_port` to `max_port` |
+| Each voice server's file transfers | UDP `[transfer] port` (3478) |
+| The storage's S3 API, for uploads | `[media.s3] public_endpoint` |
+| The storage's read path, for downloads | `[media.s3] public_base_url` |
+
+Everything else stays on a private network, or on loopback where it runs beside what uses it,
+and is firewalled from the internet: PostgreSQL (5432), NATS (4222, and its monitoring 8222 and
+cluster 6222 ports if they are on), Valkey (6379), the storage's administration and internal
+ports (a SeaweedFS master, volume, and filer: 9333, 8080, 8888; Garage's RPC and admin ports),
+the voice servers' `listen_addr` (behind their proxy), both servers' metrics (9464 and 9465),
+and the tokio console (6669) where it is built in. Each of them trusts whoever reaches it: NATS
+carries every event and can sign anyone into a call, Valkey holds the codes being mailed and the
+rate limits, and the storage's internals write without credentials.
+
+**Docker publishes ports past the host firewall.** A port published as `-p 5432:5432` (or
+`ports: ["5432:5432"]` in a compose file) is opened on every interface by rules Docker puts ahead
+of `ufw` and `firewalld`, whatever those say. Publish services only on loopback or a private
+address (`127.0.0.1:5432:5432`, as `docker-compose.yaml` does), leave them unpublished on a
+Docker network the servers share, or filter in the `DOCKER-USER` chain.
+
+**Valkey** has no password by default. Set one (`requirepass`, or an ACL user) and give it in
+`valkey_url` (`redis://:password@valkey.internal:6379`, or `redis://user:password@…`). The API
+servers speak to Valkey without TLS, so keep it on the same machine or a private network; across
+anything else, carry it over a VPN such as WireGuard.
+
+**NATS** must have a token or users ([Voice servers](#6-voice-servers) gives the users), and is
+reached by voice servers, which often run elsewhere. When a voice server reaches NATS across a
+network you do not control, give NATS a certificate (`tls { cert_file: …, key_file: … }` in its
+configuration; one from a public authority, or one the voice server's machine trusts) and name it
+with `tls://` in every `nats_url`, or connect the machines over a VPN. Without either, the NATS
+password and every event cross the network readable.
+
+### The storage's read path
+
+`public_base_url` is fetched by everyone's apps without credentials, so it must allow exactly
+one thing: reading an object by its name (S3's `GetObject`). It must not list the bucket, which
+would hand anyone every attachment ever posted, nor take writes or deletions.
+
+- **AWS S3** (or anything taking its policies): a bucket policy allowing `s3:GetObject` on
+  `arn:aws:s3:::BUCKET/*` to `*`, and nothing else; not `s3:ListBucket`.
+- **MinIO**: `mc anonymous set download` also grants listing. Set a policy of your own with
+  `mc anonymous set-json`, holding only the `s3:GetObject` statement above.
+- **Garage**: its website endpoint (`s3_web`, `garage bucket website --allow BUCKET`) serves
+  objects and does not list them.
+- **SeaweedFS**: give the S3 gateway an anonymous identity allowed only `Read` on the bucket
+  (`"actions": ["Read:BUCKET"]` in its S3 configuration) and serve `public_base_url` from the S3
+  gateway or a CDN before it. **Never expose the filer** (port 8888): it lists directories and
+  takes uploads and deletions from anyone.
+
+Serve `public_base_url` from an origin of its own (`https://media.chat.example.org`), never under
+`public_url`'s, so nothing posted can act as your deployment's pages, and have it (or the CDN
+before it) send `X-Content-Type-Options: nosniff`, so a browser opens a file only as the type it
+was stored as.
+
+Check it from a machine outside your network, with the address of any picture someone posted
+(copy it from the app) as `OBJECT`, `public_base_url` as `BASE`, and `public_endpoint` with the
+bucket as `S3` (`https://s3.chat.example.org/aspen-media`):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' "$OBJECT"                     # 200
+curl -sI "$OBJECT" | grep -i x-content-type-options                    # nosniff
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/"                      # 403 or 404, never 200
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/?list-type=2"          # 403 or 404, never 200
+curl -s -o /dev/null -w '%{http_code}\n' "$S3?list-type=2"             # 403
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$BASE/write-check"  # 403 or 405
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$S3/write-check"    # 403
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$OBJECT"           # 403 or 405
+```
+
+A `200` for a listing shows the bucket's contents to anyone; one for a write lets anyone put
+files at your media address.
 
 ## Upgrading
 

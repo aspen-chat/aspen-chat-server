@@ -68,9 +68,9 @@ pub struct Population {
     pub voice_channels: u32,
     #[serde(default = "default_history")]
     pub history_per_channel: u32,
-    /// Every seeded user's password.
-    #[serde(default = "default_password")]
-    pub password: String,
+    /// Every seeded user's password; left out, the seeder draws one for the run.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -253,9 +253,6 @@ fn default_voice_channels() -> u32 {
 }
 fn default_history() -> u32 {
     100
-}
-fn default_password() -> String {
-    "aspen benchmark".into()
 }
 fn default_report_interval() -> f64 {
     5.0

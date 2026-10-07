@@ -50,7 +50,11 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             let invite = registration_invite::create(&mut conn, None, terms)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            tracing::info!(code = %invite.code, operator = operator(), "made a registration invite");
+            tracing::info!(
+                code = registration_invite::logged_code(&invite.code),
+                operator = operator(),
+                "made a registration invite"
+            );
             println!("{}", invite.code);
             let settings = aspen_app::deployment_settings::load(&mut conn)
                 .await
@@ -94,7 +98,11 @@ pub async fn invites(config: &AspenConfig, command: InvitesCommand) -> Result<()
             registration_invite::revoke(&publisher, &mut conn, &code)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            tracing::info!(%code, operator = operator(), "revoked a registration invite");
+            tracing::info!(
+                code = registration_invite::logged_code(&code),
+                operator = operator(),
+                "revoked a registration invite"
+            );
             println!("revoked {code}");
         }
     }

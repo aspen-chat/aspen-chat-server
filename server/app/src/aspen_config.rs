@@ -5,7 +5,9 @@ use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Deserialize)]
+/// Its `Debug` leaves out the secrets it holds (`AspenConfig`'s own impl, below), so a config
+/// written to a log gives none away.
+#[derive(Clone, Deserialize)]
 pub struct AspenConfig {
     /// The one address of this deployment, such as `https://chat.example.org`: the API, the web
     /// client this server serves, and the pages it opens are all at this origin. Every link to
@@ -385,8 +387,9 @@ pub struct PluginsConfig {
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the
-/// dashboard or the terminal (`aspen-chat-server voice-servers`).
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
+/// dashboard or the terminal (`aspen-chat-server voice-servers`). Its `Debug` leaves out
+/// `token_secret`.
+#[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct VoiceConfig {
     /// Shared with every voice server; signs the join tokens they verify. The default is
@@ -423,11 +426,107 @@ pub struct VoiceConfig {
 }
 
 /// A NATS user and its password.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NatsUser {
     pub user: String,
     pub password: String,
+}
+
+/// Stands for a secret in a `Debug` impl.
+struct Redacted;
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// A URL in a `Debug` impl, with any password it holds replaced, and the whole replaced when it
+/// does not parse, since then where its password is cannot be told.
+struct RedactedUrl<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match url::Url::parse(self.0) {
+            Ok(mut url) => {
+                if url.password().is_some() {
+                    let _ = url.set_password(Some("<redacted>"));
+                }
+                write!(f, "{:?}", url.as_str())
+            }
+            Err(_) => Redacted.fmt(f),
+        }
+    }
+}
+
+impl std::fmt::Debug for AspenConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            public_url,
+            event_queue_size,
+            event_feed_shards,
+            database_url,
+            database_pool_size,
+            database_pool_wait_seconds,
+            nats_url,
+            nats_auth_token,
+            nats,
+            valkey_url,
+            media,
+            voice,
+            limits,
+            auth,
+            presence,
+            metrics,
+            connections,
+            federation,
+            push,
+            web_client,
+            plugins,
+            email,
+            rate_limit_overrides,
+            rate_limits,
+        } = self;
+        f.debug_struct("AspenConfig")
+            .field("public_url", public_url)
+            .field("event_queue_size", event_queue_size)
+            .field("event_feed_shards", event_feed_shards)
+            .field("database_url", &RedactedUrl(database_url))
+            .field("database_pool_size", database_pool_size)
+            .field("database_pool_wait_seconds", database_pool_wait_seconds)
+            .field("nats_url", &RedactedUrl(nats_url))
+            .field(
+                "nats_auth_token",
+                &nats_auth_token.as_ref().map(|_| Redacted),
+            )
+            .field("nats", nats)
+            .field("valkey_url", &RedactedUrl(valkey_url))
+            .field("media", media)
+            .field("voice", voice)
+            .field("limits", limits)
+            .field("auth", auth)
+            .field("presence", presence)
+            .field("metrics", metrics)
+            .field("connections", connections)
+            .field("federation", federation)
+            .field("push", push)
+            .field("web_client", web_client)
+            .field("plugins", plugins)
+            .field("email", email)
+            .field("rate_limit_overrides", rate_limit_overrides)
+            .field("rate_limits", rate_limits)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for NatsUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsUser")
+            .field("user", &self.user)
+            .field("password", &Redacted)
+            .finish()
+    }
 }
 
 impl AspenConfig {
@@ -464,6 +563,31 @@ const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
 /// The shortest `[voice] token_secret` an `https` deployment accepts: as long as the HMAC-SHA256
 /// key it is, so it cannot be guessed more easily than the signature forged.
 const MIN_TOKEN_SECRET_BYTES: usize = 32;
+
+impl std::fmt::Debug for VoiceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            token_secret: _,
+            failure_threshold,
+            failure_window_seconds,
+            join_token_ttl_seconds,
+            candidate_limit,
+            offer_silence_seconds,
+            session_silence_seconds,
+            idle_session_seconds,
+        } = self;
+        f.debug_struct("VoiceConfig")
+            .field("token_secret", &Redacted)
+            .field("failure_threshold", failure_threshold)
+            .field("failure_window_seconds", failure_window_seconds)
+            .field("join_token_ttl_seconds", join_token_ttl_seconds)
+            .field("candidate_limit", candidate_limit)
+            .field("offer_silence_seconds", offer_silence_seconds)
+            .field("session_silence_seconds", session_silence_seconds)
+            .field("idle_session_seconds", idle_session_seconds)
+            .finish()
+    }
+}
 
 impl VoiceConfig {
     /// Refuses, at an `https` address, the development secret or one shorter than
@@ -502,8 +626,8 @@ pub struct WebClientConfig {
 }
 
 /// Sending mail (`app::email`): verification and password reset codes, the daily digest, and the
-/// newsletter.
-#[derive(Clone, Debug, Deserialize)]
+/// newsletter. Its `Debug` leaves out the password in `smtp_url`.
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// The SMTP server mail is handed to, with its credentials: `smtps://user:password@host`
@@ -525,9 +649,50 @@ pub struct EmailConfig {
     pub from: String,
 }
 
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            smtp_url,
+            send,
+            max_per_second,
+            from,
+        } = self;
+        f.debug_struct("EmailConfig")
+            .field("smtp_url", &smtp_url.as_deref().map(RedactedUrl))
+            .field("send", send)
+            .field("max_per_second", max_per_second)
+            .field("from", from)
+            .finish()
+    }
+}
+
 impl EmailConfig {
     fn default_send() -> bool {
         true
+    }
+
+    /// Refuses an `smtp_url` that would send its user and password unencrypted, `smtp://` without
+    /// `tls=required` (which `tls=opportunistic` is not: whoever sits between the servers can
+    /// strip STARTTLS), to anything but this machine, where a development mail catcher listens.
+    fn check_smtp_encrypted(smtp_url: &str) -> Result<(), String> {
+        let Ok(url) = url::Url::parse(smtp_url) else {
+            // `from_url` reports what is wrong with it when the transport is made.
+            return Ok(());
+        };
+        let has_credentials = !url.username().is_empty() || url.password().is_some();
+        let encrypted = url.scheme() == "smtps"
+            || url
+                .query_pairs()
+                .any(|(key, value)| key == "tls" && value == "required");
+        let loopback = url.host().is_some_and(|host| is_loopback_host(&host));
+        if has_credentials && !encrypted && !loopback {
+            return Err(
+                "email.smtp_url would send its user and password unencrypted; use smtps:// \
+                 (port 465) or add ?tls=required (STARTTLS, port 587)"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     /// Checks `from`, `smtp_url`, and `max_per_second`.
@@ -539,6 +704,9 @@ impl EmailConfig {
                  server that only queues it"
                     .to_string(),
             ));
+        }
+        if let Some(smtp_url) = &self.smtp_url {
+            Self::check_smtp_encrypted(smtp_url).map_err(message)?;
         }
         if self.max_per_second == Some(0) {
             return Err(message(
@@ -569,18 +737,18 @@ pub struct MediaConfig {
 
 /// Object-storage configuration.
 ///
-/// `endpoint` is the authenticated S3 API the server talks to (PUTs preview
-/// images, deletes objects, checks uploads). `public_endpoint`, when set, is the
-/// same API as clients reach it, and is the host the presigned upload URLs they
-/// are handed name; without it they name `endpoint`, which is right only when
-/// clients reach storage at the same address the server does. `public_base_url` is what
-/// clients see in `downloadUrl` fields and is expected to be served by an
-/// operator-configured anonymous read path (e.g. Garage's `s3_web` website
-/// endpoint, or an AWS bucket with `BlockPublicAccess=false` plus a
-/// `s3:GetObject` allow-all policy). The two URLs may point at completely
-/// different hosts; the public path does not need to be reachable from the
-/// server itself.
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
+/// `endpoint` is the authenticated S3 API the server talks to (writes preview images, copies
+/// confirmed uploads into place, deletes objects, checks uploads). `public_endpoint`, when set, is
+/// the same API as clients reach it, and is the host the presigned upload URLs they are handed
+/// name; without it they name `endpoint`, which is right only when clients reach storage at the
+/// same address the server does. `public_base_url` is what clients download objects from, an
+/// anonymous read path the operator sets up that allows reading objects and nothing else, no
+/// listing and no writes (Garage's `s3_web` website endpoint, an AWS bucket whose policy allows
+/// `s3:GetObject` alone, or a CDN before either; `docs/operators/installing.md`). The addresses
+/// may name different hosts; the read path need not be reachable from the server itself. The
+/// defaults are a development storage's, which a public deployment refuses
+/// (`AspenConfig::check_development_credentials`). Its `Debug` leaves out `secret_key`.
+#[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct MediaS3Config {
     #[default = "http://127.0.0.1:3900"]
@@ -604,6 +772,31 @@ pub struct MediaS3Config {
     /// later.
     #[default = 900]
     pub upload_url_ttl_seconds: u64,
+}
+
+impl std::fmt::Debug for MediaS3Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            endpoint,
+            public_endpoint,
+            region,
+            bucket,
+            access_key,
+            secret_key: _,
+            public_base_url,
+            upload_url_ttl_seconds,
+        } = self;
+        f.debug_struct("MediaS3Config")
+            .field("endpoint", endpoint)
+            .field("public_endpoint", public_endpoint)
+            .field("region", region)
+            .field("bucket", bucket)
+            .field("access_key", access_key)
+            .field("secret_key", &Redacted)
+            .field("public_base_url", public_base_url)
+            .field("upload_url_ttl_seconds", upload_url_ttl_seconds)
+            .finish()
+    }
 }
 
 pub fn default_event_feed_shards() -> usize {
@@ -645,10 +838,123 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
     loaded
         .voice
         .check_secret(loaded.public_url.starts_with("https:"))?;
+    loaded.check_development_credentials()?;
+    loaded.check_federation_development()?;
     if let Some(email) = &loaded.email {
         email.validate()?;
     }
     Ok(loaded)
+}
+
+/// Credentials written into this repository for development (`docker-compose.yaml`, the scripts,
+/// and `MediaS3Config`'s defaults), which anyone can read.
+const DEVELOPMENT_PASSWORDS: &[&str] = &["aspen_test"];
+const DEVELOPMENT_S3_KEYS: &[&str] = &[
+    "aspen_dev_key",
+    "aspen_dev_secret",
+    "GK484e56c38fb7e14b182bf47a",
+    "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027",
+];
+
+/// Whether `host` is this machine: `localhost`, a name under it, or a loopback address.
+pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        // A URL of a scheme `url` does not know (`smtp:`) holds even an address as a name.
+        url::Host::Domain(name) => match name
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+        {
+            Ok(address) => address.is_loopback(),
+            Err(_) => {
+                let name = name.trim_end_matches('.').to_ascii_lowercase();
+                name == "localhost" || name.ends_with(".localhost")
+            }
+        },
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+    }
+}
+
+impl AspenConfig {
+    /// Whether this deployment is one others may reach: `public_url` is `https` at a host that is
+    /// not this machine. Development deployments, `http` or under `localhost`
+    /// (`scripts/dev_federation.py`), may use what is meant only for development.
+    pub fn is_public(&self) -> bool {
+        url::Url::parse(&self.public_url).is_ok_and(|url| {
+            url.scheme() == "https" && url.host().is_some_and(|host| !is_loopback_host(&host))
+        })
+    }
+
+    /// Refuses `[federation.development]` unless `public_url`'s host is this machine (`localhost`,
+    /// a name under it, or a loopback address): what it allows, trusting more certificate
+    /// authorities and calling into private networks, is for deployments side by side on one
+    /// machine, and would let a deployment others reach be pointed inside its own network.
+    fn check_federation_development(&self) -> Result<(), config::ConfigError> {
+        let development = &self.federation.development;
+        if development.extra_root_certificates.is_empty() && !development.allow_private_addresses {
+            return Ok(());
+        }
+        let local = url::Url::parse(&self.public_url)
+            .is_ok_and(|url| url.host().is_some_and(|host| is_loopback_host(&host)));
+        if local {
+            return Ok(());
+        }
+        Err(config::ConfigError::Message(
+            "[federation.development] is only for deployments whose public_url is at localhost \
+             or a name under it; remove it"
+                .to_string(),
+        ))
+    }
+
+    /// Refuses, at a public deployment ([`AspenConfig::is_public`]), the database, NATS, and
+    /// storage credentials this repository holds for development: whoever reads the repository
+    /// would hold the deployment's data.
+    fn check_development_credentials(&self) -> Result<(), config::ConfigError> {
+        if !self.is_public() {
+            return Ok(());
+        }
+        let refuse = |what: &str| {
+            Err(config::ConfigError::Message(format!(
+                "{what} is a development value published in Aspen's repository; a deployment at \
+                 an https address needs one of its own, a long random string"
+            )))
+        };
+        let database_password = match url::Url::parse(&self.database_url) {
+            Ok(url) => url.password().map(str::to_string),
+            // libpq's `key=value` form.
+            Err(_) => self
+                .database_url
+                .split_whitespace()
+                .find_map(|pair| pair.strip_prefix("password="))
+                .map(|password| password.trim_matches('\'').to_string()),
+        };
+        if database_password.is_some_and(|password| DEVELOPMENT_PASSWORDS.contains(&&*password)) {
+            return refuse("database_url's password");
+        }
+        if self
+            .nats_auth_token
+            .as_deref()
+            .is_some_and(|token| DEVELOPMENT_PASSWORDS.contains(&token))
+        {
+            return refuse("nats_auth_token");
+        }
+        if self
+            .nats
+            .as_ref()
+            .is_some_and(|nats| DEVELOPMENT_PASSWORDS.contains(&&*nats.password))
+        {
+            return refuse("[nats] password");
+        }
+        let s3 = &self.media.s3;
+        if DEVELOPMENT_S3_KEYS.contains(&&*s3.access_key) {
+            return refuse("[media.s3] access_key");
+        }
+        if DEVELOPMENT_S3_KEYS.contains(&&*s3.secret_key) {
+            return refuse("[media.s3] secret_key");
+        }
+        Ok(())
+    }
 }
 
 impl AspenConfig {
@@ -867,6 +1173,160 @@ mod tests {
             config("from = \"a@example.org\"\nsmtp_url = \"smtp://x\"\nmax_per_second = 0")
                 .is_err()
         );
+    }
+
+    /// SMTP credentials travel only encrypted, except to this machine.
+    #[test]
+    fn smtp_credentials_need_tls() {
+        let check = EmailConfig::check_smtp_encrypted;
+        assert!(check("smtp://localhost:1025").is_ok());
+        assert!(check("smtp://mail.example.org:25").is_ok());
+        assert!(check("smtps://user:pw@mail.example.org").is_ok());
+        assert!(check("smtp://user:pw@mail.example.org?tls=required").is_ok());
+        assert!(check("smtp://user:pw@127.0.0.1:1025").is_ok());
+        assert!(check("smtp://user:pw@mail.example.org").is_err());
+        assert!(check("smtp://user:pw@mail.example.org?tls=opportunistic").is_err());
+        assert!(check("smtp://user@mail.example.org:587").is_err());
+    }
+
+    /// A public deployment refuses the credentials this repository publishes for development;
+    /// development deployments keep them.
+    #[test]
+    fn a_public_deployment_refuses_development_credentials() {
+        let config = |public_url: &str, extra: &str| -> AspenConfig {
+            let mut config: AspenConfig = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = {public_url:?}\n\
+                         database_url = \"postgres://aspen:own-password@db/aspen\"\n\
+                         nats_url = \"nats://x\"\nnats_auth_token = \"own-token\"\n\
+                         valkey_url = \"redis://x\"\n{extra}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+            config.derive_from_public_url().unwrap();
+            config
+        };
+        let own_s3 = "[media.s3]\naccess_key = \"own\"\nsecret_key = \"own-secret\"\n";
+        let public = "https://chat.example.org";
+        assert!(
+            config(public, own_s3)
+                .check_development_credentials()
+                .is_ok()
+        );
+        // `MediaS3Config`'s defaults are development keys.
+        assert!(config(public, "").check_development_credentials().is_err());
+        for development in ["http://192.168.2.220:8000", "https://alpha.localhost:8443"] {
+            assert!(
+                config(development, "")
+                    .check_development_credentials()
+                    .is_ok()
+            );
+        }
+        let mut database = config(public, own_s3);
+        database.database_url = "postgres://postgres:aspen_test@db:5432".to_string();
+        assert!(database.check_development_credentials().is_err());
+        database.database_url = "host=db user=postgres password=aspen_test".to_string();
+        assert!(database.check_development_credentials().is_err());
+        let mut nats = config(public, own_s3);
+        nats.nats_auth_token = Some("aspen_test".to_string());
+        assert!(nats.check_development_credentials().is_err());
+        let mut s3 = config(public, own_s3);
+        s3.media.s3.access_key = "GK484e56c38fb7e14b182bf47a".to_string();
+        assert!(s3.check_development_credentials().is_err());
+    }
+
+    /// Development federation settings are only for deployments on this machine.
+    #[test]
+    fn federation_development_is_only_for_this_machine() {
+        let config = |public_url: &str, development: &str| -> AspenConfig {
+            let mut config: AspenConfig = config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = {public_url:?}\ndatabase_url = \"postgres://x\"\n\
+                         nats_url = \"nats://x\"\nnats_auth_token = \"t\"\n\
+                         valkey_url = \"redis://x\"\n[federation.development]\n{development}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+            config.derive_from_public_url().unwrap();
+            config
+        };
+        let private = "allow_private_addresses = true";
+        let roots = "extra_root_certificates = [\"ca.pem\"]";
+        for local in ["https://alpha.localhost:8443", "http://localhost:5173"] {
+            assert!(
+                config(local, private)
+                    .check_federation_development()
+                    .is_ok()
+            );
+        }
+        for elsewhere in ["https://chat.example.org", "http://192.168.2.220:8000"] {
+            assert!(config(elsewhere, "").check_federation_development().is_ok());
+            assert!(
+                config(elsewhere, private)
+                    .check_federation_development()
+                    .is_err()
+            );
+            assert!(
+                config(elsewhere, roots)
+                    .check_federation_development()
+                    .is_err()
+            );
+        }
+    }
+
+    /// A config written to a log gives none of its secrets away.
+    #[test]
+    fn debug_leaves_out_secrets() {
+        let mut config: AspenConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+                public_url = "https://chat.example.org"
+                database_url = "postgres://aspen:db-secret@db/aspen"
+                nats_url = "nats://x"
+                nats_auth_token = "nats-secret"
+                valkey_url = "redis://:valkey-secret@valkey:6379"
+                [nats]
+                user = "aspen"
+                password = "nats-user-secret"
+                [voice]
+                token_secret = "voice-secret"
+                [media.s3]
+                secret_key = "s3-secret"
+                [email]
+                from = "a@example.org"
+                smtp_url = "smtps://mail:smtp-secret@mail.example.org"
+                "#,
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        config.derive_from_public_url().unwrap();
+        let written = format!("{config:?}");
+        for secret in [
+            "db-secret",
+            "nats-secret",
+            "valkey-secret",
+            "nats-user-secret",
+            "voice-secret",
+            "s3-secret",
+            "smtp-secret",
+        ] {
+            assert!(!written.contains(secret), "{secret} in {written}");
+        }
+        assert!(written.contains("chat.example.org"));
+        assert!(written.contains("db/aspen"));
     }
 
     /// The domain is the public URL's, and the gates are not set here.

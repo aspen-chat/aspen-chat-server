@@ -17,8 +17,37 @@ const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
 /// `[federation]`. It fails only on an unreadable development certificate.
 pub fn client(config: &FederationConfig) -> crate::Result<reqwest::Client> {
     let development = &config.development;
-    let config_error =
-        |message: String| crate::Error::Config(config::ConfigError::Message(message));
+    if development.allow_private_addresses {
+        tracing::warn!("federation may call deployments at private network addresses");
+    }
+    builder(
+        config,
+        PublicResolver {
+            allow_private: development.allow_private_addresses,
+            allow_loopback: false,
+        },
+    )?
+    .user_agent(concat!(
+        "Aspen/",
+        env!("CARGO_PKG_VERSION"),
+        " (federation)"
+    ))
+    .build()
+    .map_err(|e| config_error(format!("building the federation client: {e}")))
+}
+
+fn config_error(message: String) -> crate::Error {
+    crate::Error::Config(config::ConfigError::Message(message))
+}
+
+/// What every client that calls hosts named by others shares: HTTPS only, no redirects, a short
+/// timeout, addresses as `resolver` allows, and `[federation.development]`'s certificate
+/// authorities trusted besides the system's.
+pub fn builder(
+    config: &FederationConfig,
+    resolver: PublicResolver,
+) -> crate::Result<reqwest::ClientBuilder> {
+    let development = &config.development;
     let mut roots = Vec::new();
     for path in &development.extra_root_certificates {
         let unreadable = |e: &dyn std::fmt::Display| {
@@ -36,27 +65,15 @@ pub fn client(config: &FederationConfig) -> crate::Result<reqwest::Client> {
             "federation trusts extra development certificate authorities"
         );
     }
-    if development.allow_private_addresses {
-        tracing::warn!("federation may call deployments at private network addresses");
-    }
-    reqwest::Client::builder()
+    Ok(reqwest::Client::builder()
         // A proxy would resolve names itself, past `PublicResolver`.
         .no_proxy()
-        .user_agent(concat!(
-            "Aspen/",
-            env!("CARGO_PKG_VERSION"),
-            " (federation)"
-        ))
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(TIMEOUT)
         .connect_timeout(TIMEOUT)
-        .dns_resolver(PublicResolver {
-            allow_private: development.allow_private_addresses,
-        })
-        .tls_certs_merge(roots)
-        .build()
-        .map_err(|e| config_error(format!("building the federation client: {e}")))
+        .dns_resolver(resolver)
+        .tls_certs_merge(roots))
 }
 
 fn unreachable(detail: std::borrow::Cow<'static, str>) -> crate::Error {

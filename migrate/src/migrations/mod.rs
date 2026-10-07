@@ -94,6 +94,7 @@ pub mod m20261005_165400_reply_echo;
 pub mod m20261006_150944_token_digests;
 pub mod m20261006_154118_recovery_code_created_at;
 pub mod m20261006_154221_voice_server_suspension;
+pub mod m20261007_120000_server_secret;
 pub mod m20261007_135448_user_foreign_deployment_domain;
 pub mod m20261007_141110_attachment_sent;
 pub mod m20261007_142523_plugin_timer_scope;

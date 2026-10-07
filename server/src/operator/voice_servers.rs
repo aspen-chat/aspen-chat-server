@@ -80,11 +80,11 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
                         capacity: Some(capacity(wanted)?),
                         enabled: None,
                     };
-                    voice::update_server_in(&mut conn, existing.id, changes)
+                    voice::update_server_in(config, &mut conn, existing.id, changes)
                         .await
                         .map_err(fail)?
                 }
-                None => voice::create_server_in(&mut conn, name, url, capacity(wanted)?)
+                None => voice::create_server_in(config, &mut conn, name, url, capacity(wanted)?)
                     .await
                     .map_err(fail)?,
             };
@@ -114,7 +114,7 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
                 {
                     server.clone()
                 } else {
-                    voice::update_server_in(&mut conn, server.id, changes)
+                    voice::update_server_in(config, &mut conn, server.id, changes)
                         .await
                         .map_err(fail)?
                 };

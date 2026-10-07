@@ -743,6 +743,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    server_secret (name) {
+        name -> Text,
+        secret -> Bytea,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     session (token) {
         token -> Text,
         expires -> Timestamp,
@@ -1088,6 +1096,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     report,
     report_case,
     report_category,
+    server_secret,
     session,
     totp_secret,
     user,

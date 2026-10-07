@@ -46,6 +46,10 @@ pub struct GlobalServerContext {
     pub event_feed: crate::event_feed::EventFeed,
     /// What every call to another deployment is made with (`app::federation::fetch`).
     pub federation_client: reqwest::Client,
+    /// What every push to a phone's push service is made with (`app::push::client`).
+    pub push_client: reqwest::Client,
+    /// What mailed codes are kept as digests under (`app::server_secret`).
+    pub code_key: crate::server_secret::CodeKey,
     /// This server's copy of the deployment's settings (`app::deployment_settings`).
     pub settings: crate::deployment_settings::SettingsCache,
     /// The plugins this server runs (`app::plugin`).
@@ -114,6 +118,7 @@ impl GlobalServerContext {
         // it starts.
         crate::passkey::relying_party(&config, crate::deployment_settings::DEFAULT_NAME)?;
         let federation_client = crate::federation::fetch::client(&config.federation)?;
+        let push_client = crate::push::client(&config.federation)?;
         let mailer = config
             .email
             .as_ref()
@@ -132,14 +137,17 @@ impl GlobalServerContext {
             }
             .build()?
         };
-        let settings = {
+        let (settings, code_key) = {
             let mut conn = connection_pool.get().await?;
             crate::deployment_settings::pin_domain(
                 conn.as_mut(),
                 crate::federation::own_domain(&config.federation).as_ref(),
             )
             .await?;
-            crate::deployment_settings::load(conn.as_mut()).await?
+            (
+                crate::deployment_settings::load(conn.as_mut()).await?,
+                crate::server_secret::CodeKey::load(conn.as_mut()).await?,
+            )
         };
 
         Ok(Self {
@@ -161,6 +169,8 @@ impl GlobalServerContext {
             media_store,
             rate_limiter: Arc::new(rate_limiter),
             federation_client,
+            push_client,
+            code_key,
             settings: crate::deployment_settings::SettingsCache::new(settings),
             plugins: Arc::new(crate::plugin::Plugins::new(&config.plugins)?),
             mailer,

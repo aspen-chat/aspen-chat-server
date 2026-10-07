@@ -79,7 +79,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 /// S3 key prefix under which preview-image blobs live inside the media store.
@@ -257,13 +257,13 @@ async fn fetch_and_store_image(
     // A page names its picture, which may be at an address inside a network (`app::outbound`)
     // or another port.
     if !url::Url::parse(image_url).is_ok_and(|url| may_fetch(&url)) {
-        info!(url = image_url, "preview image URL refused");
+        debug!(url = image_url, "preview image URL refused");
         return None;
     }
     let response = match http_client().get(image_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(
+            debug!(
                 url = image_url,
                 error = e.to_string(),
                 "preview image fetch failed"
@@ -319,9 +319,9 @@ async fn fetch_and_store_image(
     if let Err(e) = state.media_store.put_bytes(&key, bytes, &mime_type).await {
         warn!(
             error = e.to_string(),
-            url = image_url,
             "failed to upload preview image to media store"
         );
+        debug!(url = image_url, "the preview image that was not stored");
         return None;
     }
     Some(PreviewImage {

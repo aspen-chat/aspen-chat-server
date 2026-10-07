@@ -44,6 +44,12 @@ by each API server, at the same origin.
 | `[nats] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |
 
+`docker-compose.yaml` and the development scripts publish passwords and keys in Aspen's repository
+(`aspen_test`, the storage keys, and `[media.s3]`'s defaults). A server whose `public_url` is
+`https` at a host other than `localhost` (or a name under it) refuses to start with any of them as
+`database_url`'s password, `nats_auth_token`, `[nats] password`, or `[media.s3] access_key` or
+`secret_key`, and says which to change.
+
 ## Event delivery
 
 | Setting | Default | |
@@ -103,10 +109,10 @@ no harm.
 | --- | --- | --- |
 | `endpoint` | `http://127.0.0.1:3900` | The S3 API, as this server reaches it. |
 | `public_endpoint` | `endpoint` | The S3 API as clients reach it; the upload URLs they are handed name it. It must allow uploads by CORS (`PUT`, with `Content-Type`) from `public_url`'s origin and the apps' (`null` for the desktop app, `capacitor://localhost` and `https://localhost` for the mobile apps), or from any origin. Leaving it out suits only clients on the server's own machine. |
-| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: a public read path on the bucket, such as a website endpoint or a CDN. The server itself never needs to reach it. |
+| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: an anonymous read path on the bucket, such as a website endpoint or a CDN, that allows reading objects and nothing else (no listing, no writes; never a SeaweedFS filer), at an origin of its own that sends `X-Content-Type-Options: nosniff`. [The storage's read path](installing.md#the-storages-read-path) says how, and how to check it. The server itself never needs to reach it. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
-| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. |
+| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. A server at a public `https` address refuses the development values. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
 
 ## `[media.previews]`
@@ -216,7 +222,7 @@ and the rest need only `from`. Links in mail, unsubscribing included, go to `pub
 | Setting | Default | |
 | --- | --- | --- |
 | `send` | `true` | Whether this server sends mail and makes daily digests. With it off, the server still takes addresses and queues mail, and tells the senders at once (over NATS) when someone waits for it; at least one server of the deployment must send, or mail waits until one does. |
-| `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
+| `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. The server refuses to start with a user or password in an `smtp://` address without `?tls=required` (`tls=opportunistic` can be stripped by whoever sits between) unless the host is this machine. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
 | `from` | required | Who mail comes from, such as `Example Chat <noreply@chat.example.org>`. Its domain should publish SPF and DKIM records for the SMTP server you use, or mail lands in spam. |
 | `max_per_second` | none | The most mail the whole deployment hands to the SMTP server in a second, however many servers send, counted in Valkey; set it under your provider's sending quota (Amazon SES starts accounts at 14 a second). A second's worth may go back to back. Left out, each sending server sends up to eight at once. |
 
@@ -268,13 +274,14 @@ See [Federation](federation.md) for what these mean together. The deployment's d
 
 ### `[federation.development]`
 
-For running deployments side by side on one machine (`scripts/dev_federation.py`). Leave it out
-of a deployment anyone else uses.
+For running deployments side by side on one machine (`scripts/dev_federation.py`). A server whose
+`public_url` is not at `localhost`, a name under it, or a loopback address refuses to start with
+either setting given.
 
 | Setting | Default | |
 | --- | --- | --- |
 | `extra_root_certificates` | `[]` | PEM files of certificate authorities to trust, besides the system's, when calling other deployments. |
-| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network. |
+| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network, and push to push services at loopback addresses (`scripts/dev_push.py`). Pushes never go to other private addresses. |
 
 ## Deployment settings
 
@@ -312,7 +319,9 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 - `aspen-chat-server voice-servers add NAME --url URL --capacity N` registers one, or gives the
   one already registered by that name this address and capacity, so a deployment script may run
   it every time it deploys. `url` is where clients reach it, as
-  `https://voice-1.chat.example.org`; `capacity` is the most people it carries at once, which
+  `https://voice-1.chat.example.org`, an `http` or `https` address, and `https` wherever
+  `public_url` is (here and in the dashboard; browsers on an `https` page refuse unencrypted
+  WebSockets); `capacity` is the most people it carries at once, which
   `voice_server estimate-capacity` suggests.
 - `voice-servers set NAME [--url URL] [--capacity N] [--enabled true|false]` changes one. A
   disabled server is offered to no one joining a call; calls already on it go on.

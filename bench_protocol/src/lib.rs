@@ -33,8 +33,10 @@ pub fn user_name(run: &str, index: u32) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct SeedPlan {
     pub run: String,
-    /// Every seeded user's password.
-    pub password: String,
+    /// Every seeded user's password; left out, the seeder draws a random one for the run and
+    /// gives it in the manifest, so no deployment's benchmark users share a published password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
     /// Users `0..users`.
     pub users: u32,
     pub communities: Vec<CommunityPlan>,
@@ -88,7 +90,11 @@ impl SeedPlan {
                 self.run
             ));
         }
-        if self.password.len() < 8 {
+        if self
+            .password
+            .as_ref()
+            .is_some_and(|password| password.len() < 8)
+        {
             return Err("the password must be at least 8 characters".into());
         }
         let mut memberships = vec![0u32; self.users as usize];
@@ -126,7 +132,7 @@ mod tests {
     fn plan() -> SeedPlan {
         SeedPlan {
             run: "r1".into(),
-            password: "benchmark password".into(),
+            password: Some("benchmark password".into()),
             users: 3,
             communities: vec![CommunityPlan {
                 members: vec![0, 1, 2],
