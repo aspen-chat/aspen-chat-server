@@ -21,6 +21,7 @@
         "resetProfile",
         "clearNickname",
         "readReportContext",
-        "listDms"
+        "listDms",
+        "purgeAttachment"
     ]
 }

@@ -263,6 +263,7 @@ async fn make_one(
         .select(super::Attachment::as_select())
         .filter(attachment::id.eq(id))
         .filter(attachment::ready_at.is_not_null())
+        .filter(attachment::evidence_at.is_null())
         .first(state.connection_pool.get().await?.as_mut())
         .await
         .optional()?;
@@ -362,9 +363,11 @@ async fn keep(
                 // the same time either is seen here or waits to be written until this commits
                 // (its row in `message_attachment` locks this one), and its readers find the
                 // preview on the attachment.
+                // Evidence gets no preview on the public read path (`super::evidence`).
                 let Some(uploader) = attachment::table
                     .select(attachment::uploader)
                     .filter(attachment::id.eq(id))
+                    .filter(attachment::evidence_at.is_null())
                     .for_update()
                     .first::<Option<crate::UserId>>(conn)
                     .await
@@ -400,7 +403,7 @@ async fn keep(
             crate::message::held::wake(state).await;
             Ok(())
         }
-        // Deleted while its preview was made; the job went with it.
+        // Deleted, or made evidence, while its preview was made; the job went with it.
         Ok(false) => {
             state.media_store.delete(&key).await?;
             Ok(())

@@ -19,6 +19,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { secondaryButtonClass, toggleChipClass } from "@/features/invites/dialog";
 import { Skeleton } from "@/features/layout/Skeleton";
 import { toast } from "@/features/layout/toast";
+import { MessageMedia } from "@/features/messages/Attachments";
 import { EmbeddedMessage } from "@/features/messages/EmbeddedMessage";
 import { BotBadge } from "@/features/users/BotBadge";
 import { ProfileSnapshotCard } from "@/features/users/ProfileSnapshotCard";
@@ -253,6 +254,7 @@ function CaseCard({
               community={undefined}
               deletedAt={reported.deletedAt ?? null}
             />
+            <RemovedAttachments ids={reported.removedAttachments ?? []} />
             <Button
               onPress={() => {
                 setShowContext((shown) => !shown);
@@ -472,6 +474,23 @@ function NicknameCase({
 }
 
 /** Whether a reported message is in a DM, or a thread of one. */
+/**
+ * The attachments taken off a reported message, which only a review reads, at links that work
+ * for a few minutes.
+ */
+function RemovedAttachments({ ids }: { ids: readonly string[] }) {
+  const m = useMessages();
+  if (ids.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex max-w-lg flex-col gap-1 text-sm">
+      <p className="text-xs text-ink-faint">{m.reports.removedAttachments}</p>
+      <MessageMedia attachmentIds={ids} previewImages={[]} />
+    </div>
+  );
+}
+
 function isDmOf(reported: ReviewedMessage, named: Named): boolean {
   const channel = named.channels.get(reported.message.channelId);
   return channel !== undefined && channel.community == null;

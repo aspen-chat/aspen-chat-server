@@ -34,7 +34,8 @@
 //! held in one waiting for its preview is swept [`UNSENT_LIFETIME`] after it
 //! was confirmed, with its object and preview ([`sweep_unsent`], run by
 //! `media_store::spawn_upload_sweeper`), so storage is not a file host for
-//! uploads nobody sends. One an edit took out of its message is not swept.
+//! uploads nobody sends. One taken out of its message, or whose message is deleted, is kept as
+//! evidence for reviewing reports ([`evidence`]), and only a review reads it.
 //! Stale `ready_at IS NULL` rows whose presigned URL has expired are left: this
 //! module does not sweep them so a hung confirm path can't delete an upload
 //! that's still racing toward `ready_at`, and their staging objects are swept
@@ -77,8 +78,12 @@ pub struct Attachment {
     pub preview_mime_type: Option<String>,
     pub preview_width: Option<i32>,
     pub preview_height: Option<i32>,
+    /// When it became evidence for reviewing reports ([`evidence`]): read only in a review
+    /// from then on.
+    pub evidence_at: Option<chrono::DateTime<Utc>>,
 }
 
+pub mod evidence;
 pub mod preview;
 
 /// The largest side, in pixels, a picture's stated size may have.
@@ -287,7 +292,8 @@ pub async fn read_attachments(
         .filter(
             attachment::id
                 .eq_any(ids)
-                .and(attachment::ready_at.is_not_null()),
+                .and(attachment::ready_at.is_not_null())
+                .and(attachment::evidence_at.is_null()),
         )
         .load(&mut state.connection_pool.get().await?)
         .await
@@ -365,6 +371,7 @@ pub async fn init_upload(
         preview_mime_type: None,
         preview_width: None,
         preview_height: None,
+        evidence_at: None,
     };
     let mut conn = state.connection_pool.get().await?;
     crate::upload_quota::reserve(state, conn.as_mut(), caller, byte_size).await?;
@@ -494,7 +501,8 @@ pub async fn read_attachment(
         .filter(
             attachment::id
                 .eq(id)
-                .and(attachment::ready_at.is_not_null()),
+                .and(attachment::ready_at.is_not_null())
+                .and(attachment::evidence_at.is_null()),
         )
         .first(conn.as_mut())
         .await?;

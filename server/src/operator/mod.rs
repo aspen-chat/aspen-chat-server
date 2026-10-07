@@ -13,8 +13,11 @@
 //! (`app::deployment_settings`), and `voice-servers` keeps the registry of voice servers
 //! (`app::voice`), as the dashboard does. `plugins` installs, configures, and removes plugins
 //! (`app::plugin::install`), which no account can install or grant permissions to.
+//! `attachments purge` deletes outright what is kept of deleted messages' files for reviewing
+//! reports (`app::attachment::evidence`), which nothing over the API can.
 
 mod admin;
+mod attachments;
 mod bench;
 mod communities;
 mod federation;
@@ -25,6 +28,7 @@ mod settings;
 mod voice_servers;
 
 pub use admin::{AdminCommand, admin};
+pub use attachments::{AttachmentsCommand, attachments};
 pub use bench::{BenchCommand, bench};
 pub use communities::{CommunitiesCommand, communities};
 pub use federation::{FederationCommand, federation};

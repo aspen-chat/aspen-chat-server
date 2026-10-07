@@ -102,5 +102,6 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261007_144835_transfer_outcome_not_permitted::M,
     &migrations::m20261007_181601_plugin_quota_per_owner::M,
     &migrations::m20261007_181608_deployment_roles_own_people_only::M,
+    &migrations::m20261007_182216_attachment_evidence::M,
     &migrations::m20261007_183427_upload_quota::M,
 ];

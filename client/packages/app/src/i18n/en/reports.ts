@@ -41,6 +41,7 @@ export const reports = {
   embedLoading: "Loading the linked message",
   jumpToMessage: "Jump to message",
   deletedTag: "Deleted",
+  removedAttachments: "Taken off this message:",
   // Warnings
   warningLabel: "Moderator warning",
   warningAbout: "About your message:",

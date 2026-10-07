@@ -741,7 +741,8 @@ impl Call {
             .filter(
                 attachment::id
                     .eq(id)
-                    .and(attachment::ready_at.is_not_null()),
+                    .and(attachment::ready_at.is_not_null())
+                    .and(attachment::evidence_at.is_null()),
             )
             .first(conn.as_mut())
             .await
