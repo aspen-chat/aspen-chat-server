@@ -34,17 +34,14 @@ pub fn pair_key(a: UserId, b: UserId) -> String {
     format!("{}:{}", low.0, high.0)
 }
 
-/// Refuses the users in `others` who share no community with `user`.
+/// Refuses the users in `others` who share no community with `user`; a deleted community
+/// joins nobody.
 async fn ensure_shared_community(
     conn: &mut AsyncPgConnection,
     user: UserId,
     others: &[UserId],
 ) -> crate::Result<()> {
-    let communities: Vec<crate::CommunityId> = community_user::table
-        .select(community_user::community)
-        .filter(community_user::user.eq(user))
-        .load(conn)
-        .await?;
+    let communities = crate::events::memberships(conn, user).await?;
     let reachable: HashSet<UserId> = community_user::table
         .select(community_user::user)
         .filter(

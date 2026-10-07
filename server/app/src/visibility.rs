@@ -504,10 +504,26 @@ impl Visibility {
         user: UserId,
         communities: &[CommunityId],
     ) -> crate::Result<Self> {
-        let models = CommunityModel::load(conn, communities).await?;
-        let roles = member_roles(conn, user, communities).await?;
+        // A deleted community is in no view: nothing of it is listed, searched, or read.
+        let live: HashSet<CommunityId> = community::table
+            .select(community::id)
+            .filter(
+                community::id
+                    .eq_any(communities)
+                    .and(community::deleted_at.is_null()),
+            )
+            .load::<CommunityId>(conn)
+            .await?
+            .into_iter()
+            .collect();
+        let listed: Vec<CommunityId> = communities
+            .iter()
+            .copied()
+            .filter(|community| live.contains(community))
+            .collect();
+        let models = CommunityModel::load(conn, &listed).await?;
+        let roles = member_roles(conn, user, &listed).await?;
         let moderator = crate::deployment::is_moderator(conn, user).await?;
-        let listed = communities.to_vec();
         let communities = models
             .iter()
             .flat_map(|(community, model)| model.categories.keys().map(|c| (*c, *community)))
@@ -527,7 +543,7 @@ impl Visibility {
         self.user
     }
 
-    /// The communities it covers.
+    /// The communities it covers: those it was loaded for, less any deleted.
     pub fn communities(&self) -> &[CommunityId] {
         &self.listed
     }

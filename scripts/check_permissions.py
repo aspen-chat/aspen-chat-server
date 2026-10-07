@@ -1547,6 +1547,49 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
+def deleted_communities(world: World, check: Checks) -> None:
+    say("a deleted community and a deleted message: nothing found, shared, joined, or reacted to")
+    stack, member = world.stack, world.member
+    thumbs = "%F0%9F%91%8D"
+    general = world.channel("doomed")
+    gone = world.post(general, "soon deleted")
+    world.as_owner("DELETE", f"/messages/{gone}")
+    check("a deleted message takes no reaction",
+          stack.status("PUT", f"/messages/{gone}/reactions/{thumbs}/@me", token=member["token"]) == 404)
+    check("and lists no reactors",
+          stack.status("GET", f"/messages/{gone}/reactions/{thumbs}", token=member["token"]) == 404)
+    word = f"doomedword{world.run}"
+    posted = world.post(general, f"{word} in a community about to go")
+    code = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+
+    def found(query: str) -> bool:
+        read = stack.api("GET", f"/messages?filter[text]={word}{query}", token=member["token"])
+        rows = read["data"] if isinstance(read, dict) else read
+        return any(m["id"] == posted for m in rows)
+
+    def status_of(user: str) -> str:
+        return stack.api("GET", f"/users/statuses?ids={user}", token=member["token"])[0]["onlineStatus"]
+
+    check("a member finds its messages while it stands", soon(lambda: found("")))
+    world.as_owner("GET", "/users/@me")
+    check("and sees its owner connected", status_of(world.owner["id"]) != "offline")
+    world.as_owner("DELETE", f"/communities/{world.community}")
+    world.stream.gather(0.5)
+    check("once deleted, its messages are found nowhere", not found(""))
+    check("nor by naming it",
+          stack.status("GET", f"/messages?filter[text]={word}&filter[community]={world.community}",
+                       token=member["token"]) == 404)
+    check("its members share nothing to start a DM over",
+          stack.status("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, member["token"]) == 400)
+    world.as_owner("GET", "/users/@me")
+    check("nor to see each other's presence", status_of(world.owner["id"]) == "offline")
+    check("its invites read as not found", stack.status("GET", f"/invites/{code}", token=member["token"]) == 404)
+    stranger = world.account("stranger")
+    check("and join nobody to it",
+          stack.status("PUT", f"/communities/{world.community}/members/@me", {"inviteCode": code},
+                       stranger["token"]) in (400, 404))
+
+
 def blackjack_tables(world: World, check: Checks) -> None:
     say("a game's table: who may watch and play, and chips kept straight under simultaneous requests")
     from concurrent.futures import ThreadPoolExecutor
@@ -1629,7 +1672,8 @@ SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidd
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
              nicknames, review_powers, ban_ranks, ban_deletions, dm_reads,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews, previews, icons, uploads]
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
+             deleted_communities, previews, icons, uploads]
 
 
 def main() -> None:
