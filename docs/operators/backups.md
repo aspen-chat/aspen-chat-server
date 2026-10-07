@@ -28,6 +28,11 @@ The database also holds the deployment's push key, which phones' relays know it 
 deployment restored without it makes a new one, and phones then need to be opened once to be
 woken again.
 
+It also holds the key the verification and password reset codes waiting in Valkey are kept
+under (`server_secret`), so that a copy of Valkey alone does not give the codes away. A
+deployment restored without it makes a new one, and codes mailed before then stop working; the
+people waiting on them ask for new ones.
+
 ## The object storage
 
 Attachments, icons, avatars, and link preview images are objects in the `[media.s3]` bucket;

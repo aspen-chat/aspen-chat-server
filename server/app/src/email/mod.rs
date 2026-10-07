@@ -51,7 +51,6 @@ use fred::types::Expiration;
 use lettre::message::Mailbox;
 use lettre::{AsyncSmtpTransport, Tokio1Executor};
 use rand::RngExt;
-use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -180,11 +179,6 @@ fn code(digits: u32) -> String {
     let bound = 10u32.pow(digits);
     let n = CHACHA_RNG.with(|rng| rng.borrow_mut().random_range(0..bound));
     format!("{n:0width$}", width = digits as usize)
-}
-
-/// The digest a code is kept as, so a read of Valkey does not give it away.
-fn code_digest(code: &str) -> String {
-    BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(code.trim().as_bytes()))
 }
 
 /// The secret an address's unsubscribe links carry.
@@ -537,7 +531,7 @@ async fn queue_verification(
         .valkey
         .set(
             verification_key(user_id),
-            format!("{}:{}", code_digest(&code), address),
+            format!("{}:{}", state.code_key.digest(&code), address),
             ttl,
             None,
             false,
@@ -606,7 +600,7 @@ pub async fn verify(
     }
     let matches: bool = digest
         .as_bytes()
-        .ct_eq(code_digest(given).as_bytes())
+        .ct_eq(state.code_key.digest(given).as_bytes())
         .into();
     if !matches {
         if attempts >= VERIFICATION_ATTEMPTS {

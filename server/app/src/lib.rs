@@ -74,6 +74,7 @@ pub mod registration_invite;
 pub mod report;
 pub mod role;
 pub mod search;
+pub mod server_secret;
 pub mod system_account;
 pub mod thread;
 pub mod two_factor;

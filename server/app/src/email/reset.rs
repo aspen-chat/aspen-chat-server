@@ -217,7 +217,7 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
     let code = super::code(CODE_DIGITS);
     let updated = Reset {
         user: reset.user,
-        code: Some(super::code_digest(&code)),
+        code: Some(state.code_key.digest(&code)),
     };
     let ttl: i64 = state.valkey.ttl(key(id)).await?;
     let _: () = state
@@ -262,7 +262,7 @@ pub async fn complete(
     let attempts = attempt(state, id, "code").await?;
     let matches: bool = expected
         .as_bytes()
-        .ct_eq(super::code_digest(code).as_bytes())
+        .ct_eq(state.code_key.digest(code).as_bytes())
         .into();
     if !matches {
         return Err(miss(state, id, "code", attempts).await?);
