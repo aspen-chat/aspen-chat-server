@@ -1,4 +1,5 @@
 pub use aspen_limits::{Limit, LimitSetting, RuleTable};
+pub use aspen_previews::PreviewConfig;
 use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
@@ -546,44 +547,6 @@ pub struct MediaConfig {
     /// holds more deletes it.
     #[default = 268_435_456]
     pub max_attachment_bytes: u64,
-}
-
-/// Making what readers' apps show inline in place of pictures and videos
-/// (`app::attachment::preview`): smaller copies of pictures, and videos' posters.
-///
-/// Every server queues the work; those with `make` on do it, `concurrency` at a time. Pictures
-/// are made in the server's own process; videos' posters by running `ffmpeg` and `ffprobe`, so a
-/// server without them (or with `ffmpeg` naming nothing) makes previews of pictures only.
-#[derive(Clone, Debug, Deserialize, SmartDefault)]
-#[serde(default)]
-pub struct PreviewConfig {
-    /// Whether this server makes previews. Off, it only queues them for the servers that do.
-    #[default = true]
-    pub make: bool,
-    /// How many previews this server makes at once. Each picture may hold several hundred
-    /// megabytes while it is made, and each video is copied whole to a scratch file (under
-    /// `TMPDIR`) to take its poster.
-    #[default = 2]
-    pub concurrency: usize,
-    /// The largest original, in bytes, a picture's preview is made from (64 MiB).
-    #[default = 67_108_864]
-    pub max_picture_bytes: u64,
-    /// The most pixels a picture may have for a preview to be made from it (100 megapixels).
-    #[default = 100_000_000]
-    pub max_picture_pixels: u64,
-    /// The `ffmpeg` and `ffprobe` to run, by path or by name on `PATH`; `ffmpeg` left empty
-    /// makes no previews of videos.
-    #[default = "ffmpeg"]
-    pub ffmpeg: String,
-    #[default = "ffprobe"]
-    pub ffprobe: String,
-    /// The largest video, in bytes, a poster is taken of (2 GiB).
-    #[default = 2_147_483_648]
-    pub max_video_bytes: u64,
-    /// The most memory, in MiB, `ffmpeg` or `ffprobe` may map while taking one poster (its
-    /// address space, `RLIMIT_AS`); 3 GiB, room for a frame of 8K video.
-    #[default = 3072]
-    pub ffmpeg_memory_mib: u64,
 }
 
 /// Object-storage configuration.

@@ -10,13 +10,13 @@
 //! A maker without `ffmpeg` claims pictures only. Until the preview is made, or [`HOLD`] has
 //! passed since the upload, messages holding it wait for it (`app::message::held`).
 //!
-//! A preview is fitted within [`BOX`], never enlarged, its aspect ratio kept: 960 pixels is the
+//! A preview is fitted within [`aspen_previews::BOX`], never enlarged, its aspect ratio kept: 960 pixels is the
 //! tallest a picture is shown inline (320 CSS pixels) on a screen of three device pixels to
 //! the CSS pixel, and 1920 covers the widest message column at two. A picture
 //! ([`picture::make`]) is decoded in the server's own process by decoders written in Rust,
 //! since the bytes are anyone's; turned upright by its EXIF orientation; brought into sRGB from
 //! the colour profile it carries, so that a phone's Display P3 photo keeps its colours; resized
-//! with a Lanczos filter; and encoded as lossy WebP at [`picture::QUALITY`], which at that
+//! with a Lanczos filter; and encoded as lossy WebP at [`aspen_previews::picture::QUALITY`], which at that
 //! density shows no loss. Animated pictures keep their original, as do those whose colours
 //! cannot be brought into sRGB faithfully (CMYK, a profile that cannot be read). A video's
 //! preview ([`video::make`]) is its poster: one frame, taken by the operator's `ffmpeg` and
@@ -42,6 +42,7 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId, EventScope, MessageId};
 use crate::aspen_config::PreviewConfig;
+pub use aspen_previews::{Made, Outcome};
 use crate::database::schema::{attachment, attachment_preview_job, message, message_attachment};
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Bool, Integer, Uuid as PgUuid};
@@ -53,9 +54,6 @@ use std::time::Duration;
 
 pub mod picture;
 pub mod video;
-
-/// The box a preview is fitted within, in pixels: width, then height.
-pub const BOX: (u32, u32) = (1920, 960);
 
 /// How much smaller than its original a preview must be to be kept, in percent.
 pub const MIN_SAVING_PERCENT: u64 = 10;
@@ -98,31 +96,6 @@ pub fn storage_key(id: AttachmentId) -> String {
 pub fn worth_keeping(preview_bytes: u64, original_bytes: u64) -> bool {
     u128::from(preview_bytes) * 100
         <= u128::from(original_bytes) * u128::from(100 - MIN_SAVING_PERCENT)
-}
-
-/// Fits `size` within `bounds`, keeping its aspect ratio and never enlarging it; neither side
-/// is less than a pixel.
-pub fn fit(size: (u32, u32), bounds: (u32, u32)) -> (u32, u32) {
-    let (width, height) = size;
-    let (max_width, max_height) = bounds;
-    if width <= max_width && height <= max_height {
-        return size;
-    }
-    // The tighter of the two ratios, compared without division: max_width / width against
-    // max_height / height.
-    let (scaled, other, limit) =
-        if u64::from(max_width) * u64::from(height) <= u64::from(max_height) * u64::from(width) {
-            (max_width, height, width)
-        } else {
-            (max_height, width, height)
-        };
-    let other = ((u64::from(other) * u64::from(scaled) + u64::from(limit) / 2) / u64::from(limit))
-        .max(1) as u32;
-    if scaled == max_width {
-        (scaled, other)
-    } else {
-        (other, scaled)
-    }
 }
 
 /// An attachment's preview as readers receive it, where it has one.
@@ -171,25 +144,6 @@ pub async fn wake(state: &GlobalServerContext) {
     }
 }
 
-/// What a maker made of an attachment.
-pub struct Made {
-    pub bytes: Vec<u8>,
-    pub mime_type: &'static str,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// What became of making one attachment's preview.
-pub enum Outcome {
-    /// A preview, not yet weighed against the original.
-    Made(Made),
-    /// None is to be made: the original is not something a preview is made of, or is beyond
-    /// what this deployment makes previews of. The reason is for the log.
-    NoPreview(&'static str),
-    /// It could not be made now, and is tried again later.
-    Failed(String),
-}
-
 /// A maker's means: this server's settings, and whether it has `ffmpeg`.
 struct Maker {
     config: PreviewConfig,
@@ -204,7 +158,7 @@ pub fn spawn_maker(state: GlobalServerContext) {
         return;
     }
     tokio::spawn(async move {
-        let videos = video::available(&config).await;
+        let videos = aspen_previews::video::available(&config).await;
         if !videos {
             tracing::warn!(
                 ffmpeg = config.ffmpeg,
@@ -526,17 +480,6 @@ async fn retry_later(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_preview_fits_its_box_and_keeps_its_shape() {
-        assert_eq!(fit((800, 600), BOX), (800, 600));
-        assert_eq!(fit((1920, 960), BOX), (1920, 960));
-        assert_eq!(fit((4032, 3024), BOX), (1280, 960));
-        assert_eq!(fit((3024, 4032), BOX), (720, 960));
-        assert_eq!(fit((8000, 1000), BOX), (1920, 240));
-        assert_eq!(fit((100_000, 1), BOX), (1920, 1));
-        assert_eq!(fit((1, 100_000), BOX), (1, 960));
-    }
 
     #[test]
     fn a_preview_is_kept_when_a_tenth_smaller() {

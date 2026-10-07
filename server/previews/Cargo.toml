@@ -1,0 +1,23 @@
+[package]
+name = "aspen_previews"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Previews of attachments: pictures decoded, brought into sRGB, resized, and encoded as WebP, and videos' posters taken by ffmpeg."
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "tiff", "bmp"] }
+fast_image_resize = { version = "6.1.0", features = ["image"] }
+webp = { version = "0.3.1", default-features = false }
+moxcms = "0.8.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+smart-default = "0.7.1"
+tokio = { version = "1.44.2", features = ["io-util", "macros", "process", "rt", "time"] }
+tracing = "0.1.41"
+# Resource limits set on `ffmpeg` and `ffprobe` as they start (`video`).
+libc = "0.2.190"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.44.2", features = ["rt-multi-thread"] }

@@ -408,6 +408,7 @@ dependencies = [
  "aspen_bench_protocol",
  "aspen_limits",
  "aspen_metrics",
+ "aspen_previews",
  "async-nats",
  "aws-config",
  "aws-credential-types",
@@ -429,7 +430,6 @@ dependencies = [
  "diesel-async",
  "directories-next",
  "emojis",
- "fast_image_resize",
  "fred",
  "futures-util",
  "heck 0.5.0",
@@ -438,15 +438,12 @@ dependencies = [
  "humantime",
  "hyper 1.11.1",
  "hyper-util",
- "image",
  "imagesize",
  "lettre",
- "libc",
  "log",
  "lru 0.17.0",
  "message_gen",
  "metrics",
- "moxcms",
  "pulldown-cmark",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
@@ -489,7 +486,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "webauthn-rs",
- "webp",
 ]
 
 [[package]]
@@ -579,6 +575,23 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aspen_previews"
+version = "0.1.0"
+dependencies = [
+ "fast_image_resize",
+ "image",
+ "libc",
+ "moxcms",
+ "serde",
+ "serde_json",
+ "smart-default",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "webp",
 ]
 
 [[package]]

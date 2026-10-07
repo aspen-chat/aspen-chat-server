@@ -54,7 +54,7 @@ pub struct Attachment {
 }
 
 /// A smaller copy of an attachment for showing it inline: a picture fitted within
-/// `app::attachment::preview::BOX` and encoded for the web, or the same of a video.
+/// `aspen_previews::BOX` and encoded for the web, or the same of a video.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentPreview {
