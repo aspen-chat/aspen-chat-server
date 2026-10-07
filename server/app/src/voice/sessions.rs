@@ -52,6 +52,8 @@ pub async fn mute_participant(
         let Some(community) = access.community.as_ref().map(|c| c.community) else {
             return Err(missing(Permissions::MANAGE_CALLS));
         };
+        // Whether the caller may mute them is answered before whether they are in the call.
+        super::mutes::require_moderates(conn.as_mut(), caller, community, user).await?;
         let session = session_on_channel(conn.as_mut(), channel)
             .await?
             .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))?;

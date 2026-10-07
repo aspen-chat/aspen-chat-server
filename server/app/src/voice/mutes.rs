@@ -80,7 +80,7 @@ pub async fn read_mutes(
 /// Manage calls there and `user` ranks below them (never the owner; one who is not a member
 /// ranks as nobody). A deployment moderator acting by Moderate any community must outrank
 /// `user` in the deployment too.
-async fn require_moderates(
+pub(super) async fn require_moderates(
     conn: &mut AsyncPgConnection,
     caller: UserId,
     community: CommunityId,
