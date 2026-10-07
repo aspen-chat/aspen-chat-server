@@ -19,11 +19,12 @@
 //! nothing vouches for, at once ([`shut_out_home`]) and at each pass; and when the home has gone
 //! unreached for `standing_grace_seconds`.
 //!
-//! One server does each pass, under an advisory lock, while any gate is open. It first reads
-//! again the documents of the deployments a gate admits ([`refresh_documents`]), so a key one
-//! replaced stops verifying here within an interval, and then, while an immigration gate admits
-//! anyone, asks the homes, [`CONCURRENCY`] at a time and each within [`BUDGET`], so slow homes
-//! delay no one else. A deployment that fails is left alone for a while, the wait doubling with
+//! One server does each pass, under an advisory lock, while any gate is open. It reads again
+//! the documents of the deployments in use that a gate admits ([`refresh_documents`]), so a key
+//! one replaced stops verifying here within an interval, and beside that, while an immigration
+//! gate admits anyone, asks the homes, [`CONCURRENCY`] at a time and each within [`BUDGET`], so
+//! slow homes delay no one else; then it forgets deployments contacted once and never used
+//! (`directory::prune_unused`). A deployment that fails is left alone for a while, the wait doubling with
 //! each failure in a row up to an interval; its users still lose their sessions once unconfirmed
 //! for the grace.
 
@@ -228,6 +229,8 @@ const CONCURRENCY: usize = 16;
 /// The longest a pass waits on one deployment: for all of a home's answers, or for its
 /// document. A home that takes longer is taken as unreached.
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+/// The longest a pass spends reading documents again, however many are due.
+const REFRESH_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Runs a pass whenever one may be due, for as long as the server runs, while any gate is open:
 /// the documents of the deployments a gate admits are read again, so a key they replaced stops
@@ -314,7 +317,9 @@ impl Backoff {
 }
 
 /// Does what is due, if no other server is doing so: reads again the documents of the
-/// deployments a gate admits, then asks every home about its users here who are due.
+/// deployments in use that a gate admits while it asks every home about its users here who are
+/// due, then forgets the deployments recorded on first contact that went unused
+/// (`directory::prune_unused`).
 async fn pass(state: &GlobalServerContext, backoff: &mut Backoffs) -> crate::Result<()> {
     // The lock belongs to a transaction, so it is let go however the pass ends: done, failed,
     // or dropped part way, when the pool discards the connection rather than recycling it
@@ -330,9 +335,23 @@ async fn pass(state: &GlobalServerContext, backoff: &mut Backoffs) -> crate::Res
             if !locked {
                 return Ok(());
             }
-            refresh_documents(state, &mut backoff.documents).await?;
-            if state.settings().federation.admits_anyone() {
-                confirm_users(state, &mut backoff.homes).await?;
+            // The two run side by side, so however many documents are due, homes are asked
+            // about their users within the pass.
+            let Backoffs { documents, homes } = backoff;
+            let confirming = async {
+                if state.settings().federation.admits_anyone() {
+                    confirm_users(state, homes).await
+                } else {
+                    Ok(())
+                }
+            };
+            let (refreshed, confirmed) =
+                tokio::join!(refresh_documents(state, documents), confirming);
+            refreshed?;
+            confirmed?;
+            let pruned = super::directory::prune_unused(lock.as_mut()).await?;
+            if pruned > 0 {
+                tracing::info!(pruned, "forgot deployments contacted once and never used");
             }
             Ok(())
         }
@@ -341,11 +360,13 @@ async fn pass(state: &GlobalServerContext, backoff: &mut Backoffs) -> crate::Res
     .await
 }
 
-/// Reads again the document of every deployment a gate admits whose key is pinned and that was
-/// last contacted more than `standing_interval_seconds` ago, as [`contact`] does: a key handed
-/// over to is followed, so the key it replaced stops verifying here, and a key nothing vouches
-/// for suspends the deployment and signs its users out (`contact::record_contact`). A
-/// deployment no gate admits is not contacted.
+/// Reads again the document of every deployment in use (`directory::IN_USE_SQL`) that a gate
+/// admits, whose key is pinned and that was last contacted more than `standing_interval_seconds`
+/// ago, as [`contact`] does: a key handed over to is followed, so the key it replaced stops
+/// verifying here, and a key nothing vouches for suspends the deployment and signs its users out
+/// (`contact::record_contact`). A deployment no gate admits, or not in use, is not contacted.
+/// The longest contacted first, and all within [`REFRESH_BUDGET`]: those not reached by then
+/// are still due at the next pass, and do not count as failing.
 async fn refresh_documents(
     state: &GlobalServerContext,
     backoff: &mut Backoff,
@@ -362,6 +383,8 @@ async fn refresh_documents(
                 .is_null()
                 .or(federated_deployment::last_contact_at.lt(due_before)),
         )
+        .filter(super::directory::in_use())
+        .order(federated_deployment::last_contact_at.asc().nulls_first())
         .load(&mut conn)
         .await?;
     let lists = lists_of(&mut conn, &due).await?;
@@ -379,6 +402,7 @@ async fn refresh_documents(
         })
         .filter(|domain| backoff.ready(domain))
         .collect();
+    // A stable sort, so among those failing as often the longest contacted stay first.
     due.sort_by_key(|domain| backoff.failures(domain));
     let reached: Vec<(Domain, bool)> = futures_util::stream::iter(due)
         .map(|domain| async move {
@@ -397,6 +421,7 @@ async fn refresh_documents(
             (domain, reached)
         })
         .buffer_unordered(CONCURRENCY)
+        .take_until(tokio::time::sleep(REFRESH_BUDGET))
         .collect()
         .await;
     for (domain, reached) in reached {

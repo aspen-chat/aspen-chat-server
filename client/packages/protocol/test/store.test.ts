@@ -1472,8 +1472,10 @@ describe("RecordStore blocks", () => {
     const store = bootstrapped();
     const heard = vi.fn();
     store.subscribe("silenced", heard);
-    // Bob is native here; a guest from a.example is known only once their record arrives.
-    store.setBlockedIdentities("b.example", new Set([`b.example/${bob.id}`, "a.example/h1"]));
+    const blocked = new Set([`b.example/${bob.id}`, "a.example/h1"]);
+    // This is the caller's home. Bob is native here; a guest from a.example is known only once
+    // their record arrives.
+    store.setBlockedIdentities("b.example", "b.example", blocked);
     expect(heard).toHaveBeenCalledTimes(1);
     expect(store.silenced(bob.id)).toBe(true);
     expect(store.blocked(bob.id)).toBe(false);
@@ -1482,9 +1484,14 @@ describe("RecordStore blocks", () => {
     store.ingest({ users: [guest] });
     expect(heard).toHaveBeenCalledTimes(2);
     expect(store.silenced(guest.id)).toBe(true);
-    store.setBlockedIdentities("b.example", new Set([`b.example/${bob.id}`, "a.example/h1"]));
+    store.setBlockedIdentities("b.example", "b.example", blocked);
     expect(heard).toHaveBeenCalledTimes(2);
-    store.setBlockedIdentities("b.example", new Set());
+    // Elsewhere, a record's word on where its user is from is not believed: any deployment
+    // could name anyone.
+    store.setBlockedIdentities("b.example", "c.example", blocked);
+    expect(store.silenced(bob.id)).toBe(true);
+    expect(store.silenced(guest.id)).toBe(false);
+    store.setBlockedIdentities("b.example", "c.example", new Set());
     expect(store.silenced(bob.id)).toBe(false);
     store.setBlocked(bob.id, true);
     expect(store.silenced(bob.id)).toBe(true);

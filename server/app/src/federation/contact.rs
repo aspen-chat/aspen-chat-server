@@ -50,6 +50,36 @@ pub async fn contact(
     .await
 }
 
+/// Contacts `domain` on the strength of a statement said to be signed by it: its document is
+/// read, and `verify` checks the statement against the key the document presents before anything
+/// is recorded, so a statement that does not verify records and pins nothing, and a stranger's
+/// name in a forged statement leaves no row behind. The key [`record_contact`] then pins, or
+/// keeps, is the one presented whenever it does not refuse it (`KeyChanged`), so the statement
+/// verified against the key that stands.
+pub async fn contact_verifying<T>(
+    state: &GlobalServerContext,
+    domain: &Domain,
+    verify: impl FnOnce(&[u8]) -> crate::Result<T>,
+) -> crate::Result<(Listed, ContactOutcome, T)> {
+    let document =
+        fetch_document(&state.config.federation, &state.federation_client, domain).await?;
+    let presented = current_of(&document).ok_or_else(|| {
+        crate::Error::DeploymentUnreachable(t!(
+            "federationDocumentInvalid",
+            domain = domain.as_str()
+        ))
+    })?;
+    let verified = verify(&presented)?;
+    let (listed, outcome) = record_contact(
+        state,
+        state.connection_pool.get().await?.as_mut(),
+        domain,
+        &document,
+    )
+    .await?;
+    Ok((listed, outcome, verified))
+}
+
 /// `domain`'s document as it is now, which must name `domain` and present an Ed25519 key.
 pub async fn fetch_document(
     config: &FederationConfig,

@@ -315,12 +315,17 @@ pub struct FederationConfig {
     pub domain: Option<String>,
     /// How often this deployment asks the homes of the users from elsewhere signed in here
     /// whether they are still in good standing there, and reads again the documents of the
-    /// deployments a gate admits (`app::federation::standing`): an hour.
+    /// deployments in use that a gate admits (`app::federation::standing`): an hour.
     #[default = 3600]
     pub standing_interval_seconds: u64,
     /// How long a home may go unreached before its users' sessions here end: a day.
     #[default = 86400]
     pub standing_grace_seconds: u64,
+    /// The most users and bots of one other deployment that may arrive here for the first time
+    /// in one day (UTC), counted across every server (`app::federation::abroad`), so a home
+    /// that mints accounts cannot fill this deployment with them: five hundred.
+    #[default = 500]
+    pub max_arrivals_per_home_per_day: u64,
     /// Settings for trying federation on one machine; a deployment others use leaves them out.
     pub development: FederationDevelopment,
 }

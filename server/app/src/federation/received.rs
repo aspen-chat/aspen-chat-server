@@ -9,7 +9,7 @@ use crate::context::GlobalServerContext;
 use crate::federation::protocol::Protocol;
 use crate::federation::{
     ContactOutcome, Direction, Domain, FederatedDeployment, FederationList, Subject, admits,
-    contact, jws, lists_of, own_domain,
+    contact_verifying, jws, lists_of, own_domain,
 };
 use crate::t;
 use aspen_schema::federated_deployment;
@@ -25,6 +25,10 @@ use uuid::Uuid;
 pub const CLOCK_SKEW: Duration = Duration::seconds(60);
 /// The longest lifetime a statement from elsewhere may claim.
 pub const MAX_LIFETIME: Duration = Duration::minutes(5);
+/// How long after a statement had its sender contacted no other does so again.
+pub const CONTACT_INTERVAL_SECONDS: i64 = 15;
+/// How long after a statement's sender could not be reached no statement contacts it again.
+pub const UNREACHED_INTERVAL_SECONDS: i64 = 60;
 
 /// A kind of signed statement: its `typ`, and the claims every kind carries.
 pub trait Statement: DeserializeOwned {
@@ -137,30 +141,7 @@ pub async fn receive<T: Statement>(
         (Some(claims), Some(known)) => (claims, known),
         // A sender no gate admits is not contacted, so only the key already pinned will do.
         _ if !admitted => return Err(refusal()),
-        _ => {
-            // A key never pinned, or one the sender has since handed over from: contacting it
-            // pins or follows the handover, and a key that changed unannounced stays refused.
-            let (listed, outcome) = contact(state, &from).await?;
-            if outcome == ContactOutcome::KeyChanged {
-                return Err(invalid(
-                    Some(&from),
-                    t!("statementKeyChanged", domain = from.as_str()),
-                ));
-            }
-            let key = listed.deployment.public_key.clone().ok_or_else(|| {
-                invalid(
-                    Some(&from),
-                    t!("statementKeyChanged", domain = from.as_str()),
-                )
-            })?;
-            let claims = unverified.verify::<T>(T::TYPE, &key).map_err(|_| {
-                invalid(
-                    Some(&from),
-                    t!("statementSignature", domain = from.as_str()),
-                )
-            })?;
-            (claims, listed.deployment)
-        }
+        _ => contact_sender::<T>(state, &from, &unverified).await?,
     };
     // A deployment last contacted before it said which protocol it speaks speaks the first.
     let theirs = sender.protocol().unwrap_or_default();
@@ -243,6 +224,110 @@ pub async fn receive<T: Statement>(
         from,
         lists,
     })
+}
+
+/// Contacts the sender of a statement that did not verify against a key pinned for it (none is,
+/// or it has since handed over to another), and verifies the statement against the key it
+/// presents, as `contact::contact_verifying` does.
+///
+/// Anyone can name any domain as a statement's issuer, and whoever does makes this server call
+/// it, so the caller learns nothing from the call: a sender that cannot be reached is refused
+/// with the same detail however it failed, which goes to the log instead (administrators see it
+/// by contacting the deployment from the dashboard). And one sender is contacted this way at
+/// most once every [`CONTACT_INTERVAL_SECONDS`], or [`UNREACHED_INTERVAL_SECONDS`] after it
+/// could not be reached: a statement in between is checked against whatever key that contact
+/// left pinned, and refused when it does not verify.
+async fn contact_sender<T: Statement>(
+    state: &GlobalServerContext,
+    from: &Domain,
+    unverified: &jws::Unverified<'_>,
+) -> crate::Result<(T, FederatedDeployment)> {
+    let signature = || invalid(Some(from), t!("statementSignature", domain = from.as_str()));
+    let gate = format!("federation:statement-contact:{from}");
+    let first: Option<String> = state
+        .valkey
+        .set(
+            &gate,
+            1,
+            Some(fred::types::Expiration::EX(CONTACT_INTERVAL_SECONDS)),
+            Some(fred::types::SetOptions::NX),
+            false,
+        )
+        .await?;
+    if first.is_none() {
+        let mut conn = state.connection_pool.get().await?;
+        let known: Option<FederatedDeployment> = federated_deployment::table
+            .find(from)
+            .select(FederatedDeployment::as_select())
+            .first(&mut conn)
+            .await
+            .optional()?;
+        drop(conn);
+        let Some(known) = known.filter(|d| d.offered_key.is_none()) else {
+            return Err(invalid(
+                Some(from),
+                t!(
+                    "statementSenderContactedRecently",
+                    domain = from.as_str(),
+                    seconds = UNREACHED_INTERVAL_SECONDS
+                ),
+            ));
+        };
+        let claims = known
+            .public_key
+            .as_deref()
+            .and_then(|key| unverified.verify::<T>(T::TYPE, key).ok())
+            .ok_or_else(|| {
+                invalid(
+                    Some(from),
+                    t!(
+                        "statementSenderContactedRecently",
+                        domain = from.as_str(),
+                        seconds = UNREACHED_INTERVAL_SECONDS
+                    ),
+                )
+            })?;
+        return Ok((claims, known));
+    }
+    // A key never pinned, or one the sender has since handed over from: contacting it pins or
+    // follows the handover, and a key that changed unannounced stays refused. Nothing is
+    // recorded unless the statement verifies against the key it presents.
+    let contacted = contact_verifying(state, from, |key| {
+        unverified
+            .verify::<T>(T::TYPE, key)
+            .map_err(|_| signature())
+    })
+    .await;
+    let (listed, outcome, claims) = match contacted {
+        Err(crate::Error::DeploymentUnreachable(detail)) => {
+            tracing::info!(domain = %from, %detail, "could not contact the sender of a statement");
+            let backed_off: Result<(), _> = state
+                .valkey
+                .set(
+                    &gate,
+                    1,
+                    Some(fred::types::Expiration::EX(UNREACHED_INTERVAL_SECONDS)),
+                    None,
+                    false,
+                )
+                .await;
+            if let Err(error) = backed_off {
+                tracing::warn!(domain = %from, %error, "could not note an unreached deployment");
+            }
+            return Err(crate::Error::DeploymentUnreachable(t!(
+                "statementSenderUnreachable",
+                domain = from.as_str()
+            )));
+        }
+        contacted => contacted?,
+    };
+    if outcome == ContactOutcome::KeyChanged {
+        return Err(invalid(
+            Some(from),
+            t!("statementKeyChanged", domain = from.as_str()),
+        ));
+    }
+    Ok((claims, listed.deployment))
 }
 
 /// What is wrong with the times a statement claims.
