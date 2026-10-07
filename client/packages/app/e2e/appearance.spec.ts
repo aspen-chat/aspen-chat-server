@@ -134,10 +134,12 @@ test("the line spacing is kept with the account and spaces messages", async ({ p
   await page.keyboard.press("Escape");
   await openGeneral(page);
   const message = page.locator("[data-message-id] .message-body").first();
-  // 16px text at 1.5 lines, 1.4 times as far apart.
+  // 16px text at 1.5 lines, 1.4 times as far apart; WebKit gives it as 33.599998px.
   await expect
-    .poll(() => message.evaluate((element) => getComputedStyle(element).lineHeight))
-    .toBe("33.6px");
+    .poll(async () =>
+      Number.parseFloat(await message.evaluate((element) => getComputedStyle(element).lineHeight)),
+    )
+    .toBeCloseTo(33.6, 2);
 });
 
 test("contrast follows the system, and the reader's choice over it", async ({ page }) => {

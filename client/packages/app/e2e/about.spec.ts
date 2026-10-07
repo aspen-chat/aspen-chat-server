@@ -8,6 +8,29 @@ import { signInToWorld } from "./world";
  * (`attributions/plugin.ts`), so these look for packages the app is sure to have.
  */
 
+/**
+ * Waits for the attributions page's list, and expects each part of Aspen in it. A development
+ * server without the Rust toolchain (Playwright's Docker image) cannot list the servers' crates,
+ * and says so, so the servers' part is looked for only where the list is complete.
+ */
+async function expectEveryPart(page: Page) {
+  await expect(page.getByRole("heading", { name: /^The app/, level: 2 })).toBeVisible({
+    timeout: 60_000,
+  });
+  const incomplete = page
+    .getByRole("status")
+    .filter({ hasText: "This development build couldn't list every package." });
+  const parts = ["The desktop app", "The phone apps"];
+  if (!(await incomplete.isVisible())) {
+    parts.push("The servers");
+  }
+  for (const part of parts) {
+    await expect(
+      page.getByRole("heading", { name: new RegExp(`^${part}`), level: 2 }),
+    ).toBeVisible();
+  }
+}
+
 async function openAbout(page: Page) {
   const back = page.getByRole("link", { name: "Back to channels" });
   if (await back.isVisible()) {
@@ -57,11 +80,7 @@ test("the attributions link closes About Aspen and Settings and lists every part
   await expect(
     page.getByRole("heading", { name: "Open source attributions", level: 1 }),
   ).toBeVisible();
-  for (const part of ["The app", "The desktop app", "The phone apps", "The servers"]) {
-    await expect(page.getByRole("heading", { name: new RegExp(`^${part}`), level: 2 })).toBeVisible(
-      { timeout: 60_000 },
-    );
-  }
+  await expectEveryPart(page);
 
   await page.getByRole("searchbox", { name: "Find a package" }).fill("react-aria-components");
   const app = page.getByRole("region", { name: /^The app/ });
@@ -88,9 +107,7 @@ test("the attributions page opens signed out, and leads back to signing in", asy
   await expect(
     page.getByRole("heading", { name: "Open source attributions", level: 1 }),
   ).toBeVisible();
-  await expect(page.getByRole("heading", { name: /^The servers/, level: 2 })).toBeVisible({
-    timeout: 60_000,
-  });
+  await expectEveryPart(page);
   await page.getByRole("link", { name: "Back to sign in" }).click();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
 });

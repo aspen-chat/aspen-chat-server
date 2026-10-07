@@ -58,14 +58,14 @@ test("settings, invites, and new polls close from their X", async ({ page }) => 
   });
 });
 
-test("a modal never scrolls sideways, and settings' planes stand in two columns", async ({
+test("a modal never scrolls sideways, and settings' planes stand in three columns", async ({
   page,
   isMobile,
 }) => {
   test.skip(isMobile, "a phone shows one column, and its modal fills the screen");
   // As first opened after a load: the planes are measured while the modal is still arriving,
   // scaled up from a little smaller, and a measure taken at that size once set a height the
-  // planes overflowed into a third column.
+  // planes overflowed into a column too many. A desktop window is wide enough for three.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
   await expect(dialog).toBeVisible();
@@ -85,5 +85,5 @@ test("a modal never scrolls sideways, and settings' planes stand in two columns"
         };
       }),
     )
-    .toEqual({ overflow: 0, columns: 2 });
+    .toEqual({ overflow: 0, columns: 3 });
 });
