@@ -179,6 +179,22 @@ def granting_and_revoking(world: World, check: Checks) -> None:
     check("nor hear it", not world.hears_message(secret))
 
 
+def edits_after_send(world: World, check: Checks) -> None:
+    say("editing a message once Send messages is taken away")
+    stack, member = world.stack, world.member
+    quiet = world.channel("quiet")
+    said = stack.api("POST", f"/channels/{quiet}/messages", {"content": "before", "attachments": []},
+                     member["token"])["id"]
+    world.as_owner("PUT", f"/channels/{quiet}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("the member cannot put new words in their message",
+          stack.status("PATCH", f"/messages/{said}", {"content": "after"}, member["token"]) == 403)
+    check("but may clear what it said",
+          stack.status("PATCH", f"/messages/{said}", {"content": ""}, member["token"]) == 200)
+    world.as_owner("DELETE", f"/channels/{quiet}/overrides/{world.everyone}")
+    check("and with Send messages back, edits it again",
+          stack.status("PATCH", f"/messages/{said}", {"content": "again"}, member["token"]) == 200)
+
+
 def moves_and_categories(world: World, check: Checks) -> None:
     say("a channel moved into a hidden category and out, and the category deleted")
     hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Mods", "sortIndex": 9})["id"]
@@ -1845,7 +1861,7 @@ def blackjack_tables(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", BLACKJACK_ID)
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_categories, hidden_managers,
+SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, name_colours, dual_invites, device_links,
