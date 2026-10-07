@@ -41,15 +41,39 @@ impl ParsedMetadata {
     }
 }
 
+/// The `<meta>` keys [`MetaState::into_metadata`] reads; every other is dropped as it is met,
+/// so a page of many thousands of tags holds no more than these.
+const KNOWN_KEYS: [&str; 11] = [
+    "og:title",
+    "twitter:title",
+    "og:description",
+    "twitter:description",
+    "description",
+    "og:site_name",
+    "og:image",
+    "og:image:url",
+    "og:image:secure_url",
+    "twitter:image",
+    "twitter:image:src",
+];
+
+/// The most `theme-color` tags kept; the choice among them needs only the first of each kind.
+const MAX_THEME_COLORS: usize = 8;
+
+/// The most bytes of `<title>` text kept, far more than a card shows.
+const MAX_TITLE_BYTES: usize = 4096;
+
 #[derive(Default)]
 struct MetaState {
-    /// `(key_lower, value)` pairs, first writer wins so the HTML's first
+    /// `(key_lower, value)` pairs of [`KNOWN_KEYS`], first writer wins so the HTML's first
     /// occurrence of each canonical metadata key beats any fallbacks.
-    meta: Vec<(String, String)>,
-    /// `(media_attr, value)` pairs for `<meta name="theme-color">` tags.
-    /// `None` for the `media` field means the tag applied unconditionally.
+    meta: Vec<(&'static str, String)>,
+    /// `(media_attr, value)` pairs for `<meta name="theme-color">` tags, at most
+    /// [`MAX_THEME_COLORS`]. `None` for the `media` field means the tag applied unconditionally.
     theme_colors: Vec<(Option<String>, String)>,
     title_chunks: Vec<String>,
+    /// The bytes of `title_chunks`, at most [`MAX_TITLE_BYTES`] (one more once text was dropped).
+    title_bytes: usize,
     in_head: bool,
     in_title: bool,
     done: bool,
@@ -66,13 +90,16 @@ impl MetaState {
     fn lookup(&self, key: &str) -> Option<&str> {
         self.meta
             .iter()
-            .find(|(k, _)| k == key)
+            .find(|(k, _)| *k == key)
             .map(|(_, v)| v.as_str())
     }
 
-    fn insert_meta(&mut self, key: String, value: String) {
-        if !self.meta.iter().any(|(k, _)| k == &key) {
-            self.meta.push((key, value));
+    fn insert_meta(&mut self, key: &str, value: String) {
+        let Some(known) = KNOWN_KEYS.iter().find(|known| **known == key) else {
+            return;
+        };
+        if !self.meta.iter().any(|(k, _)| k == known) {
+            self.meta.push((known, value));
         }
     }
 
@@ -212,16 +239,24 @@ impl TokenSink for MetaSink {
                             return TokenSinkResult::Continue;
                         }
                         if key == "theme-color" {
-                            state.theme_colors.push((media_attr, content));
+                            if state.theme_colors.len() < MAX_THEME_COLORS {
+                                state.theme_colors.push((media_attr, content));
+                            }
                         } else {
-                            state.insert_meta(key, content);
+                            state.insert_meta(&key, content);
                         }
                     }
                     _ => {}
                 }
             }
             Token::CharacterTokens(data) if state.in_title => {
-                state.title_chunks.push(data.as_ref().to_owned());
+                // Text past the cap is dropped, and with it everything after it.
+                if state.title_bytes + data.len() <= MAX_TITLE_BYTES {
+                    state.title_bytes += data.len();
+                    state.title_chunks.push(data.as_ref().to_owned());
+                } else {
+                    state.title_bytes = MAX_TITLE_BYTES + 1;
+                }
             }
             _ => {}
         }
@@ -229,6 +264,8 @@ impl TokenSink for MetaSink {
     }
 }
 
+/// The page's metadata. Tokenizing a page of up to `fetch::MAX_METADATA_BYTES` is work for a
+/// blocking thread, where `fetch` runs it.
 pub fn parse_html_metadata(body: &str) -> ParsedMetadata {
     let sink = MetaSink {
         state: RefCell::new(MetaState::new()),
@@ -270,6 +307,28 @@ mod tests {
         // Prefer dark when available.
         assert_eq!(meta.theme_color.as_deref(), Some("#000000"));
         assert!(meta.has_content());
+    }
+
+    #[test]
+    fn many_tags_keep_only_what_is_read() {
+        let mut html = String::from("<head>");
+        for i in 0..10_000 {
+            html.push_str(&format!(r#"<meta name="k{i}" content="v">"#));
+            html.push_str(r##"<meta name="theme-color" content="#123456">"##);
+        }
+        html.push_str(r#"<meta property="og:title" content="Late"></head>"#);
+        let sink = MetaSink {
+            state: RefCell::new(MetaState::new()),
+        };
+        let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
+        let input = BufferQueue::default();
+        input.push_back(StrTendril::from(html.as_str()));
+        let _ = tokenizer.feed(&input);
+        tokenizer.end();
+        let state = tokenizer.sink.state.into_inner();
+        assert_eq!(state.meta.len(), 1);
+        assert_eq!(state.theme_colors.len(), MAX_THEME_COLORS);
+        assert_eq!(state.into_metadata().title.as_deref(), Some("Late"));
     }
 
     #[test]

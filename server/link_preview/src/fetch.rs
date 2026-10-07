@@ -206,8 +206,12 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
     if bytes.is_empty() {
         return None;
     }
-    let body = String::from_utf8_lossy(&bytes);
-    let mut metadata = parse_html_metadata(body.as_ref());
+    // Tokenizing the page is work for a blocking thread, not the runtime's.
+    let mut metadata = tokio::task::spawn_blocking(move || {
+        parse_html_metadata(String::from_utf8_lossy(&bytes).as_ref())
+    })
+    .await
+    .ok()?;
     // Resolve a relative og:image against the final redirected URL so S3
     // object creation has an absolute URL to work from.
     if let Some(raw) = metadata.image_url.take()
