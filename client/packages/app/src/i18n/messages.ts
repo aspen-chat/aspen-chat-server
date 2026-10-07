@@ -46,6 +46,7 @@ import { system } from "./en/system";
 import { tagging } from "./en/tagging";
 import { contrastModes, themeModes } from "./en/themeModes";
 import { threads } from "./en/threads";
+import { typing } from "./en/typing";
 import { twoFactor } from "./en/twoFactor";
 import { voice } from "./en/voice";
 
@@ -108,6 +109,7 @@ export const en = {
   bots,
   blocking,
   threads,
+  typing,
   dms,
   changeServer: "Change",
   continue: "Continue",

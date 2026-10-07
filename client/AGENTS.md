@@ -62,7 +62,7 @@ commit, as with comments.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions each needs, directories, moderation log, growth charts, registration invites, and foreign users' bans.
 - [`blocking.md`](docs/architecture/blocking.md): blocks as store state, collapsed runs of blocked messages, blocked DMs, and blocks in calls.
 - [`bots.md`](docs/architecture/bots.md): bot badges, developer mode and the ID wizard, the bots dialog, adding a bot, and slash commands in the message box.
-- [`composer-and-drafts.md`](docs/architecture/composer-and-drafts.md): the message box's layout and keys, keeping the bottom edge, Jump to latest, and drafts.
+- [`composer-and-drafts.md`](docs/architecture/composer-and-drafts.md): the message box's layout and keys, keeping the bottom edge, Jump to latest, drafts, and who is typing.
 - [`custom-emoji.md`](docs/architecture/custom-emoji.md): a community's emoji in messages, completion, reactions, and the Emoji tab.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
@@ -161,7 +161,9 @@ commit, as with comments.
   changes (`useReorderGlide`); the thread panel and member list sliding in, and the member
   drawer sliding out and back; call tiles, the
   composer's files (with an upload progress bar, from `uploadAttachment`'s `onProgress`), the
-  sync banner, and the Jump to latest pill appearing; speaking rings fading. Code that moves
+  sync banner, and the Jump to latest pill appearing; speaking rings fading; the typing
+  indicator's keys pressed in turn, which travel the motion distance and so stand still where
+  motion is reduced. Code that moves
   things itself reads `useMotion` (off, reduced, scale).
 - The channel list (and the DM list in its place), the member list, and the thread panel are
   `ResizablePane`s (`src/features/layout`): each has an edge, a `separator`, that the reader

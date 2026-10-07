@@ -13,3 +13,18 @@ export function formatNodes(template: string, values: Record<string, ReactNode>)
     );
   });
 }
+
+/**
+ * `nodes` joined as a list in `locale`'s words ("A, B, and C"), for a placeholder of
+ * `formatNodes`: the language decides the separators and their order.
+ */
+export function listNodes(locale: string, nodes: readonly ReactNode[]): ReactNode {
+  const parts = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).formatToParts(
+    nodes.map((_, index) => String(index)),
+  );
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {part.type === "element" ? nodes[Number(part.value)] : part.value}
+    </Fragment>
+  ));
+}
