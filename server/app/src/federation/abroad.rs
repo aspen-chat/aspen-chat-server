@@ -307,6 +307,37 @@ pub async fn sign_in(
     Ok(session)
 }
 
+/// Counts a first arrival from `home` toward today's (UTC) share of
+/// `[federation] max_arrivals_per_home_per_day`, refusing it once that is spent. The count is
+/// kept in Valkey, shared by every server, for two days; an arrival refused later still counts,
+/// which errs toward fewer.
+async fn count_arrival(state: &GlobalServerContext, home: &Domain) -> crate::Result<()> {
+    use fred::prelude::KeysInterface as _;
+    let max = state.config.federation.max_arrivals_per_home_per_day;
+    let key = format!(
+        "federation:arrivals:{home}:{}",
+        Utc::now().format("%Y-%m-%d")
+    );
+    let arrived: u64 = state.valkey.incr(&key).await?;
+    let _: bool = state
+        .valkey
+        .expire(&key, ARRIVALS_KEPT_SECONDS, None)
+        .await?;
+    if arrived > max {
+        tracing::warn!(%home, max, "refused a first arrival over the day's limit for its home");
+        return Err(crate::Error::FederationRefused(t!(
+            "federationArrivalsLimit",
+            domain = home.as_str(),
+            max = max
+        )));
+    }
+    Ok(())
+}
+
+/// How long a day's count of first arrivals is kept: past the end of the day it counts, in any
+/// time zone.
+const ARRIVALS_KEPT_SECONDS: i64 = 2 * 24 * 60 * 60;
+
 /// The same checks a profile edited here passes.
 fn check_profile(profile: &Profile) -> crate::Result<()> {
     crate::user::validate_username(&profile.name)?;
@@ -358,6 +389,7 @@ async fn arrive(
                 if invite_required && invite_code.is_none() {
                     return Err(crate::Error::RegistrationInviteRequired);
                 }
+                count_arrival(state, home).await?;
                 // As at registration, an invite that works is recorded, and where invites are
                 // optional one that does not is ignored.
                 let (registered_with, community_invite) = match invite_code {

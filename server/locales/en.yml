@@ -266,6 +266,7 @@ federationSharedListMismatch: "A shared list serves both directions, so both gat
 federationAlreadyKnown: "That deployment is already in the directory."
 federationNoteLength: "A note may be at most %{max} characters."
 federationOfferChanged: "The deployment offers no new key, or a different one than you were shown. Check it again."
+federationArrivalsLimit: "%{max} people from %{domain} have already joined this deployment today, the most it takes from one deployment in a day. Try again tomorrow, or ask this deployment's administrators to raise the limit."
 federationNoAnswer: "%{domain} could not be reached. It may be down: try again later, and check it is served over HTTPS at https://%{domain}."
 federationNoDocument: "%{domain} answered %{status} for https://%{domain}/.well-known/aspen. Aspen may not be running there, or its administrators have not given it an https public_url in its aspen.toml."
 federationDocumentInvalid: "%{domain}'s document names no key this server can use. It may run a much newer version of Aspen, or its document is damaged."

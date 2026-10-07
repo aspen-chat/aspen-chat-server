@@ -310,6 +310,11 @@ pub struct FederationConfig {
     /// How long a home may go unreached before its users' sessions here end: a day.
     #[default = 86400]
     pub standing_grace_seconds: u64,
+    /// The most users and bots of one other deployment that may arrive here for the first time
+    /// in one day (UTC), counted across every server (`app::federation::abroad`), so a home
+    /// that mints accounts cannot fill this deployment with them: five hundred.
+    #[default = 500]
+    pub max_arrivals_per_home_per_day: u64,
     /// Settings for trying federation on one machine; a deployment others use leaves them out.
     pub development: FederationDevelopment,
 }
