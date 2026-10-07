@@ -239,6 +239,20 @@ const ICON_IN_USE_SQL: &str = "SELECT EXISTS (SELECT 1 FROM \"user\" WHERE icon 
      OR EXISTS (SELECT 1 FROM report WHERE profile->>'icon' = $1::text) \
      OR EXISTS (SELECT 1 FROM message WHERE warning->'profile'->>'icon' = $1::text) AS in_use";
 
+/// Whether anything uses the icon `id` ([`ICON_IN_USE_SQL`]).
+pub async fn in_use(conn: &mut AsyncPgConnection, id: IconId) -> crate::Result<bool> {
+    #[derive(diesel::QueryableByName)]
+    struct InUse {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        in_use: bool,
+    }
+    let InUse { in_use } = diesel::sql_query(ICON_IN_USE_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await?;
+    Ok(in_use)
+}
+
 /// Deletes an icon `caller` uploaded that nothing uses. Anyone else's, or one whose uploader is
 /// not recorded, is not found; one in use is refused as a conflict.
 pub async fn delete_own_icon(
@@ -246,11 +260,6 @@ pub async fn delete_own_icon(
     caller: UserId,
     id: IconId,
 ) -> crate::Result<()> {
-    #[derive(diesel::QueryableByName)]
-    struct InUse {
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        in_use: bool,
-    }
     let mut conn = state.connection_pool.get().await?;
     let uploader: Option<UserId> = icon::table
         .select(icon::uploaded_by)
@@ -260,20 +269,17 @@ pub async fn delete_own_icon(
     if uploader != Some(caller) {
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
-    let InUse { in_use } = diesel::sql_query(ICON_IN_USE_SQL)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn.as_mut())
-        .await?;
-    if in_use {
+    drop(conn);
+    if !delete_if_unused(state, id).await? {
         return Err(crate::Error::Conflict(t!("iconInUse")));
     }
-    drop(conn);
-    delete_icon(state, id).await
+    Ok(())
 }
 
 /// Deletes an icon and its stored picture if nothing uses it ([`ICON_IN_USE_SQL`]), checked
-/// in the statement that deletes it, for the server's own use: a picture it replaced, such as
-/// the copy of a foreign user's avatar their home changed. Returns whether it was deleted.
+/// in the statement that deletes it, so nothing that takes it up meanwhile loses it: a picture
+/// the server replaced (the copy of a foreign user's avatar their home changed), a removed
+/// custom emoji's, or one its uploader deletes. Returns whether it was deleted.
 pub async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> crate::Result<bool> {
     #[derive(diesel::QueryableByName)]
     struct Deleted {
@@ -300,28 +306,4 @@ pub async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> crate:
         );
     }
     Ok(true)
-}
-
-/// Deletes an icon and its stored picture, for the server's own use: the caller has decided it
-/// may go, as when its custom emoji is removed.
-pub async fn delete_icon(state: &GlobalServerContext, id: IconId) -> crate::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
-    let Some(deleted) = diesel::delete(icon::table)
-        .filter(icon::id.eq(id))
-        .returning(Icon::as_returning())
-        .load(conn.as_mut())
-        .await?
-        .into_iter()
-        .next()
-    else {
-        return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
-    };
-    if let Err(e) = state.media_store.delete_upload(&deleted.storage_key).await {
-        warn!(
-            error = e.to_string(),
-            key = deleted.storage_key,
-            "failed to delete icon object from media store after db deletion"
-        );
-    }
-    Ok(())
 }

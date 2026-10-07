@@ -117,7 +117,7 @@ pub async fn read_emoji(
 }
 
 /// Adds an emoji to a community from an icon the caller uploaded, which must be a picture format
-/// of at most [`MAX_BYTES`] and not yet another emoji's, under the community's limit. Takes
+/// of at most [`MAX_BYTES`] and in use nowhere else, under the community's limit. Takes
 /// Manage custom emoji.
 pub async fn create_emoji(
     state: &GlobalServerContext,
@@ -147,16 +147,12 @@ pub async fn create_emoji(
         async move {
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_CUSTOM_EMOJI)?;
-            // The icon must be the caller's, uploaded and confirmed, and not already an
-            // emoji's; it is deleted with the emoji, so no two may share one.
+            // The icon must be the caller's, uploaded and confirmed, and in use nowhere else
+            // (another emoji, a profile, a community, a report): it is deleted with the
+            // emoji when nothing else has taken it up since.
             crate::icon::require_own(conn.as_mut(), caller, icon_id, t!("customEmojiIconMissing"))
                 .await?;
-            let taken: i64 = custom_emoji::table
-                .filter(custom_emoji::icon.eq(icon_id))
-                .count()
-                .get_result(conn.as_mut())
-                .await?;
-            if taken > 0 {
+            if crate::icon::in_use(conn.as_mut(), icon_id).await? {
                 return Err(crate::Error::Validation(t!("customEmojiIconUsed")));
             }
             let count: i64 = custom_emoji::table
@@ -269,9 +265,10 @@ pub async fn delete_emoji(
             .scope_boxed()
         })
         .await?;
-    // The picture is nobody's now; losing it to a storage failure costs an orphaned object,
-    // never the deletion.
-    if let Err(e) = crate::icon::delete_icon(state, icon_id).await {
+    // The picture goes too unless something has taken it up since the emoji was added (its
+    // uploader's profile, a report keeping that profile as it was); losing it to a storage
+    // failure costs an orphaned object, never the deletion.
+    if let Err(e) = crate::icon::delete_if_unused(state, icon_id).await {
         warn!(
             error = e.to_string(),
             icon = icon_id.0.to_string(),
