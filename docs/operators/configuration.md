@@ -107,7 +107,7 @@ no harm.
 | --- | --- | --- |
 | `endpoint` | `http://127.0.0.1:3900` | The S3 API, as this server reaches it. |
 | `public_endpoint` | `endpoint` | The S3 API as clients reach it; the upload URLs they are handed name it. It must allow uploads by CORS (`PUT`, with `Content-Type`) from `public_url`'s origin and the apps' (`null` for the desktop app, `capacitor://localhost` and `https://localhost` for the mobile apps), or from any origin. Leaving it out suits only clients on the server's own machine. |
-| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: a public read path on the bucket, such as a website endpoint or a CDN. The server itself never needs to reach it. |
+| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: an anonymous read path on the bucket, such as a website endpoint or a CDN, that allows reading objects and nothing else (no listing, no writes; never a SeaweedFS filer), at an origin of its own that sends `X-Content-Type-Options: nosniff`. [The storage's read path](installing.md#the-storages-read-path) says how, and how to check it. The server itself never needs to reach it. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
 | `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. A server at a public `https` address refuses the development values. |

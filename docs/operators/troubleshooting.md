@@ -93,8 +93,9 @@ something other than the API servers.
 reachable from the client, over HTTPS when the page is, and allow the page's origin by CORS for
 `PUT`. The browser's developer tools show the refused request.
 
-**Pictures do not load.** They load from `[media.s3] public_base_url`, which must serve the bucket
-without credentials.
+**Pictures do not load.** They load from `[media.s3] public_base_url`, which must serve the bucket's
+objects without credentials, and only them: [The storage's read path](installing.md#the-storages-read-path)
+gives the checks, which also show whether it lists or takes writes as it must not.
 
 **Videos show as downloads, without a poster.** No server that makes previews can run `ffmpeg`
 and `ffprobe`; each says so in its log as it starts ("makes previews of pictures only"). Install
