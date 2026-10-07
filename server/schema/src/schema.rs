@@ -26,6 +26,7 @@ diesel::table! {
         preview_mime_type -> Nullable<Text>,
         preview_width -> Nullable<Int4>,
         preview_height -> Nullable<Int4>,
+        sent -> Bool,
     }
 }
 

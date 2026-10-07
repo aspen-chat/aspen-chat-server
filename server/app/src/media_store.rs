@@ -517,8 +517,9 @@ impl MediaStore {
     }
 }
 
-/// Sweeps staging objects every [`SWEEP_EVERY`], on every server, for as long as it runs: deleting
-/// one twice is harmless, and a deployment of one server needs no other to do it.
+/// Sweeps staging objects, and attachments never sent (`attachment::sweep_unsent`), every
+/// [`SWEEP_EVERY`], on every server, for as long as it runs: deleting one twice is harmless, and
+/// a deployment of one server needs no other to do it.
 pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
     tokio::spawn(async move {
         loop {
@@ -530,6 +531,11 @@ pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
                 Ok(0) => {}
                 Ok(swept) => tracing::info!(swept, "deleted staging uploads past their URLs"),
                 Err(e) => tracing::warn!(error = %e, "could not sweep staging uploads"),
+            }
+            match crate::attachment::sweep_unsent(&state).await {
+                Ok(0) => {}
+                Ok(swept) => tracing::info!(swept, "deleted attachments never sent"),
+                Err(e) => tracing::warn!(error = %e, "could not sweep attachments never sent"),
             }
         }
     });
