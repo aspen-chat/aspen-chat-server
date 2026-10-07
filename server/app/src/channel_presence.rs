@@ -6,13 +6,20 @@
 //! follows how many are online rather than how many belong. Everyone who may view a channel
 //! sees the same count, so each server reuses a recent one (`app::recent`). A thread counts as
 //! its parent channel, whose viewers are its viewers.
+//!
+//! Nobody counts anyone whose presence they may not learn (`app::user_status::presence_visible`):
+//! a DM's count keeps only those, and a community channel's shared count has the caller's
+//! blockers who are online there now taken off it. The shared count may be up to ten seconds
+//! old while that correction is current, so for those seconds after a blocker comes online or
+//! leaves, the count the blocked caller reads is one off, and then right again.
 
 use crate::context::GlobalServerContext;
 use crate::events::{ChannelHome, channel_home};
 use crate::{ChannelId, CommunityId, UserId};
-use aspen_schema::dm_recipient;
+use aspen_schema::{community_user, dm_recipient, user_block};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use std::collections::HashSet;
 
 /// How many people are online in `channel`, for someone who may view it.
 pub async fn online_in_channel(
@@ -29,20 +36,39 @@ pub async fn online_in_channel(
                 .filter(dm_recipient::channel.eq(dm))
                 .load(conn.as_mut())
                 .await?;
+            let visible =
+                crate::user_status::presence_visible(conn.as_mut(), caller, &recipients).await?;
             drop(conn);
-            Ok(crate::user_status::online_among(state, recipients)
-                .await?
-                .len() as u32)
+            Ok(
+                crate::user_status::online_among(state, visible.into_iter().collect())
+                    .await?
+                    .len() as u32,
+            )
         }
         ChannelHome::Community {
             community,
             governing,
         } => {
+            let blockers: Vec<UserId> = user_block::table
+                .inner_join(
+                    community_user::table.on(community_user::user
+                        .eq(user_block::blocker)
+                        .and(community_user::community.eq(community))),
+                )
+                .select(user_block::blocker)
+                .filter(user_block::blocked.eq(caller))
+                .load(conn.as_mut())
+                .await?;
             drop(conn);
-            state
+            let shared = state
                 .channel_presence
                 .get_or_work(governing, || count_viewers(state, community, governing))
-                .await
+                .await?;
+            if blockers.is_empty() {
+                return Ok(shared);
+            }
+            let hidden = online_viewers(state, community, governing, blockers).await?;
+            Ok(shared.saturating_sub(hidden.len() as u32))
         }
     }
 }
@@ -54,11 +80,22 @@ async fn count_viewers(
     channel: ChannelId,
 ) -> crate::Result<u32> {
     let candidates = crate::user_status::online_candidates(state, community).await?;
+    Ok(online_viewers(state, community, channel, candidates)
+        .await?
+        .len() as u32)
+}
+
+/// Those of `candidates`, members of `community`, who are online and may view `channel`.
+async fn online_viewers(
+    state: &GlobalServerContext,
+    community: CommunityId,
+    channel: ChannelId,
+    candidates: Vec<UserId>,
+) -> crate::Result<HashSet<UserId>> {
     let online = crate::user_status::online_among(state, candidates).await?;
     if online.is_empty() {
-        return Ok(0);
+        return Ok(online);
     }
     let mut conn = state.connection_pool.get().await?;
-    let viewers = crate::visibility::viewers(conn.as_mut(), community, &online, channel).await?;
-    Ok(viewers.len() as u32)
+    crate::visibility::viewers(conn.as_mut(), community, &online, channel).await
 }
