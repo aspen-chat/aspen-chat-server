@@ -169,6 +169,7 @@ export const admin = {
     resetProfile: "Reset someone's profile",
     clearNickname: "Cleared someone's nickname",
     readReportContext: "Read the DM around a reported message",
+    listDms: "Listed someone's DMs",
   },
   invite: "Invite",
   members: "Members",

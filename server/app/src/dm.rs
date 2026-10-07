@@ -240,6 +240,27 @@ pub async fn insert_dm(
 }
 
 /// The caller's DMs and group DMs with their recipients, the most recently active first.
+/// `user`'s DMs as `list_dms` gives them, for a deployment moderator to open one. Takes
+/// Moderate any community, and is written to the moderation log, since whom someone talks to
+/// privately is theirs; opening any of them is logged again (`readDm`).
+pub async fn list_dms_moderating(
+    state: &GlobalServerContext,
+    access: &crate::deployment::DeploymentAccess,
+    user: UserId,
+) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
+    access.require(crate::deployment::DeploymentPermission::ModerateCommunities)?;
+    crate::moderation_log::log_moderation(
+        state.connection_pool.get().await?.as_mut(),
+        access.user,
+        crate::moderation_log::ModerationAction::ListDms,
+        None,
+        None,
+        Some(user.0.to_string()),
+    )
+    .await?;
+    list_dms(state, user).await
+}
+
 pub async fn list_dms(
     state: &GlobalServerContext,
     caller: UserId,

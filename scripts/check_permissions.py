@@ -1231,6 +1231,10 @@ def dm_reads(world: World, check: Checks) -> None:
     check("and the reading is logged, once", logged() == before + 1)
     status = stack.status("GET", f"/messages/{secret}/reactions/{thumbs}", token=watcher["token"])
     check("reading who reacted in it is logged too", status == 200 and logged() == before + 2, status)
+    listed = stack.status("GET", f"/admin/users/{member['id']}/dms", token=watcher["token"])
+    entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])
+    check("listing someone's DMs is logged, naming them", listed == 200 and any(
+        e.get("action") == "listDms" and e.get("subject") == member["id"] for e in entries), listed)
     check("while what reads no content finds no DM",
           stack.status("GET", f"/channels/{dm}/read-states/@me", token=watcher["token"]) == 404
           and stack.status("GET", f"/channels/{dm}/presence", token=watcher["token"]) == 404)
