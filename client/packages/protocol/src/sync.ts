@@ -1694,11 +1694,11 @@ export class AspenSync {
 
   /**
    * Who the user blocked on every deployment they use, by `identityOf`, with `domain`, this
-   * deployment's name: those of them in a call here are silenced and their screens hidden, as
-   * if blocked here.
+   * deployment's name, and `home`, their home's: those of them in a call here are silenced and
+   * their screens hidden, as if blocked here.
    */
-  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
-    this.store.setBlockedIdentities(domain, identities);
+  setBlockedIdentities(domain: string, home: string | null, identities: ReadonlySet<string>): void {
+    this.store.setBlockedIdentities(domain, home, identities);
   }
 
   /**

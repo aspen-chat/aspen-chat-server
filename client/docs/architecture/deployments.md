@@ -41,7 +41,11 @@
   every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf`
   (`packages/protocol/src/identity.ts`) names a person by their home's domain and their id
   there, from `homeDomain` and `homeId`, and `ScopeDomainContext` says which deployment a record
-  in scope is from. In calls the same holds below the UI: `ShareBlocksAcrossDeployments` hands
+  in scope is from. Only the viewer's home is believed about where a user from elsewhere is
+  from, since it checked the assertion the user signed in with; any other deployment's users
+  from elsewhere are named by that deployment and their id there, so a deployment that claims
+  its user is someone else cannot have a block of that user hide the person it named. A person
+  from a third deployment blocked on a foreign one is therefore hidden on that one alone. In calls the same holds below the UI: `ShareBlocksAcrossDeployments` hands
   every deployment's sync the blocked identities (`AspenSync.setBlockedIdentities`), and its
   store's `silenced` (topic `silenced`, `useSilenced`) decides each voice's gain
   (`VoiceCall.refreshVolumes` whenever it changes) and which shared screens are hidden, even

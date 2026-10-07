@@ -205,11 +205,13 @@ export class RecordStore {
   /** The users the caller has blocked. */
   readonly #blocked = new Set<string>();
   /**
-   * People the caller blocked on any deployment, by `identityOf`, and this deployment's domain,
-   * which names its own users' identities; `silenced` reads them.
+   * People the caller blocked on any deployment, by `identityOf`, this deployment's domain,
+   * which names its own users' identities, and the caller's home's, whose records alone are
+   * believed about where a user is from; `silenced` reads them.
    */
   #blockedIdentities: ReadonlySet<string> = new Set();
   #domain = "";
+  #home: string | null = null;
   readonly #roles = new Map<string, Role>();
   /** Overrides by `channel/role` and `category/role`. */
   readonly #channelOverrides = new Map<string, ChannelOverride>();
@@ -940,11 +942,12 @@ export class RecordStore {
 
   /**
    * Who the caller blocked on every deployment they use, by `identityOf`, with `domain`, the
-   * name of this one, so its own users' identities can be told.
+   * name of this one, so its own users' identities can be told, and `home`, the caller's home's.
    */
-  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
+  setBlockedIdentities(domain: string, home: string | null, identities: ReadonlySet<string>): void {
     const same =
       domain === this.#domain &&
+      home === this.#home &&
       identities.size === this.#blockedIdentities.size &&
       [...identities].every((identity) => this.#blockedIdentities.has(identity));
     if (same) {
@@ -952,6 +955,7 @@ export class RecordStore {
     }
     this.#batch(() => {
       this.#domain = domain;
+      this.#home = home;
       this.#blockedIdentities = new Set(identities);
       this.#touch("silenced");
     });
@@ -963,7 +967,7 @@ export class RecordStore {
     }
     const user = this.#users.get(userId);
     return this.#blockedIdentities.has(
-      identityOf(user ?? { id: userId, homeDomain: null, homeId: null }, this.#domain),
+      identityOf(user ?? { id: userId, homeDomain: null, homeId: null }, this.#domain, this.#home),
     );
   }
 
@@ -2371,10 +2375,7 @@ export class RecordStore {
    */
   #putAttachment(attachment: Attachment): void {
     const preview = attachment.preview ?? this.#attachments.get(attachment.id)?.preview;
-    this.#attachments.set(
-      attachment.id,
-      preview == null ? attachment : { ...attachment, preview },
-    );
+    this.#attachments.set(attachment.id, preview == null ? attachment : { ...attachment, preview });
     this.#touch(`attachment:${attachment.id}`);
   }
 
