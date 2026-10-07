@@ -74,6 +74,8 @@ pub enum FileTransferOutcome {
     Failed,
     /// One side left the call.
     Left,
+    /// The sender lost Transfer files in the call.
+    NotPermitted,
 }
 
 crate::wire_name_traits!(FileTransferOutcome);
@@ -86,6 +88,7 @@ impl From<TransferEnd> for FileTransferOutcome {
             TransferEnd::Cancelled => Self::Cancelled,
             TransferEnd::Failed => Self::Failed,
             TransferEnd::Left => Self::Left,
+            TransferEnd::NotPermitted => Self::NotPermitted,
         }
     }
 }

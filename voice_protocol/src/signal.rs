@@ -120,6 +120,9 @@ pub enum TransferEnd {
     Failed,
     /// The other side left the call. Only the server says this.
     Left,
+    /// The sender may no longer offer files in the call (Transfer files). Only the server says
+    /// this, to both sides.
+    NotPermitted,
 }
 
 /// Why an offer stopped standing. Transfers it started go on.

@@ -1285,6 +1285,7 @@ impl Rooms {
         }
         if !grants.transfer_files {
             self.withdraw_offers_of(room.channel, user);
+            self.end_transfers_sent_by(room, user).await;
         }
     }
 

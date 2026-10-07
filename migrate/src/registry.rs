@@ -94,4 +94,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261006_150944_token_digests::M,
     &migrations::m20261006_154118_recovery_code_created_at::M,
     &migrations::m20261006_154221_voice_server_suspension::M,
+    &migrations::m20261007_144835_transfer_outcome_not_permitted::M,
 ];

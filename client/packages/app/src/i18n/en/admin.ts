@@ -129,6 +129,7 @@ export const admin = {
     cancelled: "cancelled",
     failed: "failed",
     left: "someone left the call",
+    notPermitted: "the sender could no longer transfer files",
     underway: "under way",
   },
   logWhen: "When",

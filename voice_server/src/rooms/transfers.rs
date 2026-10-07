@@ -439,9 +439,10 @@ impl Rooms {
         peer: Uuid,
         reason: TransferEnd,
     ) -> Result<(), RoomError> {
-        if reason == TransferEnd::Left {
+        if matches!(reason, TransferEnd::Left | TransferEnd::NotPermitted) {
             return Err(RoomError::BadParameters(
-                "only the server ends a transfer for someone leaving".to_string(),
+                "only the server ends a transfer for someone leaving or losing Transfer files"
+                    .to_string(),
             ));
         }
         let user = seat.user;
@@ -455,10 +456,17 @@ impl Rooms {
     }
 
     /// Removes one transfer: closes both its sides at the relay, tells the side that did not
-    /// end it (`ended_by`), and tells everyone the link is gone.
-    async fn finish(&self, room: &Room, key: (Uuid, Uuid), ended_by: Uuid, reason: TransferEnd) {
+    /// end it (`ended_by`), and tells everyone the link is gone. False when it had already
+    /// ended.
+    async fn finish(
+        &self,
+        room: &Room,
+        key: (Uuid, Uuid),
+        ended_by: Uuid,
+        reason: TransferEnd,
+    ) -> bool {
         let Some(transfer) = room.transfers.lock().expect("transfers lock").remove(&key) else {
-            return;
+            return false;
         };
         let (offer, receiver) = key;
         let sender = transfer.sender;
@@ -490,6 +498,37 @@ impl Rooms {
             ended_by,
             reason,
         });
+        true
+    }
+
+    /// Ends every transfer `user` is sending in `room`'s call, as when they may no longer
+    /// offer files: an offer withdrawn leaves its transfers going, but a grant lost stops what
+    /// it allowed. Both sides are told.
+    pub(super) async fn end_transfers_sent_by(&self, room: &Room, user: Uuid) {
+        let keys: Vec<(Uuid, Uuid)> = room
+            .transfers
+            .lock()
+            .expect("transfers lock")
+            .iter()
+            .filter(|(_, transfer)| transfer.sender == user)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in keys {
+            let (offer, receiver) = key;
+            if self
+                .finish(room, key, user, TransferEnd::NotPermitted)
+                .await
+            {
+                room.send_to(
+                    user,
+                    ServerMessage::TransferEnded {
+                        offer,
+                        peer: receiver,
+                        reason: TransferEnd::NotPermitted,
+                    },
+                );
+            }
+        }
     }
 
     /// Everything of `user`'s in a call they are leaving: their offers are withdrawn and every

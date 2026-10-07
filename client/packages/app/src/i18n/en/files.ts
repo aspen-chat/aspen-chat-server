@@ -70,6 +70,8 @@ export const files = {
   cancelledByPeer: "{handle} cancelled it.",
   failed: "It stopped before finishing.",
   left: "{handle} left the call.",
+  notPermittedSelf: "It stopped because you can no longer send files in this call.",
+  notPermittedPeer: "It stopped because {handle} can no longer send files in this call.",
   linksLabel: "Transfers under way",
   link: "{sender} is sending a file to {receiver}",
 } as const;
