@@ -1,4 +1,9 @@
-# Not appropriate for production use cases
+# Not appropriate for production use cases: the passwords and keys here are public.
+#
+# Every service listens on this machine alone (127.0.0.1), so nothing on the network can reach
+# the database, NATS, Valkey, storage, or the mail catcher (whose inbox shows every code mailed).
+# To try the apps from a phone on the local network, start it with the address to listen on:
+# `ASPEN_DEV_BIND=0.0.0.0 docker-compose up -d`, and only on a network you trust.
 services:
   database:
     image: postgres:alpine
@@ -9,30 +14,26 @@ services:
       POSTGRES_PASSWORD: aspen_test
       PGDATA: /data/postgress
     ports:
-      - "5432:5432"
+      - "${ASPEN_DEV_BIND:-127.0.0.1}:5432:5432"
   nats:
     # 2.10 or later: the event stream reads several subjects with one consumer.
     image: nats:2.11-alpine
     command: --jetstream --auth aspen_test
     ports:
-      - "4222:4222"
-      - "8222:8222"
-      - "6222:6222"
+      - "${ASPEN_DEV_BIND:-127.0.0.1}:4222:4222"
   valkey:
     image: valkey/valkey:alpine
     ports:
-      - "6379:6379"
+      - "${ASPEN_DEV_BIND:-127.0.0.1}:6379:6379"
   seaweedfs:
     image: chrislusf/seaweedfs:4.22
+    # On the host's network, so its master (9333), volume (8080), filer (8888), and S3 (8333)
+    # servers reach one another at the addresses they advertise; `-ip.bind` keeps them all on
+    # this machine.
     network_mode: "host"
-    command: server -s3 -ip 0.0.0.0 
+    command: server -s3 -ip 0.0.0.0 -ip.bind ${ASPEN_DEV_BIND:-127.0.0.1}
     volumes:
-      - seaweeddata:/data 
-    ports:
-      - 9333:9333
-      - 8080:8080
-      - 8888:8888
-      - 8333:8333
+      - seaweeddata:/data
     environment:
       - AWS_ACCESS_KEY_ID=GK484e56c38fb7e14b182bf47a
       - AWS_SECRET_ACCESS_KEY=6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027
@@ -42,8 +43,8 @@ services:
     # and shows it at http://localhost:8025 instead of delivering it.
     image: axllent/mailpit:latest
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "${ASPEN_DEV_BIND:-127.0.0.1}:1025:1025"
+      - "${ASPEN_DEV_BIND:-127.0.0.1}:8025:8025"
 volumes:
   db:
   seaweeddata:
