@@ -39,7 +39,6 @@ mod api;
 mod app;
 mod aspen_config;
 mod connections;
-mod database;
 mod operator;
 
 /// jemalloc for the whole process (it also replaces `malloc`), which keeps memory from

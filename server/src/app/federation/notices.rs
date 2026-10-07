@@ -19,7 +19,7 @@ use crate::app::federation::keys::signing_key;
 use crate::app::federation::received::{Received, Senders, Statement, receive};
 use crate::app::federation::{Direction, Domain, FederationList, Subject, admits, jws, own_domain};
 use crate::app::{self, ChannelId, EventScope, UserId, publish_event};
-use crate::database::schema::{user, user_foreign_deployment};
+use aspen_schema::{user, user_foreign_deployment};
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

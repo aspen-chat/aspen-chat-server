@@ -18,7 +18,8 @@ use crate::app::ephemeral_token;
 use crate::app::events::Publishing;
 use crate::app::two_factor::{self, SecondFactor, SecondFactorMethods};
 use crate::app::user::UserPg;
-use crate::{CHACHA_RNG, app, app::UserId, database::schema};
+use crate::{CHACHA_RNG, app, app::UserId};
+use aspen_schema as schema;
 use diesel::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
@@ -284,7 +285,7 @@ async fn issue(
     foreign: bool,
     verified_at: DateTime<Utc>,
 ) -> app::Result<Session> {
-    use crate::database::schema::{refresh_token, session};
+    use aspen_schema::{refresh_token, session};
     let session_token = make_token();
     let refresh_token = make_token();
     let now = Utc::now();

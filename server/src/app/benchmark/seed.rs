@@ -7,11 +7,11 @@
 use crate::CHACHA_RNG;
 use crate::app;
 use crate::app::channel::ChannelType;
-use crate::database::schema::{
+use aspen_bench_protocol::{Manifest, SeedPlan, SeededCommunity, SeededUser, user_name};
+use aspen_schema::{
     benchmark_community, benchmark_run, benchmark_user, channel, community, community_user,
     message, user,
 };
-use aspen_bench_protocol::{Manifest, SeedPlan, SeededCommunity, SeededUser, user_name};
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

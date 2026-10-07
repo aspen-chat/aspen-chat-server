@@ -3,7 +3,7 @@
 //! from the fields, so they are a small vocabulary of types rather than any JSON Schema.
 
 use crate::app::{self, ChannelId, CommunityId, RoleId};
-use crate::database::schema::{channel, community_role};
+use aspen_schema::{channel, community_role};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use schemars::JsonSchema;

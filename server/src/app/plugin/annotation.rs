@@ -13,7 +13,7 @@ use crate::api::message_enum::server_event::{
 use crate::api::message_enum::{MessageAnnotation, UserAnnotation};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AnnotationId, CommunityId, EventScope, MessageId, UserId, publish_event};
-use crate::database::schema::{community_user, message_annotation, user, user_annotation};
+use aspen_schema::{community_user, message_annotation, user, user_annotation};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};

@@ -12,7 +12,7 @@
 //! icons, link preview images) are deleted after the transaction commits.
 
 use crate::app::{self, media_store::MediaStore};
-use crate::database::schema::benchmark_run;
+use aspen_schema::benchmark_run;
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Text};
 use diesel_async::scoped_futures::ScopedFutureExt;

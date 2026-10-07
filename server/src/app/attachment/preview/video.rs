@@ -62,7 +62,9 @@ pub async fn make(
     drop(dir);
 
     let max_pixels = config.max_picture_pixels;
-    match tokio::task::spawn_blocking(move || aspen_previews::picture::preview(&frame, max_pixels)).await {
+    match tokio::task::spawn_blocking(move || aspen_previews::picture::preview(&frame, max_pixels))
+        .await
+    {
         Ok(Ok(poster)) => Outcome::Made(Made {
             bytes: poster.webp,
             mime_type: "image/webp",

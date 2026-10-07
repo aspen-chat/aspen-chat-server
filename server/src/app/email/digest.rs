@@ -22,10 +22,10 @@ use super::outbox::{self, Mail};
 use super::render::{Item, Letter, Section};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, CommunityId, CustomEmojiId, UserId};
-use crate::database::schema::{
+use crate::t;
+use aspen_schema::{
     channel, community, community_role, custom_emoji, dm_recipient, user, user_email,
 };
-use crate::t;
 use chrono::{DateTime, Days, NaiveTime, TimeZone, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, BigInt, Nullable, SmallInt, Text, Timestamptz, Uuid as PgUuid};

@@ -10,7 +10,7 @@ use super::registry::LoadedPlugin;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{CommunityAccess, Permissions};
 use crate::app::{self, CommunityId, MessageId, UserId};
-use crate::database::schema::{community_user, user};
+use aspen_schema::{community_user, user};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use std::sync::Arc;

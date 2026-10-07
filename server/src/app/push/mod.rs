@@ -24,11 +24,12 @@ use crate::app::{
     self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, PluginNoticeId, PushKeyId,
     PushSubscriptionId, UserId,
 };
-use crate::database::schema::{
-    self, channel, channel_mute, community_member_role, community_user, dm_recipient, message,
-    notification_setting, push_key, push_subscription, read_state, refresh_token, user_block,
-};
 use crate::t;
+use aspen_schema::{
+    self as schema, channel, channel_mute, community_member_role, community_user, dm_recipient,
+    message, notification_setting, push_key, push_subscription, read_state, refresh_token,
+    user_block,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -313,7 +314,7 @@ async fn phones_of(
     state: &GlobalServerContext,
     users: &[UserId],
 ) -> app::Result<HashMap<UserId, Vec<PushSubscription>>> {
-    use crate::database::schema::{refresh_token, user};
+    use aspen_schema::{refresh_token, user};
     let mut conn = state.connection_pool.get().await?;
     let mut phones: HashMap<UserId, Vec<PushSubscription>> = HashMap::new();
     for (user, subscription) in push_subscription::table

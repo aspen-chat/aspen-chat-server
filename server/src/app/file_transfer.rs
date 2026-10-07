@@ -7,7 +7,7 @@
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, UserId};
-use crate::database::schema::{file_offer, file_transfer};
+use aspen_schema::{file_offer, file_transfer};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};

@@ -12,8 +12,8 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::Permissions;
 use crate::app::{self, CommunityId, UserId};
-use crate::database::schema::{community, community_user};
 use crate::t;
+use aspen_schema::{community, community_user};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

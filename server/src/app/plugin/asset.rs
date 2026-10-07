@@ -6,7 +6,7 @@
 
 use super::manifest::{Manifest, valid_asset_path};
 use crate::app;
-use crate::database::schema::plugin_asset;
+use aspen_schema::plugin_asset;
 use bytes::Bytes;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};

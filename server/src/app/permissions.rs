@@ -26,11 +26,11 @@
 use crate::app::channel::ChannelType;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
-use crate::database::schema::{
+use crate::t;
+use aspen_schema::{
     category_override, channel, channel_override, community, community_member_role, community_role,
     community_user, dm_recipient, user as user_table,
 };
-use crate::t;
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -677,7 +677,7 @@ async fn overrides_of_category(
     category_id: CategoryId,
 ) -> app::Result<Vec<Override>> {
     Ok(category_override::table
-        .inner_join(crate::database::schema::category::table)
+        .inner_join(aspen_schema::category::table)
         .select((
             category_override::role,
             category_override::allow,
@@ -686,7 +686,7 @@ async fn overrides_of_category(
         .filter(
             category_override::category
                 .eq(category_id)
-                .and(crate::database::schema::category::deleted_at.is_null()),
+                .and(aspen_schema::category::deleted_at.is_null()),
         )
         .load(&mut conn)
         .await?)

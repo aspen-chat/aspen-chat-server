@@ -409,6 +409,7 @@ dependencies = [
  "aspen_limits",
  "aspen_metrics",
  "aspen_previews",
+ "aspen_schema",
  "async-nats",
  "aws-config",
  "aws-credential-types",
@@ -592,6 +593,13 @@ dependencies = [
  "tokio",
  "tracing",
  "webp",
+]
+
+[[package]]
+name = "aspen_schema"
+version = "0.1.0"
+dependencies = [
+ "diesel",
 ]
 
 [[package]]

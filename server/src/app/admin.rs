@@ -8,7 +8,7 @@
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, CommunityId, IconId, UserId};
-use crate::database::schema::{community, user};
+use aspen_schema::{community, user};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Nullable, Text, Timestamptz, Uuid as PgUuid};

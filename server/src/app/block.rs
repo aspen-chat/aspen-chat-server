@@ -17,8 +17,8 @@
 use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, EventScope, UserId, publish_event};
-use crate::database::schema::{user, user_block};
 use crate::t;
+use aspen_schema::{user, user_block};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

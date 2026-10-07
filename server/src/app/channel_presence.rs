@@ -10,7 +10,7 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home};
 use crate::app::{self, ChannelId, CommunityId, UserId};
-use crate::database::schema::dm_recipient;
+use aspen_schema::dm_recipient;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 

@@ -11,7 +11,7 @@
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, VoiceServerId};
-use crate::database::schema::voice_server;
+use aspen_schema::voice_server;
 use async_nats::jetstream::kv::{Config as KvConfig, Store};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;

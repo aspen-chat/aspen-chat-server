@@ -10,8 +10,8 @@ use crate::app::visibility::Visibility;
 use crate::app::{
     CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, UserId, publish_event,
 };
-use crate::database::schema::{category, category_override, channel};
 use crate::t;
+use aspen_schema::{category, category_override, channel};
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     Selectable, SelectableHelper,

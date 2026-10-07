@@ -31,7 +31,7 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::channel_access;
 use crate::app::{ChannelId, UserId, VoiceServerId, VoiceSessionId};
-use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
+use aspen_schema::{channel, voice_participant, voice_server, voice_session};
 use chrono::{DateTime, Utc};
 use diesel::{
     AsChangeset, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper,

@@ -12,7 +12,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::{ChannelHome, channel_home, dm_recipients};
 use crate::app::permissions::{ChannelAccess, Permissions};
 use crate::app::{self, ChannelId, MessageId, RoleId, UserId};
-use crate::database::schema::{community_role, community_user, mention};
+use aspen_schema::{community_role, community_user, mention};
 use diesel::deserialize::FromSqlRow;
 use diesel::expression::AsExpression;
 use diesel::prelude::*;

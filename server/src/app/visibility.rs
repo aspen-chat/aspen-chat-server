@@ -17,7 +17,7 @@ use crate::app::permissions::{
     CommunityAccess, Override, Permission, Permissions, RoleGrant, from_names,
 };
 use crate::app::{self, CategoryId, ChannelId, CommunityId, RoleId, UserId};
-use crate::database::schema::{
+use aspen_schema::{
     category_override, channel, channel_override, community, community_member_role, community_role,
     community_user,
 };
@@ -416,9 +416,9 @@ impl CommunityModel {
             }
         }
         let category_overrides: Vec<(CommunityId, CategoryId, Override)> = category_override::table
-            .inner_join(crate::database::schema::category::table)
+            .inner_join(aspen_schema::category::table)
             .select((
-                crate::database::schema::category::community,
+                aspen_schema::category::community,
                 category_override::category,
                 (
                     category_override::role,
@@ -427,9 +427,9 @@ impl CommunityModel {
                 ),
             ))
             .filter(
-                crate::database::schema::category::community
+                aspen_schema::category::community
                     .eq_any(&ids)
-                    .and(crate::database::schema::category::deleted_at.is_null()),
+                    .and(aspen_schema::category::deleted_at.is_null()),
             )
             .load(conn)
             .await?;

@@ -33,8 +33,8 @@ use crate::app::plugin::intercept;
 use crate::app::plugin::manifest::InterceptHook;
 use crate::app::react::validate_emoji;
 use crate::app::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
-use crate::database::schema::{message, poll, poll_option, poll_vote};
 use crate::t;
+use aspen_schema::{message, poll, poll_option, poll_vote};
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods, QueryDsl,

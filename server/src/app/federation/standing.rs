@@ -36,7 +36,7 @@ use crate::app::federation::{
     Direction, Domain, FederationList, FederationPolicy, Subject, admits, jws, lists_of, own_domain,
 };
 use crate::app::{self, UserId};
-use crate::database::schema::{federated_deployment, refresh_token, user, user_foreign_deployment};
+use aspen_schema::{federated_deployment, refresh_token, user, user_foreign_deployment};
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

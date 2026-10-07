@@ -68,7 +68,7 @@ use crate::api::message_enum::server_event::{MessageEvent, ServerEvent};
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::MediaStore;
 use crate::app::{self, LinkPreviewImageId, MessageId, UserId};
-use crate::database::schema::message_link_preview;
+use aspen_schema::message_link_preview;
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable};
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;

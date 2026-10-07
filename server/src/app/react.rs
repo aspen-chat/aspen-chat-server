@@ -3,8 +3,8 @@ use crate::api::message_enum::server_event::{ReactEvent, ServerEvent};
 use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::{CustomEmojiId, EventScope, MessageId, UserId, publish_event};
-use crate::database::schema::react;
 use crate::t;
+use aspen_schema::react;
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl, QueryDsl, Queryable,
     QueryableByName, Selectable,
@@ -58,15 +58,16 @@ pub async fn create_react(
     };
     let mut conn = state.connection_pool.get().await?;
     let (channel, community): (crate::app::ChannelId, Option<crate::app::CommunityId>) =
-        crate::database::schema::message::table
-            .inner_join(crate::database::schema::channel::table.on(
-                crate::database::schema::channel::id.eq(crate::database::schema::message::channel),
-            ))
+        aspen_schema::message::table
+            .inner_join(
+                aspen_schema::channel::table
+                    .on(aspen_schema::channel::id.eq(aspen_schema::message::channel)),
+            )
             .select((
-                crate::database::schema::message::channel,
-                crate::database::schema::channel::community,
+                aspen_schema::message::channel,
+                aspen_schema::channel::community,
             ))
-            .filter(crate::database::schema::message::id.eq(message_id))
+            .filter(aspen_schema::message::id.eq(message_id))
             .first(conn.as_mut())
             .await?;
     crate::app::permissions::channel_access(state, conn.as_mut(), author, channel)
@@ -127,9 +128,9 @@ pub async fn remove_others_react(
 ) -> app::error::Result<()> {
     if author != caller {
         let mut conn = state.connection_pool.get().await?;
-        let channel: crate::app::ChannelId = crate::database::schema::message::table
-            .select(crate::database::schema::message::channel)
-            .filter(crate::database::schema::message::id.eq(message_id))
+        let channel: crate::app::ChannelId = aspen_schema::message::table
+            .select(aspen_schema::message::channel)
+            .filter(aspen_schema::message::id.eq(message_id))
             .first(conn.as_mut())
             .await?;
         let access = crate::app::permissions::channel_access_moderating(
@@ -295,9 +296,9 @@ pub async fn read_reactors(
     limit: u32,
 ) -> app::Result<Vec<UserId>> {
     let mut conn = state.connection_pool.get().await?;
-    let channel: crate::app::ChannelId = crate::database::schema::message::table
-        .select(crate::database::schema::message::channel)
-        .filter(crate::database::schema::message::id.eq(message_id))
+    let channel: crate::app::ChannelId = aspen_schema::message::table
+        .select(aspen_schema::message::channel)
+        .filter(aspen_schema::message::id.eq(message_id))
         .first(conn.as_mut())
         .await?;
     crate::app::permissions::channel_access_reading(

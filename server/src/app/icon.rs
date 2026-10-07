@@ -20,8 +20,8 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::{PresignedUpload, Promotion, Served};
 use crate::app::{IconId, Loadable, UserId};
-use crate::database::schema::icon;
 use crate::t;
+use aspen_schema::icon;
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable,

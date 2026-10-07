@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["server", "server/previews", "message_gen", "migrate", "voice_protocol", "voice_server", "limits", "metrics", "bench_protocol", "bench"]
+members = ["server", "server/previews", "server/schema", "message_gen", "migrate", "voice_protocol", "voice_server", "limits", "metrics", "bench_protocol", "bench"]
 # The desktop shell's libobs addon links libobs, which nothing else needs; it is its own
 # workspace and built by `pnpm build:native` in client/packages/desktop. The example plugins are
 # built for `wasm32-wasip2`, each its own workspace too.

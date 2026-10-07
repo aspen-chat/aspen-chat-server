@@ -8,7 +8,7 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment_settings;
 use crate::app::icon::Icon;
-use crate::database::schema::{community, icon, invite};
+use aspen_schema::{community, icon, invite};
 use chrono::Utc;
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, JoinOnDsl, NullableExpressionMethods,

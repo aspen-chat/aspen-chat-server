@@ -6,8 +6,8 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, EventScope, UserId, publish_event};
-use crate::database::schema::invite;
 use crate::t;
+use aspen_schema::invite;
 use chrono::Utc;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,

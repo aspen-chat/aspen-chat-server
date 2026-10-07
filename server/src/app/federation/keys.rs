@@ -13,7 +13,7 @@ use crate::app::federation::protocol::{Protocol, Software};
 use crate::app::federation::{Domain, jws, own_domain};
 use crate::app::federation::{Gate, MigrationRules};
 use crate::app::{self, FederationKeyId};
-use crate::database::schema::federation_key;
+use aspen_schema::federation_key;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};

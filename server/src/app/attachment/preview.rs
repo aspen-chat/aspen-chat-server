@@ -43,7 +43,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId, EventScope, MessageId};
 use crate::aspen_config::PreviewConfig;
 pub use aspen_previews::{Made, Outcome};
-use crate::database::schema::{attachment, attachment_preview_job, message, message_attachment};
+use aspen_schema::{attachment, attachment_preview_job, message, message_attachment};
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Bool, Integer, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;

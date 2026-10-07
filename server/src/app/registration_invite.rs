@@ -16,8 +16,8 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::events::Publishing;
 use crate::app::{self, CommunityId, UserId};
-use crate::database::schema::{community, invite, registration_invite};
 use crate::t;
+use aspen_schema::{community, invite, registration_invite};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

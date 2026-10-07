@@ -17,9 +17,9 @@ use crate::app::{
     CategoryId, ChannelId, CommunityId, EventScope, UserId, VoiceServerId, VoiceSessionId,
     publish_event,
 };
-use crate::database::schema::user as user_table;
-use crate::database::schema::{channel, voice_participant, voice_server, voice_session};
 use crate::t;
+use aspen_schema::user as user_table;
+use aspen_schema::{channel, voice_participant, voice_server, voice_session};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;

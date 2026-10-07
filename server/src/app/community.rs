@@ -11,10 +11,10 @@ use crate::app::{
     ChannelId, CommunityId, EventScope, IconId, Loadable, MaybeLoaded, RoleId, UserId,
     publish_event,
 };
-use crate::database::schema::community;
-use crate::database::schema::community_member_role;
-use crate::database::schema::community_user;
 use crate::t;
+use aspen_schema::community;
+use aspen_schema::community_member_role;
+use aspen_schema::community_user;
 use diesel::{
     AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
     QueryableByName, Selectable, SelectableHelper,
@@ -690,9 +690,9 @@ pub(crate) async fn read_community_members(
     .collect();
     let mut conn = state.connection_pool.get().await?;
     if !connected.is_empty() {
-        let blockers: Vec<UserId> = crate::database::schema::user_block::table
-            .select(crate::database::schema::user_block::blocker)
-            .filter(crate::database::schema::user_block::blocked.eq(caller))
+        let blockers: Vec<UserId> = aspen_schema::user_block::table
+            .select(aspen_schema::user_block::blocker)
+            .filter(aspen_schema::user_block::blocked.eq(caller))
             .load(conn.as_mut())
             .await?;
         for blocker in blockers {

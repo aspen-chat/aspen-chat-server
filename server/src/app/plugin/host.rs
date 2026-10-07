@@ -23,7 +23,7 @@ use crate::app::message::Message as MessageRow;
 use crate::app::permissions::channel_access;
 use crate::app::user::UserPg;
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, MessageId, UserId};
-use crate::database::schema::{attachment, channel, message, message_attachment, user};
+use aspen_schema::{attachment, channel, message, message_attachment, user};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use std::collections::HashSet;

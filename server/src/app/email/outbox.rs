@@ -23,7 +23,7 @@
 use super::{EmailAccount, Mailer, render};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, UserId};
-use crate::database::schema::{email_outbox, user, user_email};
+use aspen_schema::{email_outbox, user, user_email};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Integer, Jsonb, Nullable, SmallInt, Text, Uuid as PgUuid};

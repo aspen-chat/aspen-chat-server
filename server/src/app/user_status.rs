@@ -32,7 +32,7 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::user::UserPg;
 use crate::app::{CommunityId, UserId};
-use crate::database::schema::community_user;
+use aspen_schema::community_user;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
@@ -437,7 +437,7 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
 
 /// Writes `user`'s `last_seen_at` as now.
 async fn record_seen(state: &GlobalServerContext, user: UserId) -> app::Result<()> {
-    use crate::database::schema::user;
+    use aspen_schema::user;
     diesel::update(user::table.filter(user::id.eq(user)))
         .set(user::last_seen_at.eq(diesel::dsl::now))
         .execute(state.connection_pool.get().await?.as_mut())

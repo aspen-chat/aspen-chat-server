@@ -9,7 +9,7 @@
 
 use super::route::{self, Answer};
 use crate::app::{self, UserId};
-use crate::database::schema::{plugin_capability, user};
+use aspen_schema::{plugin_capability, user};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use diesel::prelude::*;

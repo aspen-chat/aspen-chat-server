@@ -14,7 +14,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::link_preview::extract_urls;
 use crate::app::message::{MessageWithRelations, read_messages};
 use crate::app::{self, ChannelId, CommunityId, MessageId, UserId};
-use crate::database::schema::{channel, message};
+use aspen_schema::{channel, message};
 use diesel::deserialize::FromSql;
 use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;

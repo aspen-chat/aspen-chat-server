@@ -9,7 +9,7 @@
 use super::host::wit;
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, ChannelId, CommunityId, UserId};
-use crate::database::schema::{plugin, plugin_storage};
+use aspen_schema::{plugin, plugin_storage};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -366,7 +366,7 @@ pub async fn list(
 /// transaction: for a channel, in its threads too; for a community, in its channels and their
 /// threads too.
 pub async fn forget(conn: &mut AsyncPgConnection, scope: Scope) -> app::Result<()> {
-    use crate::database::schema::channel;
+    use aspen_schema::channel;
     let channels: Vec<Uuid> = match scope {
         Scope::Channel(id) => channel::table
             .select(channel::id)

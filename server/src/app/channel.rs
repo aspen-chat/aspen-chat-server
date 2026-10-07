@@ -14,9 +14,9 @@ use crate::app::{
     AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
     UserId, publish_event,
 };
-use crate::database::schema::message_attachment;
-use crate::database::schema::{channel, dm_recipient, message};
 use crate::t;
+use aspen_schema::message_attachment;
+use aspen_schema::{channel, dm_recipient, message};
 use diesel::FromSqlRow;
 use diesel::deserialize::FromSql;
 use diesel::expression::AsExpression;
@@ -146,7 +146,7 @@ async fn ensure_category_of(
     category_id: CategoryId,
     community: CommunityId,
 ) -> app::Result<()> {
-    use crate::database::schema::category;
+    use aspen_schema::category;
     category::table
         .select(category::id)
         .filter(
@@ -454,7 +454,7 @@ pub(crate) async fn with_relations(
     Ok(ret.into_values().collect())
 }
 
-use crate::database::schema::pin;
+use aspen_schema::pin;
 
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = pin)]
@@ -675,7 +675,7 @@ pub(crate) async fn delete_channel(
     AsExpression,
 )]
 #[serde(rename_all = "camelCase")]
-#[diesel(sql_type = crate::database::schema::sql_types::ChannelType)]
+#[diesel(sql_type = aspen_schema::sql_types::ChannelType)]
 pub enum ChannelType {
     Text,
     Voice,
@@ -692,7 +692,7 @@ pub enum ChannelType {
 
 app::wire_name_traits!(ChannelType);
 
-impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+impl ToSql<aspen_schema::sql_types::ChannelType, Pg> for ChannelType {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
         out.write_all(match self {
             ChannelType::Text => b"text",
@@ -706,7 +706,7 @@ impl ToSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType 
     }
 }
 
-impl FromSql<crate::database::schema::sql_types::ChannelType, Pg> for ChannelType {
+impl FromSql<aspen_schema::sql_types::ChannelType, Pg> for ChannelType {
     fn from_sql(
         bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
     ) -> diesel::deserialize::Result<Self> {

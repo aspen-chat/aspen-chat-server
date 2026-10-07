@@ -12,8 +12,8 @@ use crate::app::events::Publishing;
 use crate::app::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::app::user::UserPg;
 use crate::app::{ChannelId, UserId, VoiceServerId};
-use crate::database::schema::{channel, voice_server, voice_server_failure, voice_session};
 use crate::t;
+use aspen_schema::{channel, voice_server, voice_server_failure, voice_session};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,

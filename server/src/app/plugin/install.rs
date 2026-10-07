@@ -13,7 +13,7 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::events::Publishing;
 use crate::app::user::UserPg;
 use crate::app::{self, CommunityId, EventScope, UserId, publish_event};
-use crate::database::schema::{
+use aspen_schema::{
     bot_command_list, community_user, message_annotation, plugin, user, user_annotation,
 };
 use chrono::{DateTime, Utc};
@@ -510,7 +510,7 @@ pub async fn remove(
 /// and its deployment settings. Its row stays, as the record that it was installed, and so does
 /// its account, both of which a later install of the same plugin takes up again.
 pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> app::Result<()> {
-    use crate::database::schema::{community_plugin, plugin_storage};
+    use aspen_schema::{community_plugin, plugin_storage};
     conn.transaction(|conn| {
         async move {
             let removed = diesel::update(

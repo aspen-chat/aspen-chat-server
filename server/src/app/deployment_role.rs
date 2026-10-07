@@ -15,8 +15,8 @@ use crate::app::deployment::{
 };
 use crate::app::events::Publishing;
 use crate::app::{self, DeploymentRoleId, EventScope, UserId, publish_event};
-use crate::database::schema::{deployment_role, user, user_deployment_role};
 use crate::t;
+use aspen_schema::{deployment_role, user, user_deployment_role};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};

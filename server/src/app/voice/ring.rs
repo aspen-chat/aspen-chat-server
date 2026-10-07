@@ -11,7 +11,7 @@ use crate::app::message::MessageKind;
 use crate::app::permissions::channel_access;
 use crate::app::{ChannelId, EventScope, UserId, VoiceSessionId, publish_event};
 use crate::app::{MaybeLoaded, MessageId};
-use crate::database::schema::{channel, dm_recipient, message, voice_ring, voice_session};
+use aspen_schema::{channel, dm_recipient, message, voice_ring, voice_session};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper};
 use diesel_async::scoped_futures::ScopedFutureExt;

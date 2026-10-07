@@ -6,7 +6,7 @@
 
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
-use crate::database::schema::moderation_log;
+use aspen_schema::moderation_log;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::Serialize;
@@ -212,9 +212,7 @@ pub async fn read_moderation_log(
     before: Option<uuid::Uuid>,
     limit: i64,
 ) -> app::Result<Vec<ModerationEntry>> {
-    use crate::database::schema::{
-        attachment, channel, community, dm_recipient, message, poll_option,
-    };
+    use aspen_schema::{attachment, channel, community, dm_recipient, message, poll_option};
     type Row = (
         uuid::Uuid,
         Option<UserId>,

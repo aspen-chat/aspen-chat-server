@@ -135,7 +135,11 @@ fn limit(_command: &mut Command, _memory: u64) {}
 
 /// The frame `at` seconds into the video at `path`, upright, as a PNG of at most
 /// `max_picture_bytes`.
-pub async fn poster_frame(config: &PreviewConfig, path: &Path, at: f64) -> Result<Vec<u8>, Outcome> {
+pub async fn poster_frame(
+    config: &PreviewConfig,
+    path: &Path,
+    at: f64,
+) -> Result<Vec<u8>, Outcome> {
     let at = format!("{at:.3}");
     let mut child = decoding(&config.ffmpeg, config)
         .args(["-nostdin", "-hide_banner", "-loglevel", "error"])

@@ -64,7 +64,7 @@ async fn run(
     command: AdminCommand,
 ) -> Result<()> {
     use crate::app::deployment_role;
-    use crate::database::schema::user;
+    use aspen_schema::user;
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     let find = |username: String| {

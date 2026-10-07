@@ -9,7 +9,7 @@ use super::host::wit;
 use super::registry::Running;
 use crate::app::context::GlobalServerContext;
 use crate::app::{self};
-use crate::database::schema::plugin_timer;
+use aspen_schema::plugin_timer;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Text};

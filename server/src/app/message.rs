@@ -26,11 +26,11 @@ use crate::app::{
     thread,
 };
 use crate::app::{HeldMessageId, MaybeLoaded, MessageId};
-use crate::database::schema::attachment;
-use crate::database::schema::channel;
-use crate::database::schema::message;
-use crate::database::schema::message_attachment;
 use crate::t;
+use aspen_schema::attachment;
+use aspen_schema::channel;
+use aspen_schema::message;
+use aspen_schema::message_attachment;
 use chrono::{DateTime, Utc};
 use diesel::FromSqlRow;
 use diesel::deserialize::FromSql;
@@ -1031,7 +1031,7 @@ pub async fn set_pinned(
     id: MessageId,
     pinned: bool,
 ) -> Result<(Option<app::channel::Pin>, bool), app::Error> {
-    use crate::database::schema::pin;
+    use aspen_schema::pin;
     let mut conn = state.connection_pool.get().await?;
     let channel_id: ChannelId = message::table
         .select(message::channel)
@@ -1223,7 +1223,7 @@ pub async fn remove_attachment(
     AsExpression,
 )]
 #[serde(rename_all = "camelCase")]
-#[diesel(sql_type = crate::database::schema::sql_types::MessageKind)]
+#[diesel(sql_type = aspen_schema::sql_types::MessageKind)]
 pub enum MessageKind {
     /// Text written by its author.
     Standard,
@@ -1249,7 +1249,7 @@ pub enum MessageKind {
     Warning,
 }
 
-impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
+impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
         out.write_all(match self {
             MessageKind::Standard => b"standard",
@@ -1265,7 +1265,7 @@ impl ToSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind 
     }
 }
 
-impl FromSql<crate::database::schema::sql_types::MessageKind, Pg> for MessageKind {
+impl FromSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
     fn from_sql(
         bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
     ) -> diesel::deserialize::Result<Self> {

@@ -39,8 +39,8 @@ use crate::app;
 use crate::app::context::GlobalServerContext;
 use crate::app::media_store::{PresignedUpload, Promotion, Served};
 use crate::app::{AttachmentId, Loadable, UserId};
-use crate::database::schema::{attachment, message, message_attachment};
 use crate::t;
+use aspen_schema::{attachment, message, message_attachment};
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,

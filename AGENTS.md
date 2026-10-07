@@ -47,9 +47,9 @@ Federation, letting a user of one deployment use others, is built in five phases
    cargo run -p aspen-migrate -- up
    ```
    The connection string is resolved from `--database-url`, then `DATABASE_URL`, then `database_url` in `aspen.toml` (same file the server reads).
-   After any schema-changing migration, regenerate `server/src/database/schema.rs`:
+   After any schema-changing migration, regenerate `server/schema/src/schema.rs`:
    ```
-   cd server && diesel print-schema > src/database/schema.rs
+   cd server/schema && diesel print-schema > src/schema.rs
    ```
    If you are upgrading a database that was previously managed by Diesel's migration runner, run `cargo run -p aspen-migrate -- import-diesel` once to copy `__diesel_schema_migrations` history into `__aspen_migrations` (mapping each Diesel `version` to the registry ID with the matching `YYYYMMDDHHMMSS` prefix, preserving `run_on`) and drop the Diesel bookkeeping table. The command refuses to run if `__aspen_migrations` is already populated or if any Diesel row can't be mapped to a registry entry.
 
@@ -183,7 +183,7 @@ The server is split into three layers:
 
 - **`server/src/api/`** — HTTP handlers and request/response types. Strictly concerned with HTTP interactions. Should not contain business logic, database queries, or message broker interactions. Think of this as a frontend to the app layer. Types the app layer needs (such as `app::channel::MessageWindow`) belong in `app`, not here; `api` depends on `app`, never the reverse, except for the `message_gen`-generated records and request types in `api::message_enum` which both layers share.
 - **`server/src/app/`** — Business logic. Responsible for checking permissions and carrying out the operations expected of each API endpoint. Contains ID types, the `MaybeLoaded` lazy-loading pattern, event publishing, and shared context (`GlobalServerContext`).
-- **`server/src/database/`** — Auto-generated Diesel schema code. Files here should not be edited by hand; alter them by adding a migration in `migrate/src/migrations/`, applying it with `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/database/schema.rs` from `server/`.
+- **`server/schema/`** (`aspen_schema`) — Auto-generated Diesel schema code. Files here should not be edited by hand; alter them by adding a migration in `migrate/src/migrations/`, applying it with `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/schema.rs` from `server/schema/`.
 
 ### Request Flow
 
@@ -266,7 +266,7 @@ This ensures that if JetStream rejects or fails to acknowledge the event, the da
    - Scaffold with `cargo run -p aspen-migrate -- new <slug>`. This creates a `migrate/src/migrations/m<ts>_<slug>/{mod.rs,up.sql,down.sql}` directory AND registers the module (`pub mod m<ts>_<slug>;` in `migrations/mod.rs`, `&migrations::m<ts>_<slug>::M,` appended to `MIGRATIONS` in `registry.rs`).
    - Edit `up.sql` and `down.sql`. For migrations that need real Rust work (data backfills, calls into `MediaStore`, etc.), replace `mod.rs` with a hand-written `impl Migration` instead of `SqlMigration`.
    - Apply it: `cargo run -p aspen-migrate -- up`.
-   - Regenerate `server/src/database/schema.rs`: `cd server && diesel print-schema > src/database/schema.rs`.
+   - Regenerate `server/schema/src/schema.rs`: `cd server/schema && diesel print-schema > src/schema.rs`.
 2. **Add the entity to `message_enum.rs`** — add a new variant to the `MessageEnumSource` enum with appropriate field annotations.
 3. **Create `server/src/api/<entity>.rs`** — implement the HTTP handler functions following the REST API shape above (`POST /<entities>` or `POST /<parents>/{parent}/<entities>`, `GET`/`PATCH`/`DELETE /<entities>/{entity}`, plus any list endpoints), each with a complete `#[utoipa::path]`. Register the module in `server/src/api/mod.rs` and add a `TAG_*` constant.
 4. **Create `server/src/app/<entity>.rs`** — implement the business logic functions. Register the module in `server/src/app/mod.rs`.

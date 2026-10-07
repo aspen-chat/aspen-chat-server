@@ -13,8 +13,8 @@ use crate::app::moderation_log::{ModerationAction, log_moderation};
 use crate::app::permissions::{Permissions, community_access, require_member};
 use crate::app::visibility::Visibility;
 use crate::app::{CommunityId, UserId};
-use crate::database::schema::community_ban;
 use crate::t;
+use aspen_schema::community_ban;
 use chrono::{DateTime, Duration, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable,

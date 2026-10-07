@@ -12,7 +12,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::message::Message as MessageRow;
 use crate::app::permissions::channel_access;
 use crate::app::{self, ChannelId, EventScope, MessageId, UserId, publish_event};
-use crate::database::schema::message;
+use aspen_schema::message;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};

@@ -12,8 +12,8 @@ use crate::app::federation::{
     ContactOutcome, Direction, Domain, FederatedDeployment, FederationList, Subject, admits,
     contact, jws, lists_of, own_domain,
 };
-use crate::database::schema::federated_deployment;
 use crate::t;
+use aspen_schema::federated_deployment;
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;

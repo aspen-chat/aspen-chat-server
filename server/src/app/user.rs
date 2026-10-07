@@ -10,8 +10,8 @@ use crate::app::login::{PASSWORD_MIN_LENGTH, hash_password};
 use crate::app::react::validate_emoji;
 use crate::app::registration_invite;
 use crate::app::{IconId, Loadable, MaybeLoaded, UserId, publish_event};
-use crate::database::schema::{self, bot_token, refresh_token, session, user};
 use crate::t;
+use aspen_schema::{self as schema, bot_token, refresh_token, session, user};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::{BoolExpressionMethods, ExpressionMethods, Queryable, Selectable};
@@ -378,7 +378,7 @@ pub async fn read_user_communities(
     state: GlobalServerContext,
     user_id: UserId,
 ) -> Result<Vec<app::community::Community>, app::Error> {
-    use crate::database::schema::{community, community_user};
+    use aspen_schema::{community, community_user};
 
     let mut conn = state.connection_pool.get().await?;
     let communities = community_user::table

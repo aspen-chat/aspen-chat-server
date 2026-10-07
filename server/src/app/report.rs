@@ -36,11 +36,11 @@ use crate::app::{
     self, ChannelId, CommunityId, EventScope, IconId, MessageId, ReportCaseId, ReportCategoryId,
     ReportId, UserId, publish_event,
 };
-use crate::database::schema::{
+use crate::t;
+use aspen_schema::{
     community, community_user, deployment_role, message, report, report_case, report_category,
     user, user_deployment_role,
 };
-use crate::t;
 use chrono::{DateTime, Utc};
 use diesel::deserialize::FromSql;
 use diesel::pg::{Pg, PgValue};

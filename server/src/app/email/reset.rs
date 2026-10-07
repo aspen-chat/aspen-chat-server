@@ -23,8 +23,8 @@
 use super::outbox::{self, Mail};
 use crate::app::context::GlobalServerContext;
 use crate::app::{self, UserId};
-use crate::database::schema::{user, user_email};
 use crate::{CHACHA_RNG, t};
+use aspen_schema::{user, user_email};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use diesel::prelude::*;

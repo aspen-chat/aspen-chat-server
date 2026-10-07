@@ -16,11 +16,11 @@ use crate::app::message::MessageKind;
 use crate::app::message::{Message, MessageWithRelations};
 use crate::app::visibility::Visibility;
 use crate::app::{self, ChannelId, CommunityId, MessageId, UserId};
-use crate::database::schema::{
+use crate::t;
+use aspen_schema::{
     attachment, channel, community_user, dm_recipient, mention, message, message_attachment,
     user_block,
 };
-use crate::t;
 use diesel::dsl::{exists, not, sql};
 use diesel::prelude::*;
 use diesel::sql_types::{Bool, Text};

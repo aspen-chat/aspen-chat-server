@@ -25,8 +25,8 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::deployment_role::roles_of_users;
 use crate::app::{self, DeploymentRoleId, UserId};
-use crate::database::schema::{deployment_role, user_deployment_role};
 use crate::t;
+use aspen_schema::{deployment_role, user_deployment_role};
 use diesel::prelude::*;
 use diesel::{AsExpression, FromSqlRow};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};

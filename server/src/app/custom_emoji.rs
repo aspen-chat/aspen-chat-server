@@ -10,8 +10,8 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::{EventScope, publish_event};
 use crate::app::permissions::{Permissions, require_member};
 use crate::app::{CommunityId, CustomEmojiId, IconId, UserId};
-use crate::database::schema::custom_emoji;
 use crate::t;
+use aspen_schema::custom_emoji;
 use chrono::{DateTime, Utc};
 use diesel::{
     ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable, Selectable,

@@ -13,7 +13,7 @@
 use crate::app::context::GlobalServerContext;
 use crate::app::user::UserPg;
 use crate::app::{self, ChannelId, UserId};
-use crate::database::schema::{channel, user};
+use aspen_schema::{channel, user};
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::upsert::DecoratableTarget;

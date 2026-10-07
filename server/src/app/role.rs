@@ -18,11 +18,11 @@ use crate::app::permissions::{
 use crate::app::{
     self, CategoryId, ChannelId, CommunityId, EventScope, RoleId, UserId, publish_event,
 };
-use crate::database::schema::{
+use crate::t;
+use aspen_schema::{
     category, category_override, channel, channel_override, community, community_member_role,
     community_role, community_user,
 };
-use crate::t;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};

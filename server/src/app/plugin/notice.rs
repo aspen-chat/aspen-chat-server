@@ -13,9 +13,7 @@ use crate::app::permissions::channel_access;
 use crate::app::{
     self, ChannelId, CommunityId, EventScope, MessageId, PluginNoticeId, UserId, publish_event,
 };
-use crate::database::schema::{
-    channel, channel_mute, message, notification_setting, plugin_notice,
-};
+use aspen_schema::{channel, channel_mute, message, notification_setting, plugin_notice};
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;

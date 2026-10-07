@@ -19,7 +19,7 @@ pub enum CommunitiesCommand {
 }
 
 pub async fn communities(config: &AspenConfig, command: CommunitiesCommand) -> Result<()> {
-    use crate::database::schema::{community, community_user, user};
+    use aspen_schema::{community, community_user, user};
     use diesel::prelude::*;
     use diesel_async::RunQueryDsl;
     let mut conn = database(config).await?;

@@ -15,7 +15,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::{EVENT_ID_HEADER, channel_home};
 use crate::app::message::Message as MessageRow;
 use crate::app::{self, ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, UserId};
-use crate::database::schema::message;
+use aspen_schema::message;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures_util::StreamExt;

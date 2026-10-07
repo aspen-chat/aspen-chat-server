@@ -35,7 +35,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::permissions::Permission;
 use crate::app::voice::Recheck;
 use crate::app::{self, CategoryId, ChannelId, CommunityId, MessageId, UserId, VoiceSessionId};
-use crate::database::schema::{
+use aspen_schema::{
     category, channel, community_user, dm_recipient, invite, message, voice_session,
 };
 use diesel::prelude::*;

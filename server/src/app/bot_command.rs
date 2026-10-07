@@ -13,8 +13,8 @@ use crate::api::message_enum::server_event::ServerEvent;
 use crate::app::context::GlobalServerContext;
 use crate::app::permissions::{ChannelAccess, Permissions, channel_access, require_member};
 use crate::app::{self, AttachmentId, ChannelId, CommunityId, EventScope, UserId, publish_event};
-use crate::database::schema::bot_command_list;
 use crate::t;
+use aspen_schema::bot_command_list;
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -315,7 +315,7 @@ pub async fn for_channel(
     caller: UserId,
     channel: ChannelId,
 ) -> app::Result<Vec<BotCommands>> {
-    use crate::database::schema::{channel as channel_table, community_user, dm_recipient, user};
+    use aspen_schema::{channel as channel_table, community_user, dm_recipient, user};
     let mut conn = state.connection_pool.get().await?;
     let access = channel_access(state, conn.as_mut(), caller, channel).await?;
     let candidates: Vec<UserId> = match &access.community {
@@ -421,7 +421,7 @@ async fn bot_present(
     channel: ChannelId,
     bot: UserId,
 ) -> app::Result<bool> {
-    use crate::database::schema::{channel as channel_table, dm_recipient, user};
+    use aspen_schema::{channel as channel_table, dm_recipient, user};
     let is_bot: Option<bool> = user::table
         .select(user::bot)
         .filter(user::id.eq(bot).and(user::deleted_at.is_null()))
@@ -467,7 +467,7 @@ pub(crate) async fn check(
     channel: ChannelId,
     invocation: &Invocation,
 ) -> app::Result<(Command, Vec<Argument>)> {
-    use crate::database::schema::{attachment, community_role, message, user};
+    use aspen_schema::{attachment, community_role, message, user};
     let name = invocation.name.as_str();
     if !bot_present(state, conn, access, channel, invocation.bot).await? {
         return Err(refused("botCommandBotAbsent", name, ""));

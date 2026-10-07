@@ -10,7 +10,7 @@ use crate::app::context::GlobalServerContext;
 use crate::app::events::ChannelHome;
 use crate::app::{self, CommunityId, UserId};
 use crate::aspen_config::PluginsConfig;
-use crate::database::schema::{community_plugin, plugin, user};
+use aspen_schema::{community_plugin, plugin, user};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
