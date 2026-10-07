@@ -1,5 +1,5 @@
 import type { Mentions } from "@aspen/protocol";
-import { type ReactNode, isValidElement, useContext } from "react";
+import { type ReactNode, isValidElement, memo, useContext } from "react";
 import { ChatTextIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -215,9 +215,10 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
  *
  * A body nesting too deeply to render safely is shown as its plain text (`opensTooDeeply`
  * before parsing, `remarkLimits` after), and one that fails to render for any other reason
- * falls back to its plain text too, rather than taking the message list down with it.
+ * falls back to its plain text too, rather than taking the message list down with it. It is
+ * drawn again only when what it is given changes, since parsing is most of its cost.
  */
-export function Markdown({
+export const Markdown = memo(function Markdown({
   content,
   mentions = NO_MENTIONS,
   communityId = null,
@@ -254,7 +255,7 @@ export function Markdown({
       </ErrorBoundary>
     </div>
   );
-}
+});
 
 /** Table rows keep the cells written (`tableRow`). */
 const REMARK_REHYPE_OPTIONS = { handlers: { tableRow } };

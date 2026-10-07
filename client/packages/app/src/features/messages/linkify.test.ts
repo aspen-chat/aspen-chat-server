@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linkify } from "./linkify";
+import { MAX_LINK_LENGTH, linkify } from "./linkify";
 
 const text = (t: string) => ({ kind: "text" as const, text: t });
 const link = (url: string, t = url) => ({ kind: "link" as const, url, text: t });
@@ -67,5 +67,32 @@ describe("linkify", () => {
     expect(linkify("https://example.com/see/github.io")).toEqual([
       link("https://example.com/see/github.io"),
     ]);
+  });
+
+  it("trims long runs of brackets and punctuation", () => {
+    const parens = "https://a" + ")".repeat(1990);
+    expect(linkify(parens)).toEqual([link("https://a"), text(")".repeat(1990))]);
+    expect(linkify("https://a" + ".)".repeat(995))).toEqual([
+      link("https://a"),
+      text(".)".repeat(995)),
+    ]);
+    expect(linkify("https://a/(" + "x".repeat(10) + "),.")).toEqual([
+      link("https://a/(xxxxxxxxxx)"),
+      text(",."),
+    ]);
+  });
+
+  it("leaves a candidate longer than a link may be as text", () => {
+    const long = "https://example.org/" + "a".repeat(MAX_LINK_LENGTH);
+    expect(linkify(`${long} https://example.org/b`)).toEqual([
+      text(`${long} `),
+      link("https://example.org/b"),
+    ]);
+    const longest = "https://example.org/" + "a".repeat(MAX_LINK_LENGTH - 20);
+    expect(linkify(longest)).toEqual([link(longest)]);
+  });
+
+  it("returns the same runs for the same text", () => {
+    expect(linkify("see example.org")).toBe(linkify("see example.org"));
   });
 });
