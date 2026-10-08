@@ -400,9 +400,20 @@ export class ListScroller {
     this.#afterMove(true);
   };
 
+  /**
+   * Whether `event` happened in the list itself. React passes events up through what a row
+   * opened in a layer of its own (a sheet, a picker, a dialog) as though it were inside the
+   * row, though it is drawn over the page, so a finger, wheel, or key there would otherwise
+   * move the list behind it.
+   */
+  #inList(event: { target: EventTarget }): boolean {
+    const box = this.viewport.current;
+    return box !== null && event.target instanceof Node && box.contains(event.target);
+  }
+
   readonly onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
-    if (touch === undefined) {
+    if (touch === undefined || !this.#inList(event)) {
       return;
     }
     this.#stopMotion();
@@ -415,7 +426,7 @@ export class ListScroller {
   readonly onTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
     const drag = this.#drag;
-    if (touch === undefined || drag === null) {
+    if (touch === undefined || drag === null || !this.#inList(event)) {
       return;
     }
     const dy = drag.y - touch.clientY;
@@ -446,13 +457,15 @@ export class ListScroller {
     }
   };
 
-  readonly onTouchCancel = () => {
-    this.#lift("touch cancel", 0);
+  readonly onTouchCancel = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (this.#inList(event)) {
+      this.#lift("touch cancel", 0);
+    }
   };
 
   readonly onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     const box = this.viewport.current;
-    if (box === null || event.deltaY === 0) {
+    if (box === null || event.deltaY === 0 || !this.#inList(event)) {
       return;
     }
     const by =
@@ -473,7 +486,12 @@ export class ListScroller {
   readonly onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const box = this.viewport.current;
     // A key a row took, to move between rows (`messageRows.ts`), is not for scrolling.
-    if (box === null || event.defaultPrevented || event.target instanceof HTMLTextAreaElement) {
+    if (
+      box === null ||
+      event.defaultPrevented ||
+      event.target instanceof HTMLTextAreaElement ||
+      !this.#inList(event)
+    ) {
       return;
     }
     const page = box.clientHeight - PAGE_OVERLAP_PX;
