@@ -168,6 +168,7 @@ pub async fn resolve(
                         community_role::community
                             .eq(community)
                             .and(community_role::everyone.eq(false))
+                            .and(community_role::deleted_at.is_null())
                             .and(community_role::id.eq_any(&roles)),
                     )
                     .load(conn)

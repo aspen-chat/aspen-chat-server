@@ -416,6 +416,7 @@ pub async fn community_access(
     let roles = community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::community.eq(community_id))
+        .filter(community_role::deleted_at.is_null())
         .filter(
             community_role::everyone
                 .eq(true)

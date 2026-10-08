@@ -365,6 +365,7 @@ impl CommunityModel {
                 community_role::everyone,
             ))
             .filter(community_role::community.eq_any(&ids))
+            .filter(community_role::deleted_at.is_null())
             .load(conn)
             .await?;
         for (community, id, permissions, everyone) in roles {

@@ -199,6 +199,19 @@ How plugins run; which are installed, and their settings, are in the database (s
 | `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. A quarter of the places (at least one, from two up) are kept for deciding messages, which routes and observers cannot take. With `memory_mib` it bounds what plugins can take of the server's memory. |
 | `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. A quarter of them are likewise kept for deciding messages. |
 
+## `[jobs]`
+
+Background jobs: work a request decides but does not wait for, such as deleting a banned
+person's recent messages, and upkeep that runs on a schedule. Jobs wait in the database, so
+none is lost to a restart, and every server that runs jobs takes its share; one that stops part
+way through a job leaves it to another within a minute. The dashboard's Jobs tab, and
+`aspen-chat-server jobs list`, show what they are doing.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `run` | `true` | Whether this server runs jobs. At least one server of the deployment must. |
+| `concurrency` | two per logical CPU | The most jobs this server runs at once that any class of job may take; each class (urgent, interactive, normal, bulk, maintenance) also keeps one place of its own, so a busy class never holds up the others. |
+
 ## `[push]`
 
 | Setting | Default | |

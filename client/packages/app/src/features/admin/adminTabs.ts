@@ -17,6 +17,7 @@ export const ADMIN_TABS = [
   "plugins",
   "moderation",
   "transfers",
+  "jobs",
 ] as const;
 export type AdminTab = (typeof ADMIN_TABS)[number];
 
@@ -42,6 +43,7 @@ export function adminTabLabel(m: Messages, tab: AdminTab): string {
     plugins: m.plugins.adminTab,
     moderation: m.admin.moderationLog,
     transfers: m.admin.fileTransfers,
+    jobs: m.admin.jobs,
   }[tab];
 }
 

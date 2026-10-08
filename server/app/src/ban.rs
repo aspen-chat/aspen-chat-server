@@ -65,7 +65,8 @@ pub struct BanRequest {
     pub delete_messages_seconds: Option<u32>,
 }
 
-/// What banning did: the ban, whether one stood already, and the messages deleted.
+/// What banning did: the ban, whether one stood already, and how many messages are being
+/// deleted, a batch at a time once the ban commits (`message::queue_deletion_of_recent`).
 pub struct Banned {
     pub ban: message_enum::CommunityBan,
     pub replaced: bool,
@@ -199,7 +200,7 @@ pub async fn ban_member(
                 .await?;
             }
             let deleted = match request.delete_messages_seconds {
-                None => Vec::new(),
+                None => 0,
                 Some(window) => {
                     if !access.has(Permissions::MANAGE_MESSAGES) {
                         return Err(crate::permissions::missing(Permissions::MANAGE_MESSAGES));
@@ -219,8 +220,7 @@ pub async fn ban_member(
                     let since = Utc::now() - Duration::seconds(i64::from(window));
                     // Only where the banner may view, as deleting one by one would allow.
                     let visible = Visibility::load_on(conn.as_mut(), caller, &[community]).await?;
-                    crate::message::delete_recent_by(
-                        state,
+                    crate::message::queue_deletion_of_recent(
                         conn.as_mut(),
                         Some(&visible),
                         member,
@@ -279,7 +279,7 @@ pub async fn ban_member(
             Ok::<_, crate::Error>(Banned {
                 ban: record,
                 replaced,
-                deleted_messages: deleted.len(),
+                deleted_messages: deleted,
             })
         }
         .scope_boxed()

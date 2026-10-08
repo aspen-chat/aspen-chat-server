@@ -108,4 +108,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261007_192833_bot_transfer::M,
     &migrations::m20261008_013730_react_by_author::M,
     &migrations::m20261008_153045_query_growth::M,
+    &migrations::m20261008_170000_jobs::M,
 ];

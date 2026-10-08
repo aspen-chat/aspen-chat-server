@@ -546,7 +546,8 @@ pub async fn check(
                     .filter(
                         community_role::id
                             .eq(id)
-                            .and(community_role::community.eq(community)),
+                            .and(community_role::community.eq(community))
+                            .and(community_role::deleted_at.is_null()),
                     )
                     .count()
                     .get_result(conn)

@@ -39,6 +39,7 @@ pub mod federation;
 pub mod icon;
 pub mod include;
 pub mod invite;
+pub mod jobs;
 pub mod link_preview;
 pub mod message;
 pub use aspen_wire::message_enum;
@@ -414,6 +415,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             deployment::remove_user_deployment_role
         ))
         .routes(routes!(deployment::read_moderation_log))
+        .routes(routes!(jobs::read_jobs))
         .routes(routes!(deployment::read_file_transfer_log))
         .routes(routes!(deployment::list_user_dms))
         .routes(routes!(poll::create_poll))

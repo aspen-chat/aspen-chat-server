@@ -206,10 +206,8 @@ impl GlobalServerContext {
 /// making the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), crate::Error> {
     crate::deployment_settings::spawn_watcher(context.clone());
-    crate::poll::spawn_closer(context.clone());
     crate::voice::spawn_report_listener(context.clone()).await?;
     crate::voice::spawn_token_key_answerer(context.clone()).await?;
-    crate::voice::spawn_reaper(context.clone());
     crate::fleet::spawn_heartbeat(context.clone());
     if context.config.federation.domain.is_some() {
         crate::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
@@ -224,5 +222,6 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     crate::media_store::spawn_upload_sweeper(context.clone());
     crate::attachment::evidence::spawn_mover(context.clone());
     crate::plugin::registry::start(context).await?;
+    crate::jobs::spawn_runner(context.clone());
     Ok(())
 }

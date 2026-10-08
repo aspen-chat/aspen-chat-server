@@ -85,6 +85,13 @@ If they never open, check that the proxy passes `Upgrade` and `Connection` throu
 
 ## Symptoms
 
+**Something that should follow a decision does not happen** (a banned person's messages stay,
+mail is not sent). It is a job that has not run. `aspen-chat-server jobs list` (or the
+dashboard's Jobs tab) shows what is running, what waits, and what was given up, with its error.
+Jobs wait when no server runs them (`[jobs] run` off everywhere) or every place is taken; a job
+given up after its attempts is kept, and `jobs retry <id>` runs it again once its cause is fixed.
+The log has a line for each failed attempt, naming the job and its kind.
+
 **The web client says it cannot reach the server.** Open `https://<your domain>/api/v1/auth/methods`
 in a browser: it should answer JSON. If it answers a page instead, your proxy sends `/api/` to
 something other than the API servers.

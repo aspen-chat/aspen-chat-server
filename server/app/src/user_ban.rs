@@ -120,6 +120,8 @@ pub struct UserBanned {
     pub replaced: bool,
     /// The people banned: the one named, and a bot's owner when asked.
     pub banned: Vec<UserId>,
+    /// How many of their messages are being deleted, a batch at a time once the ban commits
+    /// (`message::queue_deletion_of_recent`).
     pub deleted_messages: usize,
 }
 
@@ -235,9 +237,7 @@ async fn ban_one(
         .await?;
         let since = Utc::now() - Duration::seconds(i64::from(window));
         outcome.deleted_messages +=
-            crate::message::delete_recent_by(state, conn, None, target, since)
-                .await?
-                .len();
+            crate::message::queue_deletion_of_recent(conn, None, target, since).await?;
     }
     // Their bots act for them, so their streams close and they leave their calls too; their
     // tokens are refused while the ban stands (`shut_out`).

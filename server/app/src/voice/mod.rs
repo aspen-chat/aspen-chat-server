@@ -68,8 +68,8 @@ pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Resu
     Ok(())
 }
 
-/// How often sessions whose server went silent are ended.
-const REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+/// How often the reaper runs (`reap`).
+pub const REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = voice_server)]
@@ -266,27 +266,27 @@ async fn records_of_sessions(
     ))
 }
 
-/// Starts the task that ends the sessions of voice servers that stopped reporting and the
-/// calls that have sat with one person for too long, and clears rings that have run out.
-pub fn spawn_reaper(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(REAPER_INTERVAL);
-        loop {
-            interval.tick().await;
-            if let Err(e) = reap_silent_servers(&state).await {
-                error!(
-                    error = e.to_string(),
-                    "ending sessions of silent voice servers failed"
-                );
-            }
-            if let Err(e) = reap_idle_sessions(&state).await {
-                error!(error = e.to_string(), "ending idle voice sessions failed");
-            }
-            if let Err(e) = clear_spent_rings(&state).await {
-                error!(error = e.to_string(), "clearing spent call rings failed");
-            }
-        }
-    });
+/// How many calls one step of the reaper ends.
+const REAP_BATCH: i64 = 50;
+
+/// One step of the reaper (`jobs::JobKind::ReapVoice`, every [`REAPER_INTERVAL`]): ends the calls
+/// of voice servers silent for `session_silence_seconds` and calls alone for
+/// `idle_session_seconds`, [`REAP_BATCH`] of each at a time, each call in a transaction of its
+/// own, and clears the rings that have run out. Carries on while batches come back full.
+pub async fn reap(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let silent = reap_silent_servers(state, REAP_BATCH).await?;
+    let idle = reap_idle_sessions(state, REAP_BATCH).await?;
+    clear_spent_rings(state).await?;
+    Ok(
+        if silent as i64 >= REAP_BATCH || idle as i64 >= REAP_BATCH {
+            crate::jobs::Outcome::Progress(serde_json::Value::Null)
+        } else {
+            crate::jobs::Outcome::Done
+        },
+    )
 }
 
 /// `first()` yields `NotFound` for an empty result; reads that expect that turn it into `None`.

@@ -55,4 +55,8 @@ export const deploymentPermissionNames = {
     name: "Send newsletters",
     hint: "Write posts for the server's email newsletter, send tests to yourself, and send them to every subscriber.",
   },
+  viewJobs: {
+    name: "View jobs",
+    hint: "See what the server's background work is doing: what runs, what waits, and what failed, never what each job was given.",
+  },
 } as const;

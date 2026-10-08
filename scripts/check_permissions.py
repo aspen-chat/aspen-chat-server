@@ -1560,12 +1560,35 @@ def ban_deletions(world: World, check: Checks) -> None:
                          {"content": "soon banned", "attachments": []}, target["token"])["id"]
 
     in_hidden, in_shown = said(hidden), said(shown)
-    stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
-              {"deleteMessagesSeconds": 3600}, member["token"])
-    check("the message where the banner may view is deleted",
-          stack.status("GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404)
+    banned = stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
+                       {"deleteMessagesSeconds": 3600}, member["token"])
+    check("the ban says how many of their messages go", banned.get("deletedMessages") == 1, banned)
+    # The deletion is a job (`app::jobs`), done once the ban commits.
+    try:
+        wait_for("the deletion", lambda: stack.status(
+            "GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404, 15)
+        deleted = True
+    except Failed:
+        deleted = False
+    check("the message where the banner may view is deleted, shortly after", deleted)
     check("the one in a channel hidden from the banner stays",
           stack.status("GET", f"/messages/{in_hidden}", token=world.owner["token"]) == 200)
+
+
+def job_preview(world: World, check: Checks) -> None:
+    say("the jobs preview takes View jobs")
+    stack, member = world.stack, world.member
+    check("a member without it is refused",
+          stack.status("GET", "/admin/jobs", token=member["token"]) == 403)
+    viewers = world.account("job-viewer")
+    stack.command("admin", "grant", viewers["name"])
+    shown = stack.api("GET", "/admin/jobs", token=viewers["token"])
+    check("an administrator, who holds it, reads it", isinstance(shown.get("waitingCounts"), list), shown)
+    check("and it names no job's payload",
+          all("payload" not in job for job in shown.get("waiting", []) + shown.get("running", [])))
+    stack.command("admin", "revoke", viewers["name"])
+    check("once their role goes, they are refused again",
+          stack.status("GET", "/admin/jobs", token=viewers["token"]) == 403)
 
 
 def dm_reads(world: World, check: Checks) -> None:
@@ -2106,7 +2129,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
-             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads, frequent_emoji,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

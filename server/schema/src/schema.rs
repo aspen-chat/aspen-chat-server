@@ -206,6 +206,7 @@ diesel::table! {
         bot -> Nullable<Uuid>,
         hue -> Nullable<Int2>,
         hoist -> Bool,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -394,6 +395,25 @@ diesel::table! {
         created_at -> Timestamptz,
         expires_at -> Nullable<Timestamptz>,
         deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    job (id) {
+        id -> Uuid,
+        kind -> Text,
+        key -> Nullable<Text>,
+        class -> Int2,
+        due -> Timestamptz,
+        not_before -> Timestamptz,
+        every -> Nullable<Interval>,
+        payload -> Jsonb,
+        progress -> Nullable<Jsonb>,
+        attempts -> Int4,
+        running_since -> Nullable<Timestamptz>,
+        failed_at -> Nullable<Timestamptz>,
+        error -> Nullable<Text>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -1119,6 +1139,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     held_message,
     icon,
     invite,
+    job,
     mention,
     message,
     message_annotation,

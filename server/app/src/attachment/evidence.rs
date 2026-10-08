@@ -105,6 +105,20 @@ pub async fn keep_deleted(
     mark(conn, &ids, None).await
 }
 
+/// As [`keep_deleted`], for every one of `messages` at once.
+pub async fn keep_deleted_many(
+    conn: &mut AsyncPgConnection,
+    messages: &[MessageId],
+) -> crate::Result<Vec<AttachmentId>> {
+    let ids: Vec<AttachmentId> = message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.eq_any(messages))
+        .load(conn)
+        .await?;
+    let ids: Vec<uuid::Uuid> = ids.into_iter().map(|id| id.0).collect();
+    mark(conn, &ids, None).await
+}
+
 /// Makes evidence of `removed`, which the caller's transaction has just taken off `message`,
 /// those that no message standing holds, recording the message they were taken off.
 pub async fn keep_removed(

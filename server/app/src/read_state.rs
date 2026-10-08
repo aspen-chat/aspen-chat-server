@@ -45,7 +45,7 @@ pub struct ReadState {
 
 /// The position just before every message posted after `at`: the smallest UUIDv7 of its
 /// millisecond.
-fn position_at(at: DateTime<Utc>) -> MessageId {
+pub(crate) fn position_at(at: DateTime<Utc>) -> MessageId {
     let millis = u64::try_from(at.timestamp_millis()).unwrap_or(0);
     MessageId(uuid::Builder::from_unix_timestamp_millis(millis, &[0; 10]).into_uuid())
 }
@@ -133,6 +133,7 @@ async fn read(
                     UNION
                     SELECT mn.message
                     FROM community_member_role r
+                    JOIN community_role cr ON cr.id = r.role AND cr.deleted_at IS NULL
                     JOIN mention mn ON mn.target_role = r.role
                     WHERE r."user" = $1 AND r.community = c.community
                       AND mn.channel = c.id AND mn.message > p.after

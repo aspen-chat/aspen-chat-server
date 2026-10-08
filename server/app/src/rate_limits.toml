@@ -134,8 +134,7 @@ limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "secu
 endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /icons", "POST /icons/{icon}/confirm"]
 limits = { user = { requests = 60, per_seconds = 600, burst = 20, bucket = "uploads" } }
 
-# The Administration Dashboard. Its searches read whole tables, so even an administrator is
-# kept to a pace a person clicking through the dashboard never reaches.
+# The Administration Dashboard, kept to a pace a person clicking through it never reaches.
 [rate_limits.groups.admin]
 endpoints = [
   "GET /admin/overview",
@@ -154,6 +153,7 @@ endpoints = [
   "PUT /admin/users/{user}/roles/{role}",
   "DELETE /admin/users/{user}/roles/{role}",
   "GET /admin/moderation-log",
+  "GET /admin/jobs",
   "GET /admin/users/{user}/dms",
   "PUT /admin/users/{user}/ban",
   "DELETE /admin/users/{user}/ban",

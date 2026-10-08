@@ -1226,31 +1226,38 @@ pub(super) async fn end_session(
 }
 
 /// Ends every call that has gone `idle_session_seconds` without holding two people at once.
-pub(super) async fn reap_idle_sessions(state: &GlobalServerContext) -> crate::Result<()> {
+pub(super) async fn reap_idle_sessions(
+    state: &GlobalServerContext,
+    limit: i64,
+) -> crate::Result<usize> {
     let idle = Duration::seconds(
         i64::try_from(state.config.voice.idle_session_seconds).unwrap_or(24 * 60 * 60),
     );
     let cutoff = Utc::now() - idle;
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let idle: Vec<VoiceSession> = voice_session::table
-                .select(VoiceSession::as_select())
-                .filter(voice_session::alone_since.lt(cutoff))
-                .load(conn.as_mut())
-                .await?;
-            for session in idle {
-                info!(
-                    session = session.id.0.to_string(),
-                    "ending a call that has been alone for the idle limit"
-                );
-                end_session(state, conn.as_mut(), &session, VoiceSessionEndReason::Idle).await?;
+    let idle: Vec<VoiceSession> = voice_session::table
+        .select(VoiceSession::as_select())
+        .filter(voice_session::alone_since.lt(cutoff))
+        .limit(limit)
+        .load(conn.as_mut())
+        .await?;
+    let found = idle.len();
+    // Each call ends in a transaction of its own, so one that fails leaves the others ended.
+    for session in idle {
+        info!(
+            session = session.id.0.to_string(),
+            "ending a call that has been alone for the idle limit"
+        );
+        conn.transaction(|conn| {
+            let session = &session;
+            async move {
+                end_session(state, conn.as_mut(), session, VoiceSessionEndReason::Idle).await
             }
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    }
+    Ok(found)
 }
 
 #[cfg(test)]

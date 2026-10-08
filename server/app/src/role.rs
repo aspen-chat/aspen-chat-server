@@ -111,6 +111,8 @@ pub async fn create_default_roles(
     Ok(rows[2].id)
 }
 
+/// A community's roles, lowest first; deleted roles, whose holders a job is still taking off
+/// (`retire_role`), are no longer any of them, here or anywhere roles are read.
 async fn load_roles(
     conn: &mut AsyncPgConnection,
     community_id: CommunityId,
@@ -118,6 +120,7 @@ async fn load_roles(
     Ok(community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::community.eq(community_id))
+        .filter(community_role::deleted_at.is_null())
         .order((community_role::position, community_role::id))
         .load(conn)
         .await?)
@@ -127,6 +130,7 @@ async fn load_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<Ro
     Ok(community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::id.eq(id))
+        .filter(community_role::deleted_at.is_null())
         .first(conn)
         .await?)
 }
@@ -137,6 +141,7 @@ async fn lock_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<Ro
     Ok(community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::id.eq(id))
+        .filter(community_role::deleted_at.is_null())
         .for_update()
         .first(conn)
         .await?)
@@ -151,6 +156,7 @@ pub async fn read_communities_roles(
     let rows: Vec<RoleRow> = community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::community.eq_any(communities.to_vec()))
+        .filter(community_role::deleted_at.is_null())
         .order((
             community_role::community,
             community_role::position,
@@ -272,7 +278,7 @@ pub async fn roles_of_members(
         SELECT mr.community, mr."user", mr.role
         FROM unnest($1::uuid[], $2::uuid[]) AS m(community, "user")
         JOIN community_member_role mr ON mr.community = m.community AND mr."user" = m."user"
-        JOIN community_role r ON r.id = mr.role
+        JOIN community_role r ON r.id = mr.role AND r.deleted_at IS NULL
         ORDER BY r.position, r.id
         "#,
     )
@@ -477,24 +483,18 @@ pub async fn delete_bot_role(
         .first::<CommunityId>(conn)
         .await
         .optional()?;
-    let deleted: Vec<RoleId> = diesel::delete(
-        community_role::table.filter(
+    let deleted: Vec<RoleId> = community_role::table
+        .select(community_role::id)
+        .filter(
             community_role::community
                 .eq(community_id)
-                .and(community_role::bot.eq(bot)),
-        ),
-    )
-    .returning(community_role::id)
-    .get_results(conn)
-    .await?;
-    for id in &deleted {
-        publish_event(
-            state,
-            conn,
-            EventScope::Community(community_id),
-            &ServerEvent::Role(RoleEvent::Delete { id: *id }),
+                .and(community_role::bot.eq(bot))
+                .and(community_role::deleted_at.is_null()),
         )
+        .load(conn)
         .await?;
+    for id in &deleted {
+        retire_role(state, conn, community_id, *id).await?;
     }
     if !deleted.is_empty() {
         let order = load_roles(conn, community_id).await?;
@@ -645,19 +645,7 @@ pub async fn delete_role(
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             access.require_role_above(role.position)?;
-            // Its holders lose it and its overrides go with it, by the foreign keys. The one
-            // event says so: readers of it (the event feed, clients) take the role from its
-            // holders and its overrides away themselves, however many there are.
-            diesel::delete(community_role::table.filter(community_role::id.eq(role_id)))
-                .execute(conn.as_mut())
-                .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Community(role.community),
-                &ServerEvent::Role(RoleEvent::Delete { id: role_id }),
-            )
-            .await?;
+            retire_role(state, conn.as_mut(), role.community, role_id).await?;
             let order = load_roles(conn.as_mut(), role.community).await?;
             renumber(state, conn.as_mut(), role.community, &order).await?;
             Ok(())
@@ -665,6 +653,107 @@ pub async fn delete_role(
         .scope_boxed()
     })
     .await
+}
+
+/// Deletes role `id` of `community`, inside the caller's transaction, which holds the
+/// community's row (`hold_for_count`): at once it grants nothing and ranks nobody (its
+/// permissions, hue, and showing apart are taken away, and its position put below every role),
+/// its overrides go, and it is no longer read as a role anywhere; its holders and the tags of it
+/// are taken off by a job a batch at a time (`purgeRole`, `purge_step`), which then deletes it.
+/// The one event says so: readers of it (the event feed, clients) take the role from its holders
+/// and its overrides away themselves, however many there are.
+async fn retire_role(
+    state: &impl crate::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    id: RoleId,
+) -> crate::Result<()> {
+    diesel::delete(channel_override::table.filter(channel_override::role.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::delete(category_override::table.filter(category_override::role.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::update(community_role::table.filter(community_role::id.eq(id)))
+        .set((
+            community_role::deleted_at.eq(diesel::dsl::now),
+            community_role::permissions.eq(Permissions::empty()),
+            community_role::hoist.eq(false),
+            community_role::hue.eq(None::<i16>),
+            community_role::position.eq(-1),
+        ))
+        .execute(conn)
+        .await?;
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::PurgeRole,
+            crate::jobs::JobClass::Normal,
+            &ToPurge { role: id },
+        )?
+        .keyed(id.0.to_string()),
+    )
+    .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(community),
+        &ServerEvent::Role(RoleEvent::Delete { id }),
+    )
+    .await
+}
+
+/// What purging a deleted role is given (`jobs::JobKind::PurgeRole`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToPurge {
+    pub role: RoleId,
+}
+
+/// How many of a deleted role's holdings or tags one step takes off.
+const PURGE_BATCH: i64 = 1000;
+
+/// One step of purging a deleted role: a batch of its holdings, then of the tags of it, through
+/// `community_member_role_by_role` and `mention_by_role`; once neither is left, the role itself.
+/// Nothing is announced: the role's deletion already told everyone it is gone.
+pub async fn purge_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToPurge { role } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    let holdings = diesel::sql_query(
+        "DELETE FROM community_member_role WHERE (\"user\", role) IN \
+         (SELECT \"user\", role FROM community_member_role WHERE role = $1 LIMIT $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(role.0)
+    .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+    .execute(conn.as_mut())
+    .await?;
+    if holdings as i64 >= PURGE_BATCH {
+        return Ok(crate::jobs::Outcome::Progress(serde_json::Value::Null));
+    }
+    let tags = diesel::sql_query(
+        "DELETE FROM mention WHERE ctid IN \
+         (SELECT ctid FROM mention WHERE target_role = $1 LIMIT $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(role.0)
+    .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+    .execute(conn.as_mut())
+    .await?;
+    if tags as i64 >= PURGE_BATCH {
+        return Ok(crate::jobs::Outcome::Progress(serde_json::Value::Null));
+    }
+    diesel::delete(
+        community_role::table.filter(
+            community_role::id
+                .eq(role)
+                .and(community_role::deleted_at.is_not_null()),
+        ),
+    )
+    .execute(conn.as_mut())
+    .await?;
+    Ok(crate::jobs::Outcome::Done)
 }
 
 /// Reorders the roles ranked below the caller: `order` lists exactly those, lowest first,

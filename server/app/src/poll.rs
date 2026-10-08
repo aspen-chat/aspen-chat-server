@@ -1,5 +1,5 @@
 //! Timed polls. A poll is opened with a message of kind `poll` in its channel and stays open
-//! until `closes_at`, when the closer task marks it closed and posts a message of kind
+//! until `closes_at`, when a job saved with it (`close_at_deadline`) marks it closed and posts a message of kind
 //! `poll_closed` announcing the outcome. Votes may be added and withdrawn while it is open, and
 //! every change publishes the poll's current results, so readers follow the tally live.
 //!
@@ -36,14 +36,12 @@ use aspen_wire::poll::{
 };
 use chrono::{DateTime, Utc};
 use diesel::{
-    BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods, QueryDsl,
-    Queryable, Selectable, SelectableHelper,
+    BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods,
+    OptionalExtension, QueryDsl, Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use std::collections::HashMap;
-use std::time::Duration;
-use tracing::error;
 
 pub const MIN_OPTIONS: usize = 2;
 pub const MAX_OPTIONS: usize = 10;
@@ -55,8 +53,6 @@ pub const MAX_DURATION_SECONDS: u32 = 4 * 7 * 24 * 60 * 60;
 /// The most answers voters may add to one poll, removed ones included, since each keeps its
 /// index.
 pub const MAX_WRITE_INS: usize = 25;
-/// How often the closer looks for polls whose deadline has passed.
-const CLOSER_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = poll)]
@@ -244,6 +240,19 @@ pub async fn create_poll(
                 crate::read_state::advance(state, conn.as_mut(), creator, channel, message_row.id)
                     .await?;
             }
+            // Closed at its deadline by a job saved with it, which an earlier close leaves
+            // nothing to do.
+            crate::jobs::enqueue(
+                conn.as_mut(),
+                crate::jobs::NewJob::new(
+                    crate::jobs::JobKind::ClosePoll,
+                    crate::jobs::JobClass::Interactive,
+                    &ToClose { poll: row.id },
+                )?
+                .keyed(row.id.0.to_string())
+                .not_before(row.closes_at),
+            )
+            .await?;
             Ok((poll_record, message_record))
         }
         .scope_boxed()
@@ -1064,38 +1073,45 @@ pub async fn delete_poll(
     Ok(())
 }
 
-/// Starts the task that closes polls once their deadline passes.
-pub fn spawn_closer(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(CLOSER_INTERVAL);
-        loop {
-            interval.tick().await;
-            if let Err(e) = close_due_polls(&state).await {
-                error!(error = e.to_string(), "closing due polls failed");
-            }
-        }
-    });
+/// What closing one poll at its deadline is given (`jobs::JobKind::ClosePoll`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToClose {
+    pub poll: PollId,
 }
 
-/// Closes every open poll whose deadline has passed: marks it closed, publishes its final
-/// tally, and posts the `poll_closed` message. Polls another server instance is closing at
-/// the same moment are skipped and left to it.
-async fn close_due_polls(state: &GlobalServerContext) -> crate::Result<()> {
+/// Closes the poll a `ClosePoll` job names, at its deadline, under its row's lock: marks it
+/// closed, publishes its final tally, and posts the `poll_closed` message. A poll already
+/// closed, early by its creator or a moderator, or deleted, is left as it is.
+pub async fn close_at_deadline(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToClose { poll: id } = job.payload()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let now = Utc::now();
-            let due: Vec<Poll> = poll::table
+            let Some(row) = poll::table
                 .select(Poll::as_select())
-                .filter(poll::closed_at.is_null().and(poll::closes_at.le(now)))
+                .filter(poll::id.eq(id))
                 .for_update()
-                .skip_locked()
-                .load(conn.as_mut())
-                .await?;
-            for row in due {
-                close_one(state, conn.as_mut(), row, now).await?;
+                .first::<Poll>(conn.as_mut())
+                .await
+                .optional()?
+            else {
+                return Ok(crate::jobs::Outcome::Done);
+            };
+            let now = Utc::now();
+            if row.closed_at.is_some() {
+                return Ok(crate::jobs::Outcome::Done);
             }
-            Ok(())
+            if row.closes_at > now {
+                return Ok(crate::jobs::Outcome::Later(
+                    (row.closes_at - now).to_std().unwrap_or_default(),
+                ));
+            }
+            close_one(state, conn.as_mut(), row, now).await?;
+            Ok(crate::jobs::Outcome::Done)
         }
         .scope_boxed()
     })
