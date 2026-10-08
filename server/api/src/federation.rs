@@ -289,7 +289,7 @@ pub struct DeploymentListQuery {
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
-    /// How many rows to skip, at most 100,000.
+    /// How many rows to skip, at most 10,000.
     pub offset: Option<i64>,
     /// How many to return, at most 100; 15 when absent.
     pub limit: Option<i64>,

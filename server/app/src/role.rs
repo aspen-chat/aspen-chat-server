@@ -232,7 +232,19 @@ pub async fn read_communities_overrides(
     ))
 }
 
-/// The roles each of `members` holds besides everyone's, keyed by community and user.
+#[derive(diesel::QueryableByName)]
+struct HeldRole {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    community: CommunityId,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user: UserId,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    role: RoleId,
+}
+
+/// The roles each of `members` holds besides everyone's, keyed by community and user: the pairs
+/// themselves are matched, through `community_member_role_by_member`, so the rows read are
+/// those pairs' roles and no one else's.
 pub async fn roles_of_members(
     conn: &mut AsyncPgConnection,
     members: &[(CommunityId, UserId)],
@@ -240,23 +252,28 @@ pub async fn roles_of_members(
     if members.is_empty() {
         return Ok(HashMap::new());
     }
-    let communities: Vec<CommunityId> = members.iter().map(|(c, _)| *c).collect();
-    let users: Vec<UserId> = members.iter().map(|(_, u)| *u).collect();
-    let rows: Vec<(CommunityId, UserId, RoleId)> = community_member_role::table
-        .inner_join(community_role::table)
-        .select((
-            community_member_role::community,
-            community_member_role::user,
-            community_member_role::role,
-        ))
-        .filter(community_member_role::community.eq_any(communities))
-        .filter(community_member_role::user.eq_any(users))
-        .order((community_role::position, community_role::id))
-        .load(conn)
-        .await?;
+    let pairs: std::collections::BTreeSet<(CommunityId, UserId)> =
+        members.iter().copied().collect();
+    let (communities, users): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) =
+        pairs.iter().map(|(c, u)| (c.0, u.0)).unzip();
+    let rows: Vec<HeldRole> = diesel::sql_query(
+        r#"
+        SELECT mr.community, mr."user", mr.role
+        FROM unnest($1::uuid[], $2::uuid[]) AS m(community, "user")
+        JOIN community_member_role mr ON mr.community = m.community AND mr."user" = m."user"
+        JOIN community_role r ON r.id = mr.role
+        ORDER BY r.position, r.id
+        "#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&communities)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&users)
+    .load(conn)
+    .await?;
     let mut held: HashMap<(CommunityId, UserId), Vec<RoleId>> = HashMap::new();
-    for (community, user, role) in rows {
-        held.entry((community, user)).or_default().push(role);
+    for row in rows {
+        held.entry((row.community, row.user))
+            .or_default()
+            .push(row.role);
     }
     Ok(held)
 }

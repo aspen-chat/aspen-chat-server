@@ -293,51 +293,55 @@ pub async fn for_channel(
     use aspen_schema::{channel as channel_table, community_user, dm_recipient, user};
     let mut conn = state.connection_pool.get().await?;
     let access = channel_access(state, conn.as_mut(), caller, channel).await?;
-    let candidates: Vec<UserId> = match &access.community {
+    // A thread counts as its parent, for whose people are there and who may view it.
+    let parent: Option<ChannelId> = channel_table::table
+        .select(channel_table::parent_channel)
+        .filter(channel_table::id.eq(channel))
+        .first(conn.as_mut())
+        .await?;
+    let place = parent.unwrap_or(channel);
+    // Only bots that advertise commands are candidates, found from their lists through the
+    // membership's key, never by reading the whole community for its bots.
+    let present: Vec<UserId> = match &access.community {
         Some(community) => {
-            community_user::table
-                .inner_join(user::table.on(user::id.eq(community_user::user)))
-                .select(user::id)
-                .filter(
-                    community_user::community
-                        .eq(community.community)
-                        .and(user::bot)
-                        .and(user::deleted_at.is_null()),
+            let candidates: std::collections::HashSet<UserId> = bot_command_list::table
+                .inner_join(user::table.on(user::id.eq(bot_command_list::bot)))
+                .inner_join(
+                    community_user::table.on(community_user::user
+                        .eq(bot_command_list::bot)
+                        .and(community_user::community.eq(community.community))),
                 )
-                .load(conn.as_mut())
+                .select(user::id)
+                .filter(user::bot.and(user::deleted_at.is_null()))
+                .load::<UserId>(conn.as_mut())
                 .await?
+                .into_iter()
+                .collect();
+            if candidates.is_empty() {
+                Vec::new()
+            } else {
+                // A bot hears only what it can see, in a community channel whose overrides
+                // may hide it: decided for them all at once.
+                crate::visibility::viewers(conn.as_mut(), community.community, &candidates, place)
+                    .await?
+                    .into_iter()
+                    .collect()
+            }
         }
         None => {
-            let parent: Option<ChannelId> = channel_table::table
-                .select(channel_table::parent_channel)
-                .filter(channel_table::id.eq(channel))
-                .first(conn.as_mut())
-                .await?;
-            dm_recipient::table
-                .inner_join(user::table.on(user::id.eq(dm_recipient::user)))
-                .select(user::id)
-                .filter(
-                    dm_recipient::channel
-                        .eq(parent.unwrap_or(channel))
-                        .and(user::bot)
-                        .and(user::deleted_at.is_null()),
+            bot_command_list::table
+                .inner_join(user::table.on(user::id.eq(bot_command_list::bot)))
+                .inner_join(
+                    dm_recipient::table.on(dm_recipient::user
+                        .eq(bot_command_list::bot)
+                        .and(dm_recipient::channel.eq(place))),
                 )
+                .select(user::id)
+                .filter(user::bot.and(user::deleted_at.is_null()))
                 .load(conn.as_mut())
                 .await?
         }
     };
-    let mut present = Vec::new();
-    for bot in candidates {
-        // A bot hears only what it can see, in a community channel whose overrides may hide it.
-        let sees = match channel_access(state, conn.as_mut(), bot, channel).await {
-            Ok(bot_access) => bot_access.has(Permissions::VIEW_CHANNEL),
-            Err(crate::Error::Diesel(diesel::result::Error::NotFound)) => false,
-            Err(e) => return Err(e),
-        };
-        if sees {
-            present.push(bot);
-        }
-    }
     let lists: Vec<(UserId, serde_json::Value)> = bot_command_list::table
         .select((bot_command_list::bot, bot_command_list::commands))
         .filter(bot_command_list::bot.eq_any(&present))

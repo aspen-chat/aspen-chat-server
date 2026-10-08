@@ -18,8 +18,9 @@ use diesel_async::RunQueryDsl;
 /// The most rows one page of a list returns.
 pub const MAX_PAGE: i64 = 100;
 /// The furthest into a list a page may start. Pages are counted by offset so any column can
-/// sort them, which costs a scan of the rows skipped; searching narrows a long list faster.
-pub const MAX_OFFSET: i64 = 100_000;
+/// sort them, each through an index in its order, which still costs a walk past the rows
+/// skipped; searching narrows a long list faster.
+pub const MAX_OFFSET: i64 = 10_000;
 
 /// How a list is ordered: by a column, ascending or descending, then by id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,10 +92,16 @@ pub async fn overview(state: &GlobalServerContext) -> crate::Result<Overview> {
 /// The longest name search, in characters, longer than any name it could match a part of.
 pub const MAX_SEARCH_CHARS: usize = 100;
 
-/// `text` as a case-insensitive `LIKE` pattern matching any name containing it, with the
-/// pattern's own special characters escaped; `None` for an empty search. One of more than
-/// [`MAX_SEARCH_CHARS`] is refused.
-pub fn contains_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
+/// The fewest characters a search finds anywhere in a name; a shorter one finds names that
+/// start with it. A trigram index (`pg_trgm`) finds a part of a name only from three
+/// characters, but finds a start of one from the first, so every search is served by one.
+pub const MIN_CONTAINS_CHARS: usize = 3;
+
+/// `text` as a case-insensitive `LIKE` pattern matching any name containing it, or, for fewer
+/// than [`MIN_CONTAINS_CHARS`] characters, starting with it, with the pattern's own special
+/// characters escaped; `None` for an empty search. One of more than [`MAX_SEARCH_CHARS`] is
+/// refused.
+pub fn name_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
     let Some(text) = text else {
         return Ok(None);
     };
@@ -116,7 +123,11 @@ pub fn contains_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
             other => vec![other],
         })
         .collect();
-    Ok(Some(format!("%{escaped}%")))
+    if text.chars().count() < MIN_CONTAINS_CHARS {
+        Ok(Some(format!("{escaped}%")))
+    } else {
+        Ok(Some(format!("%{escaped}%")))
+    }
 }
 
 /// A user as the dashboard lists them.
@@ -167,7 +178,8 @@ pub async fn search_users(
     let mut conn = state.connection_pool.get().await?;
     let column = match sort.column {
         UserColumn::Name => "lower(COALESCE(display_name, name))",
-        UserColumn::Joined => "created_at",
+        // UUIDv7 ids order by creation, through the key.
+        UserColumn::Joined => "id",
     };
     Ok(diesel::sql_query(format!(
         r#"
@@ -187,7 +199,7 @@ pub async fn search_users(
         banned = crate::user_ban::BANNED_SQL,
         order = order_by(column, sort.descending, "id")
     ))
-    .bind::<Nullable<Text>, _>(contains_pattern(search)?)
+    .bind::<Nullable<Text>, _>(name_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_PAGE))
     .bind::<diesel::sql_types::Bool, _>(banned_only)
@@ -241,7 +253,7 @@ pub async fn search_communities(
         "#,
         order_by(column, sort.descending, "id")
     ))
-    .bind::<Nullable<Text>, _>(contains_pattern(search)?)
+    .bind::<Nullable<Text>, _>(name_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_PAGE))
     .load(conn.as_mut())
@@ -375,7 +387,7 @@ pub async fn growth(
 
 #[cfg(test)]
 mod tests {
-    use super::{GrowthUnit, MAX_SEARCH_CHARS, contains_pattern};
+    use super::{GrowthUnit, MAX_SEARCH_CHARS, name_pattern};
 
     #[test]
     fn a_growth_series_steps_by_days_weeks_or_months_as_it_lengthens() {
@@ -388,16 +400,17 @@ mod tests {
     #[test]
     fn a_search_matches_anywhere_and_takes_like_characters_literally() {
         assert_eq!(
-            contains_pattern(Some("Kate")).unwrap(),
+            name_pattern(Some("Kate")).unwrap(),
             Some("%kate%".to_string())
         );
-        assert_eq!(contains_pattern(Some("  ")).unwrap(), None);
-        assert_eq!(contains_pattern(None).unwrap(), None);
+        assert_eq!(name_pattern(Some("Ka")).unwrap(), Some("ka%".to_string()));
+        assert_eq!(name_pattern(Some("  ")).unwrap(), None);
+        assert_eq!(name_pattern(None).unwrap(), None);
         assert_eq!(
-            contains_pattern(Some("50%_\\")).unwrap(),
+            name_pattern(Some("50%_\\")).unwrap(),
             Some("%50\\%\\_\\\\%".to_string())
         );
-        assert!(contains_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS))).is_ok());
-        assert!(contains_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS + 1))).is_err());
+        assert!(name_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS))).is_ok());
+        assert!(name_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS + 1))).is_err());
     }
 }

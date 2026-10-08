@@ -9,7 +9,7 @@ use diesel::{
     QueryableByName, Selectable,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = react)]
@@ -118,13 +118,9 @@ pub async fn create_react(
                 .for_no_key_update()
                 .first::<MessageId>(conn.as_mut())
                 .await?;
-            let present: Vec<String> = react::table
-                .select(react::emoji)
-                .filter(react::message.eq(message_id))
-                .distinct()
-                .load(conn.as_mut())
-                .await?;
-            if !present.contains(&react.emoji) && present.len() >= MAX_DISTINCT_PER_MESSAGE {
+            if !emoji_present(conn.as_mut(), message_id, &react.emoji).await?
+                && distinct_emoji(conn.as_mut(), message_id).await? >= MAX_DISTINCT_PER_MESSAGE
+            {
                 return Err(crate::Error::Validation(t!(
                     "reactTooManyDistinct",
                     max = MAX_DISTINCT_PER_MESSAGE
@@ -140,6 +136,50 @@ pub async fn create_react(
     })
     .await?;
     Ok(react)
+}
+
+/// Whether anyone has reacted to `message` with `emoji`: one probe of `react_by_message`.
+async fn emoji_present(
+    conn: &mut AsyncPgConnection,
+    message: MessageId,
+    emoji: &str,
+) -> crate::Result<bool> {
+    Ok(diesel::select(diesel::dsl::exists(
+        react::table.filter(react::message.eq(message).and(react::emoji.eq(emoji))),
+    ))
+    .get_result(conn)
+    .await?)
+}
+
+#[derive(QueryableByName)]
+struct DistinctRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    used: i64,
+}
+
+/// How many emoji `message` has been reacted with, found by stepping from one emoji to the next
+/// through `react_by_message`, one probe each, rather than reading every reaction: there are
+/// never more than `MAX_DISTINCT_PER_MESSAGE` steps.
+async fn distinct_emoji(conn: &mut AsyncPgConnection, message: MessageId) -> crate::Result<usize> {
+    let row: DistinctRow = diesel::sql_query(
+        r#"
+        WITH RECURSIVE used AS (
+            (SELECT emoji FROM react WHERE message = $1 ORDER BY emoji LIMIT 1)
+            UNION ALL
+            SELECT (
+                SELECT r.emoji FROM react r
+                WHERE r.message = $1 AND r.emoji > used.emoji
+                ORDER BY r.emoji LIMIT 1
+            )
+            FROM used WHERE used.emoji IS NOT NULL
+        )
+        SELECT count(emoji) AS used FROM used
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(message.0)
+    .get_result(conn)
+    .await?;
+    Ok(usize::try_from(row.used).unwrap_or(usize::MAX))
 }
 
 /// Takes someone else's reaction off a message, which takes Manage messages where the message
@@ -258,7 +298,8 @@ struct SummaryRow {
 
 /// The reactions to each of `messages`, one summary per emoji. A message's emoji come in the
 /// order each was first used on it, so a client can break ties in count the same way. The
-/// reactions of anyone `caller` has blocked are left out (`app::block`).
+/// reactions of anyone `caller` has blocked are left out (`app::block`). Each emoji's first few
+/// are read in their order through `react_by_message`, so nothing sorts everyone who reacted.
 pub async fn read_summaries(
     state: &GlobalServerContext,
     caller: UserId,
@@ -270,15 +311,30 @@ pub async fn read_summaries(
     let mut conn = state.connection_pool.get().await?;
     let rows: Vec<SummaryRow> = diesel::sql_query(
         r#"
-        SELECT message, emoji, count(*) AS count, bool_or(author = $1) AS me,
-               (array_agg(author ORDER BY "timestamp", author))[1:$3] AS first
-        FROM react
-        WHERE message = ANY($2)
-          AND NOT EXISTS (
-              SELECT 1 FROM user_block WHERE blocker = $1 AND blocked = react.author
-          )
-        GROUP BY message, emoji
-        ORDER BY message, min("timestamp"), emoji
+        SELECT g.message, g.emoji, g.count, g.me, COALESCE(f.first, '{}') AS first
+        FROM (
+            SELECT message, emoji, count(*) AS count, bool_or(author = $1) AS me,
+                   min("timestamp") AS since
+            FROM react
+            WHERE message = ANY($2)
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_block WHERE blocker = $1 AND blocked = react.author
+              )
+            GROUP BY message, emoji
+        ) g
+        CROSS JOIN LATERAL (
+            SELECT array_agg(f.author ORDER BY f."timestamp", f.author) AS first
+            FROM (
+                SELECT author, "timestamp" FROM react r
+                WHERE r.message = g.message AND r.emoji = g.emoji
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_block WHERE blocker = $1 AND blocked = r.author
+                  )
+                ORDER BY "timestamp", author
+                LIMIT $3
+            ) f
+        ) f
+        ORDER BY g.message, g.since, g.emoji
         "#,
     )
     .bind::<diesel::sql_types::Uuid, _>(caller.0)

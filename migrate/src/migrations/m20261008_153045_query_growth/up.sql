@@ -84,3 +84,11 @@ CREATE INDEX message_search ON message USING gin (home_channel, to_tsvector('sim
     WHERE deleted_at IS NULL;
 -- Searching places by anything else, newest first.
 CREATE INDEX message_by_home_channel ON message (home_channel, id) WHERE deleted_at IS NULL;
+
+-- A case's reports, newest first: the latest few that a read of it carries.
+CREATE INDEX report_by_case ON report ("case", created_at, id);
+
+-- The dashboard's lists in their orders: people by the name they show, communities by name.
+CREATE INDEX user_dashboard_name ON "user" (lower(COALESCE(display_name, name)), id)
+    WHERE deleted_at IS NULL AND NOT system;
+CREATE INDEX community_dashboard_name ON community (lower(name), id) WHERE deleted_at IS NULL;

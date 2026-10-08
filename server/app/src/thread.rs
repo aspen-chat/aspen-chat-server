@@ -194,21 +194,25 @@ pub async fn record_if_reply(
 }
 
 /// Takes a deleted reply out of its thread's summary and announces it. The reply is already
-/// marked deleted in the caller's transaction, so the latest remaining one sets `lastReplyAt`.
+/// marked deleted in the caller's transaction, so the latest remaining one sets `lastReplyAt`:
+/// the newest by id (ids are UUIDv7), found walking `message (channel, id)` back from the end,
+/// which stops at the first reply not deleted.
 pub async fn record_removal(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     thread: ChannelId,
 ) -> crate::Result<()> {
     let last: Option<DateTime<Utc>> = message::table
-        .select(diesel::dsl::max(message::timestamp))
+        .select(message::timestamp)
         .filter(
             message::channel
                 .eq(thread)
                 .and(message::deleted_at.is_null()),
         )
+        .order(message::id.desc())
         .first(conn)
-        .await?;
+        .await
+        .optional()?;
     let (count, last): (i32, Option<DateTime<Utc>>) = diesel::update(channel::table)
         .set((
             channel::reply_count.eq(channel::reply_count - 1),

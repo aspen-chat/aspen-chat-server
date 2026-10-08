@@ -1,3 +1,6 @@
+DROP INDEX community_dashboard_name;
+DROP INDEX user_dashboard_name;
+DROP INDEX report_by_case;
 DROP INDEX message_by_home_channel;
 DROP INDEX message_search;
 CREATE INDEX message_search ON message USING gin (to_tsvector('simple', content))

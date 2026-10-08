@@ -646,6 +646,17 @@ pub async fn report_failure(
                     .execute(conn.as_mut())
                     .await?;
             }
+            // Failures older than the window count for nothing any more, so they go, and what
+            // is left is counted through `voice_server_failure_recent`.
+            diesel::delete(
+                voice_server_failure::table.filter(
+                    voice_server_failure::voice_server
+                        .eq(server)
+                        .and(voice_server_failure::reported_at.le(window_start)),
+                ),
+            )
+            .execute(conn.as_mut())
+            .await?;
             let failures: i64 = voice_server_failure::table
                 .filter(
                     voice_server_failure::voice_server
