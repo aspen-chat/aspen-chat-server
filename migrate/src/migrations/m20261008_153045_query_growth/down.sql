@@ -1,0 +1,26 @@
+DROP INDEX message_by_home_channel;
+DROP INDEX message_search;
+CREATE INDEX message_search ON message USING gin (to_tsvector('simple', content))
+    WHERE deleted_at IS NULL;
+DROP TRIGGER message_home_channel ON message;
+DROP FUNCTION message_home_channel();
+ALTER TABLE message DROP COLUMN home_channel;
+DROP INDEX poll_vote_by_option;
+DROP INDEX user_email_digest_due;
+CREATE INDEX user_email_digest_due ON user_email (digest_next_at) WHERE digest;
+DROP INDEX report_case_resolved;
+DROP INDEX federation_list_entry_host;
+DROP FUNCTION aspen_domain_host(text);
+DROP INDEX plugin_capability_user;
+DROP INDEX voice_server_failure_recent;
+DROP INDEX voice_participant_user;
+DROP INDEX voice_session_voice_server;
+DROP INDEX channel_community_live;
+DROP INDEX message_command_bot;
+DROP INDEX message_poll;
+DROP INDEX report_profile_icon;
+DROP INDEX message_warning_icon;
+DROP INDEX custom_emoji_icon;
+DROP INDEX community_icon;
+DROP INDEX user_icon;
+DROP FUNCTION aspen_uuid_floor(timestamptz);

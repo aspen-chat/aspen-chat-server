@@ -399,9 +399,12 @@ impl CommunityModel {
                         channel_override::deny,
                     ),
                 ))
+                // Only live channels' overrides count (threads carry none), found through
+                // `channel_community_live`.
                 .filter(
                     channel::community
                         .eq_any(ids.iter().map(|c| Some(*c)))
+                        .and(channel::parent_channel.is_null())
                         .and(channel::deleted_at.is_null()),
                 )
                 .load(conn)

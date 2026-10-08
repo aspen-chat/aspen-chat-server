@@ -13,13 +13,13 @@
 //! position of their own.
 //!
 //! Each read state also counts the unread messages that tag the caller (`app::mention`):
-//! directly, through a role they hold now, or as everyone. The same messages are left out as
-//! for being unread.
+//! directly, through a role they hold now, or as everyone, up to [`MAX_COUNTED_MENTIONS`]. The
+//! same messages are left out as for being unread.
 
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::t;
-use crate::{ChannelId, CommunityId, EventScope, MessageId, UserId, publish_event};
+use crate::{ChannelId, EventScope, MessageId, UserId, publish_event};
 use aspen_schema::{channel, message};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
@@ -36,10 +36,10 @@ pub struct ReadState {
     /// name a message that has since been deleted, or none at all when it is the moment the
     /// user joined.
     pub last_read: MessageId,
-    /// The newest message in the channel written by neither the user nor anyone they have
-    /// blocked, if there is one.
+    /// The newest message after `last_read` written by neither the user nor anyone they have
+    /// blocked, if there is one: the channel is unread exactly when there is.
     pub last_message: Option<MessageId>,
-    /// How many of the unread messages tag the user.
+    /// How many of the unread messages tag the user, up to [`MAX_COUNTED_MENTIONS`].
     pub mentions: u32,
 }
 
@@ -76,31 +76,42 @@ impl From<Row> for ReadState {
     }
 }
 
-/// The user's read states for the listed channels and for every channel of the listed
-/// communities, in one query: only channels they belong to (as a member of the community or a
-/// recipient of the DM), never threads or deleted channels. The newest message of each is
-/// found through the `(channel, id)` index, one short scan per channel, and its unread tags
-/// through `mention`'s indexes on who is tagged, however much of it is unread.
+/// The most unread tags counted in one channel: a count this high reads as "this many or more",
+/// which the apps show as "99+", and no read of a channel's tags goes further than it.
+pub const MAX_COUNTED_MENTIONS: i64 = 100;
+
+/// The user's read states for the listed channels, in one query: only channels they belong to
+/// (as a member of the community or a recipient of the DM), never threads or deleted channels.
+/// Everything is read from the channel's position on: the newest message after it through the
+/// `(channel, id)` index, and its tags through `mention`'s indexes on who is tagged (one branch
+/// each for the user, everyone, and each role the user holds), so the work grows with what is
+/// unread and is cut off at [`MAX_COUNTED_MENTIONS`].
 async fn read(
     conn: &mut AsyncPgConnection,
     user: UserId,
     channels: &[ChannelId],
-    communities: &[CommunityId],
 ) -> crate::Result<Vec<ReadState>> {
     let rows: Vec<Row> = diesel::sql_query(
         r#"
         SELECT c.id AS channel,
                rs.message AS last_read,
-               COALESCE(cu.joined_at, dr.joined_at) AS joined_at,
+               j.joined_at,
                m.id AS last_message,
                COALESCE(mc.mentions, 0) AS mentions
         FROM channel c
         LEFT JOIN community_user cu ON cu.community = c.community AND cu."user" = $1
         LEFT JOIN dm_recipient dr ON dr.channel = c.id AND dr."user" = $1
         LEFT JOIN read_state rs ON rs.channel = c.id AND rs."user" = $1
+        CROSS JOIN LATERAL (
+            SELECT COALESCE(cu.joined_at, dr.joined_at) AS joined_at
+        ) j
+        CROSS JOIN LATERAL (
+            SELECT GREATEST(rs.message, aspen_uuid_floor(j.joined_at)) AS after
+        ) p
         LEFT JOIN LATERAL (
             SELECT message.id FROM message
             WHERE message.channel = c.id
+              AND message.id > p.after
               AND message.deleted_at IS NULL
               AND message.author <> $1
               AND NOT EXISTS (
@@ -111,37 +122,41 @@ async fn read(
             LIMIT 1
         ) m ON true
         LEFT JOIN LATERAL (
-            SELECT count(DISTINCT mn.message) AS mentions
-            FROM mention mn
-            JOIN message tagged ON tagged.id = mn.message
-            WHERE mn.channel = c.id
-              AND (rs.message IS NULL OR mn.message > rs.message)
-              AND tagged."timestamp" > COALESCE(cu.joined_at, dr.joined_at)
-              AND tagged.deleted_at IS NULL
-              AND tagged.author <> $1
-              AND NOT EXISTS (
-                  SELECT 1 FROM user_block
-                  WHERE user_block.blocker = $1 AND user_block.blocked = tagged.author
-              )
-              AND (
-                  mn.target_user = $1
-                  OR mn.everyone
-                  OR mn.target_role IN (
-                      SELECT role FROM community_member_role
-                      WHERE community_member_role."user" = $1
-                        AND community_member_role.community = c.community
+            SELECT count(*) AS mentions FROM (
+                SELECT tagged.id
+                FROM (
+                    SELECT mn.message FROM mention mn
+                    WHERE mn.target_user = $1 AND mn.channel = c.id AND mn.message > p.after
+                    UNION
+                    SELECT mn.message FROM mention mn
+                    WHERE mn.everyone AND mn.channel = c.id AND mn.message > p.after
+                    UNION
+                    SELECT mn.message
+                    FROM community_member_role r
+                    JOIN mention mn ON mn.target_role = r.role
+                    WHERE r."user" = $1 AND r.community = c.community
+                      AND mn.channel = c.id AND mn.message > p.after
+                ) t
+                JOIN message tagged ON tagged.id = t.message
+                WHERE tagged."timestamp" > j.joined_at
+                  AND tagged.deleted_at IS NULL
+                  AND tagged.author <> $1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_block
+                      WHERE user_block.blocker = $1 AND user_block.blocked = tagged.author
                   )
-              )
+                LIMIT $3
+            ) counted
         ) mc ON true
-        WHERE c.deleted_at IS NULL
+        WHERE c.id = ANY($2)
+          AND c.deleted_at IS NULL
           AND c.parent_channel IS NULL
-          AND (c.id = ANY($2) OR c.community = ANY($3))
           AND (cu."user" IS NOT NULL OR dr."user" IS NOT NULL)
         "#,
     )
     .bind::<PgUuid, _>(user.0)
     .bind::<Array<PgUuid>, _>(channels.iter().map(|c| c.0).collect::<Vec<_>>())
-    .bind::<Array<PgUuid>, _>(communities.iter().map(|c| c.0).collect::<Vec<_>>())
+    .bind::<diesel::sql_types::BigInt, _>(MAX_COUNTED_MENTIONS)
     .load(conn)
     .await?;
     Ok(rows.into_iter().map(ReadState::from).collect())
@@ -153,9 +168,7 @@ pub async fn read_communities_read_states(
     visible: &crate::visibility::Visibility,
 ) -> crate::Result<Vec<ReadState>> {
     let mut conn = state.connection_pool.get().await?;
-    let mut states = read(conn.as_mut(), visible.user(), &[], visible.communities()).await?;
-    states.retain(|s| visible.can_view(s.channel));
-    Ok(states)
+    read(conn.as_mut(), visible.user(), &visible.visible_channels()).await
 }
 
 /// The user's read state of each of `channels` they belong to.
@@ -165,7 +178,7 @@ pub async fn read_channels_read_states(
     channels: &[ChannelId],
 ) -> crate::Result<Vec<ReadState>> {
     let mut conn = state.connection_pool.get().await?;
-    read(conn.as_mut(), user, channels, &[]).await
+    read(conn.as_mut(), user, channels).await
 }
 
 /// The user's read state of one channel; not found for a channel they do not belong to or may

@@ -185,6 +185,7 @@ pub async fn read_communities_overrides(
             channel_override::deny,
         ))
         .filter(channel::community.eq_any(communities.to_vec()))
+        .filter(channel::parent_channel.is_null())
         .filter(channel::deleted_at.is_null())
         .load(conn.as_mut())
         .await?;

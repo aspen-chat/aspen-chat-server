@@ -10,7 +10,8 @@ use utoipa::ToSchema;
 #[serde(rename_all = "camelCase")]
 pub struct PollOptionResult {
     pub count: u32,
-    /// Who voted for the option, oldest vote first. Absent on an anonymous poll.
+    /// The first to vote for the option, oldest vote first, at most `app::poll::SHOWN_VOTERS`
+    /// (five); everyone is `GET /polls/{poll}/votes/{option}`. Absent on an anonymous poll.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voters: Option<Vec<UserId>>,
 }

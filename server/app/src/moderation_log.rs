@@ -5,6 +5,7 @@
 //! what its ids name.
 
 use crate::context::GlobalServerContext;
+use crate::message::MessageKind;
 use crate::{AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
 use aspen_schema::moderation_log;
 use diesel::prelude::*;
@@ -322,9 +323,11 @@ pub async fn read_moderation_log(
             message::poll,
         ))
         .filter(
-            message::id
-                .eq_any(&message_ids)
-                .or(message::poll.eq_any(&poll_ids)),
+            // A poll's entry links the message it is shown in, never its `poll_closed` notice,
+            // which `message_poll_shown_once` finds by this very condition.
+            message::id.eq_any(&message_ids).or(message::kind
+                .eq(MessageKind::Poll)
+                .and(message::poll.eq_any(&poll_ids))),
         )
         .load(conn.as_mut())
         .await?;

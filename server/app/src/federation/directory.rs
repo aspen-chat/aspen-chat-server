@@ -143,8 +143,9 @@ fn clean_note(note: Option<String>) -> crate::Result<Option<String>> {
 }
 
 diesel::define_sql_function! {
-    /// PostgreSQL's `split_part`, which takes a domain's host from before its port.
-    fn split_part(text: diesel::sql_types::Text, delimiter: diesel::sql_types::Text, field: diesel::sql_types::Integer) -> diesel::sql_types::Text;
+    /// The host a domain names, without its port: the migrations' `aspen_domain_host`, which
+    /// `federation_list_entry_host` indexes.
+    fn aspen_domain_host(domain: diesel::sql_types::Text) -> diesel::sql_types::Text;
 }
 
 /// The lists each of `domains` is on itself, as the directory shows and edits them.
@@ -192,7 +193,7 @@ pub async fn lists_of(
     let covering: Vec<(Domain, FederationList)> = federation_list_entry::table
         .select((federation_list_entry::domain, federation_list_entry::list))
         .filter(federation_list_entry::list.eq_any(&blocks))
-        .filter(split_part(federation_list_entry::domain, ":", 1).eq_any(&hosts))
+        .filter(aspen_domain_host(federation_list_entry::domain).eq_any(&hosts))
         .load(conn)
         .await?;
     for domain in domains {

@@ -202,13 +202,17 @@ pub async fn read_community_settings(
     state: &GlobalServerContext,
     visible: &crate::visibility::Visibility,
 ) -> crate::Result<Vec<NotificationSetting>> {
-    let mut settings = read_settings(state, visible.user(), &[], visible.communities()).await?;
-    settings.retain(|s| s.channel.is_none_or(|channel| visible.can_view(channel)));
-    Ok(settings)
+    read_settings(
+        state,
+        visible.user(),
+        &visible.visible_channels(),
+        visible.communities(),
+    )
+    .await
 }
 
-/// The user's settings for the listed communities and every channel in them, and for the listed
-/// channels, in one query.
+/// The user's settings for the listed communities and the listed channels, in one query, each
+/// arm found through the user's own `(user, community)` or `(user, channel)` index.
 async fn read_settings(
     state: &GlobalServerContext,
     user: UserId,
@@ -216,17 +220,13 @@ async fn read_settings(
     communities: &[CommunityId],
 ) -> crate::Result<Vec<NotificationSetting>> {
     let mut conn = state.connection_pool.get().await?;
-    let in_communities = channel::table
-        .select(channel::id.nullable())
-        .filter(channel::community.eq_any(communities.to_vec()));
     Ok(notification_setting::table
         .select(NotificationSetting::as_select())
         .filter(notification_setting::user.eq(user))
         .filter(
             notification_setting::community
                 .eq_any(communities.to_vec())
-                .or(notification_setting::channel.eq_any(channels.to_vec()))
-                .or(notification_setting::channel.eq_any(in_communities)),
+                .or(notification_setting::channel.eq_any(channels.to_vec())),
         )
         .load(conn.as_mut())
         .await?)

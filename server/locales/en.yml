@@ -66,6 +66,7 @@ pollOptionOutOfRange: "The poll has no such option."
 pollWriteInsOff: "This poll doesn't take written-in answers."
 pollWriteInOnePerPerson: "You've already added an answer to this poll. Remove it to add another."
 pollWriteInsFull: "This poll has taken all %{max} written-in answers it can."
+pollVotersAnonymous: "This poll is anonymous, so who voted for each answer is not shown."
 problemPollClosed: "The poll has closed."
 
 # Voice

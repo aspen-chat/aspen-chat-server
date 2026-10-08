@@ -315,14 +315,19 @@ struct UnreadMessage {
 /// The condition that message `m` of place `c` is unread for the user `$1`, with `cu`, `dr`, and
 /// `rs` their membership, recipiency, and read state there: someone else's but no one they
 /// blocked, not deleted, posted after `$3` (the digest before) and after they arrived, and after
-/// their read position.
+/// their read position. The three lower bounds are one id bound too (ids are UUIDv7), so each
+/// place is read through `message (channel, id)` from there on rather than through its history.
 const UNREAD_SQL: &str = r#"
     m.channel = c.id
     AND m.deleted_at IS NULL
     AND m.author <> $1
+    AND m.id > GREATEST(
+        rs.message,
+        aspen_uuid_floor($3),
+        aspen_uuid_floor(COALESCE(cu.joined_at, dr.joined_at))
+    )
     AND m."timestamp" > $3
     AND m."timestamp" > COALESCE(cu.joined_at, dr.joined_at)
-    AND (rs.message IS NULL OR m.id > rs.message)
     AND NOT EXISTS (
         SELECT 1 FROM user_block b WHERE b.blocker = $1 AND b.blocked = m.author
     )
@@ -357,7 +362,7 @@ pub async fn build(
     time_zone: &str,
 ) -> crate::Result<Option<Digest>> {
     let communities = crate::events::memberships(conn, user_id).await?;
-    let visible = crate::visibility::Visibility::load(state, user_id, &communities).await?;
+    let visible = crate::visibility::Visibility::load_on(conn, user_id, &communities).await?;
     let mut places: Vec<ChannelId> = visible.visible_channels();
     let dms: Vec<ChannelId> = dm_recipient::table
         .select(dm_recipient::channel)
