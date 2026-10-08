@@ -8,8 +8,10 @@ DROP INDEX message_by_home_channel;
 DROP INDEX message_search;
 CREATE INDEX message_search ON message USING gin (to_tsvector('simple', content))
     WHERE deleted_at IS NULL;
-DROP TRIGGER message_home_channel ON message;
-DROP FUNCTION message_home_channel();
+DROP TRIGGER message_inserted ON message;
+DROP FUNCTION message_inserted();
+DROP INDEX dm_recipient_by_activity;
+ALTER TABLE dm_recipient DROP COLUMN active_at;
 ALTER TABLE message DROP COLUMN home_channel;
 DROP INDEX poll_vote_by_option;
 DROP INDEX user_email_digest_due;

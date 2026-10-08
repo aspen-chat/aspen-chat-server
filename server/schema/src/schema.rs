@@ -274,6 +274,7 @@ diesel::table! {
         channel -> Uuid,
         user -> Uuid,
         joined_at -> Timestamptz,
+        active_at -> Timestamptz,
     }
 }
 

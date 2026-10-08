@@ -57,6 +57,7 @@ export const reports = {
   tabs: "Which reports",
   open: "Open",
   openCount: "Open ({count})",
+  earlierReports: "{count} earlier reports are not shown.",
   resolved: "Resolved",
   dismissed: "Dismissed",
   noneOpen: "Nothing to review.",

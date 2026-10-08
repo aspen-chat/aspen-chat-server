@@ -234,6 +234,8 @@ export {
   PRESENCE_POLL_MS,
   READ_REPORT_MS,
   REACTORS_PAGE,
+  VOTERS_PAGE,
+  DM_PAGE,
   SEARCH_PAGE,
 } from "./sync";
 export {

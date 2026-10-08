@@ -465,14 +465,14 @@ pub async fn read_file_transfer_log(
     ))
 }
 
-/// Someone's DMs and group DMs, the most recently active first, for a deployment moderator to
-/// open. Takes Moderate any community; listing them, and reading any of them, is written to the
-/// moderation log.
+/// Someone's DMs and group DMs, the most recently active first, a page at a time, for a
+/// deployment moderator to open. Takes Moderate any community; listing them, and reading any of
+/// them, is written to the moderation log.
 #[utoipa::path(
     get,
     path = "/admin/users/{user}/dms",
     tag = TAG_ADMIN,
-    params(("user" = UserId, Path)),
+    params(("user" = UserId, Path), crate::dm::DmPageQuery),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Vec<crate::message_enum::Channel>),
@@ -485,9 +485,10 @@ pub async fn list_user_dms(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
+    crate::extract::Query(page): crate::extract::Query<crate::dm::DmPageQuery>,
 ) -> ApiResult<Json<Vec<crate::message_enum::Channel>>> {
     Ok(Json(
-        app::dm::list_dms_moderating(&state, &access, user)
+        app::dm::list_dms_moderating(&state, &access, user, page.before, page.limit())
             .await?
             .into_iter()
             .map(|(dm, recipients)| app::channel::record(&dm, recipients))

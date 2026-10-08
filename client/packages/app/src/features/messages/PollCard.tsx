@@ -1,6 +1,6 @@
-import { ApiProblemError, type Poll } from "@aspen/protocol";
-import { CheckIcon, XIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { ApiProblemError, VOTERS_PAGE, type Poll } from "@aspen/protocol";
+import { CheckIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Dialog,
@@ -45,6 +45,8 @@ import {
   type PollChoice,
 } from "@/features/messages/poll";
 import { displayNameOf } from "@/features/users/profile";
+import { PersonAvatar, PersonName } from "@/features/users/PersonName";
+import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -174,6 +176,9 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
     return user === undefined ? m.unknownUser : (nicknames.get(id) ?? displayNameOf(user));
   };
   const names = voters === null ? null : voters.map(nameOf).join(", ");
+  // The tally names an answer's first few voters; the rest are counted, and listed on asking.
+  const count = poll.results[index]?.count ?? 0;
+  const unnamed = voters === null ? 0 : Math.max(0, count - voters.length);
   const note = !choice.writeIn
     ? null
     : choice.writtenBy === null
@@ -229,7 +234,9 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
           {note !== null && <span className="truncate text-xs text-ink-faint">{note}</span>}
           {names !== null && names.length > 0 && (
             <span className="truncate text-xs text-ink-muted">
-              {format(m.poll.votedBy, { names })}
+              {unnamed > 0
+                ? format(m.poll.votedByMore, { names, count: String(unnamed) })
+                : format(m.poll.votedBy, { names })}
             </span>
           )}
         </span>
@@ -237,6 +244,9 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
           {String(sharePercent(poll, index))}%
         </span>
       </ToggleButton>
+      {voters !== null && count > 0 && (
+        <VotersDialog pollId={poll.id} index={index} label={optionName(option)} />
+      )}
       {canRemove && <RemoveWriteInDialog pollId={poll.id} index={index} label={option.label} />}
     </li>
   );
@@ -305,6 +315,111 @@ function WriteInField({ pollId }: { pollId: string }) {
 }
 
 /** A write-in's remove control and the confirmation it asks for, since its votes go with it. */
+/** A control that lists everyone who voted for one answer, earliest first, a page at a time. */
+function VotersDialog({ pollId, index, label }: { pollId: string; index: number; label: string }) {
+  const m = useMessages();
+  const name = format(m.poll.seeVoters, { option: label });
+  return (
+    <DialogTrigger>
+      <Tooltip text={name}>
+        <Button
+          aria-label={name}
+          className={
+            "tap-target shrink-0 rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
+            "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+          }
+        >
+          <UsersIcon size={16} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      <ModalOverlay className={overlayClass} isDismissable>
+        <Modal className={modalClass}>
+          <Dialog className={dialogClass}>
+            <DialogHeading>{format(m.poll.votersHeading, { option: label })}</DialogHeading>
+            <VoterList pollId={pollId} index={index} />
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </DialogTrigger>
+  );
+}
+
+/** Everyone who voted for one answer, earliest first, read a page at a time. */
+function VoterList({ pollId, index }: { pollId: string; index: number }) {
+  const m = useMessages();
+  const sync = useSync();
+  const community = useChannel(usePoll(pollId)?.channelId ?? "")?.community;
+  // The ids of a paged read, in the server's order; the records themselves are in the store.
+  const [ids, setIds] = useState<readonly string[]>([]);
+  const [complete, setComplete] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const read = useCallback(
+    (after: string | undefined, isCurrent: () => boolean) => {
+      sync.loadVoters(pollId, index, after).then(
+        (users) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const page = users.map((u) => u.id);
+          setIds((held) => (after === undefined ? page : [...held, ...page]));
+          setComplete(users.length < VOTERS_PAGE);
+          setLoading(false);
+        },
+        (e: unknown) => {
+          if (isCurrent()) {
+            setError(e instanceof ApiProblemError ? e.message : String(e));
+            setLoading(false);
+          }
+        },
+      );
+    },
+    [sync, pollId, index],
+  );
+
+  useEffect(() => {
+    let current = true;
+    read(undefined, () => current);
+    return () => {
+      current = false;
+    };
+  }, [read]);
+
+  return (
+    <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
+      <ul className="flex flex-col gap-1">
+        {ids.map((id) => (
+          <li key={id} className="flex items-center gap-2 rounded-md px-1 py-1 text-sm">
+            <PersonAvatar id={id} size="sm" />
+            <span className="min-w-0 flex-1 truncate">
+              <PersonName id={id} community={community} />
+            </span>
+          </li>
+        ))}
+      </ul>
+      {loading && <RowsSkeleton count={ids.length === 0 ? 5 : 2} />}
+      {error !== null && (
+        <p role="alert" className="px-1 text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {!loading && !complete && ids.length > 0 && (
+        <Button
+          onPress={() => {
+            setLoading(true);
+            setError(null);
+            read(ids[ids.length - 1], () => true);
+          }}
+          className={secondaryButtonClass + " self-start"}
+        >
+          {m.showMore}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function RemoveWriteInDialog({
   pollId,
   index,

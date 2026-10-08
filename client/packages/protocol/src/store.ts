@@ -274,6 +274,8 @@ export class RecordStore {
   readonly #myOrder = new Map<string, number>();
   /** The caller's DMs in the order the server listed them, most recently active first. */
   #dmOrder: string[] = [];
+  /** Whether the server has listed every DM, its last page having come short. */
+  #dmsComplete = true;
   /**
    * The newest activity seen in each DM since it was listed: the id of its latest message, or
    * the DM's own id when it was made. Both are UUIDv7, so they compare by time, and anything
@@ -1993,10 +1995,11 @@ export class RecordStore {
 
   /** Forgets everything, for sign-out. */
   /**
-   * Installs the caller's DMs as the server listed them, most recently active first, dropping
-   * any the cache held that the list no longer has.
+   * Installs the first page of the caller's DMs as the server listed them, most recently active
+   * first, dropping any the cache held that the page does not have; `complete` says whether it
+   * was the last page.
    */
-  setDms(dms: readonly Channel[]): void {
+  setDms(dms: readonly Channel[], complete: boolean): void {
     this.#batch(() => {
       const listed = new Set(dms.map((dm) => dm.id));
       for (const channel of Array.from(this.#channels.values())) {
@@ -2006,11 +2009,39 @@ export class RecordStore {
       }
       this.#dmOrder = dms.map((dm) => dm.id);
       this.#dmActivity.clear();
+      this.#dmsComplete = complete;
       for (const dm of dms) {
         this.#putChannel(dm);
       }
       this.#touch("dms");
     });
+  }
+
+  /**
+   * Adds a later page of the caller's DMs after those listed, in the server's order;
+   * `complete` says whether it was the last page. A DM already listed keeps its place.
+   */
+  appendDms(dms: readonly Channel[], complete: boolean): void {
+    this.#batch(() => {
+      for (const dm of dms) {
+        if (!this.#dmOrder.includes(dm.id)) {
+          this.#dmOrder.push(dm.id);
+        }
+        this.#putChannel(dm);
+      }
+      this.#dmsComplete = complete;
+      this.#touch("dms");
+    });
+  }
+
+  /** Whether every DM is listed, so there is no further page to read. */
+  dmsComplete(): boolean {
+    return this.#dmsComplete;
+  }
+
+  /** The last DM listed, after which the next page starts. */
+  lastListedDm(): string | undefined {
+    return this.#dmOrder.at(-1);
   }
 
   clear(): void {
@@ -2064,6 +2095,7 @@ export class RecordStore {
       this.#myCommunities.clear();
       this.#myOrder.clear();
       this.#dmOrder = [];
+      this.#dmsComplete = true;
       this.#dmActivity.clear();
       this.#removedChannels.clear();
       this.#myUserId = null;

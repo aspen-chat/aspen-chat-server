@@ -91,7 +91,7 @@ export function ReportsSection() {
     s === "open"
       ? open === undefined
         ? m.reports.open
-        : format(m.reports.openCount, { count: String(open) })
+        : format(m.reports.openCount, { count: countText(open) })
       : s === "resolved"
         ? m.reports.resolved
         : m.reports.dismissed;
@@ -235,9 +235,9 @@ function CaseCard({
           </span>
         )}
         <span className="ms-auto text-xs text-ink-muted">
-          {c.reports.length === 1
+          {c.reportCount === 1
             ? m.reports.oneReport
-            : format(m.reports.reportCount, { count: String(c.reports.length) })}
+            : format(m.reports.reportCount, { count: String(c.reportCount) })}
           {" · "}
           {format(m.reports.lastReported, { time: time(c.lastReportedAt) })}
         </span>
@@ -323,6 +323,11 @@ function CaseCard({
             )}
           </li>
         ))}
+        {c.reportCount > c.reports.length && (
+          <li className="text-xs text-ink-muted">
+            {format(m.reports.earlierReports, { count: String(c.reportCount - c.reports.length) })}
+          </li>
+        )}
       </ul>
 
       <footer className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
@@ -657,4 +662,9 @@ function ContextView({ caseId, reported, dm }: { caseId: string; reported: strin
       )}
     </section>
   );
+}
+
+/** A count the server stops at `MAX_COUNTED_CASES` (1000), shown as "999+" from there. */
+function countText(count: number): string {
+  return count >= 1000 ? "999+" : String(count);
 }

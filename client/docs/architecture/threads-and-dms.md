@@ -23,7 +23,10 @@
 - DMs and group DMs are channels of type `dm` and `groupDm` with no community and their people
   in `recipients`. `AspenSync` reads them at bootstrap (`GET /users/@me/dms`, with their
   people) into `RecordStore.dms()` (topic `dms`): the server's order, most recently active
-  first, with any DM that sees a message or is made afterwards moved to the top. A DM whose
+  first, with any DM that sees a message or is made afterwards moved to the top. The list comes
+  a page at a time (`DM_PAGE`, 100): bootstrap reads the first (`setDms`), with every DM's mutes
+  and notification settings whole, and the end of the DM list (`OlderDms`) reads the next of
+  each deployment with more (`AspenSync.loadMoreDms`, `appendDms`) as it comes into view. A DM whose
   update no longer lists the caller is one they left, and the store drops it with its history;
   `channelRemoved(id)` then tells a screen still showing it that it is gone, not unread, so it
   is not fetched again. `/dms` is `DmLayout` (`src/features/dms`): the DM list beside the

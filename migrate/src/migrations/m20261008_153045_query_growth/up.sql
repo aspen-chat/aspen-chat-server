@@ -59,23 +59,39 @@ CREATE INDEX user_email_digest_due ON user_email (digest_next_at)
 CREATE INDEX poll_vote_by_option ON poll_vote (poll, option_index, "timestamp", "user");
 
 -- The channel a message is read in for searching: its own, or, for a thread reply, the
--- thread's parent. Filled by `message_home_channel` on insert, since a thread's parent never
--- changes, so one indexed column scopes a search to channels and their threads together.
+-- thread's parent, so one indexed column scopes a search to channels and their threads
+-- together; a thread's parent never changes.
 ALTER TABLE message ADD COLUMN home_channel UUID;
 UPDATE message SET home_channel = COALESCE(c.parent_channel, c.id)
 FROM channel c WHERE c.id = message.channel;
 ALTER TABLE message ALTER COLUMN home_channel SET NOT NULL;
-CREATE FUNCTION message_home_channel() RETURNS trigger LANGUAGE plpgsql AS $$
+-- When each person's DM was last active: when they joined it, or its latest message since, so
+-- their DM list is read most recently active first through an index, a page at a time.
+ALTER TABLE dm_recipient ADD COLUMN active_at TIMESTAMPTZ NOT NULL DEFAULT now();
+UPDATE dm_recipient SET active_at = GREATEST(
+    joined_at,
+    COALESCE((SELECT max(m."timestamp") FROM message m WHERE m.channel = dm_recipient.channel),
+             joined_at)
+);
+CREATE INDEX dm_recipient_by_activity ON dm_recipient ("user", active_at DESC, channel DESC);
+-- What every inserted message records about where it is, whichever code inserts it: its
+-- `home_channel`, and, in a DM or group DM, that the DM is active for its people.
+CREATE FUNCTION message_inserted() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    parent UUID;
+    kind channel_type;
 BEGIN
-    NEW.home_channel := COALESCE(
-        (SELECT parent_channel FROM channel WHERE id = NEW.channel),
-        NEW.channel
-    );
+    SELECT parent_channel, ty INTO parent, kind FROM channel WHERE id = NEW.channel;
+    NEW.home_channel := COALESCE(parent, NEW.channel);
+    IF kind IN ('dm', 'group_dm') THEN
+        UPDATE dm_recipient SET active_at = NEW."timestamp"
+        WHERE channel = NEW.channel AND active_at < NEW."timestamp";
+    END IF;
     RETURN NEW;
 END
 $$;
-CREATE TRIGGER message_home_channel BEFORE INSERT ON message
-    FOR EACH ROW EXECUTE FUNCTION message_home_channel();
+CREATE TRIGGER message_inserted BEFORE INSERT ON message
+    FOR EACH ROW EXECUTE FUNCTION message_inserted();
 -- Searching text within some places: one GIN index over the place and the words, so the
 -- places bound the search rather than every match on the deployment (`app::search`).
 CREATE EXTENSION IF NOT EXISTS btree_gin;

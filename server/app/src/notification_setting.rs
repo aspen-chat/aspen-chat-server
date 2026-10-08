@@ -196,6 +196,29 @@ pub async fn read_channel_settings(
     read_settings(state, user, channels, &[]).await
 }
 
+/// The user's settings for every DM and group DM they are in, however many there are: rows they
+/// made themselves, found from their own key, which the DM list sends whole beside its pages.
+pub async fn read_dm_settings(
+    state: &GlobalServerContext,
+    user: UserId,
+) -> crate::Result<Vec<NotificationSetting>> {
+    use aspen_schema::dm_recipient;
+    let mut conn = state.connection_pool.get().await?;
+    Ok(notification_setting::table
+        .select(NotificationSetting::as_select())
+        .filter(notification_setting::user.eq(user))
+        .filter(diesel::dsl::exists(
+            dm_recipient::table.filter(
+                dm_recipient::channel
+                    .nullable()
+                    .eq(notification_setting::channel)
+                    .and(dm_recipient::user.eq(user)),
+            ),
+        ))
+        .load(conn.as_mut())
+        .await?)
+}
+
 /// The settings of `visible`'s user for its communities and for the channels they may view in
 /// them.
 pub async fn read_community_settings(

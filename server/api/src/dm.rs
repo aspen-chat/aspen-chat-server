@@ -29,9 +29,10 @@ pub enum DmInclude {
     Users,
     /// How far the caller has read each DM, as `included.readStates`.
     ReadStates,
-    /// The caller's mutes of the DMs, as `included.channelMutes`.
+    /// The caller's mutes of every DM they are in, listed or not, as `included.channelMutes`.
     Mutes,
-    /// The caller's notification settings for the DMs, as `included.notificationSettings`.
+    /// The caller's notification settings for every DM they are in, listed or not, as
+    /// `included.notificationSettings`.
     Notifications,
     /// The calls under way in the DMs, as `included.voiceSessions`, with who is in each, as
     /// `included.voiceParticipants`, and who each is ringing, as `included.voiceRings`.
@@ -48,6 +49,29 @@ pub struct DmListQuery {
     #[serde(default)]
     #[param(value_type = Option<Vec<DmInclude>>, style = Form, explode = false)]
     pub include: IncludeSet<DmInclude>,
+    /// Continue after this DM, the last of the previous page.
+    pub before: Option<ChannelId>,
+    /// How many to return, at most 100; 50 when absent.
+    pub limit: Option<i64>,
+}
+
+/// A page of someone's DMs.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DmPageQuery {
+    /// Continue after this DM, the last of the previous page.
+    pub before: Option<ChannelId>,
+    /// How many to return, at most 100; 50 when absent.
+    pub limit: Option<i64>,
+}
+
+/// How many DMs a page lists when it does not say.
+const DEFAULT_DM_PAGE: i64 = 50;
+
+impl DmPageQuery {
+    pub fn limit(&self) -> i64 {
+        self.limit.unwrap_or(DEFAULT_DM_PAGE)
+    }
 }
 
 /// Opens a DM with the people named. With one other person this is their one-to-one DM: made
@@ -89,7 +113,8 @@ pub async fn open_dm(
     ))
 }
 
-/// The caller's DMs and group DMs, the most recently active first. `include=users` sideloads
+/// The caller's DMs and group DMs, the most recently active first, a page at a time: a page
+/// shorter than `limit` is the last. `include=users` sideloads
 /// their recipients, `include=readStates` how far the caller has read each, and
 /// `include=mutes` which the caller has muted.
 #[utoipa::path(
@@ -110,7 +135,13 @@ pub async fn list_dms(
     SessionUser { user, .. }: SessionUser,
     Query(query): Query<DmListQuery>,
 ) -> ApiResult<Json<DmList>> {
-    let dms = app::dm::list_dms(&state, user.id).await?;
+    let dms = app::dm::list_dms(
+        &state,
+        user.id,
+        query.before,
+        query.limit.unwrap_or(DEFAULT_DM_PAGE),
+    )
+    .await?;
     let users = if query.include.contains(DmInclude::Users) {
         let ids: Vec<UserId> = dms
             .iter()
@@ -140,10 +171,11 @@ pub async fn list_dms(
     } else {
         None
     };
+    // Mutes and notification settings come whole, every DM's, on every page: they are the
+    // caller's own few rows, and a DM not listed yet must be known muted when heard from.
     let channel_mutes = if query.include.contains(DmInclude::Mutes) {
-        let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
         Some(
-            app::channel_mute::read_channel_mutes(&state, user.id, &ids)
+            app::channel_mute::read_dm_mutes(&state, user.id)
                 .await?
                 .into_iter()
                 .map(crate::channel_mute::ChannelMute::from)
@@ -153,9 +185,8 @@ pub async fn list_dms(
         None
     };
     let notification_settings = if query.include.contains(DmInclude::Notifications) {
-        let ids: Vec<ChannelId> = dms.iter().map(|(dm, _)| dm.id).collect();
         Some(
-            app::notification_setting::read_channel_settings(&state, user.id, &ids)
+            app::notification_setting::read_dm_settings(&state, user.id)
                 .await?
                 .into_iter()
                 .map(crate::notification_setting::NotificationSetting::from)
