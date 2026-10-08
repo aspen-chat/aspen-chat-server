@@ -291,11 +291,12 @@ commit, as with comments.
   reaction button, which is not in the list again, then when the message was sent. The press owns the message there, so the
   browser's text selection is off on it and Copy text is among the actions. Every action
   closes the sheet: the ones that open something (the reaction picker, who reacted, delete)
-  open it in the sheet's place, as `MessageItem`'s own, the picker as a popover anchored to
-  the point pressed (below it, or above it in the lower half of the list and always on the
-  newest message, which sits on the message box), since a popover or dialog inside the sheet
-  would go with it (`MessageSheet`, `ReactionPickerPopover`, `ReactionsDialog`,
-  `DeleteMessageModal`). Otherwise a control is shown outright with
+  open it in the sheet's place, as `MessageItem`'s own, since a sheet or dialog inside the
+  sheet would go with it (`MessageSheet`, `ReactionPickerOverlay`, `ReactionsDialog`,
+  `DeleteMessageModal`). Every emoji picker (a reaction's, a poll option's, a status's) opens
+  through `EmojiPickerOverlay` (`src/features/emoji`): on a touch-only device a sheet from the
+  bottom like the actions', the picker filling its width in whole rows of emoji, its search
+  left unfocused so the keyboard does not rise over them; elsewhere a popover by its button. Otherwise a control is shown outright with
   `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
   widens what a finger can hit to 44px on a touch screen without moving anything; controls side
   by side are drawn larger with `pointer-coarse:` instead, so their areas do not overlap. The app

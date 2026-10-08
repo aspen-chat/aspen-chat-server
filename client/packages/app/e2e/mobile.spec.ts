@@ -588,25 +588,28 @@ test.describe("on a phone", () => {
     });
   }
 
-  test("the reaction picker fits on the screen", async ({ page }) => {
-    const fit = await openReactionPicker(page);
-    expect(fit.left).toBeGreaterThanOrEqual(0);
-    expect(fit.right).toBeLessThanOrEqual(fit.screen);
-    expect(fit.listOverflow).toBeLessThanOrEqual(0);
-    // A whole row of emoji, as far from each side.
-    expect(fit.perRow).toBe(8);
-    expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
-  });
-
-  test("on the narrowest phones the reaction picker takes a row of seven", async ({ page }) => {
-    await page.setViewportSize({ width: 340, height: 700 });
-    const fit = await openReactionPicker(page);
-    expect(fit.left).toBeGreaterThanOrEqual(0);
-    expect(fit.right).toBeLessThanOrEqual(fit.screen);
-    expect(fit.listOverflow).toBeLessThanOrEqual(0);
-    expect(fit.perRow).toBe(7);
-    expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
-  });
+  for (const width of [412, 340]) {
+    test(`the reaction picker fills a sheet across a ${String(width)}px phone in whole rows`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const fit = await openReactionPicker(page);
+      const sheet = page.getByRole("dialog", { name: "Add a reaction" });
+      await settleAnimations(page);
+      const box = await sheet.boundingBox();
+      expect((box?.y ?? 0) + (box?.height ?? 0)).toBeCloseTo(800, 0);
+      expect(box?.width ?? 0).toBeCloseTo(width, 0);
+      expect(fit.left).toBeGreaterThanOrEqual(0);
+      expect(fit.right).toBeLessThanOrEqual(fit.screen);
+      expect(fit.listOverflow).toBeLessThanOrEqual(0);
+      // As many whole 40px emoji as the screen holds beside the picker's padding, as far from
+      // each side.
+      expect(fit.perRow).toBe(Math.floor((width - 20) / 40));
+      expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
+      // Its search waits for a tap, so the keyboard does not rise over the emoji.
+      await expect(sheet.getByRole("searchbox").or(sheet.locator("input"))).not.toBeFocused();
+    });
+  }
 
   test("the message box sits level with its buttons, which share one + menu", async ({ page }) => {
     await openChannel(page, "general");

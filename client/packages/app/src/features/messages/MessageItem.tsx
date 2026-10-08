@@ -29,7 +29,7 @@ import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import {
   ReactionChips,
-  ReactionPickerPopover,
+  ReactionPickerOverlay,
   ReactionsDialog,
 } from "@/features/messages/Reactions";
 import { DeleteMessageModal } from "@/features/messages/DeleteMessageDialog";
@@ -56,21 +56,10 @@ const TIME_OF_DAY: Intl.DateTimeFormatOptions = { timeStyle: "short" };
 
 /** How long a finger is held on a message before its actions are offered under it. */
 const LONG_PRESS_MS = 450;
-/** How far from the finger's point the reaction picker opens, clear of the finger. */
-const PRESS_OFFSET_PX = 12;
 
 /** What a long press has open: the actions, or what one of them opened in their place. */
 type Sheet = "actions" | MessageSheet;
 
-/** Where the finger pressed, within the row, and what follows from it. */
-interface Press {
-  x: number;
-  y: number;
-  /** Whether the picker opens above the point rather than below it. */
-  above: boolean;
-  /** The list it keeps within. */
-  list: HTMLElement | null;
-}
 /** How far the pointer's actions rise above their message's top, over the message before. */
 const TOOLBAR_RISE_PX = 20;
 
@@ -105,7 +94,6 @@ export const MessageItem = memo(function MessageItem({
   parentId,
   highlighted,
   threadable = true,
-  latest = false,
   grouped = false,
   continued = false,
 }: {
@@ -116,8 +104,6 @@ export const MessageItem = memo(function MessageItem({
   highlighted: boolean;
   /** Whether the message may start or show a thread here; not for a thread's own header. */
   threadable?: boolean;
-  /** Whether it is the newest message, on which the actions never open downward. */
-  latest?: boolean;
   /** Whether it continues its author's group, drawn without picture, name, or time. */
   grouped?: boolean;
   /** Whether the message after it continues its group. */
@@ -144,10 +130,9 @@ export const MessageItem = memo(function MessageItem({
   // What the press has open: the actions, or what one of them opened in their place.
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const row = useRef<HTMLElement>(null);
-  // Where the finger pressed, which the reaction picker opens beside, so that on a long message
-  // it comes where the finger is rather than under the whole of it; and which way it opens.
-  const [press, setPress] = useState<Press | null>(null);
-  const anchor = useRef<HTMLSpanElement>(null);
+  // Whether the message has been pressed long, from when its sheets are drawn: they stay drawn
+  // once it has, so each can slide away when it closes.
+  const [pressed, setPressed] = useState(false);
   const { longPressProps } = useLongPress({
     isDisabled: !touchOnly || editing,
     threshold: LONG_PRESS_MS,
@@ -162,16 +147,9 @@ export const MessageItem = memo(function MessageItem({
         void sync.loadFrequentEmoji(home.community).catch(() => undefined);
       }
     },
-    onLongPress: (e) => {
+    onLongPress: () => {
       feelPress();
-      const list = row.current?.closest<HTMLElement>("[data-message-list]") ?? null;
-      const rowTop = row.current?.getBoundingClientRect().top ?? 0;
-      const listRect = list?.getBoundingClientRect();
-      // Above the finger in the lower half of the list, where below would be cramped or over
-      // the message box, and always on the newest message, which sits on the message box.
-      const above =
-        latest || (listRect !== undefined && rowTop + e.y > listRect.top + listRect.height / 2);
-      setPress({ x: e.x, y: e.y, above, list });
+      setPressed(true);
       setSheet("actions");
     },
   });
@@ -180,12 +158,6 @@ export const MessageItem = memo(function MessageItem({
     onOpenChange: (open: boolean) => {
       setSheet(open ? which : null);
     },
-  });
-  const popoverProps = (which: Sheet) => ({
-    ...sheetProps(which),
-    placement: press?.above ? ("top" as const) : ("bottom" as const),
-    offset: PRESS_OFFSET_PX,
-    ...(press?.list == null ? {} : { boundaryElement: press.list }),
   });
   // A message that came while the reader was here rises into place; history arrives still.
   const [arriving] = useState(() => {
@@ -321,15 +293,8 @@ export const MessageItem = memo(function MessageItem({
           : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
       }
     >
-      {touchOnly && press !== null && (
+      {touchOnly && pressed && (
         <>
-          {/* The point the finger pressed, which the reaction picker opens beside. */}
-          <span
-            ref={anchor}
-            aria-hidden="true"
-            className="pointer-events-none absolute h-0 w-0"
-            style={{ left: press.x, top: press.y }}
-          />
           <MessageActionSheet
             messageId={id}
             communityId={home.community}
@@ -348,11 +313,10 @@ export const MessageItem = memo(function MessageItem({
               }}
             />
           </MessageActionSheet>
-          <ReactionPickerPopover
+          <ReactionPickerOverlay
             messageId={id}
             communityId={home.community}
-            triggerRef={anchor}
-            {...popoverProps("react")}
+            {...sheetProps("react")}
           />
           <ReactionsDialog
             messageId={id}

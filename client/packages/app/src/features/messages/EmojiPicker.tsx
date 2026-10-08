@@ -1,5 +1,5 @@
 import Picker, { Categories, EmojiStyle, SkinTonePickerLocation, Theme } from "emoji-picker-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useCustomEmoji, useIcons } from "@/api/hooks";
 import { referenceOf } from "@/features/emoji/customEmoji";
 import { loadEmojiData, useEmojiLanguage, type EmojiData } from "@/features/emoji/emojiData";
@@ -25,18 +25,30 @@ const FITS_WIDE = `(min-width: ${String(WIDE + 16)}px)`;
  * The emoji keep the library's own 40px size: it places them by a size it measures once they
  * render and assumes 40px until then, so any other size would lay the first rows out at the
  * wrong spacing, past the edge, for as long as that takes.
+ *
+ * In a popover it is eight emoji across, or seven where that does not fit. `fill` instead fits
+ * as many whole emoji as the width it is given holds, `height` tall, for a touch screen's sheet
+ * across the screen, and leaves the search unfocused, so the keyboard does not rise over the
+ * emoji the moment it opens.
  */
 export default function EmojiPicker({
   onPick,
   communityId,
+  fill = false,
+  height = 384,
 }: {
   /** Called with the emoji, or a custom emoji's reference, as a message or reaction names it. */
   onPick: (emoji: string) => void;
   /** The community whose own emoji the picker offers too; none in a DM. */
   communityId: string | null;
+  fill?: boolean;
+  height?: number;
 }) {
   const m = useMessages();
   const wide = useMediaQuery(FITS_WIDE);
+  const box = useRef<HTMLDivElement>(null);
+  const filled = useFilledWidth(box, fill);
+  const width = fill ? filled : wide ? WIDE : NARROW;
   const language = useEmojiLanguage();
   // The names and headings in the reader's language, with the community's own section called
   // what the app calls it; until they come, the room they will take.
@@ -78,32 +90,64 @@ export default function EmojiPicker({
       }),
     [custom, icons],
   );
-  if (emojiData === null) {
-    return (
+  const content =
+    emojiData === null || width === null ? (
       <div
         className="flex items-center justify-center text-sm text-ink-muted"
-        style={{ width: wide ? WIDE : NARROW, height: 384 }}
+        style={{ width: width ?? "100%", height }}
       >
         {m.loading}
       </div>
+    ) : (
+      <Picker
+        emojiData={emojiData}
+        onEmojiClick={(picked) => {
+          onPick(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
+        }}
+        customEmojis={customEmojis}
+        emojiStyle={EmojiStyle.NATIVE}
+        theme={Theme.AUTO}
+        lazyLoadEmojis
+        skinTonePickerLocation={SkinTonePickerLocation.SEARCH}
+        previewConfig={{ showPreview: false }}
+        searchPlaceholder={m.emojiSearch}
+        width={width}
+        height={height}
+        autoFocusSearch={!fill}
+        className="emoji-picker"
+      />
     );
-  }
-  return (
-    <Picker
-      emojiData={emojiData}
-      onEmojiClick={(picked) => {
-        onPick(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
-      }}
-      customEmojis={customEmojis}
-      emojiStyle={EmojiStyle.NATIVE}
-      theme={Theme.AUTO}
-      lazyLoadEmojis
-      skinTonePickerLocation={SkinTonePickerLocation.SEARCH}
-      previewConfig={{ showPreview: false }}
-      searchPlaceholder={m.emojiSearch}
-      width={wide ? WIDE : NARROW}
-      height={384}
-      className="emoji-picker"
-    />
+  // Filling, it is measured by a box that stays while the picker loads into it.
+  return fill ? (
+    <div ref={box} className="flex w-full justify-center">
+      {content}
+    </div>
+  ) : (
+    content
   );
+}
+
+/**
+ * Where `fill`, the widest picker of whole 40px emoji, with the 20px of padding beside them,
+ * that `box`'s width holds, followed as it is resized; `null` until measured.
+ */
+function useFilledWidth(box: RefObject<HTMLDivElement | null>, fill: boolean): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (!fill || element === null) {
+      return;
+    }
+    const measure = () => {
+      const across = Math.max(1, Math.floor((element.clientWidth - 20) / 40));
+      setWidth(across * 40 + 20);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [box, fill]);
+  return width;
 }

@@ -7,14 +7,12 @@ import {
 } from "@aspen/protocol";
 import { useGrowthKey } from "@/features/layout/motion";
 import { SmileyIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Dialog,
-  DialogTrigger,
   Modal,
   ModalOverlay,
-  Popover,
   type PopoverProps,
   Tab,
   TabList,
@@ -45,6 +43,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useNameIn } from "@/features/users/nameIn";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
+import { EmojiPickerOverlay } from "@/features/emoji/EmojiPickerOverlay";
 import { useEmojiName } from "@/features/messages/emojiName";
 import { emojiIdOf } from "@/features/emoji/customEmoji";
 import { useMessages } from "@/i18n/context";
@@ -53,7 +52,6 @@ import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
-const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
 
 const chipClass =
   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm outline-none " +
@@ -541,79 +539,74 @@ export function ReactionPicker({
   iconSize?: number | string;
 }) {
   const m = useMessages();
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
-    <DialogTrigger>
+    <>
       <Tooltip text={m.addReaction}>
-        <Button className={triggerClassName} aria-label={m.addReaction}>
+        <Button
+          ref={trigger}
+          className={triggerClassName}
+          aria-label={m.addReaction}
+          onPress={() => {
+            setOpen(true);
+          }}
+        >
           <SmileyIcon size={iconSize} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ReactionPickerPopover
+      <ReactionPickerOverlay
         messageId={messageId}
         communityId={communityId}
+        triggerRef={trigger}
         placement="bottom end"
+        isOpen={open}
+        onOpenChange={setOpen}
       />
-    </DialogTrigger>
+    </>
   );
 }
 
 /**
- * The emoji picker that adds a reaction to the message, in a popover: opened by the trigger
- * around it, or, given `isOpen` and a `triggerRef`, by whatever holds it (a touch screen's
- * message actions, which close as it opens). A pick closes it.
+ * The emoji picker that adds a reaction to the message (`EmojiPickerOverlay`: a sheet on a touch
+ * screen, else a popover by `triggerRef`), opened by whatever holds it: its trigger, or a touch
+ * screen's message actions, which close as it opens. A pick closes it; a refusal is said in it.
  */
-export function ReactionPickerPopover({
+export function ReactionPickerOverlay({
   messageId,
   communityId,
   ...popover
-}: { messageId: string; communityId: string | null } & Omit<
-  PopoverProps,
-  "children" | "className"
->) {
+}: {
+  messageId: string;
+  communityId: string | null;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+} & Omit<PopoverProps, "children" | "className" | "isOpen" | "onOpenChange">) {
   const m = useMessages();
   const sync = useSync();
   const [error, setError] = useState<string | null>(null);
   return (
-    <>
-      <Popover {...popover} className="rounded-lg border border-line bg-surface-raised shadow-lg">
-        <Dialog aria-label={m.addReaction} className="outline-none">
-          {({ close }) => (
-            // A pick closes the popover: through the trigger's state around it, or, opened by
-            // what holds it, through its own `onOpenChange`, which the dialog's `close` does
-            // not reach.
-            <div className="flex flex-col">
-              <Suspense
-                fallback={
-                  <div className="flex h-96 w-80 items-center justify-center text-sm text-ink-muted">
-                    {m.loading}
-                  </div>
-                }
-              >
-                <EmojiPicker
-                  communityId={communityId}
-                  onPick={(emoji) => {
-                    setError(null);
-                    sync.addReaction(messageId, emoji).then(
-                      () => {
-                        close();
-                        popover.onOpenChange?.(false);
-                      },
-                      (e: unknown) => {
-                        setError(e instanceof ApiProblemError ? e.message : String(e));
-                      },
-                    );
-                  }}
-                />
-              </Suspense>
-              {error !== null && (
-                <p role="alert" className="px-3 pb-2 text-xs text-danger">
-                  {error}
-                </p>
-              )}
-            </div>
-          )}
-        </Dialog>
-      </Popover>
-    </>
+    <EmojiPickerOverlay
+      label={m.addReaction}
+      communityId={communityId}
+      onPick={(emoji) => {
+        setError(null);
+        sync.addReaction(messageId, emoji).then(
+          () => {
+            popover.onOpenChange(false);
+          },
+          (e: unknown) => {
+            setError(e instanceof ApiProblemError ? e.message : String(e));
+          },
+        );
+      }}
+      popover={popover}
+    >
+      {error !== null && (
+        <p role="alert" className="px-3 pb-2 text-xs text-danger">
+          {error}
+        </p>
+      )}
+    </EmojiPickerOverlay>
   );
 }

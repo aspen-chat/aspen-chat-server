@@ -1,6 +1,6 @@
 import { ApiProblemError, type User } from "@aspen/protocol";
-import { PencilSimpleIcon, SmileyIcon, XIcon } from "@phosphor-icons/react";
-import { lazy, Suspense, useState } from "react";
+import { PencilSimpleIcon, XIcon } from "@phosphor-icons/react";
+import { useState } from "react";
 import {
   Button,
   Dialog,
@@ -10,7 +10,6 @@ import {
   Label,
   Modal,
   ModalOverlay,
-  Popover,
   TextArea,
   TextField,
 } from "react-aria-components";
@@ -32,11 +31,9 @@ import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { IconPicker } from "@/features/media/IconPicker";
 import { profileForm, profilePatch, type ProfileForm } from "@/features/users/profile";
+import { EmojiChoiceButton } from "@/features/emoji/EmojiPickerOverlay";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
-
-/** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
-const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
 
 /** Bounds mirrored from the server's `app::user`, so the form refuses what it would refuse. */
 const DISPLAY_NAME_MAX_CHARS = 32;
@@ -238,47 +235,12 @@ function StatusEmojiPicker({
   const m = useMessages();
   const label = emoji === null ? m.profile.pickStatusEmoji : m.profile.changeStatusEmoji;
   return (
-    <DialogTrigger>
-      <Button aria-label={label} className={iconButtonClass + " text-base leading-none"}>
-        {emoji ?? <SmileyIcon size={18} aria-hidden="true" />}
-      </Button>
-      <Popover
-        placement="bottom start"
-        className="rounded-lg border border-line bg-surface-raised shadow-lg"
-      >
-        <Dialog aria-label={label} className="outline-none">
-          {({ close }) => (
-            <div className="flex flex-col">
-              <Suspense
-                fallback={
-                  <div className="flex h-96 w-80 items-center justify-center text-sm text-ink-muted">
-                    {m.loading}
-                  </div>
-                }
-              >
-                <EmojiPicker
-                  communityId={null}
-                  onPick={(picked) => {
-                    onChange(picked === emoji ? null : picked);
-                    close();
-                  }}
-                />
-              </Suspense>
-              {emoji !== null && (
-                <Button
-                  onPress={() => {
-                    onChange(null);
-                    close();
-                  }}
-                  className={secondaryButtonClass + " m-2"}
-                >
-                  {m.poll.clearEmoji}
-                </Button>
-              )}
-            </div>
-          )}
-        </Dialog>
-      </Popover>
-    </DialogTrigger>
+    <EmojiChoiceButton
+      label={label}
+      clearLabel={m.poll.clearEmoji}
+      emoji={emoji}
+      onChange={onChange}
+      className={iconButtonClass + " text-base leading-none"}
+    />
   );
 }
