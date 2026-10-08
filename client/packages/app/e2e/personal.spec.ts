@@ -26,12 +26,15 @@ async function messageAction(page: Page, isMobile: boolean, action: string) {
   }
 }
 
-/** Goes to one of the user bar's pages from the channel list. */
-async function openFromUserBar(page: Page, isMobile: boolean, name: string) {
+/** Goes to one of the rail's pages, from the channel list on a phone. */
+async function openFromRail(page: Page, isMobile: boolean, name: string) {
   if (isMobile) {
     await page.goBack();
   }
-  await page.getByRole("link", { name, exact: true }).first().click();
+  await page
+    .getByRole("navigation", { name: "Communities" })
+    .getByRole("link", { name, exact: true })
+    .click();
 }
 
 test("a saved message is marked, listed, and removed", async ({ page, isMobile }) => {
@@ -39,7 +42,7 @@ test("a saved message is marked, listed, and removed", async ({ page, isMobile }
   await channels(page).getByText("general", { exact: true }).click();
   await messageAction(page, isMobile, "Save message");
   await expect(soundsGood(page).getByText("Saved", { exact: true })).toBeAttached();
-  await openFromUserBar(page, isMobile, "Saved messages");
+  await openFromRail(page, isMobile, "Saved messages");
   await expect(page).toHaveURL(/\/saved$/);
   const list = page.getByRole("list", { name: "Saved messages" });
   await expect(list.getByText(reactedText)).toBeVisible();
@@ -54,7 +57,7 @@ test("the feed holds what notifies, follows threads, and leaves out what is filt
 }) => {
   await signInToWorld(page);
   await channels(page).getByText("general", { exact: true }).click();
-  await openFromUserBar(page, isMobile, "Activity");
+  await openFromRail(page, isMobile, "Activity");
   await expect(page).toHaveURL(/\/activity$/);
   const feed = page.getByRole("list", { name: "Activity" });
   await expect(feed.getByText("Did you get the photos?")).toBeVisible();
@@ -63,7 +66,10 @@ test("the feed holds what notifies, follows threads, and leaves out what is filt
   // Following the thread brings its replies, with a way to reply in place.
   await page.goto("/");
   await channels(page).getByText("general", { exact: true }).click();
-  await page.getByRole("link", { name: /^View thread/ }).first().click();
+  await page
+    .getByRole("link", { name: /^View thread/ })
+    .first()
+    .click();
   await page.getByRole("button", { name: "Follow thread" }).click();
   await expect(page.getByRole("button", { name: "Unfollow thread" })).toBeVisible();
   await page.goto("/activity");

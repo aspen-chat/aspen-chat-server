@@ -1,11 +1,14 @@
 # Saved messages and activity
 
 Two pages of the reader's own, across every deployment they use (`useSources`), opened from
-the user bar (`SidebarFooter`, beside Edit profile and Settings) and routed at `/activity` and
-`/saved` (never under `/at/{domain}`, since they span deployments). Both are `PersonalPage`s
+the top of the community rail (`CommunityRail`: Activity, then Saved messages, then the DMs,
+each a round link drawn alike, `railLinkClass`, ringed while its page is open) and routed at
+`/activity` and `/saved` (never under `/at/{domain}`, since they span deployments). Both are `PersonalPage`s
 (`src/features/activity`), a `RailPage` (`src/features/layout`, the layout the Administration
 Dashboard uses too) whose rail goes between the two and holds whatever more the page puts in
-it, with the user bar at its foot. Each message they list is a `ListedMessage`
+it, with the user bar at its foot. Their content scrolls only up and down, so a phone never
+pans them sideways; what is wider than the column (a code block) scrolls in itself, and the
+filters' long names are cut short. Each message they list is a `ListedMessage`
 (`src/features/messages`, which a channel's pins use too): its author, when, where it was said
 (`useMessagePlace`, which search's results use too: the governing channel, the thread, the
 link that goes to it, and a line naming the place, with `on {domain}` for another deployment),

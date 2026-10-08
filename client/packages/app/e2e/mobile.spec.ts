@@ -10,6 +10,7 @@ import {
   signInToWorld,
   starterText,
 } from "./world";
+import { bob, generalMessages, message, threadRecord, users } from "./world/fixtures";
 
 /**
  * The app on a phone: a narrow, touch-only screen, where there is no hover and one list or
@@ -178,6 +179,43 @@ test.describe("on a phone", () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expectNoSidewaysScroll(page);
+  });
+
+  test("the activity and saved pages scroll only up and down", async ({ page }) => {
+    await page.route(/\/api\/v1\/users\/@me\/activity/, (route) =>
+      route.fulfill({
+        json: {
+          data: [
+            message(299, bob, "A long word: " + "x".repeat(300), 1),
+            message(298, bob, "https://example.com/" + "a/".repeat(80), 2),
+            ...generalMessages,
+          ],
+          included: { users, channels: [threadRecord] },
+        },
+      }),
+    );
+    for (const path of ["/activity", "/saved"]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      if (path === "/activity") {
+        await expect(page.getByText(/^A long word/)).toBeVisible();
+        await page.getByRole("button", { name: "Show", exact: true }).click();
+      }
+      await expectNoSidewaysScroll(page);
+      const sideways = await page.locator("main").evaluate((main) =>
+        Array.from(main.querySelectorAll<HTMLElement>("*"))
+          .filter((element) => {
+            const style = getComputedStyle(element);
+            return (
+              element.tagName !== "PRE" &&
+              ["auto", "scroll"].includes(style.overflowX) &&
+              element.scrollWidth > element.clientWidth + 1
+            );
+          })
+          .map((element) => element.className),
+      );
+      expect(sideways).toEqual([]);
+    }
   });
 
   test("a message's time stays on one line", async ({ page }) => {

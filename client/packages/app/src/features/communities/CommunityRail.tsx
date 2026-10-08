@@ -39,12 +39,14 @@ import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import {
+  BookmarksSimpleIcon,
   ChatsTeardropIcon,
   DotsSixVerticalIcon,
   DotsThreeIcon,
   GaugeIcon,
   GlobeSimpleIcon,
   PlusIcon,
+  TrayIcon,
 } from "@phosphor-icons/react";
 import {
   Button,
@@ -118,6 +120,13 @@ function railRows(units: readonly RailUnit<RailEntry>[]): RailRow[] {
 }
 
 const currentRing = "ring-2 ring-accent ring-offset-2 ring-offset-surface-rail";
+/** A round way to a page of the rail's own (activity, saved messages, DMs, the dashboard), ringed while it is open. */
+function railLinkClass(current: boolean): string {
+  return (
+    "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60" +
+    (current ? " text-accent " + currentRing : "")
+  );
+}
 /** The focus ring and the mark of a drop onto a row, drawn on its tile rather than its band. */
 const tileStateClass =
   "group-data-[focus-visible]:ring-2 group-data-[focus-visible]:ring-accent/60 " +
@@ -181,6 +190,8 @@ export function CommunityRail() {
     matchRoute({ to: "/dms", fuzzy: true }) !== false ||
     matchRoute({ to: "/at/$domain/dms", fuzzy: true }) !== false;
   const inAdmin = matchRoute({ to: "/admin", fuzzy: true }) !== false;
+  const inActivity = matchRoute({ to: "/activity" }) !== false;
+  const inSaved = matchRoute({ to: "/saved" }) !== false;
   const admin = useIsAdmin();
   const bootstrapping = useSyncStatus() === "bootstrapping";
   /** The row being dragged, which decides what it may be dropped on. */
@@ -272,6 +283,26 @@ export function CommunityRail() {
       aria-label={m.communitiesLabel}
       className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-e border-line bg-surface-rail py-3"
     >
+      <Tooltip text={m.activity.open}>
+        <Link
+          to="/activity"
+          aria-label={m.activity.open}
+          aria-current={inActivity ? "page" : undefined}
+          className={railLinkClass(inActivity)}
+        >
+          <TrayIcon size={22} aria-hidden="true" />
+        </Link>
+      </Tooltip>
+      <Tooltip text={m.saved.open}>
+        <Link
+          to="/saved"
+          aria-label={m.saved.open}
+          aria-current={inSaved ? "page" : undefined}
+          className={railLinkClass(inSaved)}
+        >
+          <BookmarksSimpleIcon size={22} aria-hidden="true" />
+        </Link>
+      </Tooltip>
       {/* The dot sits beside the link rather than in it, so the link's own round background
           covers it; see `UnreadDot`. */}
       <div className="relative isolate">
@@ -286,10 +317,7 @@ export function CommunityRail() {
               dmTags,
             )}
             aria-current={inDms ? "page" : undefined}
-            className={
-              "flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
-              (inDms ? "text-accent " + currentRing : "")
-            }
+            className={railLinkClass(inDms)}
           >
             <ChatsTeardropIcon size={22} aria-hidden="true" />
           </Link>
@@ -430,10 +458,7 @@ function AdminLink({ inAdmin }: { inAdmin: boolean }) {
           to="/admin"
           aria-label={label}
           aria-current={inAdmin ? "page" : undefined}
-          className={
-            "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60 " +
-            (inAdmin ? "text-accent ring-2 ring-accent ring-offset-2 ring-offset-surface-rail" : "")
-          }
+          className={railLinkClass(inAdmin)}
         >
           <GaugeIcon size={22} aria-hidden="true" />
         </Link>

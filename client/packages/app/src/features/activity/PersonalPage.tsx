@@ -37,7 +37,7 @@ export function PersonalPage({
           <h1 className="px-2 text-lg font-semibold">
             {current === "activity" ? m.activity.heading : m.saved.heading}
           </h1>
-          <ul className="-mx-1 flex gap-1 overflow-x-auto px-1 md:flex-col">
+          <ul className="flex flex-wrap gap-1 md:flex-col">
             <li className="shrink-0">
               <Link
                 to="/activity"
