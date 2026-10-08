@@ -204,15 +204,22 @@ pub enum Recheck {
     Everyone,
 }
 
+/// How many rechecks one server runs at once; the rest wait their turn.
+pub const RECHECKS_AT_ONCE: usize = 16;
+
 /// Brings the calls `which` names in line with what their participants may now do, after a
 /// change to it has committed: whoever may no longer view the channel or join voice there (or
 /// is banned from the deployment, or gone) is removed, and everyone else's grants are sent to
 /// their voice server, which stops whatever they may no longer send. Runs on its own task, so
-/// the change that called for it does not wait; a failure is logged, and the next change or
-/// join brings the call in line.
+/// the change that called for it does not wait, at most [`RECHECKS_AT_ONCE`] at a time on each
+/// server; a failure is logged, and the next change or join brings the call in line. Every
+/// call on the deployment is rechecked by a job instead ([`recheck_all_step`]).
 pub fn recheck(state: &GlobalServerContext, which: Recheck) {
     let state = state.clone();
     tokio::spawn(async move {
+        let Ok(_turn) = state.rechecks.clone().acquire_owned().await else {
+            return;
+        };
         let rechecked = async {
             let mut conn = state.connection_pool.get().await?;
             recheck_in(&state, conn.as_mut(), which.clone()).await
@@ -262,6 +269,79 @@ pub async fn recheck_in(
         Recheck::Everyone => seats,
     };
     let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
+    recheck_seats(state, conn, file_transfers, &which, seats).await
+}
+
+/// How many seats one step of rechecking every call takes.
+const RECHECK_BATCH: i64 = 200;
+
+/// How far rechecking every call has come: the last seat rechecked, by session and user.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Rechecked {
+    after: Option<(VoiceSessionId, UserId)>,
+}
+
+/// One step of rechecking every call on the deployment (`jobs::JobKind::RecheckAllCalls`), for a
+/// change that touches them all, as turning file transfers on or off does: the next
+/// [`RECHECK_BATCH`] seats in order of session and user.
+pub async fn recheck_all_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let done: Rechecked = job.progress()?.unwrap_or_default();
+    let mut conn = state.connection_pool.get().await?;
+    let file_transfers = crate::deployment_settings::load(conn.as_mut())
+        .await?
+        .file_transfers;
+    let mut seats = voice_participant::table
+        .inner_join(voice_session::table)
+        .select((
+            voice_session::id,
+            voice_session::voice_server,
+            voice_session::channel,
+            voice_participant::user,
+        ))
+        .order((voice_participant::session, voice_participant::user))
+        .limit(RECHECK_BATCH)
+        .into_boxed();
+    if let Some((session, user)) = done.after {
+        seats = seats.filter(
+            voice_participant::session
+                .gt(session)
+                .or(voice_participant::session
+                    .eq(session)
+                    .and(voice_participant::user.gt(user))),
+        );
+    }
+    let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> =
+        seats.load(conn.as_mut()).await?;
+    let last = seats.last().map(|(session, _, _, user)| (*session, *user));
+    let full = seats.len() as i64 >= RECHECK_BATCH;
+    recheck_seats(
+        state,
+        conn.as_mut(),
+        file_transfers,
+        &Recheck::Everyone,
+        seats,
+    )
+    .await?;
+    Ok(match last {
+        Some(after) if full => {
+            crate::jobs::Outcome::Progress(serde_json::to_value(Rechecked { after: Some(after) })?)
+        }
+        _ => crate::jobs::Outcome::Done,
+    })
+}
+
+/// Rechecks each of `seats`, as `which` asks.
+async fn recheck_seats(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    file_transfers: bool,
+    which: &Recheck,
+    seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)>,
+) -> crate::Result<()> {
     if let Recheck::SignIns { ended, kept, .. } = which {
         // The voice server knows which sign-in each participant joined on; it decides.
         for (session, server, _, user) in seats {

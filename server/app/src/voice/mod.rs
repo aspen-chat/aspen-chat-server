@@ -24,7 +24,8 @@ pub use servers::{
 };
 use sessions::reap_idle_sessions;
 pub use sessions::{
-    Recheck, kick_everywhere, kick_participant, mute_participant, recheck, recheck_in,
+    RECHECKS_AT_ONCE, Recheck, kick_everywhere, kick_participant, mute_participant, recheck,
+    recheck_all_step, recheck_in,
 };
 
 use crate::context::GlobalServerContext;

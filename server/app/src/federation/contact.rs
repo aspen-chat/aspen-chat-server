@@ -3,7 +3,6 @@
 
 use crate::aspen_config::FederationConfig;
 use crate::context::GlobalServerContext;
-use crate::events::Publishing;
 use crate::federation::keys::{DeploymentDocument, current_of, follow_handovers};
 use crate::federation::{Domain, Listed, Origin, fetch, get, own_domain, standing};
 use crate::t;
@@ -42,7 +41,6 @@ pub async fn contact(
         fetch_document(&state.config.federation, &state.federation_client, domain).await?;
     // The connection is taken once the other deployment has answered, not held while it might.
     record_contact(
-        state,
         state.connection_pool.get().await?.as_mut(),
         domain,
         &document,
@@ -71,7 +69,6 @@ pub async fn contact_verifying<T>(
     })?;
     let verified = verify(&presented)?;
     let (listed, outcome) = record_contact(
-        state,
         state.connection_pool.get().await?.as_mut(),
         domain,
         &document,
@@ -115,9 +112,8 @@ fn check_document(domain: &Domain, document: &DeploymentDocument) -> crate::Resu
 /// Checks the key `document` presents against the one pinned for `domain`, as [`contact`]
 /// describes. A key nothing vouches for suspends the deployment until an administrator accepts
 /// it, since the key pinned may be in someone else's hands: everything it signs is refused
-/// (`received::receive`), and its users signed in here are signed out at once.
+/// (`received::receive`), and its users signed in here are signed out by a job saved with it.
 pub async fn record_contact(
-    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     domain: &Domain,
     document: &DeploymentDocument,
@@ -130,7 +126,7 @@ pub async fn record_contact(
     })?;
     let recorded = record_key(conn, domain, document, presented).await?;
     if recorded.1 == ContactOutcome::KeyChanged {
-        standing::shut_out_home(state, conn, domain).await?;
+        standing::shut_out(conn, Some(domain.clone())).await?;
     }
     Ok(recorded)
 }

@@ -62,3 +62,13 @@ ALTER TABLE community_member_role ADD CONSTRAINT community_member_role_role_fkey
 ALTER TABLE mention DROP CONSTRAINT mention_target_role_fkey;
 ALTER TABLE mention ADD CONSTRAINT mention_target_role_fkey
     FOREIGN KEY (target_role) REFERENCES community_role (id) ON DELETE NO ACTION;
+
+-- A deleted custom emoji is marked and announced at once, its name free again, and its
+-- reactions taken off by a job a batch at a time (`purgeCustomEmoji`) before it goes.
+ALTER TABLE custom_emoji ADD COLUMN deleted_at TIMESTAMPTZ;
+DROP INDEX custom_emoji_name_key;
+CREATE UNIQUE INDEX custom_emoji_name_key ON custom_emoji (community, lower(name))
+    WHERE deleted_at IS NULL;
+ALTER TABLE react DROP CONSTRAINT react_custom_emoji_fkey;
+ALTER TABLE react ADD CONSTRAINT react_custom_emoji_fkey
+    FOREIGN KEY (custom_emoji) REFERENCES custom_emoji (id) ON DELETE NO ACTION;

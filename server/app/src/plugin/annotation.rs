@@ -437,6 +437,15 @@ pub async fn clear_on_user(
     .await
 }
 
+/// The plugins installed and not removed, whose notes are shown.
+fn installed_plugins()
+-> aspen_schema::plugin::BoxedQuery<'static, diesel::pg::Pg, diesel::sql_types::Text> {
+    aspen_schema::plugin::table
+        .select(aspen_schema::plugin::id)
+        .filter(aspen_schema::plugin::removed_at.is_null())
+        .into_boxed()
+}
+
 /// The annotations of `messages`, which the caller has already been allowed to read.
 pub async fn of_messages(
     state: &GlobalServerContext,
@@ -449,6 +458,8 @@ pub async fn of_messages(
     Ok(message_annotation::table
         .select(MessageAnnotationRow::as_select())
         .filter(message_annotation::message.eq_any(messages))
+        // A removed plugin's notes are read nowhere while a job takes them away.
+        .filter(message_annotation::plugin.eq_any(installed_plugins()))
         .order(message_annotation::id.asc())
         .load(conn.as_mut())
         .await?
@@ -488,6 +499,7 @@ pub async fn of_user(
     Ok(user_annotation::table
         .select(UserAnnotationRow::as_select())
         .filter(user_annotation::user.eq(subject))
+        .filter(user_annotation::plugin.eq_any(installed_plugins()))
         .order(user_annotation::id.asc())
         .load(conn.as_mut())
         .await?

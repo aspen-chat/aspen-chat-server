@@ -320,6 +320,10 @@ pub async fn read_summaries(
               AND NOT EXISTS (
                   SELECT 1 FROM user_block WHERE blocker = $1 AND blocked = react.author
               )
+              AND NOT EXISTS (
+                  SELECT 1 FROM custom_emoji ce
+                  WHERE ce.id = react.custom_emoji AND ce.deleted_at IS NOT NULL
+              )
             GROUP BY message, emoji
         ) g
         CROSS JOIN LATERAL (

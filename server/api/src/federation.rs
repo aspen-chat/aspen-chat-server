@@ -504,7 +504,7 @@ pub async fn remove_deployment(
         .get()
         .await
         .map_err(app::Error::from)?;
-    federation::remove(&state, conn.as_mut(), &state.settings().federation, &domain).await?;
+    federation::remove(conn.as_mut(), &domain).await?;
     tracing::info!(%domain, admin = %session.user.id.0, "forgot a deployment");
     Ok(NoContent)
 }
@@ -639,16 +639,8 @@ pub async fn add_to_list(
         .get()
         .await
         .map_err(app::Error::from)?;
-    let added = federation::set_listed(
-        &state,
-        conn.as_mut(),
-        &state.settings().federation,
-        &domain,
-        list,
-        true,
-        Some(session.user.id),
-    )
-    .await?;
+    let added =
+        federation::set_listed(conn.as_mut(), &domain, list, true, Some(session.user.id)).await?;
     if added {
         tracing::info!(%domain, %list, admin = %session.user.id.0, "put a deployment on a list");
     }
@@ -688,17 +680,7 @@ pub async fn remove_from_list(
         .get()
         .await
         .map_err(app::Error::from)?;
-    if federation::set_listed(
-        &state,
-        conn.as_mut(),
-        &state.settings().federation,
-        &domain,
-        list,
-        false,
-        None,
-    )
-    .await?
-    {
+    if federation::set_listed(conn.as_mut(), &domain, list, false, None).await? {
         tracing::info!(%domain, %list, admin = %session.user.id.0, "took a deployment off a list");
     }
     Ok(NoContent)

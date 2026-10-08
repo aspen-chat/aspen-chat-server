@@ -36,6 +36,8 @@ pub struct GlobalServerContext {
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<crate::ChannelId, crate::events::ChannelHome>>>,
+    /// The places for rechecks of calls this server runs at once (`app::voice::recheck`).
+    pub rechecks: Arc<tokio::sync::Semaphore>,
     /// Each channel's recent count of who is online in it (`app::channel_presence`).
     pub channel_presence: Arc<crate::recent::Recent<crate::ChannelId, u32>>,
     /// Who of each community is online, by the roles they hold, for its channels' counts
@@ -169,6 +171,7 @@ impl GlobalServerContext {
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
             channel_presence: Arc::default(),
+            rechecks: Arc::new(tokio::sync::Semaphore::new(crate::voice::RECHECKS_AT_ONCE)),
             community_online: Arc::default(),
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),

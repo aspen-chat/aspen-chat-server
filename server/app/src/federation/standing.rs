@@ -733,68 +733,109 @@ async fn apply(
     Ok(())
 }
 
-/// Ends the sessions of the users from elsewhere whose homes `policy` no longer admits, for a
-/// change to the immigration gates that has committed. It reads only users with a session, so a
-/// second run finds nothing left to do.
-pub async fn shut_out(
-    state: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    policy: &FederationPolicy,
-) -> crate::Result<()> {
-    let staying: Vec<(UserId, Option<Domain>, bool)> = user::table
-        .select((user::id, user::home_domain, user::bot))
-        .filter(user::home_domain.is_not_null())
-        .filter(user::deleted_at.is_null())
-        .filter(diesel::dsl::exists(
-            refresh_token::table
-                .filter(refresh_token::user.eq(user::id))
-                .filter(refresh_token::expires.gt(diesel::dsl::now)),
-        ))
-        .load(conn)
-        .await?;
-    let homes: Vec<Domain> = staying
-        .iter()
-        .filter_map(|(_, home, _)| home.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    let lists = lists_of(conn, &homes).await?;
-    for (id, home, bot) in staying {
-        let Some(home) = home else { continue };
-        let subject = if bot { Subject::Bots } else { Subject::Users };
-        let on = lists.get(&home).map(Vec::as_slice).unwrap_or_default();
-        if !admits(policy, subject, Direction::Immigration, on) {
-            end_stay(state, conn, id).await?;
-            tracing::info!(%home, user = %id.0, "ended the sessions of a user whose home this deployment no longer admits");
-        }
-    }
+/// Whom a sign-out of users from elsewhere covers (`jobs::JobKind::ShutOut`): those whose homes
+/// the gates no longer admit, decided as each step runs, or everyone of one home.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutOut {
+    /// One home, suspended because it presented a key nothing vouches for; `None` for every
+    /// home the gates no longer admit.
+    pub home: Option<Domain>,
+}
+
+/// Starts ending the sessions of the users from elsewhere whose homes the gates no longer admit,
+/// for a change to the gates or the lists they read, or, given `home`, of everyone of that home:
+/// a job saved in the caller's transaction (`shutOut`, urgent, [`shut_out_step`]), so the change
+/// commits at once and the sign-outs follow within seconds, a batch at a time.
+pub async fn shut_out(conn: &mut AsyncPgConnection, home: Option<Domain>) -> crate::Result<()> {
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::ShutOut,
+            crate::jobs::JobClass::Urgent,
+            &ShutOut { home },
+        )?,
+    )
+    .await?;
     Ok(())
 }
 
-/// Ends the sessions of every user of `home` signed in here, for a home that is suspended
-/// because it presented a key nothing vouches for (`contact::record_contact`). It reads only
-/// users with a session, so a second run finds nothing left to do.
-pub async fn shut_out_home(
-    state: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    home: &Domain,
-) -> crate::Result<()> {
-    let staying: Vec<UserId> = user::table
-        .select(user::id)
-        .filter(user::home_domain.eq(home))
-        .filter(user::deleted_at.is_null())
-        .filter(diesel::dsl::exists(
-            refresh_token::table
-                .filter(refresh_token::user.eq(user::id))
-                .filter(refresh_token::expires.gt(diesel::dsl::now)),
-        ))
-        .load(conn)
-        .await?;
-    for id in staying {
-        end_stay(state, conn, id).await?;
-        tracing::info!(%home, user = %id.0, "ended the sessions of a user whose home presented a key nothing vouches for");
+/// How many users one step of a sign-out ends the sessions of.
+const SHUT_OUT_BATCH: i64 = 100;
+
+/// One step of signing out users from elsewhere: the homes not admitted are decided afresh, per
+/// home rather than per user, from the gates as they stand (`settings().federation`) and the
+/// lists, and a batch of those homes' users who still have a session here are signed out, each in
+/// a transaction of its own. Those signed out have no session left, so each step reads only who
+/// remains, and a second run finds nothing to do.
+pub async fn shut_out_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    use crate::jobs::Outcome;
+    let ShutOut { home } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    // Which homes, and for which of people and bots, are shut out.
+    let shut: Vec<(Domain, Option<bool>)> = match home {
+        Some(home) => vec![(home, None)],
+        None => {
+            let homes: Vec<Domain> = user::table
+                .select(user::home_domain.assume_not_null())
+                .filter(user::home_domain.is_not_null())
+                .filter(user::deleted_at.is_null())
+                .distinct()
+                .load(conn.as_mut())
+                .await?;
+            let lists = lists_of(conn.as_mut(), &homes).await?;
+            let policy = state.settings().federation;
+            homes
+                .into_iter()
+                .flat_map(|home| {
+                    let on = lists.get(&home).cloned().unwrap_or_default();
+                    [(Subject::Users, false), (Subject::Bots, true)]
+                        .into_iter()
+                        .filter(move |(subject, _)| {
+                            !admits(&policy, *subject, Direction::Immigration, &on)
+                        })
+                        .map(move |(_, bot)| (home.clone(), Some(bot)))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        }
+    };
+    let mut batch: Vec<UserId> = Vec::new();
+    for (home, bot) in shut {
+        let room = SHUT_OUT_BATCH - batch.len() as i64;
+        if room <= 0 {
+            break;
+        }
+        let mut found = user::table
+            .select(user::id)
+            .filter(user::home_domain.eq(home))
+            .filter(user::deleted_at.is_null())
+            .filter(diesel::dsl::exists(
+                refresh_token::table
+                    .filter(refresh_token::user.eq(user::id))
+                    .filter(refresh_token::expires.gt(diesel::dsl::now)),
+            ))
+            .limit(room)
+            .into_boxed();
+        if let Some(bot) = bot {
+            found = found.filter(user::bot.eq(bot));
+        }
+        batch.extend(found.load::<UserId>(conn.as_mut()).await?);
     }
-    Ok(())
+    let more = batch.len() as i64 >= SHUT_OUT_BATCH;
+    for id in batch {
+        conn.transaction(|conn| async move { end_stay(state, conn, id).await }.scope_boxed())
+            .await?;
+        tracing::info!(user = %id.0, "ended the sessions of a user whose home this deployment no longer admits");
+    }
+    Ok(if more {
+        Outcome::Progress(serde_json::Value::Null)
+    } else {
+        Outcome::Done
+    })
 }
 
 /// Ends a foreign user's sessions here, closing their event streams, and takes them out of

@@ -94,6 +94,18 @@ pub enum JobKind {
     ReapVoice,
     /// Taking a deleted role off its holders and the tags of it, then deleting it.
     PurgeRole,
+    /// Taking a deleted custom emoji's reactions off, then deleting it and its picture.
+    PurgeCustomEmoji,
+    /// Deleting what plugins kept in a deleted community, channel, or account.
+    ForgetPluginScope,
+    /// Taking a removed plugin's notes away and its account out of its communities.
+    RetirePlugin,
+    /// Deleting everything a removed plugin kept.
+    PurgePlugin,
+    /// Signing out users from elsewhere whose homes the gates no longer admit.
+    ShutOut,
+    /// Rechecking every call on the deployment, for a change that touches them all.
+    RecheckAllCalls,
 }
 
 crate::wire_name_traits!(JobKind);

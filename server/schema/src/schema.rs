@@ -231,6 +231,7 @@ diesel::table! {
         icon -> Uuid,
         created_by -> Nullable<Uuid>,
         created_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 

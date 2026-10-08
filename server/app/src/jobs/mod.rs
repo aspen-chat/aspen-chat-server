@@ -284,6 +284,12 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::ClosePoll => crate::poll::close_at_deadline(state, job).await,
         JobKind::ReapVoice => crate::voice::reap(state, job).await,
         JobKind::PurgeRole => crate::role::purge_step(state, job).await,
+        JobKind::PurgeCustomEmoji => crate::custom_emoji::purge_step(state, job).await,
+        JobKind::ForgetPluginScope => crate::plugin::storage::forget_step(state, job).await,
+        JobKind::RetirePlugin => crate::plugin::install::retire_step(state, job).await,
+        JobKind::PurgePlugin => crate::plugin::install::purge_step(state, job).await,
+        JobKind::ShutOut => crate::federation::standing::shut_out_step(state, job).await,
+        JobKind::RecheckAllCalls => crate::voice::recheck_all_step(state, job).await,
     }
 }
 

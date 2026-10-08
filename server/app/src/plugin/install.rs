@@ -9,12 +9,11 @@
 
 use super::manifest::Manifest;
 use super::{Mode, PluginPermission, settings};
+use crate::context::GlobalServerContext;
 use crate::events::Publishing;
 use crate::user::UserPg;
 use crate::{CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::{
-    bot_command_list, community_user, message_annotation, plugin, user, user_annotation,
-};
+use aspen_schema::{bot_command_list, community_user, plugin, user};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -216,7 +215,7 @@ pub async fn install(
                     Some(principal) => {
                         ensure_principal(publisher, conn, manifest, principal).await?
                     }
-                    None => retire_principal(publisher, conn, &manifest.id).await?,
+                    None => retire(conn, &manifest.id).await?,
                 }
                 Ok::<_, crate::Error>(outcome)
             }
@@ -354,31 +353,147 @@ async fn ensure_principal(
     .await
 }
 
-/// Takes the plugin's principal out of every community it is in, as the plugin goes or stops
-/// acting. The account stays, as does what it posted.
-async fn retire_principal(
-    publisher: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    id: &str,
-) -> crate::Result<()> {
+/// What retiring or purging a removed plugin is given (`jobs::JobKind::RetirePlugin`,
+/// `PurgePlugin`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Retired {
+    pub plugin: String,
+}
+
+/// How many rows, or communities, one step of retiring or purging a plugin takes.
+const RETIRE_BATCH: i64 = 1000;
+const LEAVE_BATCH: i64 = 50;
+
+/// Starts taking `id`'s account out of every community it is in, as the plugin goes or stops
+/// acting, and, once it is removed, its notes away: a job saved in the caller's transaction
+/// (`retirePlugin`, [`retire_step`]). The account stays, as does what it posted.
+async fn retire(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> {
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::RetirePlugin,
+            crate::jobs::JobClass::Normal,
+            &Retired {
+                plugin: id.to_string(),
+            },
+        )?
+        .keyed(id.to_string()),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Whether `id` is installed and removed, which purging it and taking its notes need: one
+/// installed again meanwhile is left as it is.
+async fn still_removed(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<bool> {
+    Ok(diesel::select(diesel::dsl::exists(
+        plugin::table.filter(plugin::id.eq(id).and(plugin::removed_at.is_not_null())),
+    ))
+    .get_result(conn)
+    .await?)
+}
+
+/// Deletes up to `$2` rows of `table` whose `plugin` is `$1`; answers whether a whole batch went.
+async fn delete_batch(conn: &mut AsyncPgConnection, table: &str, id: &str) -> crate::Result<bool> {
+    let deleted = diesel::sql_query(format!(
+        "DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE plugin = $1 LIMIT $2)"
+    ))
+    .bind::<diesel::sql_types::Text, _>(id)
+    .bind::<diesel::sql_types::BigInt, _>(RETIRE_BATCH)
+    .execute(conn)
+    .await?;
+    Ok(deleted as i64 >= RETIRE_BATCH)
+}
+
+/// One step of retiring a plugin: when it is removed, a batch of its notes on messages, then on
+/// profiles, which no read shows once it is removed and so go without an event each; then its
+/// account out of a batch of the communities it is in, each in a transaction of its own,
+/// announced as any member leaving is, unless it was installed again with an account to act as.
+/// The account stays, as does what it posted.
+pub async fn retire_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    use crate::jobs::Outcome;
+    let Retired { plugin: id } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    if still_removed(conn.as_mut(), &id).await? {
+        for table in ["message_annotation", "user_annotation"] {
+            if delete_batch(conn.as_mut(), table, &id).await? {
+                return Ok(Outcome::Progress(serde_json::Value::Null));
+            }
+        }
+    } else {
+        // Installed again meanwhile: its account leaves only if it no longer has one to act as.
+        let acts: bool = diesel::select(diesel::dsl::exists(
+            plugin::table.filter(plugin::id.eq(&id).and(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "manifest->'principal' IS NOT NULL AND manifest->'principal' <> 'null'",
+                ),
+            )),
+        ))
+        .get_result(conn.as_mut())
+        .await?;
+        if acts {
+            return Ok(Outcome::Done);
+        }
+    }
     let principal: Option<UserId> = user::table
         .select(user::id)
-        .filter(user::plugin.eq(id))
-        .first(conn)
+        .filter(user::plugin.eq(&id))
+        .first(conn.as_mut())
         .await
         .optional()?;
     let Some(principal) = principal else {
-        return Ok(());
+        return Ok(Outcome::Done);
     };
     let communities: Vec<CommunityId> = community_user::table
         .select(community_user::community)
         .filter(community_user::user.eq(principal))
-        .load(conn)
+        .limit(LEAVE_BATCH)
+        .load(conn.as_mut())
         .await?;
+    let more = communities.len() as i64 >= LEAVE_BATCH;
     for community in communities {
-        super::principal::leave(publisher, conn, principal, community).await?;
+        conn.transaction(|conn| {
+            async move { super::principal::leave(state, conn, principal, community).await }
+                .scope_boxed()
+        })
+        .await?;
     }
-    Ok(())
+    Ok(if more {
+        Outcome::Progress(serde_json::Value::Null)
+    } else {
+        Outcome::Done
+    })
+}
+
+/// One step of purging a removed plugin: a batch of what it kept, then of what counted it, of
+/// its timers, of the links it gave out, and of its communities' settings for it, so a later
+/// install starts with nothing of this one's.
+pub async fn purge_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    use crate::jobs::Outcome;
+    let Retired { plugin: id } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    if !still_removed(conn.as_mut(), &id).await? {
+        return Ok(Outcome::Done);
+    }
+    for table in [
+        "plugin_storage",
+        "plugin_storage_usage",
+        "plugin_timer",
+        "plugin_capability",
+        "community_plugin",
+    ] {
+        if delete_batch(conn.as_mut(), table, &id).await? {
+            return Ok(Outcome::Progress(serde_json::Value::Null));
+        }
+    }
+    Ok(Outcome::Done)
 }
 
 /// Changes what `id` is: whether it is on, its mode, or its settings (`patch` laid over them).
@@ -467,11 +582,7 @@ pub async fn order(conn: &mut AsyncPgConnection, order: &[String]) -> crate::Res
 
 /// Removes `id`: it stops running everywhere, its component goes, its annotations go, and its
 /// principal leaves every community. What it kept stays until it is purged.
-pub async fn remove(
-    publisher: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    id: &str,
-) -> crate::Result<()> {
+pub async fn remove(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> {
     conn.transaction(|conn| {
         async move {
             let removed = diesel::update(
@@ -488,29 +599,21 @@ pub async fn remove(
             if removed == 0 {
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
             }
-            // Clients draw no annotation of a plugin the deployment no longer runs, so these go
-            // without an event each.
-            diesel::delete(message_annotation::table.filter(message_annotation::plugin.eq(id)))
-                .execute(conn)
-                .await?;
-            diesel::delete(user_annotation::table.filter(user_annotation::plugin.eq(id)))
-                .execute(conn)
-                .await?;
             super::asset::replace(conn, id, &[]).await?;
-            retire_principal(publisher, conn, id).await
+            // Its notes, which no read shows once it is removed, and its account's memberships
+            // go by a job, a batch at a time.
+            retire(conn, id).await
         }
         .scope_boxed()
     })
     .await
 }
 
-/// Deletes everything a removed plugin kept: its storage, its communities' settings for it,
-/// and its deployment settings. Its row stays, as the record that it was installed, and so does
-/// its account, both of which a later install of the same plugin takes up again.
+/// Starts deleting everything a removed plugin kept: its storage, its communities' settings for
+/// it, and its deployment settings, the last at once and the rest by a job (`purgePlugin`,
+/// [`purge_step`]). Its row stays, as the record that it was installed, and so does its account,
+/// both of which a later install of the same plugin takes up again.
 pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> {
-    use aspen_schema::{
-        community_plugin, plugin_capability, plugin_storage, plugin_storage_usage, plugin_timer,
-    };
     conn.transaction(|conn| {
         async move {
             let removed = diesel::update(
@@ -527,23 +630,18 @@ pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> 
                     format!("{id} is not a removed plugin; remove it first").into(),
                 ));
             }
-            diesel::delete(plugin_storage::table.filter(plugin_storage::plugin.eq(id)))
-                .execute(conn)
-                .await?;
-            // What counted it, what it would have been woken for, and the links it gave out
-            // go with it, so a later install starts with nothing of this one's.
-            diesel::delete(plugin_storage_usage::table.filter(plugin_storage_usage::plugin.eq(id)))
-                .execute(conn)
-                .await?;
-            diesel::delete(plugin_timer::table.filter(plugin_timer::plugin.eq(id)))
-                .execute(conn)
-                .await?;
-            diesel::delete(plugin_capability::table.filter(plugin_capability::plugin.eq(id)))
-                .execute(conn)
-                .await?;
-            diesel::delete(community_plugin::table.filter(community_plugin::plugin.eq(id)))
-                .execute(conn)
-                .await?;
+            crate::jobs::enqueue(
+                conn,
+                crate::jobs::NewJob::new(
+                    crate::jobs::JobKind::PurgePlugin,
+                    crate::jobs::JobClass::Bulk,
+                    &Retired {
+                        plugin: id.to_string(),
+                    },
+                )?
+                .keyed(id.to_string()),
+            )
+            .await?;
             Ok(())
         }
         .scope_boxed()

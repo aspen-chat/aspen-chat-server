@@ -1,7 +1,7 @@
 //! `federation …`: the directory of other deployments and this deployment's key
 //! (`app::federation`).
 
-use super::{database, operator, publisher};
+use super::{database, operator};
 use anyhow::{Result, anyhow, bail};
 use aspen_app::aspen_config::AspenConfig;
 use clap::Subcommand;
@@ -157,8 +157,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
         let document = federation::fetch_document(&config.federation, &client, domain)
             .await
             .map_err(fail)?;
-        let publisher = publisher(config).await?;
-        let (listed, outcome) = federation::record_contact(&publisher, conn, domain, &document)
+        let (listed, outcome) = federation::record_contact(conn, domain, &document)
             .await
             .map_err(fail)?;
         tracing::info!(%domain, ?outcome, operator = operator(), "contacted a deployment");
@@ -231,10 +230,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             contact(&mut conn, &domain).await?;
         }
         FederationCommand::Remove { domain } => {
-            let publisher = publisher(config).await?;
-            federation::remove(&publisher, &mut conn, &policy, &domain)
-                .await
-                .map_err(fail)?;
+            federation::remove(&mut conn, &domain).await.map_err(fail)?;
             tracing::info!(%domain, operator = operator(), "forgot a deployment");
             println!("forgot {domain}");
         }
@@ -263,11 +259,9 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             print_deployment(&policy, &listed);
         }
         FederationCommand::ListAdd { domain, list } => {
-            let publisher = publisher(config).await?;
-            let added =
-                federation::set_listed(&publisher, &mut conn, &policy, &domain, list, true, None)
-                    .await
-                    .map_err(fail)?;
+            let added = federation::set_listed(&mut conn, &domain, list, true, None)
+                .await
+                .map_err(fail)?;
             if added {
                 tracing::info!(%domain, %list, operator = operator(), "put a deployment on a list");
             }
@@ -277,8 +271,7 @@ pub async fn federation(config: &AspenConfig, command: FederationCommand) -> Res
             );
         }
         FederationCommand::ListRemove { domain, list } => {
-            let publisher = publisher(config).await?;
-            if federation::set_listed(&publisher, &mut conn, &policy, &domain, list, false, None)
+            if federation::set_listed(&mut conn, &domain, list, false, None)
                 .await
                 .map_err(fail)?
             {
