@@ -56,9 +56,8 @@ export function paneSizing(
 }
 
 /**
- * The panes with the user bar at their foot start wide enough for the call bar above it to
- * show "Voice connected" beside all five of its buttons, which are larger with a coarse
- * pointer.
+ * The panes with the user bar at their foot start wider than the other lists, roomy enough for
+ * the call bar's row of five buttons, which are larger with a coarse pointer.
  */
 const CALL_BAR_WIDTH = { fallback: 312, coarseFallback: 352 };
 

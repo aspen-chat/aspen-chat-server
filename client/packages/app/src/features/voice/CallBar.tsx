@@ -17,6 +17,7 @@ import { useChannel, useSync, useVoiceCall } from "@/api/hooks";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { channelLink, useDomain } from "@/features/messages/links";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { callBarButtonClass } from "@/features/voice/callBarButton";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
 import { useNumberFormat } from "@/i18n/format";
@@ -25,13 +26,9 @@ import { format } from "@/i18n/messages";
 /** A wait in whole seconds, spelled out ("5 seconds") in the app's language. */
 const SECONDS: Intl.NumberFormatOptions = { style: "unit", unit: "second", unitDisplay: "long" };
 
-const buttonClass =
-  "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover " +
-  "focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-2.5";
-
 /**
  * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
- * people), which opens that room, and mute, deafen, camera, share, leave.
+ * people), which opens that room, and below it a row of mute, deafen, camera, share, leave.
  */
 export function CallBar() {
   const m = useMessages();
@@ -53,34 +50,37 @@ export function CallBar() {
             : m.voice.failed
           : m.voice.joining;
   return (
-    <div role="region" aria-label={m.voice.callBarLabel} className="border-t border-line px-3 py-2">
-      <div className="flex items-center gap-1">
-        <CallPlaceLink channel={channel}>
-          <span
-            className={
-              "truncate text-sm font-medium " + (call.status === "connected" ? "text-online" : "")
-            }
-          >
-            {status}
-          </span>
-          <span className="truncate text-xs text-ink-muted">
-            {call.status === "failed" && call.error !== null ? (
-              call.errorKind === "refused" && call.retryAfterSeconds !== null ? (
-                format(m.voice.tooFast, { wait: seconds.format(call.retryAfterSeconds) })
-              ) : (
-                call.error
-              )
-            ) : channel === undefined ? null : (
-              <CallPlace channel={channel} />
-            )}
-          </span>
-        </CallPlaceLink>
+    <div role="region" aria-label={m.voice.callBarLabel} className="border-t border-line px-3 py-4">
+      <CallPlaceLink channel={channel}>
+        <span
+          className={
+            "truncate text-base font-medium " + (call.status === "connected" ? "text-online" : "")
+          }
+        >
+          {status}
+        </span>
+        <span className="truncate text-sm text-ink-muted">
+          {call.status === "failed" && call.error !== null ? (
+            call.errorKind === "refused" && call.retryAfterSeconds !== null ? (
+              format(m.voice.tooFast, { wait: seconds.format(call.retryAfterSeconds) })
+            ) : (
+              call.error
+            )
+          ) : channel === undefined ? null : (
+            <CallPlace channel={channel} />
+          )}
+        </span>
+      </CallPlaceLink>
+      <div className="mt-3 flex items-center gap-1">
         {/* Someone who may not speak here listens only, and has no microphone to mute; someone
             a moderator muted stays muted until a moderator lifts it. */}
         {call.serverMuted ? (
           <Tooltip text={m.voice.serverMutedYou}>
-            <span aria-label={m.voice.serverMutedYou} className={buttonClass + " text-danger"}>
-              <MicrophoneSlashIcon size={18} aria-hidden="true" />
+            <span
+              aria-label={m.voice.serverMutedYou}
+              className={callBarButtonClass + " text-danger"}
+            >
+              <MicrophoneSlashIcon size={24} aria-hidden="true" />
             </span>
           </Tooltip>
         ) : call.canSpeak || call.status !== "connected" ? (
@@ -91,19 +91,22 @@ export function CallBar() {
               onPress={() => {
                 sync.voice.setMuted(!call.muted);
               }}
-              className={buttonClass + (call.muted ? " text-danger" : "")}
+              className={callBarButtonClass + (call.muted ? " text-danger" : "")}
             >
               {call.muted ? (
-                <MicrophoneSlashIcon size={18} aria-hidden="true" />
+                <MicrophoneSlashIcon size={24} aria-hidden="true" />
               ) : (
-                <MicrophoneIcon size={18} aria-hidden="true" />
+                <MicrophoneIcon size={24} aria-hidden="true" />
               )}
             </Button>
           </Tooltip>
         ) : (
           <Tooltip text={m.voice.listeningOnly}>
-            <span aria-label={m.voice.listeningOnly} className={buttonClass + " text-ink-faint"}>
-              <MicrophoneSlashIcon size={18} aria-hidden="true" />
+            <span
+              aria-label={m.voice.listeningOnly}
+              className={callBarButtonClass + " text-ink-faint"}
+            >
+              <MicrophoneSlashIcon size={24} aria-hidden="true" />
             </span>
           </Tooltip>
         )}
@@ -114,12 +117,12 @@ export function CallBar() {
             onPress={() => {
               sync.voice.setDeafened(!call.deafened);
             }}
-            className={buttonClass + (call.deafened ? " text-danger" : "")}
+            className={callBarButtonClass + (call.deafened ? " text-danger" : "")}
           >
             {call.deafened ? (
-              <SpeakerSlashIcon size={18} aria-hidden="true" />
+              <SpeakerSlashIcon size={24} aria-hidden="true" />
             ) : (
-              <HeadphonesIcon size={18} aria-hidden="true" />
+              <HeadphonesIcon size={24} aria-hidden="true" />
             )}
           </Button>
         </Tooltip>
@@ -131,9 +134,9 @@ export function CallBar() {
             onPress={() => {
               sync.voice.leave();
             }}
-            className={buttonClass + " text-danger"}
+            className={callBarButtonClass + " text-danger"}
           >
-            <PhoneDisconnectIcon size={18} aria-hidden="true" />
+            <PhoneDisconnectIcon size={24} aria-hidden="true" />
           </Button>
         </Tooltip>
       </div>
@@ -179,7 +182,7 @@ function CallPlaceLink({
   children: ReactNode;
 }) {
   const domain = useDomain();
-  const className = "flex min-w-0 flex-1 flex-col";
+  const className = "flex min-w-0 flex-col";
   if (channel === undefined) {
     return <span className={className}>{children}</span>;
   }
@@ -221,13 +224,14 @@ function CameraToggle() {
           }
         }}
         className={
-          buttonClass + (on ? " text-accent" : call.cameraError !== null ? " text-danger" : "")
+          callBarButtonClass +
+          (on ? " text-accent" : call.cameraError !== null ? " text-danger" : "")
         }
       >
         {on ? (
-          <VideoCameraIcon size={18} aria-hidden="true" />
+          <VideoCameraIcon size={24} aria-hidden="true" />
         ) : (
-          <VideoCameraSlashIcon size={18} aria-hidden="true" />
+          <VideoCameraSlashIcon size={24} aria-hidden="true" />
         )}
       </Button>
     </Tooltip>
