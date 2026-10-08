@@ -136,6 +136,14 @@ pub enum Error {
     Totp(String),
     #[error("the server is too busy to do this now")]
     Busy,
+    /// An upload would take its uploader past the deployment's daily quota
+    /// (`app::upload_quota`); `detail` names the quota and when there will be room, which
+    /// `retry_after` gives too, unless the file alone is larger than the quota.
+    #[error("upload quota exceeded")]
+    UploadQuotaExceeded {
+        detail: Cow<'static, str>,
+        retry_after: Option<std::time::Duration>,
+    },
     /// Another deployment could not be reached, or did not answer as a deployment does; the
     /// reason is localized for the administrator who asked.
     #[error("another deployment could not be reached: {0}")]
@@ -162,9 +170,6 @@ pub enum Error {
     /// A plugin that must decide what is about to be saved could not; the detail names it.
     #[error("a plugin could not decide: {0}")]
     PluginUnavailable(Cow<'static, str>),
-    /// Password reset: the address given is not the account's (`app::email::reset`).
-    #[error("the email address does not match the account's")]
-    EmailMismatch,
     /// Password reset cannot start for this account; the reason says why, and what to do.
     #[error("password reset is unavailable: {0}")]
     PasswordResetUnavailable(Cow<'static, str>),
@@ -186,4 +191,6 @@ pub type Result<T> = std::result::Result<T, crate::Error>;
 pub enum PasswordRequirement {
     /// The password is shorter than the minimum length.
     Length,
+    /// The password is longer than the most bytes a password may have.
+    MaxLength,
 }

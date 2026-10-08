@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
-use voice_protocol::token::{TokenError, verify};
+use voice_protocol::token::{JoinClaims, TokenError, key_of, verify, verify_shared};
 
 /// How long a client has to identify before the socket is closed.
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -35,7 +35,9 @@ const CLOSE_GRACE: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct AppState {
     pub server: Uuid,
-    pub token_secret: Arc<str>,
+    /// The shared secret tokens of that form are checked under, when this server is given one.
+    pub token_secret: Option<Arc<str>>,
+    pub token_keys: Arc<crate::token_keys::TokenKeys>,
     pub rooms: Arc<Rooms>,
     pub limits: Arc<Limits>,
     pub used_tokens: Arc<UsedTokens>,
@@ -163,21 +165,20 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
     let claims = match tokio::time::timeout(IDENTIFY_TIMEOUT, next_frame(&mut stream)).await {
         Ok(Some(ClientMessage::Identify { token })) => {
             let at = now();
-            match verify(&token, state.token_secret.as_bytes(), state.server, at).and_then(
-                |claims| {
-                    if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
-                        Ok(claims)
-                    } else {
-                        Err(TokenError::Used)
-                    }
-                },
-            ) {
+            match check_token(&state, &token, at).await.and_then(|claims| {
+                if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
+                    Ok(claims)
+                } else {
+                    Err(TokenError::Used)
+                }
+            }) {
                 Ok(claims) => claims,
                 Err(e) => {
                     outbox.send(&ServerMessage::Error {
                         detail: e.to_string(),
                         fatal: true,
                         retry_after_seconds: None,
+                        refused: None,
                     });
                     close(outbox, writer).await;
                     return;
@@ -189,6 +190,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: "the first frame must be identify".to_string(),
                 fatal: true,
                 retry_after_seconds: None,
+                refused: None,
             });
             close(outbox, writer).await;
             return;
@@ -210,13 +212,14 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             ),
             fatal: true,
             retry_after_seconds: Some(wait.as_secs().max(1)),
+            refused: None,
         });
         close(outbox, writer).await;
         return;
     }
     let seat = match state
         .rooms
-        .join(channel, user, outbox.clone(), claims.grants())
+        .join(channel, user, outbox.clone(), (&claims).into())
         .await
     {
         Ok(seat) => seat,
@@ -226,6 +229,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: e.to_string(),
                 fatal: true,
                 retry_after_seconds: None,
+                refused: None,
             });
             close(outbox, writer).await;
             return;
@@ -242,7 +246,15 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         };
         let kind = frame.kind();
         crate::metrics::frame(kind);
-        if let Err(wait) = state.limits.check_frame(kind, &caller) {
+        // Muting and deafening always go through; only lifting them is limited.
+        let quietens = matches!(frame, ClientMessage::SetState { muted, deafened }
+            if state.rooms.quietens(seat, muted, deafened));
+        let limited = if quietens {
+            Ok(())
+        } else {
+            state.limits.check_frame(kind, &caller)
+        };
+        if let Err(wait) = limited {
             crate::metrics::frame_refused(kind);
             outbox.send(&ServerMessage::Error {
                 detail: format!(
@@ -251,6 +263,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 ),
                 fatal: false,
                 retry_after_seconds: Some(wait.as_secs().max(1)),
+                refused: Some(kind.to_string()),
             });
             continue;
         }
@@ -336,12 +349,33 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                 detail: e.to_string(),
                 fatal: false,
                 retry_after_seconds: None,
+                refused: Some(kind.to_string()),
             });
         }
     }
     info!(user = user.to_string(), "socket closed");
     state.rooms.leave_seat(seat).await;
     close(outbox, writer).await;
+}
+
+/// The claims of `token` if it admits its holder here at `at`: a signed token checked against
+/// the API servers' key it names, or, on a server given `token_secret`, one of the shared-secret
+/// form under that secret.
+async fn check_token(state: &AppState, token: &str, at: i64) -> Result<JoinClaims, TokenError> {
+    match key_of(token) {
+        Some(key) => {
+            let public = state
+                .token_keys
+                .public_key(key)
+                .await
+                .ok_or(TokenError::UnknownKey)?;
+            verify(token, &public, state.server, at)
+        }
+        None => match &state.token_secret {
+            Some(secret) => verify_shared(token, secret.as_bytes(), state.server, at),
+            None => Err(TokenError::Malformed),
+        },
+    }
 }
 
 /// The next client frame, or `None` once the socket is closed, sends something unreadable, or

@@ -69,6 +69,10 @@ smart-default = "0.7.1"
 strum = { version = "0.28.0", features = ["derive"] }
 imagesize = "0.15.0"
 regex = "1.13.1"
+# Usernames: whether a name is in NFC, and its UTS #39 confusable skeleton, so no name passes
+# for the system account's by letters that look alike.
+unicode-normalization = "0.1.24"
+unicode-security = "0.1.2"
 # Plugins (`app::plugin`): WebAssembly components run in a sandbox, metered and bounded. The
 # WASI host gives a component built for `wasm32-wasip2` the system interfaces its standard
 # library imports, with nothing behind them: no files, sockets, environment, or arguments.

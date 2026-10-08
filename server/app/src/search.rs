@@ -192,7 +192,8 @@ async fn readable_channels(
                 community_user::table.filter(
                     community_user::community
                         .eq(community)
-                        .and(community_user::user.eq(caller)),
+                        .and(community_user::user.eq(caller))
+                        .and(community_user::community.eq_any(crate::community::live())),
                 ),
             ))
             .get_result(conn.as_mut())
@@ -207,11 +208,7 @@ async fn readable_channels(
         }
         SearchScope::Everywhere => {
             let mut conn = state.connection_pool.get().await?;
-            let communities: Vec<CommunityId> = community_user::table
-                .select(community_user::community)
-                .filter(community_user::user.eq(caller))
-                .load(conn.as_mut())
-                .await?;
+            let communities = crate::events::memberships(conn.as_mut(), caller).await?;
             let dms: Vec<ChannelId> = dm_recipient::table
                 .select(dm_recipient::channel)
                 .filter(dm_recipient::user.eq(caller))

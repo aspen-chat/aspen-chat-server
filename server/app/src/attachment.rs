@@ -29,11 +29,17 @@
 //! inline, which the servers that make previews do in the background ([`preview`]).
 //!
 //! [`delete_attachment`] removes an unsent row of the caller's, confirmed or
-//! not, and best-effort deletes the S3 object. Stale `ready_at IS NULL` rows
-//! whose presigned URL has expired are orphans the operator can sweep on a
-//! schedule; this module intentionally does not run that sweep itself so a
-//! hung confirm path can't delete an upload that's still racing toward
-//! `ready_at`.
+//! not, and best-effort deletes the S3 object. A confirmed attachment that has
+//! never been in a message (`attachment.sent`, set as it is put in one) nor is
+//! held in one waiting for its preview is swept [`UNSENT_LIFETIME`] after it
+//! was confirmed, with its object and preview ([`sweep_unsent`], run by
+//! `media_store::spawn_upload_sweeper`), so storage is not a file host for
+//! uploads nobody sends. One taken out of its message, or whose message is deleted, is kept as
+//! evidence for reviewing reports ([`evidence`]), and only a review reads it.
+//! Stale `ready_at IS NULL` rows whose presigned URL has expired are left: this
+//! module does not sweep them so a hung confirm path can't delete an upload
+//! that's still racing toward `ready_at`, and their staging objects are swept
+//! with every other.
 
 use crate::context::GlobalServerContext;
 use crate::media_store::{PresignedUpload, Promotion, Served};
@@ -72,8 +78,12 @@ pub struct Attachment {
     pub preview_mime_type: Option<String>,
     pub preview_width: Option<i32>,
     pub preview_height: Option<i32>,
+    /// When it became evidence for reviewing reports ([`evidence`]): read only in a review
+    /// from then on.
+    pub evidence_at: Option<chrono::DateTime<Utc>>,
 }
 
+pub mod evidence;
 pub mod preview;
 
 /// The largest side, in pixels, a picture's stated size may have.
@@ -282,7 +292,8 @@ pub async fn read_attachments(
         .filter(
             attachment::id
                 .eq_any(ids)
-                .and(attachment::ready_at.is_not_null()),
+                .and(attachment::ready_at.is_not_null())
+                .and(attachment::evidence_at.is_null()),
         )
         .load(&mut state.connection_pool.get().await?)
         .await
@@ -360,8 +371,10 @@ pub async fn init_upload(
         preview_mime_type: None,
         preview_width: None,
         preview_height: None,
+        evidence_at: None,
     };
     let mut conn = state.connection_pool.get().await?;
+    crate::upload_quota::reserve(state, conn.as_mut(), caller, byte_size).await?;
     diesel::insert_into(attachment::table)
         .values(&row)
         .execute(conn.as_mut())
@@ -488,7 +501,8 @@ pub async fn read_attachment(
         .filter(
             attachment::id
                 .eq(id)
-                .and(attachment::ready_at.is_not_null()),
+                .and(attachment::ready_at.is_not_null())
+                .and(attachment::evidence_at.is_null()),
         )
         .first(conn.as_mut())
         .await?;
@@ -553,6 +567,78 @@ pub async fn describe_attachment(
         }
     };
     Ok(row)
+}
+
+/// How long a confirmed attachment may wait to be sent before [`sweep_unsent`] deletes it.
+pub const UNSENT_LIFETIME: chrono::Duration = chrono::Duration::hours(24);
+
+/// The most attachments one statement of [`sweep_unsent`] deletes.
+const SWEEP_BATCH: i64 = 500;
+
+/// Records that `ids` have been in a message, so [`sweep_unsent`] leaves them.
+pub async fn mark_sent(
+    conn: &mut diesel_async::AsyncPgConnection,
+    ids: &[AttachmentId],
+) -> crate::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    diesel::update(attachment::table)
+        .filter(attachment::id.eq_any(ids).and(attachment::sent.eq(false)))
+        .set(attachment::sent.eq(true))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Deletes every confirmed attachment confirmed more than [`UNSENT_LIFETIME`] ago that has never
+/// been in a message and is not held in one (`held_message`), with its object and its preview,
+/// answering how many it deleted. Rows a message being saved has locked
+/// (`message::ensure_attachments_ready`) are passed by, so every server may run it at once.
+pub async fn sweep_unsent(state: &GlobalServerContext) -> crate::Result<usize> {
+    #[derive(diesel::QueryableByName)]
+    struct Swept {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        storage_key: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        preview_storage_key: Option<String>,
+    }
+    let cutoff = Utc::now() - UNSENT_LIFETIME;
+    let mut total = 0;
+    loop {
+        let swept: Vec<Swept> = diesel::sql_query(
+            "DELETE FROM attachment WHERE id IN ( \
+                SELECT a.id FROM attachment a \
+                WHERE NOT a.sent AND a.ready_at < $1 \
+                  AND NOT EXISTS (SELECT 1 FROM message_attachment ma WHERE ma.attachment_id = a.id) \
+                  AND NOT EXISTS (SELECT 1 FROM held_message h WHERE h.attachments @> ARRAY[a.id]) \
+                LIMIT $2 FOR UPDATE SKIP LOCKED \
+             ) RETURNING storage_key, preview_storage_key",
+        )
+        .bind::<diesel::sql_types::Timestamptz, _>(cutoff)
+        .bind::<diesel::sql_types::BigInt, _>(SWEEP_BATCH)
+        .load(state.connection_pool.get().await?.as_mut())
+        .await?;
+        let count = swept.len();
+        for Swept {
+            storage_key,
+            preview_storage_key,
+        } in swept
+        {
+            if let Err(e) = state.media_store.delete_upload(&storage_key).await {
+                warn!(error = %e, key = storage_key, "failed to delete a swept attachment");
+            }
+            if let Some(key) = preview_storage_key
+                && let Err(e) = state.media_store.delete(&key).await
+            {
+                warn!(error = %e, key, "failed to delete a swept attachment's preview");
+            }
+        }
+        total += count;
+        if count < SWEEP_BATCH as usize {
+            return Ok(total);
+        }
+    }
 }
 
 /// Hard-delete an attachment of the caller's that is in no message, and best-effort delete the

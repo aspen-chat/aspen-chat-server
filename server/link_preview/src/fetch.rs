@@ -11,7 +11,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::debug;
 use url::Url;
 
 /// Maximum number of HTML bytes we'll read from any single URL while looking
@@ -59,6 +59,7 @@ pub fn http_client() -> &'static reqwest::Client {
             .no_proxy()
             .dns_resolver(Arc::new(PublicResolver {
                 allow_private: false,
+                allow_loopback: false,
             }))
             .redirect(outbound::checked_redirects(MAX_REDIRECTS, may_fetch))
             .user_agent(USER_AGENT)
@@ -123,18 +124,19 @@ impl Lookup {
 /// only decode bodies whose `Content-Type` starts with `text/`.
 pub async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
     if !may_fetch(url) {
-        info!(url = url.as_str(), "preview generation: URL refused");
+        debug!(url = url.as_str(), "preview generation: URL refused");
         return None;
     }
     let cache_key = url.as_str().to_owned();
     if let Some(cached) = cache_get(&cache_key) {
         return cached;
     }
-    let lookup = if reddit::is_reddit(url) {
+    let mut lookup = if reddit::is_reddit(url) {
         reddit::fetch_metadata(url).await
     } else {
         Lookup::lasting(fetch_metadata_uncached(url).await)
     };
+    lookup.metadata = lookup.metadata.map(ParsedMetadata::bounded);
     if lookup.lasting {
         cache_put(cache_key, lookup.metadata.clone());
     }
@@ -167,13 +169,13 @@ async fn fetch_metadata_uncached(url: &Url) -> Option<ParsedMetadata> {
 async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
     // Refuse addresses inside a network (`app::outbound`), and ports but the web's.
     if !may_fetch(url) {
-        info!(url = url.as_str(), "preview generation: URL refused");
+        debug!(url = url.as_str(), "preview generation: URL refused");
         return None;
     }
     let response = match http_client().get(url.as_str()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(
+            debug!(
                 url = url.as_str(),
                 error = e.to_string(),
                 "link preview fetch failed"
@@ -206,8 +208,12 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
     if bytes.is_empty() {
         return None;
     }
-    let body = String::from_utf8_lossy(&bytes);
-    let mut metadata = parse_html_metadata(body.as_ref());
+    // Tokenizing the page is work for a blocking thread, not the runtime's.
+    let mut metadata = tokio::task::spawn_blocking(move || {
+        parse_html_metadata(String::from_utf8_lossy(&bytes).as_ref())
+    })
+    .await
+    .ok()?;
     // Resolve a relative og:image against the final redirected URL so S3
     // object creation has an absolute URL to work from.
     if let Some(raw) = metadata.image_url.take()

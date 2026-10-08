@@ -41,7 +41,11 @@
   every one (`useBlocked` with `useBlockedAnywhere`, `src/api/identity.ts`): `identityOf`
   (`packages/protocol/src/identity.ts`) names a person by their home's domain and their id
   there, from `homeDomain` and `homeId`, and `ScopeDomainContext` says which deployment a record
-  in scope is from. In calls the same holds below the UI: `ShareBlocksAcrossDeployments` hands
+  in scope is from. Only the viewer's home is believed about where a user from elsewhere is
+  from, since it checked the assertion the user signed in with; any other deployment's users
+  from elsewhere are named by that deployment and their id there, so a deployment that claims
+  its user is someone else cannot have a block of that user hide the person it named. A person
+  from a third deployment blocked on a foreign one is therefore hidden on that one alone. In calls the same holds below the UI: `ShareBlocksAcrossDeployments` hands
   every deployment's sync the blocked identities (`AspenSync.setBlockedIdentities`), and its
   store's `silenced` (topic `silenced`, `useSilenced`) decides each voice's gain
   (`VoiceCall.refreshVolumes` whenever it changes) and which shared screens are hidden, even
@@ -49,7 +53,10 @@
   File offers from silenced people are hidden the same way (`FilesPanel`). File transfers in
   calls are `FileTransfers` (`packages/protocol/src/transfers.ts`), which `VoiceCall` feeds its
   signalling frames and whose state it carries as `files`; its peer connections are injected
-  (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. The
+  (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes. An
+  offered file's name is shown and saved without format and control characters
+  (`plainFileName`, `packages/protocol/src/fileNames.ts`), so a bidirectional override cannot
+  make `gpj.exe` read as `exe.jpg`; attachments' names are shown the same way. The
   repository's `docs/architecture/file-transfers.md` describes the flow. In the mobile apps a receiver chooses
   where a file goes through `AspenFilesPlugin` (Android's `android/.../files/`, iOS's
   `ios/App/App/AspenFilesPlugin.swift`, where the user picks a folder and the file is made in

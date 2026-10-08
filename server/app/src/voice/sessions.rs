@@ -32,10 +32,12 @@ use voice_protocol::signal::KickReason;
 // ---------------------------------------------------------------------------------------------
 // Moderation
 
-/// Server-mutes or unmutes someone in a channel's call. The voice server holding the call
-/// applies it and reports the new state, which becomes the participant's `update` event; the
-/// record returned is the state as recorded before the command lands. Takes Manage calls and
-/// ranking above them, who may not be the owner.
+/// Server-mutes or unmutes someone in a channel's call: the mute is the community's
+/// (`super::mutes`), so it stands in every call of the community until lifted. The voice server
+/// holding the call applies it and reports the new state, which becomes the participant's
+/// `update` event; the record returned is the state as recorded before the command lands. Takes
+/// being able to view the channel, and Manage calls in the community over someone ranking below
+/// the caller, who may not be the owner.
 pub async fn mute_participant(
     state: &GlobalServerContext,
     caller: UserId,
@@ -43,12 +45,36 @@ pub async fn mute_participant(
     user: UserId,
     muted: bool,
 ) -> crate::Result<message_enum::VoiceParticipant> {
-    command_participant(state, caller, channel, user, |session| VoiceCommand::Mute {
-        session: session.0,
-        user: user.0,
-        muted,
-    })
-    .await
+    let (community, participant) = {
+        let mut conn = state.connection_pool.get().await?;
+        let access = channel_access(state, conn.as_mut(), caller, channel).await?;
+        // A DM's call has no moderators.
+        let Some(community) = access.community.as_ref().map(|c| c.community) else {
+            return Err(missing(Permissions::MANAGE_CALLS));
+        };
+        // Whether the caller may mute them is answered before whether they are in the call.
+        super::mutes::require_moderates(conn.as_mut(), caller, community, user).await?;
+        let session = session_on_channel(conn.as_mut(), channel)
+            .await?
+            .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))?;
+        let participant: VoiceParticipant = voice_participant::table
+            .select(VoiceParticipant::as_select())
+            .filter(
+                voice_participant::session
+                    .eq(session.id)
+                    .and(voice_participant::user.eq(user)),
+            )
+            .first(conn.as_mut())
+            .await?;
+        (community, participant)
+    };
+    let (_, changed) = super::mutes::set_muted(state, caller, community, user, muted).await?;
+    // A change is announced, and the announcement rechecks their calls; one that changed
+    // nothing still brings their calls in line with the mute as it stands.
+    if !changed {
+        recheck(state, Recheck::User(user));
+    }
+    Ok(participant_record(&participant, channel))
 }
 
 /// Removes someone from a channel's call. The voice server disconnects them, telling them
@@ -156,8 +182,16 @@ async fn command_participant(
 // Who may stay
 
 /// Whose calls a recheck covers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Recheck {
+    /// The user's participants that joined on tokens of sign-ins that ended, as `signInsEnded`
+    /// names them: `ended` alone, or without it every one but `kept`. They leave their calls;
+    /// nothing else about the user's calls changes.
+    SignIns {
+        user: UserId,
+        ended: Option<String>,
+        kept: Option<String>,
+    },
     /// Everyone in a call in one of the community's channels.
     Community(CommunityId),
     /// Everyone in the channel's call.
@@ -181,7 +215,7 @@ pub fn recheck(state: &GlobalServerContext, which: Recheck) {
     tokio::spawn(async move {
         let rechecked = async {
             let mut conn = state.connection_pool.get().await?;
-            recheck_in(&state, conn.as_mut(), which).await
+            recheck_in(&state, conn.as_mut(), which.clone()).await
         };
         if let Err(e) = rechecked.await {
             warn!(?which, error = %e, "could not recheck who may stay in calls");
@@ -222,10 +256,25 @@ pub async fn recheck_in(
                     .filter(channel::parent_category.eq(Some(category))),
             ),
         ),
-        Recheck::User(user) => seats.filter(voice_participant::user.eq(user)),
+        Recheck::User(user) | Recheck::SignIns { user, .. } => {
+            seats.filter(voice_participant::user.eq(user))
+        }
         Recheck::Everyone => seats,
     };
     let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
+    if let Recheck::SignIns { ended, kept, .. } = which {
+        // The voice server knows which sign-in each participant joined on; it decides.
+        for (session, server, _, user) in seats {
+            let command = VoiceCommand::EndSignIns {
+                session: session.0,
+                user: user.0,
+                ended: ended.clone(),
+                kept: kept.clone(),
+            };
+            send_command(state, server, &command).await?;
+        }
+        return Ok(());
+    }
     for (session, server, channel, user) in seats {
         let seat = Seat {
             session,
@@ -261,11 +310,13 @@ async fn recheck_seat(
         channel,
         user,
     } = seat;
+    // Gone, banned, or a bot whose owner is banned.
     let present: bool = diesel::select(diesel::dsl::exists(
         user_table::table.filter(
             user_table::id
                 .eq(user)
-                .and(user_table::deleted_at.is_null()),
+                .and(user_table::deleted_at.is_null())
+                .and(diesel::dsl::not(crate::user_ban::shut_out())),
         ),
     ))
     .get_result(conn)
@@ -275,20 +326,45 @@ async fn recheck_seat(
         user: user.0,
         reason: Some(KickReason::AccessLost),
     };
-    let command = if !present || crate::user_ban::standing(conn, user).await?.is_some() {
-        removed
-    } else {
+    let access = if present {
         match channel_access(state, conn, user, channel).await {
-            Ok(access) if access.has(Permissions::JOIN_VOICE) => VoiceCommand::Grant {
-                session: session.0,
-                user: user.0,
-                grants: super::servers::grants_of(file_transfers, &access),
-            },
-            Ok(_) | Err(crate::Error::Diesel(diesel::result::Error::NotFound)) => removed,
+            Ok(access) if access.has(Permissions::JOIN_VOICE) => Some(access),
+            Ok(_) | Err(crate::Error::Diesel(diesel::result::Error::NotFound)) => None,
             Err(e) => return Err(e),
         }
+    } else {
+        None
     };
-    let payload = serde_json::to_vec(&command)?;
+    let Some(access) = access else {
+        return send_command(state, server, &removed).await;
+    };
+    let grant = VoiceCommand::Grant {
+        session: session.0,
+        user: user.0,
+        grants: super::servers::grants_of(file_transfers, &access),
+    };
+    send_command(state, server, &grant).await?;
+    // A moderator's mute as it stands in the community (`super::mutes`); a DM's call has none.
+    // The voice server changes nothing when it already stands as said.
+    let muted = match access.community.as_ref() {
+        Some(community) => super::mutes::is_muted(conn, community.community, user).await?,
+        None => false,
+    };
+    let mute = VoiceCommand::Mute {
+        session: session.0,
+        user: user.0,
+        muted,
+    };
+    send_command(state, server, &mute).await
+}
+
+/// Sends `command` to the voice server `server`.
+async fn send_command(
+    state: &impl Publishing,
+    server: VoiceServerId,
+    command: &VoiceCommand,
+) -> crate::Result<()> {
+    let payload = serde_json::to_vec(command)?;
     state
         .nats()
         .client()
@@ -342,17 +418,20 @@ pub(super) async fn apply_report(
         )
         .await;
     }
-    // Someone who joined on a token issued before a change to what they may do is brought in
-    // line with it once their joining is recorded.
+    // Someone who joined on a token issued before a change to what they may do, or before
+    // the sign-in it was issued to ended, is brought in line with it once their joining is
+    // recorded.
     let joined = match &report {
         VoiceReport::ParticipantJoined {
             session,
             channel,
             user,
+            sign_in,
         } => Some((
             VoiceSessionId::from(*session),
             ChannelId::from(*channel),
             UserId::from(*user),
+            sign_in.clone(),
         )),
         _ => None,
     };
@@ -535,7 +614,7 @@ pub(super) async fn apply_report(
         .scope_boxed()
     })
     .await?;
-    if let Some((session, channel, user)) = joined {
+    if let Some((session, channel, user, sign_in)) = joined {
         let server: Option<VoiceServerId> = voice_session::table
             .select(voice_session::voice_server)
             .filter(voice_session::id.eq(session))
@@ -563,8 +642,37 @@ pub(super) async fn apply_report(
             // The join is recorded; the next change to what they may do brings them in line.
             warn!(session = %session.0, error = %e, "could not recheck a joiner");
         }
+        if let (Some(server), Some(sign_in)) = (server, sign_in)
+            && let Err(e) =
+                end_if_signed_out(state, conn.as_mut(), session, server, user, sign_in).await
+        {
+            warn!(session = %session.0, error = %e, "could not check a joiner's sign-in");
+        }
     }
     Ok(())
+}
+
+/// Takes `user`'s participant in `session` out of the call if the sign-in its join token was
+/// issued to has ended since: its `signInsEnded` may have reached the voice server before
+/// the participant joined.
+async fn end_if_signed_out(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    session: VoiceSessionId,
+    server: VoiceServerId,
+    user: UserId,
+    sign_in: String,
+) -> crate::Result<()> {
+    if crate::login::sign_in_live(conn, user, &sign_in).await? {
+        return Ok(());
+    }
+    let command = VoiceCommand::EndSignIns {
+        session: session.0,
+        user: user.0,
+        ended: Some(sign_in),
+        kept: None,
+    };
+    send_command(state, server, &command).await
 }
 
 /// Whether `report`, which came from voice server `from`, is about what that server holds: a
@@ -678,10 +786,27 @@ async fn record_session(
     // reports is the channel's call, and stays so: this room is closed, sending its people to
     // rejoin there, and every later report of it (a snapshot, a join) finds it unrecorded and
     // comes here or is ignored, so it never displaces the call it duplicates.
-    if let Some(stale) = session_on_channel(conn, row.channel).await? {
-        if stale.id == row.id {
-            return Ok(Some(stale));
-        }
+    let stale = session_on_channel(conn, row.channel).await?;
+    if let Some(recorded) = stale.as_ref().filter(|stale| stale.id == row.id) {
+        return Ok(Some(recorded.clone()));
+    }
+    // A call not yet recorded is believed only where the API server sent someone.
+    if !super::servers::offered_for(
+        state,
+        VoiceServerId::from(server),
+        ChannelId::from(channel),
+        None,
+    )
+    .await
+    {
+        warn!(
+            channel = channel.to_string(),
+            server = server.to_string(),
+            "a voice server reported a call in a channel no one was sent to it for; ignoring it"
+        );
+        return Ok(None);
+    }
+    if let Some(stale) = stale {
         let recorded_server: VoiceServer = voice_server::table
             .select(VoiceServer::as_select())
             .filter(voice_server::id.eq(stale.voice_server))
@@ -747,6 +872,22 @@ async fn record_participant(
     session: &mut VoiceSession,
     joined: &ParticipantSnapshot,
 ) -> crate::Result<()> {
+    if !super::servers::offered_for(
+        state,
+        session.voice_server,
+        session.channel,
+        Some(UserId::from(joined.user)),
+    )
+    .await
+    {
+        warn!(
+            session = %session.id.0,
+            user = %joined.user,
+            "a voice server reported someone joining a call they were not sent to it for; \
+             ignoring it"
+        );
+        return Ok(());
+    }
     let row = VoiceParticipant {
         session: session.id,
         user: UserId::from(joined.user),

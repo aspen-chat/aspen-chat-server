@@ -12,7 +12,7 @@
 //! Every file and page goes out with the headers that keep the page to itself
 //! (`security_headers`): a Content Security Policy that runs only the web client's own scripts,
 //! keeps any other page from framing it, and lets it reach only what it uses, and `nosniff`, no
-//! referrer, and, over `https`, HSTS.
+//! referrer, no opener shared with another page, and, over `https`, HSTS.
 
 use crate::error::{ApiError, ApiResult, ProblemCode};
 use crate::extract::Path;
@@ -31,7 +31,7 @@ use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY,
     STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderMap, HeaderValue, Uri};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::convert::Infallible;
@@ -261,10 +261,17 @@ async fn respond(
     Ok(response)
 }
 
+/// The header that gives a page a browsing context group of its own; the `http` crate names
+/// none for it.
+const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
+    HeaderName::from_static("cross-origin-opener-policy");
+
 /// The headers on every file and page of the web client: its Content Security Policy
 /// (`content_security_policy`), `nosniff`, so no file is run as anything but its type, no
 /// referrer, so the deployment's paths reach no one the page links to or loads from, framing
-/// refused (for browsers that predate `frame-ancestors` too), and, over `https`, HSTS, without
+/// refused (for browsers that predate `frame-ancestors` too), a browsing context group of its
+/// own (`Cross-Origin-Opener-Policy`), so no page that opened it or that it opens holds a handle
+/// on its window, and, over `https`, HSTS, without
 /// `includeSubDomains`, since other names under the deployment's may be served otherwise.
 fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
     let policy = content_security_policy(&config.public_url, &config.media.s3);
@@ -279,6 +286,10 @@ fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        CROSS_ORIGIN_OPENER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
     if config.public_url.starts_with("https://") {
         headers.insert(
             STRICT_TRANSPORT_SECURITY,
@@ -380,12 +391,17 @@ fn tags(state: &GlobalServerContext, base: &str, uri: &Uri, preview: Preview) ->
     }
 }
 
-/// The address of the page asked for: the request's path on the web client's origin.
+/// The address of the page asked for: the request's path on the web client's origin. Leading
+/// slashes are collapsed to one, since a path such as `//other.example/x` read as a reference
+/// would name another host.
 fn page_url(base: &str, uri: &Uri) -> String {
     let path = uri.path_and_query().map_or("/", |path| path.as_str());
-    url::Url::parse(base)
-        .and_then(|base| base.join(path))
-        .map_or_else(|_| format!("{base}{path}"), String::from)
+    let path = path.trim_start_matches('/');
+    let origin = url::Url::parse(base).map_or_else(
+        |_| base.trim_end_matches('/').to_string(),
+        |base| base.origin().ascii_serialization(),
+    );
+    format!("{origin}/{path}")
 }
 
 /// The picture of something named `name`, when it has an icon every unfurler shows (one of
@@ -522,6 +538,18 @@ mod tests {
         assert_eq!(
             page_url("https://example.org/aspen", &uri),
             "https://example.org/aspen/communities/x"
+        );
+        for path in ["//evil.example/x", "///evil.example/x"] {
+            let uri: Uri = path.parse().unwrap();
+            assert_eq!(
+                page_url("https://chat.example.org", &uri),
+                "https://chat.example.org/evil.example/x"
+            );
+        }
+        let uri: Uri = "/".parse().unwrap();
+        assert_eq!(
+            page_url("https://chat.example.org:8443", &uri),
+            "https://chat.example.org:8443/"
         );
     }
 }

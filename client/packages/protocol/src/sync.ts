@@ -58,6 +58,7 @@ type Category = components["schemas"]["Category"];
 type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
+export type BotTransfer = components["schemas"]["BotTransfer"];
 export type MessageHolding = components["schemas"]["MessageHolding"];
 
 /** What became of a message sent: posted, or held by the server for its previews. */
@@ -1040,20 +1041,10 @@ export class AspenSync {
 
   /**
    * Presses a button of a message's card, which calls its plugin as the user. Answers the
-   * plugin's status.
+   * status, which is the plugin's to choose, so it says only whether the press worked.
    */
-  async pressCardButton(messageId: string, button: string): Promise<number> {
-    const result = await this.#client.api.POST("/api/v1/messages/{message}/card/buttons/{button}", {
-      params: { path: { message: messageId, button } },
-      parseAs: "text",
-    });
-    if (
-      result.response.status >= 400 &&
-      result.response.headers.get("content-type")?.includes("problem")
-    ) {
-      throw new ApiProblemError(problemOf(result.error, result.response));
-    }
-    return result.response.status;
+  pressCardButton(messageId: string, button: string): Promise<number> {
+    return this.#client.pressCardButton(messageId, button);
   }
 
   /** Calls a plugin's route as the user, for a plugin's view. */
@@ -1768,11 +1759,11 @@ export class AspenSync {
 
   /**
    * Who the user blocked on every deployment they use, by `identityOf`, with `domain`, this
-   * deployment's name: those of them in a call here are silenced and their screens hidden, as
-   * if blocked here.
+   * deployment's name, and `home`, their home's: those of them in a call here are silenced and
+   * their screens hidden, as if blocked here.
    */
-  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
-    this.store.setBlockedIdentities(domain, identities);
+  setBlockedIdentities(domain: string, home: string | null, identities: ReadonlySet<string>): void {
+    this.store.setBlockedIdentities(domain, home, identities);
   }
 
   /**
@@ -1804,13 +1795,33 @@ export class AspenSync {
     }
   }
 
-  /** Reads every bot the caller owns into the store (`RecordStore.ownedBots`). */
+  /**
+   * Reads every bot the caller owns into the store (`RecordStore.ownedBots`). A bot the store
+   * still holds as theirs that the answer lacks (accepted by someone it was offered to, whose
+   * owner change reaches only those sharing a community with it) is read again, so its new
+   * owner replaces the stale one.
+   */
   async loadBots(): Promise<void> {
     const result = await this.#client.api.GET("/api/v1/users/@me/bots");
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+    const owned = new Set(result.data.map((bot) => bot.id));
+    const stale = this.store.ownedBots().filter((bot) => !owned.has(bot.id));
     this.store.ingest({ users: result.data });
+    const reread = await Promise.all(
+      stale.map((bot) =>
+        this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: bot.id } } }),
+      ),
+    );
+    const found = reread.flatMap((answer) => (answer.data === undefined ? [] : [answer.data]));
+    this.store.ingest({ users: found });
+    for (const [index, answer] of reread.entries()) {
+      const bot = stale[index];
+      if (answer.response.status === 404 && bot !== undefined) {
+        this.store.forgetUser(bot.id);
+      }
+    }
   }
 
   /**
@@ -1819,7 +1830,8 @@ export class AspenSync {
    */
   async createBot(name: string, displayName: string | null): Promise<{ bot: User; token: string }> {
     const result = await this.#client.api.POST("/api/v1/users/@me/bots", {
-      body: { name, displayName },
+      // Composed (NFC), as the server requires a new name to be.
+      body: { name: name.normalize("NFC"), displayName },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -1865,16 +1877,54 @@ export class AspenSync {
     this.store.ingest({ users: [result.data] });
   }
 
-  /** Hands a bot the caller owns to someone else; it leaves the caller's list. */
-  async transferBot(botId: string, ownerId: string): Promise<void> {
-    const result = await this.#client.api.PUT("/api/v1/bots/{bot}/owner", {
+  /** The offers of bots made to the caller or by them that still stand, the newest first. */
+  async loadBotTransfers(): Promise<BotTransfer[]> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/bot-transfers");
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data.map((transfer) => transfer.bot) });
+    return result.data;
+  }
+
+  /**
+   * Offers a bot the caller owns to someone else, who owns it once they accept; offering it
+   * again replaces the offer. Needs a recently verified sign-in (`reauthenticationRequired`).
+   */
+  async offerBotTransfer(botId: string, ownerId: string): Promise<BotTransfer> {
+    const result = await this.#client.api.PUT("/api/v1/bots/{bot}/transfer", {
       params: { path: { bot: botId } },
       body: { owner: ownerId },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: [result.data] });
+    return result.data;
+  }
+
+  /** Withdraws the offer of a bot the caller made, or declines one made to them. */
+  async endBotTransfer(botId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/bots/{bot}/transfer", {
+      params: { path: { bot: botId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Accepts a bot offered to the caller: it becomes theirs, with a new token the server shows
+   * only this once, and the old token stops working.
+   */
+  async acceptBotTransfer(botId: string): Promise<{ bot: User; token: string }> {
+    const result = await this.#client.api.POST("/api/v1/bots/{bot}/transfer/acceptance", {
+      params: { path: { bot: botId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: [result.data.bot] });
+    return result.data;
   }
 
   /** The categories a report may be made in, in the order they are offered. */
@@ -2113,6 +2163,34 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.replaceBans(communityId, result.data);
+  }
+
+  /** Reads a community's standing server mutes into the store, for a holder of Manage calls. */
+  async loadVoiceMutes(communityId: string): Promise<void> {
+    const result = await this.#client.api.GET("/api/v1/communities/{community}/voice-mutes", {
+      params: { path: { community: communityId } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.replaceVoiceMutes(communityId, result.data);
+  }
+
+  /** Lifts someone's server mute in a community; its deletion event changes the cache. */
+  async liftVoiceMute(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/communities/{community}/voice-mutes/{user}",
+      { params: { path: { community: communityId, user: userId } } },
+    );
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "voiceMute",
+      type: "delete",
+      community: communityId,
+      user: userId,
+    });
   }
 
   /**
@@ -2550,7 +2628,8 @@ export class AspenSync {
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
-      body: patch,
+      // A new username composed (NFC), as the server requires.
+      body: patch.name == null ? patch : { ...patch, name: patch.name.normalize("NFC") },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -3134,6 +3213,15 @@ export class AspenSync {
     }
     if (event.serverEvent === "voiceSessionEnded") {
       this.voice.onSessionEnded(event);
+    }
+    if (event.serverEvent === "voiceMute" && event.user === this.store.me()?.id) {
+      // A moderator's mute of the user, in the community of the call they are in.
+      const callChannel = this.voice.state.channelId;
+      const community =
+        callChannel === null ? undefined : this.store.channel(callChannel)?.community;
+      if (community != null && community === event.community) {
+        this.voice.setServerMuted(event.type === "create");
+      }
     }
     if (event.serverEvent === "channelMuteChanged") {
       this.#scheduleMuteEnd();

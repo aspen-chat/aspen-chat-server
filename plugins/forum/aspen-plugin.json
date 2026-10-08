@@ -1,6 +1,6 @@
 {
   "id": "org.aspenchat.forum",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "api": 1,
   "component": "target/wasm32-wasip2/release/aspen_forum.wasm",
   "assets": "views",
@@ -28,6 +28,8 @@
       "cannotPost": "You can read this board, but not post to it.",
       "failed": "That did not work. Try again in a moment.",
       "loading": "Loading…",
+      "older": "Older posts",
+      "moreReplies": "More replies",
       "someone": "Someone"
     }
   },

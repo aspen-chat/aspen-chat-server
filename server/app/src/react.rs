@@ -44,6 +44,12 @@ pub fn stored_key(s: &str) -> Option<String> {
         .or_else(|| crate::custom_emoji::referenced(s).map(crate::custom_emoji::reference))
 }
 
+/// The most different emoji one message may carry as reactions; adding to one already there is
+/// always allowed.
+pub const MAX_DISTINCT_PER_MESSAGE: usize = 50;
+
+/// Adds `author`'s reaction to a message, refused when it would be the message's
+/// [`MAX_DISTINCT_PER_MESSAGE`] + 1st different emoji.
 pub async fn create_react(
     state: &GlobalServerContext,
     author: UserId,
@@ -67,6 +73,7 @@ pub async fn create_react(
                 aspen_schema::channel::community,
             ))
             .filter(aspen_schema::message::id.eq(message_id))
+            .filter(aspen_schema::message::deleted_at.is_null())
             .first(conn.as_mut())
             .await?;
     crate::permissions::channel_access(state, conn.as_mut(), author, channel)
@@ -104,6 +111,25 @@ pub async fn create_react(
         let react = &react;
         let event = &event;
         async move {
+            // The message is locked so two new emoji cannot both find room for one more.
+            aspen_schema::message::table
+                .select(aspen_schema::message::id)
+                .filter(aspen_schema::message::id.eq(message_id))
+                .for_no_key_update()
+                .first::<MessageId>(conn.as_mut())
+                .await?;
+            let present: Vec<String> = react::table
+                .select(react::emoji)
+                .filter(react::message.eq(message_id))
+                .distinct()
+                .load(conn.as_mut())
+                .await?;
+            if !present.contains(&react.emoji) && present.len() >= MAX_DISTINCT_PER_MESSAGE {
+                return Err(crate::Error::Validation(t!(
+                    "reactTooManyDistinct",
+                    max = MAX_DISTINCT_PER_MESSAGE
+                )));
+            }
             diesel::insert_into(react::table)
                 .values(react)
                 .execute(conn.as_mut())
@@ -146,6 +172,7 @@ pub async fn remove_others_react(
                 &access,
                 crate::moderation_log::ModerationAction::RemoveReaction,
                 Some(format!("{}/{emoji}/{}", message_id.0, author.0)),
+                Some(author),
             )
             .await?;
         }
@@ -281,7 +308,7 @@ struct ReactorRow {
 
 /// Who reacted to `message_id` with `emoji`, earliest first: at most `limit` of them, starting
 /// after `after` when given, leaving out anyone `caller` has blocked. Not found for a message
-/// `caller` may not see.
+/// `caller` may not see, or one deleted.
 pub async fn read_reactors(
     state: &GlobalServerContext,
     caller: UserId,
@@ -294,6 +321,7 @@ pub async fn read_reactors(
     let channel: crate::ChannelId = aspen_schema::message::table
         .select(aspen_schema::message::channel)
         .filter(aspen_schema::message::id.eq(message_id))
+        .filter(aspen_schema::message::deleted_at.is_null())
         .first(conn.as_mut())
         .await?;
     crate::permissions::channel_access_reading(

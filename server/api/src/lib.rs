@@ -440,7 +440,9 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(block::list_blocks))
         .routes(routes!(bot::list_bots, bot::create_bot))
         .routes(routes!(bot::rotate_bot_token))
-        .routes(routes!(bot::transfer_bot))
+        .routes(routes!(bot::offer_bot_transfer, bot::end_bot_transfer))
+        .routes(routes!(bot::accept_bot_transfer))
+        .routes(routes!(bot::list_bot_transfers))
         .routes(routes!(bot::update_bot, bot::delete_bot))
         .routes(routes!(
             bot_command::publish_bot_commands,
@@ -471,6 +473,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             voice::delete_voice_server
         ))
         .routes(routes!(voice::report_voice_server_failure))
+        .routes(routes!(voice::read_voice_mutes))
+        .routes(routes!(voice::put_voice_mute, voice::delete_voice_mute))
         .routes(routes!(attachment::init_attachment_upload))
         .routes(routes!(attachment::confirm_attachment_upload))
         .routes(routes!(
@@ -511,7 +515,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         )
         // The event stream is a WebSocket and has no OpenAPI representation; its frames are
         // described by `event_schema.json`.
-        .route("/events", any(event_stream::event_stream))
+        .route("/events", axum::routing::get(event_stream::event_stream))
 }
 
 /// The OpenAPI document of every API route.
@@ -556,6 +560,21 @@ async fn settle_after_request(
     }
 }
 
+/// The headers every answer of the API carries: `nosniff`, so no browser reads one as anything
+/// but its type, and `Cache-Control: no-store`, so no cache keeps what one user was answered,
+/// unless the handler chose its own caching (an icon, the federation document).
+async fn api_response_headers(mut response: axum::response::Response) -> axum::response::Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    headers
+        .entry(axum::http::header::CACHE_CONTROL)
+        .or_insert(axum::http::HeaderValue::from_static("no-store"));
+    response
+}
+
 /// Starts the server's work: connects to the services, starts the metrics listener and the
 /// background tasks, and, for a [`Role::Public`] server, which refuses to start without the web
 /// client, returns the router that serves the deployment.
@@ -591,7 +610,8 @@ pub async fn start(
             context.clone(),
             rate_limit::limit_requests,
         ))
-        .route_layer(axum::middleware::from_fn(metrics::observe));
+        .route_layer(axum::middleware::from_fn(metrics::observe))
+        .layer(axum::middleware::map_response(api_response_headers));
     // A page, not an API: the desktop and mobile apps open it in the system browser to run a
     // passkey ceremony (`api::passkey_page`). It is limited like the API.
     let page = OpenApiRouter::<GlobalServerContext>::new()
@@ -655,4 +675,28 @@ pub async fn start(
             .layer(cors_layer()),
         config,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+    use axum::http::header::{CACHE_CONTROL, X_CONTENT_TYPE_OPTIONS};
+    use axum::response::IntoResponse as _;
+
+    #[tokio::test]
+    async fn api_answers_are_not_kept_unless_their_handler_says_so() {
+        let answer = api_response_headers("{}".into_response()).await;
+        assert_eq!(answer.headers()[CACHE_CONTROL], "no-store");
+        assert_eq!(answer.headers()[X_CONTENT_TYPE_OPTIONS], "nosniff");
+
+        let mut icon = "icon".into_response();
+        icon.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=3600"),
+        );
+        let icon = api_response_headers(icon).await;
+        assert_eq!(icon.headers()[CACHE_CONTROL], "public, max-age=3600");
+        assert_eq!(icon.headers()[X_CONTENT_TYPE_OPTIONS], "nosniff");
+    }
 }

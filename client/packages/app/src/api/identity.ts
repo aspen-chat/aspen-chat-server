@@ -8,15 +8,15 @@ import { AspenSyncContext } from "./syncContext";
 
 /**
  * Who a user is across deployments (the protocol's `identityOf`). `deployment` is the domain of
- * the deployment the record is from, `home` the domain of the viewer's home, which stands for
- * it when it is the home's record.
+ * the deployment the record is from, `null` for the viewer's home, and `home` the domain of the
+ * viewer's home.
  */
 export function identityOf(
   user: Pick<User, "id" | "homeDomain" | "homeId">,
   deployment: string | null,
   home: string | null,
 ): string {
-  return identityOn(user, deployment ?? home ?? "");
+  return identityOn(user, deployment ?? home ?? "", home);
 }
 
 /** The domain of the viewer's home among deployments; `null` while unknown or when it has none. */
@@ -102,7 +102,7 @@ export function ShareBlocksAcrossDeployments() {
   const sources = useSources();
   useEffect(() => {
     for (const source of sources) {
-      source.sync.setBlockedIdentities(source.domain ?? home ?? "", identities);
+      source.sync.setBlockedIdentities(source.domain ?? home ?? "", home, identities);
     }
   }, [sources, home, identities]);
   return null;

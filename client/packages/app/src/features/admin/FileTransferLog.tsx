@@ -1,4 +1,4 @@
-import { ApiProblemError, type FileOfferEntry } from "@aspen/protocol";
+import { ApiProblemError, plainFileName, type FileOfferEntry } from "@aspen/protocol";
 import { useCallback, useEffect, useState } from "react";
 import { Button, useLocale } from "react-aria-components";
 import { useSync, useIdWizard } from "@/api/hooks";
@@ -101,7 +101,7 @@ export function FileTransferLog() {
                 <Handle userId={entry.sender ?? undefined} />
               </Cell>
               <Cell>
-                <span className="break-all">{entry.fileName}</span>
+                <span className="break-all">{plainFileName(entry.fileName)}</span>
                 <span className="text-ink-muted"> · {formatSize(entry.fileSize, locale)}</span>
               </Cell>
               <Cell>

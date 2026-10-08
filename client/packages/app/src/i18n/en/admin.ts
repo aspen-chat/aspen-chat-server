@@ -129,6 +129,7 @@ export const admin = {
     cancelled: "cancelled",
     failed: "failed",
     left: "someone left the call",
+    notPermitted: "the sender could no longer transfer files",
     underway: "under way",
   },
   logWhen: "When",
@@ -136,6 +137,7 @@ export const admin = {
   logWhat: "What",
   logWhere: "Where",
   logAccountGone: "A deleted account",
+  logOperator: "An operator, from the terminal",
   logDeleted: "{name} (deleted)",
   logDm: "DM with {people}",
   logGroupDm: "Group DM with {people}",
@@ -169,6 +171,8 @@ export const admin = {
     resetProfile: "Reset someone's profile",
     clearNickname: "Cleared someone's nickname",
     readReportContext: "Read the DM around a reported message",
+    listDms: "Listed someone's DMs",
+    purgeAttachment: "Deleted a kept attachment for good",
   },
   invite: "Invite",
   members: "Members",
@@ -213,6 +217,9 @@ export const admin = {
   everyoneMentionLimitHint:
     "A community this large has Mention everyone taken from its everyone role, and its owner is told why. 0 never.",
   customEmojiLimit: "Custom emoji per community",
+  uploadQuotaGib: "GiB each person may upload a day",
+  uploadQuotaGibHint:
+    "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
   fileTransfersAllowed: "People may send files in calls",
   fileTransfersAllowedHint:
     "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",

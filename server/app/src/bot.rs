@@ -4,22 +4,25 @@
 //! the API a bot may do too, under the same permissions and limits. It has no password, no
 //! second factor, and no sessions: its one token (`bot_token`, kept only as a SHA-256 digest)
 //! is sent as the bearer token of every request and of the event stream, and stands until its
-//! owner issues another. Its owner (`user.bot_owner`) renames it, issues its token, hands it on,
-//! and deletes it. An owner who deletes their account leaves their bots working and ownerless,
+//! owner issues another. Its owner (`user.bot_owner`) renames it, issues its token, offers it to
+//! someone else, and deletes it. Issuing a token and offering the bot take a recently verified
+//! sign-in; an offer (`bot_transfer`) hands the bot over only when its recipient accepts it,
+//! which gives the bot a new token that only the recipient is shown. An owner who deletes their account leaves their bots working and ownerless,
 //! and a holder of Manage deployment settings may delete those.
 
 use crate::context::GlobalServerContext;
 use crate::deployment::DeploymentPermission;
 use crate::permissions::{Permissions, require_member};
 use crate::t;
+use crate::two_factor::Caller;
 use crate::user::{User, UserPg, validate_new_username, validate_profile, with_online_status};
 use crate::{CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::{bot_token, community_user, user};
+use aspen_schema::{bot_token, bot_transfer, community_user, user};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{ServerEvent, UserEvent};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -60,7 +63,7 @@ pub async fn user_for_token(
                 .eq(digest(token))
                 .and(user::bot)
                 .and(user::deleted_at.is_null())
-                .and(diesel::dsl::not(crate::user_ban::banned())),
+                .and(diesel::dsl::not(crate::user_ban::shut_out())),
         )
         .first(conn.as_mut())
         .await
@@ -269,53 +272,257 @@ pub async fn read_owned(
 }
 
 /// Issues a new token for a bot `caller` owns; the old one stops working at once, and the event
-/// streams opened with it close.
+/// streams opened with it close. Takes a recently verified sign-in, since the token is the bot.
 pub async fn rotate_token(
     state: &GlobalServerContext,
-    caller: UserId,
+    caller: &Caller,
     bot: UserId,
 ) -> crate::Result<String> {
+    caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
-    owned_bot(conn.as_mut(), caller, bot).await?;
+    owned_bot(conn.as_mut(), caller.user, bot).await?;
     let token = new_token();
     let digested = digest(&token);
     conn.transaction(|conn| {
-        async move {
-            diesel::insert_into(bot_token::table)
-                .values((bot_token::bot.eq(bot), bot_token::digest.eq(&digested)))
-                .on_conflict(bot_token::bot)
-                .do_update()
-                .set((
-                    bot_token::digest.eq(&digested),
-                    bot_token::created_at.eq(diesel::dsl::now),
-                ))
-                .execute(conn.as_mut())
-                .await?;
-            crate::login::revoke_all_sessions(state, conn.as_mut(), bot).await
-        }
-        .scope_boxed()
+        async move { replace_token(state, conn.as_mut(), bot, &digested).await }.scope_boxed()
     })
     .await?;
     Ok(token)
 }
 
-/// Hands a bot `caller` owns to `new_owner`, a person who may own another.
-pub async fn transfer(
+/// Gives `bot` the token whose digest is `digested`, ending what its old one holds open: its
+/// event streams and calls close (`signInsEnded`).
+async fn replace_token(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    bot: UserId,
+    digested: &[u8],
+) -> crate::Result<()> {
+    diesel::insert_into(bot_token::table)
+        .values((bot_token::bot.eq(bot), bot_token::digest.eq(digested)))
+        .on_conflict(bot_token::bot)
+        .do_update()
+        .set((
+            bot_token::digest.eq(digested),
+            bot_token::created_at.eq(diesel::dsl::now),
+        ))
+        .execute(conn)
+        .await?;
+    crate::login::revoke_all_sessions(state, conn, bot).await
+}
+
+/// How long an offer to hand a bot over waits for its recipient.
+pub const TRANSFER_OFFER_DAYS: i64 = 7;
+
+/// An offer to hand a bot to someone, as its giver and its recipient see it.
+#[derive(Debug, Clone)]
+pub struct Transfer {
+    pub bot: User,
+    pub from: User,
+    pub to: User,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = bot_transfer)]
+struct TransferRow {
+    bot: UserId,
+    from_owner: UserId,
+    to_user: UserId,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+/// The offers that still stand among `rows`: unexpired, of a live bot its giver still owns.
+async fn standing_transfers(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    viewer: UserId,
+    rows: Vec<TransferRow>,
+) -> crate::Result<Vec<Transfer>> {
+    let now = Utc::now();
+    let mut ids: Vec<UserId> = rows
+        .iter()
+        .flat_map(|row| [row.bot, row.from_owner, row.to_user])
+        .collect();
+    ids.sort();
+    ids.dedup();
+    let users: Vec<UserPg> = user::table
+        .select(UserPg::as_select())
+        .filter(user::id.eq_any(&ids).and(user::deleted_at.is_null()))
+        .load(conn)
+        .await?;
+    let users = with_online_status(state, viewer, users).await?;
+    let find = |id: UserId| users.iter().find(|u| u.user_pg.id == id).cloned();
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.expires_at > now)
+        .filter_map(|row| {
+            let bot = find(row.bot)?;
+            (bot.user_pg.bot_owner == Some(row.from_owner)).then_some(())?;
+            Some(Transfer {
+                bot,
+                from: find(row.from_owner)?,
+                to: find(row.to_user)?,
+                created_at: row.created_at,
+                expires_at: row.expires_at,
+            })
+        })
+        .collect())
+}
+
+/// Offers a bot `caller` owns to `recipient`, a person of this deployment, who becomes its
+/// owner only by accepting ([`accept_transfer`]) within [`TRANSFER_OFFER_DAYS`]. Takes a
+/// recently verified sign-in. Offering it again replaces the offer. The recipient is told by
+/// the system account. Answers the offer, and whether it replaced one.
+pub async fn offer_transfer(
+    state: &GlobalServerContext,
+    caller: &Caller,
+    bot: UserId,
+    recipient: UserId,
+) -> crate::Result<(Transfer, bool)> {
+    caller.ensure_recently_verified(&state.config.auth)?;
+    if recipient == caller.user {
+        return Err(crate::Error::Validation(t!("botAlreadyYours")));
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let bot_row = owned_bot(conn.as_mut(), caller.user, bot).await?;
+    ensure_may_own(state, conn.as_mut(), recipient, |_| {
+        crate::Error::Validation(t!("botNewOwnerAtLimit"))
+    })
+    .await?;
+    let expires_at = Utc::now() + Duration::days(TRANSFER_OFFER_DAYS);
+    let replaced: bool = diesel::select(diesel::dsl::exists(
+        bot_transfer::table.filter(
+            bot_transfer::bot
+                .eq(bot)
+                .and(bot_transfer::expires_at.gt(diesel::dsl::now)),
+        ),
+    ))
+    .get_result(conn.as_mut())
+    .await?;
+    let row: TransferRow = diesel::insert_into(bot_transfer::table)
+        .values((
+            bot_transfer::bot.eq(bot),
+            bot_transfer::from_owner.eq(caller.user),
+            bot_transfer::to_user.eq(recipient),
+            bot_transfer::expires_at.eq(expires_at),
+        ))
+        .on_conflict(bot_transfer::bot)
+        .do_update()
+        .set((
+            bot_transfer::from_owner.eq(caller.user),
+            bot_transfer::to_user.eq(recipient),
+            bot_transfer::created_at.eq(diesel::dsl::now),
+            bot_transfer::expires_at.eq(expires_at),
+        ))
+        .returning(TransferRow::as_returning())
+        .get_result(conn.as_mut())
+        .await?;
+    let giver_name: String = user::table
+        .select(user::name)
+        .filter(user::id.eq(caller.user))
+        .first(conn.as_mut())
+        .await?;
+    let transfer = standing_transfers(state, conn.as_mut(), caller.user, vec![row])
+        .await?
+        .pop()
+        .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))?;
+    drop(conn);
+    let notice = crate::locale::scope(crate::locale::DEFAULT, async {
+        t!(
+            "botTransferOfferedNotice",
+            giver = giver_name.as_str(),
+            bot = bot_row.name.as_str(),
+            days = TRANSFER_OFFER_DAYS
+        )
+        .into_owned()
+    })
+    .await;
+    // The offer stands whether or not the notice reaches them: they also find it in Settings.
+    if let Err(e) = crate::system_account::notify(state, recipient, notice).await {
+        tracing::warn!(recipient = %recipient.0, error = %e, "could not tell someone of a bot offered to them");
+    }
+    Ok((transfer, replaced))
+}
+
+/// The offers of bots made to `caller` or by them that still stand, the newest first.
+pub async fn list_transfers(
+    state: &GlobalServerContext,
+    caller: UserId,
+) -> crate::Result<Vec<Transfer>> {
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<TransferRow> = bot_transfer::table
+        .select(TransferRow::as_select())
+        .filter(
+            bot_transfer::to_user
+                .eq(caller)
+                .or(bot_transfer::from_owner.eq(caller)),
+        )
+        .filter(bot_transfer::expires_at.gt(diesel::dsl::now))
+        .order_by(bot_transfer::created_at.desc())
+        .load(conn.as_mut())
+        .await?;
+    standing_transfers(state, conn.as_mut(), caller, rows).await
+}
+
+/// Ends the offer of `bot`: its owner withdrawing it, or its recipient declining it. Anyone else
+/// finds no offer.
+pub async fn end_transfer(
     state: &GlobalServerContext,
     caller: UserId,
     bot: UserId,
-    new_owner: UserId,
-) -> crate::Result<User> {
-    if new_owner == caller {
-        return Err(crate::Error::Validation(t!("botAlreadyYours")));
+) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    let ended = diesel::delete(
+        bot_transfer::table.filter(
+            bot_transfer::bot.eq(bot).and(
+                bot_transfer::from_owner
+                    .eq(caller)
+                    .or(bot_transfer::to_user.eq(caller)),
+            ),
+        ),
+    )
+    .execute(conn.as_mut())
+    .await?;
+    if ended == 0 {
+        return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
+    Ok(())
+}
+
+/// The recipient of an offer accepts the bot: they own it from now on, and it is given a new
+/// token, which only they are shown, so whoever held the old one (its giver among them) holds
+/// nothing; its event streams and calls close (`signInsEnded`). Refused once the offer has
+/// expired or been withdrawn, once its giver no longer owns the bot, while the bot is shut out
+/// of the deployment (`user_ban::shut_out`, which a ban of its giver does), and when the
+/// recipient owns as many bots as they may.
+pub async fn accept_transfer(
+    state: &GlobalServerContext,
+    caller: UserId,
+    bot: UserId,
+) -> crate::Result<(User, String)> {
+    let token = new_token();
+    let digested = digest(&token);
     let mut conn = state.connection_pool.get().await?;
     let row = conn
         .transaction(|conn| {
             async move {
-                // Both owners' rows are locked, in id order, so a transfer and a creation for
-                // the same person cannot both fit under the cap.
-                let mut owners = [caller, new_owner];
+                let offer: TransferRow = bot_transfer::table
+                    .select(TransferRow::as_select())
+                    .filter(
+                        bot_transfer::bot
+                            .eq(bot)
+                            .and(bot_transfer::to_user.eq(caller))
+                            .and(bot_transfer::expires_at.gt(diesel::dsl::now)),
+                    )
+                    .for_update()
+                    .first(conn.as_mut())
+                    .await?;
+                // Both owners' rows are locked, in id order, so an acceptance and a creation
+                // for the same person cannot both fit under the cap.
+                let mut owners = [offer.from_owner, caller];
                 owners.sort();
                 for owner in owners {
                     user::table
@@ -325,25 +532,47 @@ pub async fn transfer(
                         .first::<UserId>(conn.as_mut())
                         .await?;
                 }
-                owned_bot(conn.as_mut(), caller, bot).await?;
-                ensure_may_own(state, conn.as_mut(), new_owner, |_| {
-                    crate::Error::Validation(t!("botNewOwnerAtLimit"))
+                let live: bool = diesel::select(diesel::dsl::exists(
+                    user::table.filter(
+                        user::id
+                            .eq(bot)
+                            .and(user::bot)
+                            .and(user::deleted_at.is_null())
+                            .and(user::bot_owner.eq(offer.from_owner))
+                            .and(diesel::dsl::not(crate::user_ban::shut_out())),
+                    ),
+                ))
+                .get_result(conn.as_mut())
+                .await?;
+                if !live {
+                    diesel::delete(bot_transfer::table.filter(bot_transfer::bot.eq(bot)))
+                        .execute(conn.as_mut())
+                        .await?;
+                    return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+                }
+                ensure_may_own(state, conn.as_mut(), caller, |max| {
+                    crate::Error::Validation(t!("botLimit", max = max))
                 })
                 .await?;
                 let row: UserPg = diesel::update(user::table.filter(user::id.eq(bot)))
-                    .set(user::bot_owner.eq(new_owner))
+                    .set(user::bot_owner.eq(caller))
                     .returning(UserPg::as_returning())
                     .get_result(conn.as_mut())
                     .await?;
-                publish_owner(state, conn.as_mut(), bot, Some(new_owner)).await?;
+                diesel::delete(bot_transfer::table.filter(bot_transfer::bot.eq(bot)))
+                    .execute(conn.as_mut())
+                    .await?;
+                publish_owner(state, conn.as_mut(), bot, Some(caller)).await?;
+                replace_token(state, conn.as_mut(), bot, &digested).await?;
                 Ok::<_, crate::Error>(row)
             }
             .scope_boxed()
         })
         .await?;
-    Ok(with_online_status(state, caller, vec![row])
+    let bot = with_online_status(state, caller, vec![row])
         .await?
-        .remove(0))
+        .remove(0);
+    Ok((bot, token))
 }
 
 /// Deletes a bot: its owner may, and so may a holder of Manage deployment settings once its

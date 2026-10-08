@@ -69,6 +69,7 @@ import type {
   Poll,
   Role,
   ServerEvent,
+  VoiceMute,
   VoiceParticipant,
   VoiceRing,
   VoiceSession,
@@ -192,6 +193,11 @@ export class RecordStore {
   readonly #customEmoji = new Map<string, CustomEmoji>();
   /** The standing bans of the communities whose bans a read has brought, by community then user. */
   readonly #bans = new Map<string, Map<string, CommunityBan>>();
+  /**
+   * The standing server mutes of the communities whose mutes a read has brought, by community
+   * then user.
+   */
+  readonly #voiceMutes = new Map<string, Map<string, VoiceMute>>();
   readonly #polls = new Map<string, Poll>();
   /** `poll -> option indices` the calling user voted for, for polls read with their votes. */
   readonly #myVotes = new Map<string, ReadonlySet<number>>();
@@ -206,11 +212,13 @@ export class RecordStore {
   /** The users the caller has blocked. */
   readonly #blocked = new Set<string>();
   /**
-   * People the caller blocked on any deployment, by `identityOf`, and this deployment's domain,
-   * which names its own users' identities; `silenced` reads them.
+   * People the caller blocked on any deployment, by `identityOf`, this deployment's domain,
+   * which names its own users' identities, and the caller's home's, whose records alone are
+   * believed about where a user is from; `silenced` reads them.
    */
   #blockedIdentities: ReadonlySet<string> = new Set();
   #domain = "";
+  #home: string | null = null;
   readonly #roles = new Map<string, Role>();
   /** Overrides by `channel/role` and `category/role`. */
   readonly #channelOverrides = new Map<string, ChannelOverride>();
@@ -490,6 +498,28 @@ export class RecordStore {
       return held === undefined
         ? undefined
         : Array.from(held.values()).sort((a, b) => b.bannedAt.localeCompare(a.bannedAt));
+    });
+  }
+
+  /**
+   * Topic `voiceMutes:<communityId>`: the community's standing server mutes, newest first, or
+   * `undefined` before a read has brought them (`AspenSync.loadVoiceMutes`); events then keep
+   * them.
+   */
+  voiceMutes(communityId: string): readonly VoiceMute[] | undefined {
+    return this.#memoized(`voiceMutes:${communityId}`, () => {
+      const held = this.#voiceMutes.get(communityId);
+      return held === undefined
+        ? undefined
+        : Array.from(held.values()).sort((a, b) => b.mutedAt.localeCompare(a.mutedAt));
+    });
+  }
+
+  /** Keeps a read's whole list of a community's standing server mutes. */
+  replaceVoiceMutes(communityId: string, mutes: readonly VoiceMute[]): void {
+    this.#batch(() => {
+      this.#voiceMutes.set(communityId, new Map(mutes.map((m) => [m.user, m])));
+      this.#touch(`voiceMutes:${communityId}`);
     });
   }
 
@@ -946,11 +976,12 @@ export class RecordStore {
 
   /**
    * Who the caller blocked on every deployment they use, by `identityOf`, with `domain`, the
-   * name of this one, so its own users' identities can be told.
+   * name of this one, so its own users' identities can be told, and `home`, the caller's home's.
    */
-  setBlockedIdentities(domain: string, identities: ReadonlySet<string>): void {
+  setBlockedIdentities(domain: string, home: string | null, identities: ReadonlySet<string>): void {
     const same =
       domain === this.#domain &&
+      home === this.#home &&
       identities.size === this.#blockedIdentities.size &&
       [...identities].every((identity) => this.#blockedIdentities.has(identity));
     if (same) {
@@ -958,6 +989,7 @@ export class RecordStore {
     }
     this.#batch(() => {
       this.#domain = domain;
+      this.#home = home;
       this.#blockedIdentities = new Set(identities);
       this.#touch("silenced");
     });
@@ -969,7 +1001,7 @@ export class RecordStore {
     }
     const user = this.#users.get(userId);
     return this.#blockedIdentities.has(
-      identityOf(user ?? { id: userId, homeDomain: null, homeId: null }, this.#domain),
+      identityOf(user ?? { id: userId, homeDomain: null, homeId: null }, this.#domain, this.#home),
     );
   }
 
@@ -1376,6 +1408,10 @@ export class RecordStore {
         this.#touch(`bans:${id}`);
       }
       this.#bans.clear();
+      for (const id of this.#voiceMutes.keys()) {
+        this.#touch(`voiceMutes:${id}`);
+      }
+      this.#voiceMutes.clear();
       const listed = new Set(communities.map((c) => c.id));
       for (const id of this.#myCommunities) {
         if (!listed.has(id)) {
@@ -1967,6 +2003,7 @@ export class RecordStore {
       this.#roles.clear();
       this.#customEmoji.clear();
       this.#bans.clear();
+      this.#voiceMutes.clear();
       this.#pins.clear();
       this.#channelOnline.clear();
       this.#forgetCommands();
@@ -2033,6 +2070,19 @@ export class RecordStore {
               held.delete(event.user);
             }
             this.#touch(`bans:${event.community}`);
+          }
+          break;
+        }
+        case "voiceMute": {
+          // Only a community whose mutes were read is followed; the rest are read when shown.
+          const held = this.#voiceMutes.get(event.community);
+          if (held !== undefined) {
+            if (event.type === "create") {
+              held.set(event.user, created(event));
+            } else {
+              held.delete(event.user);
+            }
+            this.#touch(`voiceMutes:${event.community}`);
           }
           break;
         }
@@ -2860,6 +2910,13 @@ export class RecordStore {
       // afresh if the permission comes back.
       if (this.access(communityId)?.has("banMembers") !== true && this.#bans.delete(communityId)) {
         this.#touch(`bans:${communityId}`);
+      }
+      // Likewise server mutes without Manage calls.
+      if (
+        this.access(communityId)?.has("manageCalls") !== true &&
+        this.#voiceMutes.delete(communityId)
+      ) {
+        this.#touch(`voiceMutes:${communityId}`);
       }
     }
   }

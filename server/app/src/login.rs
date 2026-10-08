@@ -26,6 +26,21 @@ use serde::{Deserialize, Serialize};
 const REFRESH_TOKEN_LIFETIME: Duration = Duration::weeks(52);
 const SESSION_TOKEN_LIFETIME: Duration = Duration::hours(3);
 pub const PASSWORD_MIN_LENGTH: usize = 8;
+/// The longest password, in bytes of UTF-8, that may be set. Far beyond any passphrase, and it
+/// bounds what each password's work reads.
+pub const PASSWORD_MAX_BYTES: usize = 1024;
+
+/// Whether `password` may be set as a new password: the rule registration, changing a password,
+/// and resetting one share.
+pub fn check_new_password(password: &str) -> Result<(), PasswordRequirement> {
+    if password.len() < PASSWORD_MIN_LENGTH {
+        Err(PasswordRequirement::Length)
+    } else if password.len() > PASSWORD_MAX_BYTES {
+        Err(PasswordRequirement::MaxLength)
+    } else {
+        Ok(())
+    }
+}
 
 /// How a sign-in proved who its user is. A foreign user's sign-in records what their home
 /// deployment said of theirs (`app::federation::abroad`).
@@ -163,6 +178,15 @@ impl PasswordWork {
     }
 }
 
+/// An Argon2id hash, with the parameters `argon2::Argon2::default()` hashes with, of a password
+/// nobody is given. Checking a password against it costs what checking one against a real
+/// account's hash does, for sign-ins naming no account that has a password.
+const UNMATCHABLE_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$YXNwZW5zYWx0YXNwZW5zYWx0$/6zVLI+Zwo33wUxGeAqFH9OoZU4amh95DyO/q9vpmQ0";
+
+/// Hashes a new password. It waits on the server's password work allowance and then takes a
+/// blocking thread for a noticeable time, so callers hold no database connection across it:
+/// a burst of password work would otherwise hold the pool's connections idle and refuse every
+/// other request with `serverBusy`.
 pub async fn hash_password(password: String) -> crate::Result<String> {
     password_work(|| {
         let argon2 = argon2::Argon2::default();
@@ -177,6 +201,8 @@ pub async fn hash_password(password: String) -> crate::Result<String> {
     .map_err(Into::into)
 }
 
+/// Whether `password` matches `entry_password_hash`. Like `hash_password`, callers hold no
+/// database connection across it.
 pub async fn check_password(password: String, entry_password_hash: String) -> crate::Result<bool> {
     password_work(move || {
         let argon2 = argon2::Argon2::default();
@@ -213,21 +239,29 @@ pub async fn try_login(
 ) -> Result<LoginOutcome, crate::Error> {
     use schema::user::dsl::*;
 
-    let mut conn = state.connection_pool.get().await?;
-    let conn = conn.as_mut();
-    let user_entry: Option<UserPg> = user
-        .select(UserPg::as_select())
-        .filter(crate::user::named(username.to_owned()))
-        .first(conn)
-        .await
-        .optional()?;
-    // A bot has no password; it signs in only with its token.
-    let Some(u) = user_entry.filter(|u| !u.bot) else {
+    let user_entry: Option<UserPg> = {
+        let mut conn = state.connection_pool.get().await?;
+        user.select(UserPg::as_select())
+            .filter(crate::user::named(username.to_owned()))
+            .first(conn.as_mut())
+            .await
+            .optional()?
+    };
+    // A bot has no password; it signs in only with its token. An unknown name or a bot's is
+    // checked against a hash no password matches, so the answer takes as long as a wrong
+    // password for a real account and does not tell which names exist.
+    let account = user_entry.filter(|u| !u.bot);
+    let hash = account.as_ref().map_or_else(
+        || UNMATCHABLE_PASSWORD_HASH.to_string(),
+        |u| u.password_hash.clone(),
+    );
+    // No database connection is held while the hash is checked (see `check_password`).
+    let right = check_password(password.to_string(), hash).await?;
+    let Some(u) = account.filter(|_| right) else {
         return Ok(LoginOutcome::InvalidCredentials);
     };
-    if !check_password(password.to_string(), u.password_hash).await? {
-        return Ok(LoginOutcome::InvalidCredentials);
-    }
+    let mut conn = state.connection_pool.get().await?;
+    let conn = conn.as_mut();
     // A banned account learns so once its password is right, before a second factor is asked
     // for that could not be used.
     crate::user_ban::check_not_banned(conn, u.id).await?;
@@ -476,6 +510,27 @@ pub fn sign_in_id(refresh_digest: &str) -> String {
 /// follows it.
 pub const SIGN_IN_ID_IS_SQL: &str = "substr(refresh_token.token, 1, 32) = ";
 
+/// Whether `user`'s sign-in named `sign_in` (`sign_in_id`) is live: its refresh token has not
+/// expired or been revoked.
+pub async fn sign_in_live(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    sign_in: &str,
+) -> crate::Result<bool> {
+    use schema::refresh_token;
+    Ok(diesel::select(diesel::dsl::exists(
+        refresh_token::table
+            .filter(refresh_token::user.eq(user))
+            .filter(refresh_token::expires.gt(Utc::now().naive_utc()))
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(SIGN_IN_ID_IS_SQL)
+                    .bind::<diesel::sql_types::Text, _>(sign_in),
+            ),
+    ))
+    .get_result(conn)
+    .await?)
+}
+
 /// Tells `user`'s event streams that sign-ins ended: `ended` alone, or without it every one but
 /// `kept`. The streams of those sign-ins close.
 async fn announce_ended(
@@ -485,13 +540,27 @@ async fn announce_ended(
     ended: Option<String>,
     kept: Option<String>,
 ) -> crate::Result<()> {
+    let at = database_clock(conn).await?;
     crate::publish_event(
         state,
         conn,
         crate::EventScope::User(user),
-        &ServerEvent::SignInsEnded { ended, kept },
+        &ServerEvent::SignInsEnded { ended, kept, at },
     )
     .await
+}
+
+/// The database's clock as it reads now, which a sign-in's `refresh_token.created_at` is set
+/// by. Read after a transaction's changes, it is later than the start of every transaction they
+/// saw committed, so every sign-in an end of sign-ins or a ban covered began before it.
+pub async fn database_clock(conn: &mut AsyncPgConnection) -> crate::Result<DateTime<Utc>> {
+    Ok(
+        diesel::select(diesel::dsl::sql::<diesel::sql_types::Timestamptz>(
+            "clock_timestamp()",
+        ))
+        .get_result(conn)
+        .await?,
+    )
 }
 
 /// Revokes a refresh token and all sessions issued from it, closing their event streams.
@@ -542,7 +611,6 @@ pub enum ChangePasswordOutcome {
 /// given to re-verify does, so a stolen session cannot guess it.
 pub async fn try_change_password(
     state: &GlobalServerContext,
-    mut conn: impl AsMut<AsyncPgConnection>,
     caller: &two_factor::Caller,
     config: &crate::aspen_config::AuthConfig,
     old_password: &str,
@@ -554,16 +622,25 @@ pub async fn try_change_password(
     }
     let user_id = caller.user;
     let current_session = caller.session_digest.as_str();
-    let conn = conn.as_mut();
-    let entry_password_hash: String = schema::user::table
-        .select(schema::user::password_hash)
-        .filter(
-            schema::user::id
-                .eq(&user_id.0)
-                .and(schema::user::deleted_at.is_null()),
-        )
-        .first(conn)
-        .await?;
+    if let Err(requirement) = check_new_password(new_password) {
+        // Refused before the old password is tried, so a password that cannot be set costs no
+        // attempt.
+        return Ok(ChangePasswordOutcome::RequirementNotMet(requirement));
+    }
+    // The connection goes back to the pool before the password work, and another is taken
+    // after it (see `hash_password`).
+    let entry_password_hash: String = {
+        let mut conn = state.connection_pool.get().await?;
+        schema::user::table
+            .select(schema::user::password_hash)
+            .filter(
+                schema::user::id
+                    .eq(&user_id.0)
+                    .and(schema::user::deleted_at.is_null()),
+            )
+            .first(conn.as_mut())
+            .await?
+    };
     let old_password = old_password.to_string();
     let right = two_factor::limited(state, user_id, async || {
         check_password(old_password, entry_password_hash).await
@@ -572,13 +649,9 @@ pub async fn try_change_password(
     if !right {
         return Ok(ChangePasswordOutcome::OldPasswordIncorrect);
     }
-    if new_password.len() < PASSWORD_MIN_LENGTH {
-        return Ok(ChangePasswordOutcome::RequirementNotMet(
-            PasswordRequirement::Length,
-        ));
-    }
     let new_password_hash = hash_password(new_password.to_string()).await?;
     let current_session = current_session.to_string();
+    let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
             diesel::update(
@@ -785,5 +858,37 @@ mod password_work_tests {
         release_tx.send(()).unwrap();
         holder.await.unwrap().unwrap();
         assert_eq!(allowance.run(|| 7).await.unwrap(), 7);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stand-in hash costs what a real one does: it parses, and has the parameters new
+    /// hashes are made with.
+    #[test]
+    fn unmatchable_hash_has_default_parameters() {
+        let hash = PasswordHash::new(UNMATCHABLE_PASSWORD_HASH).unwrap();
+        let defaults = argon2::Params::default();
+        let params = argon2::Params::try_from(&hash).unwrap();
+        assert_eq!(hash.algorithm, argon2::Algorithm::Argon2id.ident());
+        assert_eq!(params.m_cost(), defaults.m_cost());
+        assert_eq!(params.t_cost(), defaults.t_cost());
+        assert_eq!(params.p_cost(), defaults.p_cost());
+    }
+
+    #[test]
+    fn new_password_lengths() {
+        assert_eq!(
+            check_new_password("short"),
+            Err(PasswordRequirement::Length)
+        );
+        assert_eq!(check_new_password("long enough"), Ok(()));
+        assert_eq!(check_new_password(&"x".repeat(PASSWORD_MAX_BYTES)), Ok(()));
+        assert_eq!(
+            check_new_password(&"x".repeat(PASSWORD_MAX_BYTES + 1)),
+            Err(PasswordRequirement::MaxLength)
+        );
     }
 }

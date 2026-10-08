@@ -77,6 +77,8 @@ pub struct DeploymentSettings {
     pub everyone_mention_limit: u32,
     /// The most custom emoji one community may hold (`app::custom_emoji`).
     pub custom_emoji_limit: u32,
+    /// How many GiB one person may upload in any 24 hours (`app::upload_quota`); 0 sets no limit.
+    pub upload_quota_gib: u32,
     /// Whether people may offer files to one another in calls. Off, no join token grants
     /// Transfer files, whatever the channel's permissions say.
     pub file_transfers: bool,
@@ -111,6 +113,7 @@ struct SettingsRow {
     bots_max_per_user: i32,
     everyone_mention_limit: i32,
     custom_emoji_limit: i32,
+    upload_quota_gib: i32,
     file_transfers: bool,
     email_required: bool,
     email_verification_required: bool,
@@ -140,6 +143,7 @@ impl From<SettingsRow> for DeploymentSettings {
             bots_max_per_user: count(row.bots_max_per_user),
             everyone_mention_limit: count(row.everyone_mention_limit),
             custom_emoji_limit: count(row.custom_emoji_limit),
+            upload_quota_gib: count(row.upload_quota_gib),
             file_transfers: row.file_transfers,
             email_required: row.email_required,
             email_verification_required: row.email_verification_required,
@@ -180,6 +184,8 @@ pub struct SettingsChange {
     pub everyone_mention_limit: Option<u32>,
     #[diesel(skip_update)]
     pub custom_emoji_limit: Option<u32>,
+    #[diesel(skip_update)]
+    pub upload_quota_gib: Option<u32>,
     pub file_transfers: Option<bool>,
     pub email_required: Option<bool>,
     pub email_verification_required: Option<bool>,
@@ -244,6 +250,7 @@ impl SettingsChange {
             bots_max_per_user => next.bots_max_per_user,
             everyone_mention_limit => next.everyone_mention_limit,
             custom_emoji_limit => next.custom_emoji_limit,
+            upload_quota_gib => next.upload_quota_gib,
             file_transfers => next.file_transfers,
             email_required => next.email_required,
             email_verification_required => next.email_verification_required,
@@ -461,6 +468,7 @@ pub async fn update(
                             .eq(count(wanted.everyone_mention_limit)),
                         deployment_settings::custom_emoji_limit
                             .eq(count(wanted.custom_emoji_limit)),
+                        deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
                         deployment_settings::revision.eq(deployment_settings::revision + 1),
                     ))
                     .returning(deployment_settings::revision)
@@ -492,6 +500,7 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
         settings.bots_max_per_user,
         settings.everyone_mention_limit,
         settings.custom_emoji_limit,
+        settings.upload_quota_gib,
     ]
     .into_iter()
     .any(|count| count > largest)

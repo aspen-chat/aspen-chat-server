@@ -55,6 +55,21 @@ use crate::aspen_config::{AspenConfig, MediaS3Config};
 /// Where clients' uploads land until they are confirmed (see the module docs).
 pub const UPLOAD_PREFIX: &str = "uploads/";
 
+/// Where the objects kept as evidence for reviewing reports are (`app::attachment::evidence`):
+/// the files of deleted messages and attachments taken off their messages. The anonymous read
+/// path must never serve it (`docs/operators/installing.md`); reviewers read what is there
+/// through short-lived signed URLs ([`MediaStore::presign_get`]).
+pub const EVIDENCE_PREFIX: &str = "evidence/";
+
+/// Where the object at `key` is kept as evidence.
+pub fn evidence_key(key: &str) -> String {
+    if key.starts_with(EVIDENCE_PREFIX) {
+        key.to_string()
+    } else {
+        format!("{EVIDENCE_PREFIX}{key}")
+    }
+}
+
 /// The largest object one `CopyObject` copies; [`MediaStore::promote`] copies larger ones in
 /// parts of [`COPY_PART_BYTES`].
 const MAX_SINGLE_COPY_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -507,6 +522,84 @@ impl MediaStore {
         self.delete(key).await
     }
 
+    /// Moves the object at `from` to `to` with the store's own copy, keeping how it is served,
+    /// and deletes `from`. Answers `false`, moving nothing, when there is no object at `from`.
+    pub async fn move_object(&self, from: &str, to: &str) -> crate::error::Result<bool> {
+        let head = match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(from)
+            .send()
+            .await
+        {
+            Ok(head) => head,
+            Err(SdkError::ServiceError(svc))
+                if matches!(svc.err(), HeadObjectError::NotFound(_)) =>
+            {
+                return Ok(false);
+            }
+            Err(e) => return Err(crate::Error::S3HeadObject(Box::new(e))),
+        };
+        let size = head
+            .content_length()
+            .and_then(|length| u64::try_from(length).ok())
+            .unwrap_or_default();
+        let Some(e_tag) = head.e_tag() else {
+            return Err(crate::Error::S3Request(
+                "the store gave an object no ETag, so it cannot be copied safely".into(),
+            ));
+        };
+        let source = format!("{}/{}", self.bucket, from);
+        let copied = if size <= MAX_SINGLE_COPY_BYTES {
+            self.client
+                .copy_object()
+                .bucket(&self.bucket)
+                .key(to)
+                .copy_source(&source)
+                .copy_source_if_match(e_tag)
+                .metadata_directive(MetadataDirective::Copy)
+                .send()
+                .await
+                .map(|_| ())
+                .map_err(CopyError::from)
+        } else {
+            let served = Served {
+                content_type: head
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                disposition: head.content_disposition().map(str::to_string),
+            };
+            self.copy_in_parts(&source, e_tag, to, size, &served).await
+        };
+        match copied {
+            Ok(()) => {}
+            Err(CopyError::Replaced) => {
+                return Err(crate::Error::S3Request(
+                    "an object changed while it was moved".into(),
+                ));
+            }
+            Err(CopyError::Other(e)) => return Err(e),
+        }
+        self.delete(from).await?;
+        Ok(true)
+    }
+
+    /// A URL that reads the object at `key` for `ttl`, signed for the S3 API as clients reach it,
+    /// for what the anonymous read path does not serve ([`EVIDENCE_PREFIX`]).
+    pub async fn presign_get(&self, key: &str, ttl: StdDuration) -> crate::error::Result<String> {
+        let presigned = self
+            .presign_client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(PresigningConfig::expires_in(ttl)?)
+            .await
+            .map_err(Box::new)?;
+        Ok(presigned.uri().to_string())
+    }
+
     /// Build the anonymous-read URL clients fetch the bytes from.
     ///
     /// The base URL is normalised once at construction time, so this is a
@@ -517,8 +610,9 @@ impl MediaStore {
     }
 }
 
-/// Sweeps staging objects every [`SWEEP_EVERY`], on every server, for as long as it runs: deleting
-/// one twice is harmless, and a deployment of one server needs no other to do it.
+/// Sweeps staging objects, and attachments never sent (`attachment::sweep_unsent`), every
+/// [`SWEEP_EVERY`], on every server, for as long as it runs: deleting one twice is harmless, and
+/// a deployment of one server needs no other to do it.
 pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
     tokio::spawn(async move {
         loop {
@@ -531,6 +625,14 @@ pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
                 Ok(swept) => tracing::info!(swept, "deleted staging uploads past their URLs"),
                 Err(e) => tracing::warn!(error = %e, "could not sweep staging uploads"),
             }
+            match crate::attachment::sweep_unsent(&state).await {
+                Ok(0) => {}
+                Ok(swept) => tracing::info!(swept, "deleted attachments never sent"),
+                Err(e) => tracing::warn!(error = %e, "could not sweep attachments never sent"),
+            }
+            if let Err(e) = crate::upload_quota::prune(&state).await {
+                tracing::warn!(error = %e, "could not prune the record of uploads");
+            }
         }
     });
 }
@@ -538,6 +640,20 @@ pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Evidence keeps its key beneath its own prefix, once however often it is moved.
+    #[test]
+    fn evidence_lives_under_its_own_prefix() {
+        assert_eq!(evidence_key("attachments/a"), "evidence/attachments/a");
+        assert_eq!(
+            evidence_key("evidence/attachments/a"),
+            "evidence/attachments/a"
+        );
+        assert_eq!(
+            evidence_key("attachment-previews/a"),
+            "evidence/attachment-previews/a"
+        );
+    }
 
     #[tokio::test]
     async fn upload_urls_name_storage_as_clients_reach_it() {

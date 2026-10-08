@@ -13,7 +13,8 @@
 //! holding the code, gets no session out of it. The new sign-in proves what the giver's did
 //! (`method`, `verified_at`), so it is no stronger than the giver's and no more recently
 //! verified; and the giver's sign-in must still stand when it is claimed, so signing out
-//! everywhere or changing the password between the tap and the claim stops it.
+//! everywhere or changing the password between the tap and the claim stops it. Giving a sign-in
+//! (starting an offer, scanning a request) takes a recently verified sign-in.
 
 use crate::CHACHA_RNG;
 use crate::UserId;
@@ -141,15 +142,18 @@ fn code_challenge(given: Option<String>) -> crate::Result<String> {
     Ok(challenge)
 }
 
-/// Refuses a caller who cannot give a sign-in away: a bot, whose token is its sign-in, and a
-/// user of another deployment, whose sign-ins their home makes.
-fn giver(caller: &Caller) -> crate::Result<Giver> {
+/// Refuses a caller who cannot give a sign-in away: a bot, whose token is its sign-in, a user
+/// of another deployment, whose sign-ins their home makes, and a sign-in not verified recently
+/// (`reauthenticationRequired`), since giving a sign-in away is a security change: a stolen
+/// session must not mint another, longer-lived one on a device of the thief's.
+fn giver(state: &GlobalServerContext, caller: &Caller) -> crate::Result<Giver> {
     if caller.bot {
         return Err(crate::Error::Forbidden(t!("deviceLinkBot")));
     }
     if caller.foreign {
         return Err(crate::Error::Forbidden(t!("deviceLinkForeign")));
     }
+    caller.ensure_recently_verified(&state.config.auth)?;
     Ok(Giver {
         user: caller.user,
         sign_in: caller.sign_in(),
@@ -184,6 +188,27 @@ async fn write(
     Ok(())
 }
 
+/// Writes a link back after a step on it, only while it still exists (`XX`), so a step racing
+/// a `cancel` that removed it between its read and this write cannot bring it back.
+async fn rewrite(
+    state: &GlobalServerContext,
+    id: &str,
+    link: &Link,
+    ttl_seconds: i64,
+) -> crate::Result<()> {
+    let written: Option<String> = state
+        .valkey
+        .set(
+            token_key(LINK_PREFIX, id),
+            serde_json::to_string(link)?,
+            Some(Expiration::EX(ttl_seconds)),
+            Some(SetOptions::XX),
+            false,
+        )
+        .await?;
+    written.map(|_| ()).ok_or(crate::Error::DeviceLinkExpired)
+}
+
 /// Starts a link. With `caller` set it is an offer of the caller's account; without, a request
 /// from a device naming itself `name`, which will claim with the verifier behind
 /// `challenge`.
@@ -197,7 +222,7 @@ pub async fn start(
         Some(caller) => Link {
             kind: Kind::Offer,
             receiver: None,
-            giver: Some(giver(caller)?),
+            giver: Some(giver(state, caller)?),
             scanned: false,
             approved: false,
         },
@@ -237,7 +262,7 @@ pub async fn scan(
     let (giver, receiver) = match link.kind {
         Kind::Request => {
             let caller = caller.ok_or(crate::Error::Unauthenticated)?;
-            (Some(giver(caller)?), None)
+            (Some(giver(state, caller)?), None)
         }
         Kind::Offer if caller.is_some() => {
             return Err(crate::Error::Validation(t!("deviceLinkAlreadySignedIn")));
@@ -270,7 +295,7 @@ pub async fn scan(
     if let Some(receiver) = receiver {
         link.receiver = Some(receiver);
     }
-    write(state, id, &link, CONFIRM_SECONDS).await?;
+    rewrite(state, id, &link, CONFIRM_SECONDS).await?;
     Ok(Scanned {
         kind: link.kind,
         device_name: match link.kind {
@@ -324,13 +349,14 @@ pub async fn approve(state: &GlobalServerContext, id: &str, caller: &Caller) -> 
     }
     if !link.approved {
         link.approved = true;
-        write(state, id, &link, CLAIM_SECONDS).await?;
+        rewrite(state, id, &link, CLAIM_SECONDS).await?;
     }
     Ok(())
 }
 
 /// Ends a link before it is claimed: the giver declining, or either device giving up. Holding
 /// the code is enough, since it ends nothing but the link.
+/// A scan or an approval under way when it ends finds it gone (`rewrite`) rather than reviving it.
 pub async fn cancel(state: &GlobalServerContext, id: &str) -> crate::Result<()> {
     let _: i64 = state.valkey.del(token_key(LINK_PREFIX, id)).await?;
     Ok(())

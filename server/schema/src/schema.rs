@@ -26,6 +26,9 @@ diesel::table! {
         preview_mime_type -> Nullable<Text>,
         preview_width -> Nullable<Int4>,
         preview_height -> Nullable<Int4>,
+        sent -> Bool,
+        evidence_at -> Nullable<Timestamptz>,
+        removed_from -> Nullable<Uuid>,
     }
 }
 
@@ -74,6 +77,16 @@ diesel::table! {
         bot -> Uuid,
         digest -> Bytea,
         created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    bot_transfer (bot) {
+        bot -> Uuid,
+        from_owner -> Uuid,
+        to_user -> Uuid,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
     }
 }
 
@@ -252,6 +265,7 @@ diesel::table! {
         email_required -> Bool,
         email_verification_required -> Bool,
         newsletter_enabled -> Bool,
+        upload_quota_gib -> Int4,
     }
 }
 
@@ -576,6 +590,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    plugin_storage_usage (plugin, owner_kind, owner) {
+        plugin -> Text,
+        owner_kind -> Text,
+        owner -> Uuid,
+        bytes -> Int8,
+    }
+}
+
+diesel::table! {
     plugin_timer (plugin, key) {
         plugin -> Text,
         key -> Text,
@@ -583,6 +606,10 @@ diesel::table! {
         payload -> Text,
         attempts -> Int4,
         claimed_until -> Nullable<Timestamptz>,
+        scope_kind -> Nullable<Text>,
+        scope -> Nullable<Uuid>,
+        owner_kind -> Text,
+        owner -> Uuid,
     }
 }
 
@@ -679,6 +706,7 @@ diesel::table! {
         user -> Uuid,
         verified_at -> Timestamptz,
         method -> Text,
+        created_at -> Timestamptz,
     }
 }
 
@@ -740,6 +768,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    server_secret (name) {
+        name -> Text,
+        secret -> Bytea,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     session (token) {
         token -> Text,
         expires -> Timestamp,
@@ -754,6 +790,15 @@ diesel::table! {
         created_at -> Timestamptz,
         confirmed_at -> Nullable<Timestamptz>,
         last_used_step -> Nullable<Int8>,
+    }
+}
+
+diesel::table! {
+    upload_usage (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        bytes -> Int8,
+        at -> Timestamptz,
     }
 }
 
@@ -854,6 +899,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    voice_mute (community, user) {
+        community -> Uuid,
+        user -> Uuid,
+        muted_by -> Nullable<Uuid>,
+        muted_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     voice_participant (session, user) {
         session -> Uuid,
         user -> Uuid,
@@ -908,6 +962,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(attachment -> message (removed_from));
 diesel::joinable!(attachment -> user (uploader));
 diesel::joinable!(attachment_preview_job -> attachment (attachment_id));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
@@ -982,6 +1037,7 @@ diesel::joinable!(plugin_notice -> message (message));
 diesel::joinable!(plugin_notice -> plugin (plugin));
 diesel::joinable!(plugin_notice -> user (user));
 diesel::joinable!(plugin_storage -> plugin (plugin));
+diesel::joinable!(plugin_storage_usage -> plugin (plugin));
 diesel::joinable!(plugin_timer -> plugin (plugin));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
@@ -1006,6 +1062,7 @@ diesel::joinable!(report_case -> community (community));
 diesel::joinable!(report_case -> message (message));
 diesel::joinable!(session -> refresh_token (refresh_token));
 diesel::joinable!(totp_secret -> user (user));
+diesel::joinable!(upload_usage -> user (user_id));
 diesel::joinable!(user -> plugin (plugin));
 diesel::joinable!(user_annotation -> plugin (plugin));
 diesel::joinable!(user_annotation -> user (user));
@@ -1014,6 +1071,7 @@ diesel::joinable!(user_deployment_role -> user (user));
 diesel::joinable!(user_email -> user (user));
 diesel::joinable!(user_foreign_deployment -> user (user));
 diesel::joinable!(user_preferences -> user (user));
+diesel::joinable!(voice_mute -> community (community));
 diesel::joinable!(voice_participant -> user (user));
 diesel::joinable!(voice_participant -> voice_session (session));
 diesel::joinable!(voice_ring -> voice_session (session));
@@ -1031,6 +1089,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     benchmark_user,
     bot_command_list,
     bot_token,
+    bot_transfer,
     category,
     category_collapse,
     category_override,
@@ -1071,6 +1130,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     plugin_capability,
     plugin_notice,
     plugin_storage,
+    plugin_storage_usage,
     plugin_timer,
     poll,
     poll_option,
@@ -1085,8 +1145,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     report,
     report_case,
     report_category,
+    server_secret,
     session,
     totp_secret,
+    upload_usage,
     user,
     user_annotation,
     user_block,
@@ -1094,6 +1156,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_email,
     user_foreign_deployment,
     user_preferences,
+    voice_mute,
     voice_participant,
     voice_ring,
     voice_server,

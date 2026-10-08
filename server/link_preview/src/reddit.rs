@@ -26,7 +26,7 @@ use reqwest::StatusCode;
 use std::cell::RefCell;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::debug;
 use url::Url;
 
 /// Hosts whose pages are Reddit's and get the challenge.
@@ -140,7 +140,7 @@ async fn follow_to_post(url: &Url) -> Option<PostRef> {
     let response = match http_client().get(url.as_str()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(
+            debug!(
                 url = url.as_str(),
                 error = e.to_string(),
                 "Reddit redirect fetch failed"
@@ -211,7 +211,7 @@ async fn fetch_oembed(post: &PostRef) -> Result<OembedResponse, bool> {
     let response = match http_client().get(endpoint.as_str()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(
+            debug!(
                 url = post_url,
                 error = e.to_string(),
                 "Reddit oEmbed fetch failed"
@@ -301,7 +301,7 @@ async fn fetch_embed_page(subreddit: &str, id: &str) -> (Option<EmbedPost>, bool
     let response = match http_client().get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(url, error = e.to_string(), "Reddit embed page fetch failed");
+            debug!(url, error = e.to_string(), "Reddit embed page fetch failed");
             return (None, false);
         }
     };
@@ -319,8 +319,15 @@ async fn fetch_embed_page(subreddit: &str, id: &str) -> (Option<EmbedPost>, bool
     let Some(bytes) = read_capped(response, MAX_EMBED_PAGE_BYTES).await else {
         return (None, false);
     };
-    let page = String::from_utf8_lossy(&bytes);
-    (parse_embed_page(&page, id), true)
+    // Tokenizing the page is work for a blocking thread, not the runtime's.
+    let id = id.to_owned();
+    let post = tokio::task::spawn_blocking(move || {
+        parse_embed_page(String::from_utf8_lossy(&bytes).as_ref(), &id)
+    })
+    .await
+    .ok()
+    .flatten();
+    (post, true)
 }
 
 /// What a card takes from the embed page.

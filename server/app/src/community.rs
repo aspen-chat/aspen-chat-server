@@ -46,6 +46,74 @@ pub struct CommunityUser {
     pub nickname: Option<String>,
 }
 
+/// The communities that are not deleted, as a subquery for `community_user::community.eq_any`.
+/// A deleted community keeps its memberships, so every read of what someone belongs to (what
+/// they may search, whom they share a community with, how many they hold) keeps to these.
+#[allow(clippy::type_complexity)]
+pub fn live() -> diesel::dsl::Filter<
+    diesel::dsl::Select<community::table, community::id>,
+    diesel::dsl::IsNull<community::deleted_at>,
+> {
+    community::table
+        .select(community::id)
+        .filter(community::deleted_at.is_null())
+}
+
+/// The most roles a community holds, everyone's and bots' included.
+pub const MAX_ROLES: i64 = 250;
+/// The most channels and categories a community holds together, threads aside.
+pub const MAX_CHANNELS_AND_CATEGORIES: i64 = 500;
+
+/// Holds `community`'s row until the caller's transaction ends, refusing a deleted community,
+/// so a count of what it holds checked against a cap stays true until what is added commits:
+/// two additions at once take turns rather than both passing the count.
+pub async fn hold_for_count(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+) -> crate::Result<()> {
+    community::table
+        .select(community::id)
+        .filter(
+            community::id
+                .eq(community)
+                .and(community::deleted_at.is_null()),
+        )
+        .for_no_key_update()
+        .first::<CommunityId>(conn)
+        .await?;
+    Ok(())
+}
+
+/// Refuses another channel or category in `community` once it holds
+/// `MAX_CHANNELS_AND_CATEGORIES` live ones, inside the transaction that adds it.
+pub async fn ensure_room_for_channel(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+) -> crate::Result<()> {
+    use aspen_schema::{category, channel};
+    hold_for_count(conn, community).await?;
+    let channels: i64 = channel::table
+        .filter(channel::community.eq(Some(community)))
+        .filter(channel::parent_channel.is_null())
+        .filter(channel::deleted_at.is_null())
+        .count()
+        .get_result(conn)
+        .await?;
+    let categories: i64 = category::table
+        .filter(category::community.eq(community))
+        .filter(category::deleted_at.is_null())
+        .count()
+        .get_result(conn)
+        .await?;
+    if channels + categories >= MAX_CHANNELS_AND_CATEGORIES {
+        return Err(crate::Error::Validation(t!(
+            "channelLimit",
+            max = MAX_CHANNELS_AND_CATEGORIES
+        )));
+    }
+    Ok(())
+}
+
 impl Loadable for Community {
     type Id = CommunityId;
 
@@ -332,9 +400,8 @@ pub async fn join_community(
     Ok(membership)
 }
 
-/// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
-/// and announces the membership.
-/// Refuses `user` another community once they belong to as many as a user may.
+/// Refuses `user` another community once they belong to as many as a user may. A deleted
+/// community counts for nothing.
 pub async fn ensure_room_for_another(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -342,6 +409,7 @@ pub async fn ensure_room_for_another(
 ) -> crate::Result<()> {
     let held: i64 = community_user::table
         .filter(community_user::user.eq(user))
+        .filter(community_user::community.eq_any(live()))
         .count()
         .get_result(conn)
         .await?;
@@ -352,6 +420,8 @@ pub async fn ensure_room_for_another(
     Ok(())
 }
 
+/// Adds `user` to `community` holding `roles` besides everyone's, at the end of their own list,
+/// and announces the membership.
 pub async fn add_member(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -359,7 +429,19 @@ pub async fn add_member(
     community: CommunityId,
     roles: &[RoleId],
 ) -> crate::Result<message_enum::UserCommunity> {
-    // Every way in passes here, so a standing ban refuses them all.
+    // Every way in passes here, so a deleted community refuses them all. The row is held until
+    // the membership commits, so a deletion running beside it waits and is announced after it.
+    community::table
+        .select(community::id)
+        .filter(
+            community::id
+                .eq(community)
+                .and(community::deleted_at.is_null()),
+        )
+        .for_share()
+        .first::<CommunityId>(conn)
+        .await?;
+    // Likewise a standing ban.
     crate::ban::check_not_banned(conn, community, user).await?;
     let last: Option<i32> = community_user::table
         .filter(community_user::user.eq(user))
@@ -847,7 +929,7 @@ pub async fn search_community_members(
         "#,
     )
     .bind::<Uuid, _>(community.0)
-    .bind::<Nullable<Text>, _>(crate::admin::contains_pattern(search))
+    .bind::<Nullable<Text>, _>(crate::admin::contains_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_MEMBER_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
     .load(conn.as_mut())

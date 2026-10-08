@@ -284,7 +284,8 @@ impl FederatedDeployment {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct DeploymentListQuery {
-    /// Only those whose domain contains this, ignoring case.
+    /// Only those whose domain contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,

@@ -87,6 +87,11 @@ impl Caller {
         crate::login::sign_in_id(&self.refresh_digest)
     }
 
+    /// The sign-in the session belongs to, or `None` for a bot's token, which belongs to none.
+    pub fn sign_in_held(&self) -> Option<String> {
+        (!self.refresh_digest.is_empty()).then(|| self.sign_in())
+    }
+
     /// Until when the session counts as recently verified.
     pub fn verified_until(&self, config: &AuthConfig) -> DateTime<Utc> {
         self.verified_at + reverify_window(config)
@@ -726,15 +731,30 @@ pub async fn factor_removed(
     crate::email::outbox::notify(state, conn, user_id, &Mail::SecondFactorRemoved { factor }).await
 }
 
+/// What a password reset took from an account (`remove_recent`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovedRecent {
+    /// How many second factors went.
+    pub factors: u32,
+    /// Whether the account keeps second factors but was left no recovery codes, all of them
+    /// having been issued within [`RESET_REACH`]: its owner signs in with a factor and makes
+    /// new ones.
+    pub recovery_codes_gone: bool,
+}
+
 /// Removes the second factors added to `user_id`'s account within [`RESET_REACH`], and the
-/// recovery codes issued within it, as a password reset by email does, answering how many
-/// factors went. Someone who took over the account (its password and a session) can add a
+/// recovery codes issued within it, as a password reset by email does, answering what went. Someone who took over the account (its password and a session) can add a
 /// factor of their own, and with the account's first factor receive its recovery codes; a
 /// reset by its owner takes those away, while the factors the owner held before keep it
 /// asking for one of theirs. Codes issued with or after a recent factor are as suspect as the
 /// factor, so they go too; when no factor is left, so do the rest, as removing the last one
 /// does, and the owner adds one again (being asked to, where the deployment requires one).
-pub async fn remove_recent(conn: &mut AsyncPgConnection, user_id: UserId) -> crate::Result<u32> {
+/// No codes are made in place of those removed: mailing them would hand a second factor to
+/// whoever holds the mailbox, the one thing a reset proves, so the owner is told instead.
+pub async fn remove_recent(
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+) -> crate::Result<RemovedRecent> {
     let since = Utc::now() - RESET_REACH;
     let apps = diesel::delete(
         totp_secret::table
@@ -751,14 +771,22 @@ pub async fn remove_recent(conn: &mut AsyncPgConnection, user_id: UserId) -> cra
     .execute(conn)
     .await?;
     let codes = recovery_code::table.filter(recovery_code::user.eq(user_id));
+    let mut recovery_codes_gone = false;
     if methods(conn, user_id).await?.any_factor() {
-        diesel::delete(codes.filter(recovery_code::created_at.ge(since)))
+        let removed = diesel::delete(codes.filter(recovery_code::created_at.ge(since)))
             .execute(conn)
             .await?;
+        if removed > 0 {
+            let left: i64 = codes.count().get_result(conn).await?;
+            recovery_codes_gone = left == 0;
+        }
     } else {
         diesel::delete(codes).execute(conn).await?;
     }
-    Ok(u32::try_from(apps + passkeys).unwrap_or(u32::MAX))
+    Ok(RemovedRecent {
+        factors: u32::try_from(apps + passkeys).unwrap_or(u32::MAX),
+        recovery_codes_gone,
+    })
 }
 
 /// Removes every credential of a user whose account is being deleted.
@@ -862,13 +890,17 @@ pub async fn reauthenticate(
                 )));
             }
             limited(state, user_id, async || {
-                let mut conn = state.connection_pool.get().await?;
-                let hash: String = user::table
-                    .select(user::password_hash)
-                    .filter(user::id.eq(user_id))
-                    .filter(user::deleted_at.is_null())
-                    .first(&mut conn)
-                    .await?;
+                // The connection goes back to the pool before the password work
+                // (`app::login::hash_password`).
+                let hash: String = {
+                    let mut conn = state.connection_pool.get().await?;
+                    user::table
+                        .select(user::password_hash)
+                        .filter(user::id.eq(user_id))
+                        .filter(user::deleted_at.is_null())
+                        .first(&mut conn)
+                        .await?
+                };
                 crate::login::check_password(password, hash).await
             })
             .await?

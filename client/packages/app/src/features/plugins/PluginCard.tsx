@@ -1,4 +1,4 @@
-import { ApiProblemError, pluginText, type Message, type PluginInfo } from "@aspen/protocol";
+import { pluginText, type Message, type PluginInfo } from "@aspen/protocol";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { usePlugin, useSync } from "@/api/hooks";
@@ -124,22 +124,19 @@ function Buttons({
             onPress={() => {
               setPressing(button.id);
               setFailure(null);
-              sync
+              // What failed is the plugin's to say, and it may say anything, so every failure
+              // reads the same.
+              void sync
                 .pressCardButton(messageId, button.id)
                 .then(
-                  (status) => {
-                    if (status >= 400) {
-                      setFailure(format(m.plugins.pressFailed, { plugin: plugin.name }));
-                    }
-                  },
-                  (error: unknown) => {
-                    setFailure(
-                      error instanceof ApiProblemError
-                        ? error.message
-                        : format(m.plugins.pressFailed, { plugin: plugin.name }),
-                    );
-                  },
+                  (status) => status < 400,
+                  () => false,
                 )
+                .then((worked) => {
+                  if (!worked) {
+                    setFailure(format(m.plugins.pressFailed, { plugin: plugin.name }));
+                  }
+                })
                 .finally(() => {
                   setPressing(null);
                 });

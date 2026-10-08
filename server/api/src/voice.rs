@@ -6,12 +6,12 @@ use crate::admin::AdminUser;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
-use crate::message_enum::{VoiceParticipant, VoiceSession};
+use crate::message_enum::{VoiceMute, VoiceParticipant, VoiceSession};
 use crate::{API_PREFIX, TAG_VOICE};
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment::DeploymentPermission;
-use aspen_app::{ChannelId, UserId, VoiceServerId};
+use aspen_app::{ChannelId, CommunityId, UserId, VoiceServerId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
@@ -22,9 +22,10 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceParticipantModerationRequest {
-    /// Server mute: their microphone is no longer forwarded to anyone, whatever they ask, until
-    /// a moderator unmutes them. Unmuting lifts only the server mute: someone who also muted
-    /// themself stays muted.
+    /// Server mute: their microphone is no longer forwarded to anyone, whatever they ask, in
+    /// any call of the channel's community, joins and rejoins included, until a moderator
+    /// unmutes them (here, or `DELETE /communities/{community}/voice-mutes/{user}`). Unmuting
+    /// lifts only the server mute: someone who also muted themself stays muted.
     pub muted: bool,
 }
 
@@ -130,6 +131,10 @@ pub struct VoiceJoinOffer {
     pub transfer_files: bool,
     /// Whether they may turn on a camera (Use camera), which the voice server also enforces.
     pub use_camera: bool,
+    /// Whether a moderator's mute of them stands in the channel's community: they join muted
+    /// and stay so until a moderator lifts it, whatever they ask.
+    #[serde(default)]
+    pub server_muted: bool,
 }
 
 /// The call on a channel, if any, and who is in it.
@@ -174,10 +179,10 @@ pub struct VoiceServerFailureOutcome {
 )]
 pub async fn join_voice(
     State(state): State<GlobalServerContext>,
-    SessionUser { user, .. }: SessionUser,
+    SessionUser { caller, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
 ) -> ApiResult<Json<VoiceJoinOffer>> {
-    let offer = app::voice::join_offer(&state, user.id, channel).await?;
+    let offer = app::voice::join_offer(&state, &caller, channel).await?;
     Ok(Json(VoiceJoinOffer {
         channel_id: channel,
         session: offer.session,
@@ -196,6 +201,7 @@ pub async fn join_voice(
         share_screen: offer.share_screen,
         transfer_files: offer.transfer_files,
         use_camera: offer.camera,
+        server_muted: offer.server_muted,
     }))
 }
 
@@ -446,4 +452,87 @@ pub async fn kick_voice_participant(
 ) -> ApiResult<StatusCode> {
     app::voice::kick_participant(&state, caller.id, channel, user).await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+/// The community's standing server mutes, newest first. Takes Manage calls.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/voice-mutes",
+    tag = TAG_VOICE,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<VoiceMute>),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn read_voice_mutes(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(community): Path<CommunityId>,
+) -> ApiResult<Json<Vec<VoiceMute>>> {
+    Ok(Json(
+        app::voice::mutes::read_mutes(&state, user.id, community).await?,
+    ))
+}
+
+/// Server-mutes someone in every call of the community until a moderator lifts it, whether or
+/// not they are in one now, and whether or not they stay a member. Takes Manage calls, over
+/// someone below the caller's highest role and never the owner. A mute standing already is
+/// left as it is (`200`).
+#[utoipa::path(
+    put,
+    path = "/communities/{community}/voice-mutes/{user}",
+    tag = TAG_VOICE,
+    params(("community" = CommunityId, Path), ("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "Muted", body = VoiceMute),
+        (status = OK, description = "A mute stood already", body = VoiceMute),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls, or the person is the owner or ranks at or above the caller", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn put_voice_mute(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user: caller, .. }: SessionUser,
+    Path((community, user)): Path<(CommunityId, UserId)>,
+) -> ApiResult<(StatusCode, Json<VoiceMute>)> {
+    let (mute, changed) = app::voice::mutes::mute(&state, caller.id, community, user).await?;
+    let status = if changed {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(mute)))
+}
+
+/// Lifts someone's server mute in the community, in a call or not. Nothing standing is not an
+/// error. Takes Manage calls, over someone below the caller's highest role.
+#[utoipa::path(
+    delete,
+    path = "/communities/{community}/voice-mutes/{user}",
+    tag = TAG_VOICE,
+    params(("community" = CommunityId, Path), ("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls, or the person is the owner or ranks at or above the caller", body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn delete_voice_mute(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user: caller, .. }: SessionUser,
+    Path((community, user)): Path<(CommunityId, UserId)>,
+) -> ApiResult<NoContent> {
+    app::voice::mutes::set_muted(&state, caller.id, community, user, false).await?;
+    Ok(NoContent)
 }

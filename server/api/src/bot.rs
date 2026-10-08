@@ -11,6 +11,7 @@ use aspen_app::permissions::{Permission, from_names};
 use aspen_app::{self as app, CommunityId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
 use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -43,7 +44,7 @@ pub struct BotToken {
     pub token: String,
 }
 
-/// Who a bot is handed to.
+/// Who a bot is offered to.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BotOwnerRequest {
@@ -112,7 +113,8 @@ pub async fn create_bot(
     ))
 }
 
-/// Issues a new token for a bot the caller owns; the old one stops working at once.
+/// Issues a new token for a bot the caller owns; the old one stops working at once, and what it
+/// holds open closes. Takes a recently verified sign-in.
 #[utoipa::path(
     post,
     path = "/bots/{bot}/token",
@@ -122,45 +124,151 @@ pub async fn create_bot(
     responses(
         (status = OK, body = BotToken),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot; `reauthenticationRequired`: verify again first", body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
 pub async fn rotate_bot_token(
     State(state): State<GlobalServerContext>,
-    SessionUser { user, .. }: SessionUser,
+    SessionUser { caller, .. }: SessionUser,
     Path(bot): Path<UserId>,
 ) -> ApiResult<Json<BotToken>> {
-    let token = app::bot::rotate_token(&state, user.id, bot).await?;
+    let token = app::bot::rotate_token(&state, &caller, bot).await?;
     Ok(Json(BotToken { token }))
 }
 
-/// Hands a bot the caller owns to someone else, who then owns and manages it.
+/// An offer to hand a bot over, as its giver and its recipient see it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BotTransfer {
+    pub bot: User,
+    /// Who offers it: its owner.
+    pub from: User,
+    /// Who it is offered to.
+    pub to: User,
+    pub created_at: DateTime<Utc>,
+    /// When the offer lapses unaccepted.
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<app::bot::Transfer> for BotTransfer {
+    fn from(transfer: app::bot::Transfer) -> Self {
+        Self {
+            bot: transfer.bot.into(),
+            from: transfer.from.into(),
+            to: transfer.to.into(),
+            created_at: transfer.created_at,
+            expires_at: transfer.expires_at,
+        }
+    }
+}
+
+/// Offers a bot the caller owns to someone else, who owns it once they accept. Offering it again
+/// replaces the offer. The recipient is told by the system account. Takes a recently verified
+/// sign-in.
 #[utoipa::path(
     put,
-    path = "/bots/{bot}/owner",
+    path = "/bots/{bot}/transfer",
     tag = TAG_USERS,
     params(("bot" = UserId, Path)),
     request_body = BotOwnerRequest,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = User),
-        (status = BAD_REQUEST, description = "`validation`: the new owner is a bot, the caller, or owns as many bots as allowed", body = Problem),
+        (status = CREATED, description = "Offered", body = BotTransfer),
+        (status = OK, description = "An earlier offer replaced", body = BotTransfer),
+        (status = BAD_REQUEST, description = "`validation`: the recipient is a bot, the caller, someone of another deployment, or owns as many bots as allowed", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: not the caller's bot; `reauthenticationRequired`: verify again first", body = Problem),
         (status = NOT_FOUND, description = "No such bot, or no such person", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
-pub async fn transfer_bot(
+pub async fn offer_bot_transfer(
+    State(state): State<GlobalServerContext>,
+    SessionUser { caller, .. }: SessionUser,
+    Path(bot): Path<UserId>,
+    Json(request): Json<BotOwnerRequest>,
+) -> ApiResult<(StatusCode, Json<BotTransfer>)> {
+    let (transfer, replaced) =
+        app::bot::offer_transfer(&state, &caller, bot, request.owner).await?;
+    let status = if replaced {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(transfer.into())))
+}
+
+/// Withdraws the offer of a bot the caller made, or declines one made to them.
+#[utoipa::path(
+    delete,
+    path = "/bots/{bot}/transfer",
+    tag = TAG_USERS,
+    params(("bot" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT, description = "Withdrawn or declined"),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No offer of this bot made by or to the caller", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn end_bot_transfer(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(bot): Path<UserId>,
-    Json(request): Json<BotOwnerRequest>,
-) -> ApiResult<Json<User>> {
-    let bot = app::bot::transfer(&state, user.id, bot, request.owner).await?;
-    Ok(Json(User::from(bot)))
+) -> ApiResult<NoContent> {
+    app::bot::end_transfer(&state, user.id, bot).await?;
+    Ok(NoContent)
+}
+
+/// Accepts a bot offered to the caller: they own it from now on, and it gets a new token, shown
+/// only in this answer; the old one stops working, and what it holds open closes.
+#[utoipa::path(
+    post,
+    path = "/bots/{bot}/transfer/acceptance",
+    tag = TAG_USERS,
+    params(("bot" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = BotCreated),
+        (status = BAD_REQUEST, description = "`validation`: the caller owns as many bots as allowed", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No standing offer of this bot to the caller: none was made, or it expired, was withdrawn, or its giver no longer holds the bot", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn accept_bot_transfer(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(bot): Path<UserId>,
+) -> ApiResult<Json<BotCreated>> {
+    let (bot, token) = app::bot::accept_transfer(&state, user.id, bot).await?;
+    Ok(Json(BotCreated {
+        bot: bot.into(),
+        token,
+    }))
+}
+
+/// The offers of bots made to the caller or by them that still stand, the newest first.
+#[utoipa::path(
+    get,
+    path = "/users/@me/bot-transfers",
+    tag = TAG_USERS,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<BotTransfer>),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_bot_transfers(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+) -> ApiResult<Json<Vec<BotTransfer>>> {
+    let transfers = app::bot::list_transfers(&state, user.id).await?;
+    Ok(Json(transfers.into_iter().map(BotTransfer::from).collect()))
 }
 
 /// Deletes a bot: the caller's own, or, with Manage deployment settings, one whose owner is

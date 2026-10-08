@@ -9,12 +9,24 @@ development, with passwords written into it; it is not a production setup.
   the database's owner may do on PostgreSQL 13 and later.
 - **NATS 2.10 or later, with JetStream on** (`--jetstream`) and a token (`--auth <token>`).
   Aspen creates the stream it needs and keeps only the last minute of events, in memory.
-- **Valkey** (or anything that speaks the Redis protocol).
+- **Valkey** (or anything that speaks the Redis protocol). Give it a memory limit and tell it
+  never to evict, `maxmemory 512mb` and `maxmemory-policy noeviction` in `valkey.conf` (or
+  `--maxmemory 512mb --maxmemory-policy noeviction`). Everything Aspen keeps there expires on its
+  own; an eviction policy would instead drop rate limit counts (letting guesses through) or
+  sign-ins in progress at random, while a full Valkey that refuses writes is treated as one that
+  cannot be reached: sign-in, password reset, registration, and invite endpoints answer
+  `serverBusy` until it has room. Aspen limits how fast strangers can start what it stores there
+  (password resets, passkey ceremonies, device links) for everyone together, so half a gigabyte
+  is plenty for most deployments; watch `used_memory` in `INFO memory` and raise it if it
+  approaches the limit.
 - **Object storage that speaks S3**: SeaweedFS, Garage, MinIO, or AWS S3. It needs a bucket, a
   key pair that may read, write, delete, and list in it, and two things clients reach directly: the S3 API (they
   upload to presigned URLs, so it must allow your deployment's origin and the apps' by CORS) and an anonymous
-  read path for downloads (a public bucket, a website endpoint, or a CDN in front of one). See
-  [`[media.s3]`](configuration.md#medias3).
+  read path for downloads (a website endpoint, or a CDN in front of the bucket) that allows
+  anonymous reads of objects and nothing else. See [`[media.s3]`](configuration.md#medias3) and
+  [The storage's read path](#the-storages-read-path).
+
+None of the four belongs on the internet: see [Network exposure](#network-exposure).
 
 ## 2. Building
 
@@ -61,9 +73,6 @@ bucket = "aspen-media"
 region = "us-east-1"
 access_key = "…"
 secret_key = "…"
-
-[voice]
-token_secret = "a long random string, shared with every voice server"
 
 [web_client]
 dir = "/srv/aspen/dist"
@@ -172,8 +181,10 @@ else is revalidated on each load.
 ### Security headers
 
 The server sends the web client with a Content Security Policy and the other headers that keep
-it to itself (`nosniff`, no referrer, framing refused, and, when `public_url` is `https`,
-HSTS for a year: once a browser has seen it, it reaches your deployment over HTTPS only). The
+it to itself (`nosniff`, no referrer, framing refused, no window shared with another page, and,
+when `public_url` is `https`, HSTS for a year: once a browser has seen it, it reaches your
+deployment over HTTPS only), and every API answer with `nosniff` and, but for the few meant to
+be kept, `Cache-Control: no-store`, so no cache between keeps one user's answers. The
 policy is built from your configuration: it allows your storage's
 [`public_base_url`](configuration.md#medias3) for pictures and videos and its `public_endpoint`
 (or `endpoint`) for uploads, so nothing needs adding by hand. Let your reverse proxy pass these
@@ -219,18 +230,21 @@ aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.o
 
 It may be run again with the same arguments, so a deployment script can run it every time; the
 dashboard registers servers too. Its id is then in the database
-(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id, the same
-`token_secret`, and NATS:
+(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id and NATS:
 
 ```toml
 id = "…"
-token_secret = "the same string as [voice] token_secret"
 nats_url = "nats.internal:4222"
 listen_addr = "127.0.0.1:9000"
 
 [nats]
 user = "voice-1"
 password = "…"
+
+# The TLS proxy in front (below) is on this machine. Without this every client has the
+# proxy's address, and the limits each address has apply to everyone together.
+[rate_limits]
+trusted_proxies = ["127.0.0.1"]
 
 [rtc]
 announced_address = "203.0.113.10"
@@ -261,6 +275,7 @@ authorization {
         publish: { allow: [
           "aspen.voice.report.*.VOICE_SERVER_ID",
           "aspen.voice.speaking.*.VOICE_SERVER_ID",
+          "aspen.voice.token-key",
           "$JS.API.INFO",
           "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
           "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
@@ -281,8 +296,13 @@ authorization {
 
 That lets the voice server publish its own reports (`aspen.voice.report.{lane}.{id}` and
 `aspen.voice.speaking.{lane}.{id}`), receive its own commands, follow a suspension of rate limits
-(the key-value bucket `aspen_rate_limits`), and receive the replies to its own requests, which it
-asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The API servers apply a
+(the key-value bucket `aspen_rate_limits`), ask the API servers for the public half of the key
+they sign join tokens with (`aspen.voice.token-key`), and receive the replies to its own
+requests, which it asks for under `_INBOX_voice.{id}` rather than NATS's shared `_INBOX`. The key
+itself is made by the first API server to start and kept in the database, so a voice server can
+check the tokens that let people into calls but never make one, and no secret needs copying to
+it. A voice server that cannot reach an API server at startup keeps asking every few seconds, and
+turns joins away until one answers. The API servers apply a
 report only when it came on a subject naming the server it is about, and only when the call or
 channel it is about is that server's, so a voice server taken over can misreport its own calls and
 no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
@@ -291,7 +311,9 @@ Clients reach a voice server in two ways, and both must be open to them:
 
 - **Signalling and the latency check**, over HTTPS: `GET /health` and the WebSocket
   `GET /ws`. The voice server speaks plain HTTP on `listen_addr`, so put a TLS proxy in front
-  of it at the `url` you registered, passing WebSocket upgrades through.
+  of it at the `url` you registered, passing WebSocket upgrades through and setting
+  `X-Forwarded-For`, and list the proxy's address in `[rate_limits] trusted_proxies`. The
+  server warns at startup when it listens on loopback with no trusted proxies.
 - **Media**, over UDP (and TCP where UDP is blocked) on the ports from `min_port` to
   `max_port`. `announced_address` is the address clients send media to: set it to the
   server's public address when it is behind NAT. Leave it out only when the machine has a
@@ -314,7 +336,8 @@ aspen-chat-server admin grant <username>
 ```
 
 It needs the database and NATS, as the servers do: it announces the change to the account's open
-apps. It gives that account the deployment's top role, making an Administrator role with every
+apps. The account must be a person's on this deployment: bots and users from other deployments
+hold no deployment roles, and the command refuses them. It gives that account the deployment's top role, making an Administrator role with every
 permission but the moderation ones if there is none: `moderateCommunities` (reading everything in
 any community or DM, the record of files sent in calls, and taking things out; it includes
 `removeContent`), `reviewReports` (the reports people make of messages, profiles, and
@@ -349,6 +372,117 @@ endpoints, then cleans up. It needs the services from `docker-compose.yaml`.
 Both servers export Prometheus metrics on loopback (`127.0.0.1:9464` and `127.0.0.1:9465`);
 scrape them from the same machine, and keep them off public interfaces.
 
+## Network exposure
+
+Only these need to be reachable by the people using the deployment:
+
+| What | Where |
+| --- | --- |
+| The API servers (or the reverse proxy before them) | TCP 443 at `public_url` |
+| Each voice server's signalling | TCP 443 at its registered `url`, through its TLS proxy |
+| Each voice server's media | UDP and TCP `min_port` to `max_port` |
+| Each voice server's file transfers | UDP `[transfer] port` (3478) |
+| The storage's S3 API, for uploads | `[media.s3] public_endpoint` |
+| The storage's read path, for downloads | `[media.s3] public_base_url` |
+
+Everything else stays on a private network, or on loopback where it runs beside what uses it,
+and is firewalled from the internet: PostgreSQL (5432), NATS (4222, and its monitoring 8222 and
+cluster 6222 ports if they are on), Valkey (6379), the storage's administration and internal
+ports (a SeaweedFS master, volume, and filer: 9333, 8080, 8888; Garage's RPC and admin ports),
+the voice servers' `listen_addr` (behind their proxy), both servers' metrics (9464 and 9465),
+and the tokio console (6669) where it is built in. Each of them trusts whoever reaches it: NATS
+carries every event and can sign anyone into a call, Valkey holds the codes being mailed and the
+rate limits, and the storage's internals write without credentials.
+
+**Docker publishes ports past the host firewall.** A port published as `-p 5432:5432` (or
+`ports: ["5432:5432"]` in a compose file) is opened on every interface by rules Docker puts ahead
+of `ufw` and `firewalld`, whatever those say. Publish services only on loopback or a private
+address (`127.0.0.1:5432:5432`, as `docker-compose.yaml` does), leave them unpublished on a
+Docker network the servers share, or filter in the `DOCKER-USER` chain.
+
+**Valkey** has no password by default. Set one (`requirepass`, or an ACL user) and give it in
+`valkey_url` (`redis://:password@valkey.internal:6379`, or `redis://user:password@…`). The API
+servers speak to Valkey without TLS, so keep it on the same machine or a private network; across
+anything else, carry it over a VPN such as WireGuard.
+
+**NATS** must have a token or users ([Voice servers](#6-voice-servers) gives the users), and is
+reached by voice servers, which often run elsewhere. When a voice server reaches NATS across a
+network you do not control, give NATS a certificate (`tls { cert_file: …, key_file: … }` in its
+configuration; one from a public authority, or one the voice server's machine trusts) and name it
+with `tls://` in every `nats_url`, or connect the machines over a VPN. Without either, the NATS
+password and every event cross the network readable.
+
+### The storage's read path
+
+`public_base_url` is fetched by everyone's apps without credentials, so it must allow exactly
+one thing: reading an object by its name (S3's `GetObject`), and only under the four prefixes
+clients read: `attachments/`, `attachment-previews/`, `icons/`, and `link-preview-images/`. It
+must not list the bucket, which would hand anyone every attachment ever posted, nor take writes
+or deletions, and it must never serve `evidence/`, where the files of deleted messages and
+attachments taken off their messages are kept for reviewing reports (reviewers read them through
+links the server signs for ten minutes), nor `uploads/`, where uploads wait to be confirmed.
+
+- **AWS S3** (or anything taking its policies): a bucket policy allowing `s3:GetObject` to `*` on
+  `arn:aws:s3:::BUCKET/attachments/*`, `arn:aws:s3:::BUCKET/attachment-previews/*`,
+  `arn:aws:s3:::BUCKET/icons/*`, and `arn:aws:s3:::BUCKET/link-preview-images/*`, and nothing
+  else; not `s3:ListBucket`, and not `BUCKET/*`.
+- **MinIO**: `mc anonymous set download` grants listing and the whole bucket. Set a policy of
+  your own with `mc anonymous set-json`, holding only the statement above.
+- **Garage**: its website endpoint (`s3_web`, `garage bucket website --allow BUCKET`) lists
+  nothing but serves every object, so put a reverse proxy or CDN before it that passes only
+  paths under the four prefixes and refuses the rest.
+- **SeaweedFS**: give the S3 gateway an anonymous identity allowed only `Read` on the bucket
+  (`"actions": ["Read:BUCKET"]` in its S3 configuration), which reaches every object, so serve
+  `public_base_url` through a reverse proxy or CDN that passes only paths under the four
+  prefixes. **Never expose the filer** (port 8888): it lists directories and takes uploads and
+  deletions from anyone.
+
+A proxy rule for the prefixes, in Caddy (`handle` blocks are tried in order):
+
+```
+media.chat.example.org {
+    @public path_regexp ^/aspen-media/(attachments|attachment-previews|icons|link-preview-images)/[^/]+$
+    handle @public {
+        header X-Content-Type-Options nosniff
+        reverse_proxy 127.0.0.1:3902
+    }
+    respond 404
+}
+```
+
+Serve `public_base_url` from an origin of its own (`https://media.chat.example.org`), never under
+`public_url`'s, so nothing posted can act as your deployment's pages, and have it (or the CDN
+before it) send `X-Content-Type-Options: nosniff`, so a browser opens a file only as the type it
+was stored as.
+
+Check it from a machine outside your network, with the address of any picture someone posted
+(copy it from the app) as `OBJECT`, `public_base_url` as `BASE`, and `public_endpoint` with the
+bucket as `S3` (`https://s3.chat.example.org/aspen-media`):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' "$OBJECT"                     # 200
+curl -sI "$OBJECT" | grep -i x-content-type-options                    # nosniff
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/"                      # 403 or 404, never 200
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/?list-type=2"          # 403 or 404, never 200
+curl -s -o /dev/null -w '%{http_code}\n' "$S3?list-type=2"             # 403
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$BASE/write-check"  # 403 or 405
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$S3/write-check"    # 403
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$OBJECT"           # 403 or 405
+```
+
+and, with the AWS command line and the deployment's storage key pair, that the read path keeps
+`evidence/` to itself (`ENDPOINT` is `[media.s3] endpoint`):
+
+```
+echo check | aws --endpoint-url "$ENDPOINT" s3 cp - s3://aspen-media/evidence/read-check
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/evidence/read-check"  # 403 or 404, never 200
+aws --endpoint-url "$ENDPOINT" s3 rm s3://aspen-media/evidence/read-check
+```
+
+A `200` for a listing shows the bucket's contents to anyone; one for a write lets anyone put
+files at your media address; one for `evidence/` lets anyone holding an old link read what was
+deleted.
+
 ## Upgrading
 
 1. Build the new binaries and web client.
@@ -360,3 +494,21 @@ scrape them from the same machine, and keep them off public interfaces.
 
 People's event streams reconnect by themselves when an API server restarts, and pick up exactly
 where they left off.
+
+### From shared-secret join tokens
+
+Deployments whose `aspen.toml` has a `[voice] token_secret` signed join tokens with that secret.
+API servers now sign them with a key of their own and ignore the setting, so upgrade the voice
+servers first, while they still have the secret, then the API servers:
+
+1. Run `aspen-migrate up`, then restart each voice server on the new build with its
+   `token_secret` still in `voice_server.toml`. It takes both kinds of token, and warns that the
+   secret is set.
+2. Restart the API servers on the new build. The first to start makes the key; each answers the
+   voice servers asking for it, and every join token from then on is signed with it.
+3. Take `token_secret` out of every `voice_server.toml` and out of `aspen.toml`, and restart the
+   voice servers. A voice server without it refuses tokens of the old kind.
+
+Calls go on throughout, apart from those on each voice server as it restarts, whose clients
+rejoin on their own. Add `aspen.voice.token-key` to each voice server's NATS permissions (above)
+before step 1.

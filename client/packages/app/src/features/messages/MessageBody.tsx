@@ -11,7 +11,9 @@ import { AlteredBy } from "@/features/plugins/Annotations";
 import { PluginCard } from "@/features/plugins/PluginCard";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
+import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
 import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
+import { useUser } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -25,23 +27,43 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * nothing but links to pictures the server has previews of shows the pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
  * `still` draws it for reference only, as another message shows it: no poll to vote in, no
- * card's buttons to press.
+ * card's buttons to press. A message that fails to draw shows its text alone, plainly, rather
+ * than taking the list it is in down with it.
  */
-export function MessageBody({
-  message,
-  home,
-  hideText = false,
-  still = false,
-  onRemoveAttachment,
-}: {
+export function MessageBody(props: MessageBodyProps) {
+  const { message, hideText = false } = props;
+  return (
+    <ErrorBoundary
+      resetKey={message}
+      fallback={
+        hideText ? null : <p className="message-body whitespace-pre-wrap">{message.content}</p>
+      }
+    >
+      <MessageBodyContent {...props} />
+    </ErrorBoundary>
+  );
+}
+
+interface MessageBodyProps {
   message: Message;
   home: ChannelHome;
   hideText?: boolean;
   still?: boolean;
   onRemoveAttachment?: (attachmentId: string) => void;
-}) {
+}
+
+function MessageBodyContent({
+  message,
+  home,
+  hideText = false,
+  still = false,
+  onRemoveAttachment,
+}: MessageBodyProps) {
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
+  // The system account's notices quote names others chose (a community's, a person's), so
+  // nothing in them is a link the deployment would seem to vouch for.
+  const fromSystem = useUser(message.author)?.system === true;
   const imageLinks = imageUrls(message.content);
   // Every picture is the server's copy, kept in its storage, of what it found behind a link,
   // never the link itself: loading a picture from wherever a message points would tell whoever
@@ -89,6 +111,7 @@ export function MessageBody({
               content={message.content}
               mentions={message.mentions}
               communityId={home.community}
+              links={!fromSystem}
             />
           )}
           {message.editedAt != null && (

@@ -1,7 +1,6 @@
-use crate::PasswordRequirement;
 use crate::context::GlobalServerContext;
 use crate::icon::Icon;
-use crate::login::{PASSWORD_MIN_LENGTH, hash_password};
+use crate::login::hash_password;
 use crate::react::validate_emoji;
 use crate::registration_invite;
 use crate::t;
@@ -62,6 +61,7 @@ impl UserPg {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct User {
     pub user_pg: UserPg,
     pub online_status: UserOnlineStatus,
@@ -169,8 +169,50 @@ pub fn named(username: String) -> _ {
         .and(user::deleted_at.is_null())
 }
 
-/// Rejects usernames that are blank, padded with whitespace, or too long; a bot's name follows
-/// the same rules.
+/// The format characters (Unicode general category Cf, as of Unicode 16.0): invisible marks
+/// that change how text around them reads, such as zero-width spaces and joiners and the
+/// marks that set text's direction, by which two names that look alike could differ.
+const FORMAT_CHARACTERS: &[(char, char)] = &[
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
+];
+
+/// Whether a username may hold `c`: not `@`, which sets a tag apart, nor whitespace (which
+/// takes in the line and paragraph separators, Zl and Zp), a control character (Cc), or a
+/// format character (Cf). Letters and marks of every script, digits, and punctuation are
+/// welcome.
+fn username_char(c: char) -> bool {
+    c != '@'
+        && !c.is_whitespace()
+        && !c.is_control()
+        && !FORMAT_CHARACTERS
+            .iter()
+            .any(|&(first, last)| (first..=last).contains(&c))
+}
+
+/// Rejects usernames that are blank or too long, that hold `@`, whitespace, or control or
+/// format characters ([`username_char`]), or that are not in NFC, so one name is spelled one
+/// way. A bot's name follows the same rules, and so does a foreign user's, as their home gives
+/// it. Names taken before these rules stand as they are; a rename follows them.
 pub fn validate_username(name: &str) -> Result<(), crate::Error> {
     if name.is_empty() || name.trim() != name {
         return Err(crate::Error::Validation(t!("usernameBlankOrPadded")));
@@ -181,16 +223,45 @@ pub fn validate_username(name: &str) -> Result<(), crate::Error> {
             max = USERNAME_MAX_LENGTH
         )));
     }
+    if !name.chars().all(username_char) {
+        return Err(crate::Error::Validation(t!("usernameCharacters")));
+    }
+    if !unicode_normalization::is_nfc(name) {
+        return Err(crate::Error::Validation(t!("usernameNotNfc")));
+    }
     Ok(())
 }
 
+/// How a name looks, for telling names that look alike from different ones: its UTS #39
+/// confusable skeleton, taken of the name in compatibility form (NFKC, which makes fullwidth
+/// and styled letters plain), in two foldings, since lowering a letter can change what it is
+/// confusable with (Greek `Ε` with Latin `E`, its lower case `ε` with neither): the skeleton
+/// lowered and taken again, and the skeleton of the name lowered first.
+fn looks(name: &str) -> [String; 2] {
+    use unicode_normalization::UnicodeNormalization;
+    let skeleton = |text: &str| -> String { unicode_security::skeleton(text).collect() };
+    let plain: String = name.nfkc().collect();
+    [
+        skeleton(&skeleton(&plain).to_lowercase()),
+        skeleton(&skeleton(&plain.to_lowercase()).to_lowercase()),
+    ]
+}
+
+/// Whether `name` looks like `other` in either folding of [`looks`], so `SYSTEM`, `ＳＹＳＴＥＭ`,
+/// `ѕуѕtеm` (with Cyrillic letters), `SYSTΕM` (with a Greek one), and `systern` all look like
+/// `system`.
+fn looks_like(name: &str, other: &str) -> bool {
+    let (name, other) = (looks(name), looks(other));
+    name.iter().any(|form| other.contains(form))
+}
+
 /// Rejects what [`validate_username`] does, and the names no one may take for an account of
-/// their own: the system account's (`app::system_account::USERNAME`), in any case, which would
-/// pass for the deployment speaking. For registration, renames, and bots; a foreign user's name
-/// is their home's.
+/// their own: the system account's (`app::system_account::USERNAME`), or any name that looks
+/// like it ([`looks_like`]), which would pass for the deployment speaking. For registration,
+/// renames, bots, and foreign users' names.
 pub fn validate_new_username(name: &str) -> Result<(), crate::Error> {
     validate_username(name)?;
-    if name.to_lowercase() == crate::system_account::USERNAME {
+    if looks_like(name, crate::system_account::USERNAME) {
         return Err(crate::Error::Validation(t!(
             "usernameReserved",
             name = name
@@ -199,15 +270,12 @@ pub fn validate_new_username(name: &str) -> Result<(), crate::Error> {
     Ok(())
 }
 
-/// Rejects a bad username, passwords that fail the same length rule `try_change_password`
-/// enforces, and a profile `update_user` would refuse.
+/// Rejects a bad username, a password `app::login::check_new_password` refuses, and a profile
+/// `update_user` would refuse.
 fn validate_registration(command: &UserCreateRequest) -> Result<(), crate::Error> {
     validate_new_username(&command.name)?;
-    if command.password.len() < PASSWORD_MIN_LENGTH {
-        return Err(crate::Error::PasswordRequirement(
-            PasswordRequirement::Length,
-        ));
-    }
+    crate::login::check_new_password(&command.password)
+        .map_err(crate::Error::PasswordRequirement)?;
     validate_profile(&UserUpdateRequest {
         display_name: Some(command.display_name.clone()),
         pronouns: Some(command.pronouns.clone()),
@@ -230,12 +298,6 @@ pub async fn create_user(
     validate_registration(command)?;
     let email = crate::email::check_registration(&state, command.email.as_deref())?;
     let newsletter = command.newsletter.unwrap_or(false);
-    let mut conn = match state.connection_pool.get().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
     let invite_required = state.settings().registration_invite_required;
     let invite_code = command
         .invite_code
@@ -246,7 +308,9 @@ pub async fn create_user(
     if invite_required && invite_code.is_none() {
         return Err(crate::Error::RegistrationInviteRequired);
     }
+    // The connection is taken once the password is hashed (see `hash_password`).
     let password_hash = hash_password(command.password.to_string()).await?;
+    let mut conn = state.connection_pool.get().await?;
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
     let state = &state;
@@ -676,26 +740,44 @@ impl Retired {
     }
 }
 
-/// When the sign-in whose refresh token's digest is `refresh_digest` ends by itself, for closing
-/// what it holds open then (an event stream). A bot's token, which has no refresh token, never
-/// expires: `Ok(None)`. A sign-in that is gone already ends now.
-pub async fn sign_in_expires(
+/// When the caller's sign-in began and when it ends by itself.
+pub struct SignInTimes {
+    /// For closing what it holds open then (an event stream). A bot's token, which has no
+    /// refresh token, never expires: `None`. A sign-in that is gone already ends now.
+    pub expires: Option<chrono::DateTime<Utc>>,
+    /// `refresh_token.created_at`, or for a bot the making of its current token; `None` when
+    /// gone.
+    pub began: Option<chrono::DateTime<Utc>>,
+}
+
+/// When `caller`'s sign-in began and when it ends by itself.
+pub async fn sign_in_times(
     state: &GlobalServerContext,
-    refresh_digest: &str,
-) -> crate::Result<Option<chrono::DateTime<Utc>>> {
-    if refresh_digest.is_empty() {
-        return Ok(None);
-    }
+    caller: &crate::two_factor::Caller,
+) -> crate::Result<SignInTimes> {
     let mut conn = state.connection_pool.get().await?;
-    let expires: Option<chrono::NaiveDateTime> = refresh_token::table
-        .select(refresh_token::expires)
-        .filter(refresh_token::token.eq(refresh_digest))
+    if caller.refresh_digest.is_empty() {
+        let began = schema::bot_token::table
+            .select(schema::bot_token::created_at)
+            .filter(schema::bot_token::bot.eq(caller.user))
+            .first(conn.as_mut())
+            .await
+            .optional()?;
+        return Ok(SignInTimes {
+            expires: None,
+            began,
+        });
+    }
+    let found: Option<(chrono::NaiveDateTime, chrono::DateTime<Utc>)> = refresh_token::table
+        .select((refresh_token::expires, refresh_token::created_at))
+        .filter(refresh_token::token.eq(&caller.refresh_digest))
         .first(conn.as_mut())
         .await
         .optional()?;
-    Ok(Some(
-        expires.map_or_else(Utc::now, |expires| expires.and_utc()),
-    ))
+    Ok(SignInTimes {
+        expires: Some(found.map_or_else(Utc::now, |(expires, _)| expires.and_utc())),
+        began: found.map(|(_, began)| began),
+    })
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.
@@ -800,5 +882,64 @@ mod tests {
         }
         assert!(validate_new_username("systems").is_ok());
         assert!(validate_username("system").is_ok());
+    }
+
+    #[test]
+    fn names_that_look_like_the_system_accounts_are_reserved() {
+        // Cyrillic ѕ, у, and е; "rn" for "m"; and the fullwidth forms.
+        for name in ["ѕуѕtеm", "systern", "ＳＹＳＴＥＭ", "SYSTΕM"] {
+            assert!(
+                matches!(
+                    validate_new_username(name),
+                    Err(crate::Error::Validation(_))
+                ),
+                "{name}"
+            );
+        }
+        assert!(validate_new_username("sistema").is_ok());
+    }
+
+    #[test]
+    fn usernames_take_every_script_but_no_invisible_or_separating_characters() {
+        for name in [
+            "kate",
+            "Ŝoso",
+            "李小龍",
+            "ऋषि",
+            "مريم",
+            "dot.dash-under_score",
+            "😀",
+        ] {
+            assert!(validate_username(name).is_ok(), "{name}");
+        }
+        for name in [
+            "a@b",
+            "two words",
+            "tab\tbed",
+            "line\u{2028}break",
+            "para\u{2029}graph",
+            "zero\u{200B}width",
+            "join\u{200D}er",
+            "right\u{202E}left",
+            "isolate\u{2067}d",
+            "soft\u{00AD}hyphen",
+            "bom\u{FEFF}",
+            "tag\u{E0041}",
+            "bell\u{7}",
+        ] {
+            assert!(
+                matches!(validate_username(name), Err(crate::Error::Validation(_))),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn usernames_are_in_nfc() {
+        assert!(validate_username("caf\u{E9}").is_ok());
+        assert!(matches!(
+            validate_username("cafe\u{301}"),
+            Err(crate::Error::Validation(_))
+        ));
     }
 }

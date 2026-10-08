@@ -214,7 +214,9 @@ The deployment POSTs only to HTTPS endpoints at public addresses (`app::outbound
 to other deployments), since an endpoint is a URL a client chose: a name must resolve to one,
 and an endpoint naming an address inside a network is refused when registered and dropped
 before a push. It drops a subscription whose
-endpoint answers `403`, `404`, or `410`, and one made for a push key since replaced.
+endpoint answers `403`, `404`, or `410`, and one made for a push key since replaced. A push
+service has three seconds to answer a push; one that leaves a subscription's pushes unanswered
+five times in a row has that subscription skipped for an hour.
 
 ## The app
 

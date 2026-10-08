@@ -57,8 +57,6 @@ pub enum ProblemCode {
     /// The deployment requires a verified email address, and this account's is not verified;
     /// the session may only verify, change, or resend it (`/users/@me/email`), or sign out.
     EmailVerificationRequired,
-    /// Password reset: the email address given is not the one the account has.
-    EmailMismatch,
     /// Password reset cannot start for this account: no account has that username, or it has no
     /// verified email address. `detail` says which, and what to do.
     PasswordResetUnavailable,
@@ -69,6 +67,10 @@ pub enum ProblemCode {
     /// Too many requests to this endpoint recently. `Retry-After` says how many seconds to
     /// wait.
     RateLimited,
+    /// The upload would take the caller past the deployment's daily upload quota. `detail`
+    /// names the quota and when there will be room, which `Retry-After` gives in seconds,
+    /// absent when the file alone is larger than the quota.
+    UploadQuotaExceeded,
     /// The server requires a second factor, so the account's last one cannot be removed.
     LastSecondFactor,
     /// The authenticator's response to a passkey ceremony did not verify.
@@ -147,16 +149,15 @@ impl ProblemCode {
             | ProblemCode::ReauthenticationRequired
             | ProblemCode::TwoFactorEnrollmentRequired
             | ProblemCode::EmailVerificationRequired
-            | ProblemCode::EmailMismatch
             | ProblemCode::RegistrationInviteRequired
             | ProblemCode::RegistrationInviteInvalid
             | ProblemCode::AdminRequired
             | ProblemCode::Blocked
             | ProblemCode::Banned
             | ProblemCode::DeploymentBanned => StatusCode::FORBIDDEN,
-            ProblemCode::TooManyAttempts | ProblemCode::RateLimited => {
-                StatusCode::TOO_MANY_REQUESTS
-            }
+            ProblemCode::TooManyAttempts
+            | ProblemCode::RateLimited
+            | ProblemCode::UploadQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
             ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
@@ -200,11 +201,11 @@ impl ProblemCode {
             ProblemCode::ReauthenticationRequired => t!("problemReauthenticationRequired"),
             ProblemCode::TwoFactorEnrollmentRequired => t!("problemTwoFactorEnrollmentRequired"),
             ProblemCode::EmailVerificationRequired => t!("problemEmailVerificationRequired"),
-            ProblemCode::EmailMismatch => t!("problemEmailMismatch"),
             ProblemCode::PasswordResetUnavailable => t!("problemPasswordResetUnavailable"),
             ProblemCode::PasswordResetExpired => t!("problemPasswordResetExpired"),
             ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
             ProblemCode::RateLimited => t!("problemRateLimited"),
+            ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
@@ -286,11 +287,29 @@ impl ApiError {
         self
     }
 
+    /// `passwordRequirementsNotMet`, naming the rule the password broke and saying what it is.
     pub fn password_requirement(requirement: PasswordRequirement) -> Self {
-        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet);
+        let detail = match requirement {
+            PasswordRequirement::Length => {
+                t!("passwordTooShort", min = app::login::PASSWORD_MIN_LENGTH)
+            }
+            PasswordRequirement::MaxLength => {
+                t!("passwordTooLong", max = app::login::PASSWORD_MAX_BYTES)
+            }
+        };
+        let mut e = Self::new(ProblemCode::PasswordRequirementsNotMet).with_detail(detail);
         e.problem.requirement = Some(requirement);
         e
     }
+}
+
+/// Whether PostgreSQL's message refuses text it cannot store: `invalid byte sequence for
+/// encoding` (SQLSTATE 22021, a NUL in text) or `unsupported Unicode escape sequence` (22P05, a
+/// `\u0000` in JSON). The messages are PostgreSQL's English ones, which a server set to report
+/// in another language does not give; such a refusal then answers `internal`.
+fn unstorable_text(message: &str) -> bool {
+    message.starts_with("invalid byte sequence for encoding")
+        || message.starts_with("unsupported Unicode escape sequence")
 }
 
 /// How long a client told `serverBusy` waits before trying again.
@@ -304,14 +323,19 @@ impl From<app::Error> for ApiError {
                 DatabaseErrorKind::UniqueViolation,
                 _,
             )) => Self::new(ProblemCode::Conflict),
+            // Text PostgreSQL cannot store (U+0000, which the extractors refuse, reaching it
+            // another way): the request's fault, not the server's. The database names neither
+            // case by a kind of its own, only by its message.
+            app::Error::Diesel(diesel::result::Error::DatabaseError(
+                DatabaseErrorKind::Unknown,
+                ref info,
+            )) if unstorable_text(info.message()) => {
+                Self::new(ProblemCode::Validation).with_detail(t!("textHasNul"))
+            }
             app::Error::Validation(reason) => {
                 Self::new(ProblemCode::Validation).with_detail(reason)
             }
-            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement)
-                .with_detail(t!(
-                    "passwordTooShort",
-                    min = app::login::PASSWORD_MIN_LENGTH
-                )),
+            app::Error::PasswordRequirement(requirement) => Self::password_requirement(requirement),
             app::Error::Unauthorized => Self::new(ProblemCode::Forbidden),
             app::Error::Forbidden(reason) => Self::new(ProblemCode::Forbidden).with_detail(reason),
             app::Error::Unauthenticated => Self::new(ProblemCode::Unauthorized),
@@ -321,9 +345,6 @@ impl From<app::Error> for ApiError {
                 Self::new(ProblemCode::ReauthenticationRequired)
             }
             app::Error::TooManyAttempts => Self::new(ProblemCode::TooManyAttempts),
-            app::Error::EmailMismatch => {
-                Self::new(ProblemCode::EmailMismatch).with_detail(t!("emailMismatchDetail"))
-            }
             app::Error::PasswordResetUnavailable(reason) => {
                 Self::new(ProblemCode::PasswordResetUnavailable).with_detail(reason)
             }
@@ -388,6 +409,16 @@ impl From<app::Error> for ApiError {
             }
             app::Error::PluginUnavailable(detail) => {
                 Self::new(ProblemCode::PluginUnavailable).with_detail(detail)
+            }
+            app::Error::UploadQuotaExceeded {
+                detail,
+                retry_after,
+            } => {
+                let problem = Self::new(ProblemCode::UploadQuotaExceeded).with_detail(detail);
+                match retry_after {
+                    Some(wait) => problem.with_retry_after(wait),
+                    None => problem,
+                }
             }
             app::Error::Busy => {
                 Self::new(ProblemCode::ServerBusy).with_retry_after(BUSY_RETRY_AFTER)

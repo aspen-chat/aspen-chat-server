@@ -38,6 +38,32 @@ pub const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "im
 /// The largest icon, in bytes: room for a large photo as a profile picture.
 pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+/// The most pixels an icon may have, as its header gives them: 4096 by 4096. A picture is
+/// decoded whole wherever it is shown, so a small file declaring a huge canvas would take every
+/// reader's memory; the same cap holds for link previews' pictures and copied foreign avatars.
+pub const MAX_PIXELS: u64 = 4096 * 4096;
+
+/// The width and height `bytes`' header gives, when it is a picture of one of [`IMAGE_TYPES`]
+/// that has some pixels and at most `max_pixels` of them.
+pub fn size_within(bytes: &[u8], max_pixels: u64) -> Option<(u32, u32)> {
+    let size = imagesize::blob_size(bytes).ok()?;
+    let width = u32::try_from(size.width).ok().filter(|w| *w > 0)?;
+    let height = u32::try_from(size.height).ok().filter(|h| *h > 0)?;
+    (u64::from(width) * u64::from(height) <= max_pixels).then_some((width, height))
+}
+
+/// Refuses a picture whose header gives no size, or more than `max_pixels`.
+pub fn require_pixels(bytes: &[u8], max_pixels: u64) -> crate::Result<()> {
+    match size_within(bytes, max_pixels) {
+        Some(_) => Ok(()),
+        None if imagesize::blob_size(bytes).is_ok() => Err(crate::Error::Validation(t!(
+            "iconTooManyPixels",
+            max = max_pixels.isqrt()
+        ))),
+        None => Err(crate::Error::Validation(t!("iconImageType"))),
+    }
+}
+
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = icon)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -113,6 +139,7 @@ pub async fn init_upload(
         ready_at: None,
     };
     let mut conn = state.connection_pool.get().await?;
+    crate::upload_quota::reserve(state, conn.as_mut(), uploader, byte_size).await?;
     diesel::insert_into(icon::table)
         .values((&row, icon::uploaded_by.eq(Some(uploader))))
         .execute(conn.as_mut())
@@ -153,7 +180,8 @@ fn too_large() -> crate::Error {
 }
 
 /// Confirms an upload `caller` started; anyone else's is not found. One of more than
-/// [`MAX_BYTES`] is deleted and refused.
+/// [`MAX_BYTES`], or whose header gives no size or more than [`MAX_PIXELS`], is deleted and
+/// refused.
 pub async fn confirm_upload(
     state: &GlobalServerContext,
     caller: UserId,
@@ -178,6 +206,18 @@ pub async fn confirm_upload(
         Promotion::Promoted(_) => {}
         Promotion::NotUploaded => return Err(crate::Error::Validation(t!("iconUploadNotFound"))),
         Promotion::TooLarge => return Err(too_large()),
+    }
+    let checked = match state
+        .media_store
+        .get_bytes(&row.storage_key, MAX_BYTES)
+        .await?
+    {
+        Some(bytes) => require_pixels(&bytes, MAX_PIXELS),
+        None => Err(too_large()),
+    };
+    if let Err(e) = checked {
+        state.media_store.delete(&row.storage_key).await?;
+        return Err(e);
     }
     let confirmed = Utc::now();
     let updated: usize = diesel::update(icon::table)
@@ -239,6 +279,20 @@ const ICON_IN_USE_SQL: &str = "SELECT EXISTS (SELECT 1 FROM \"user\" WHERE icon 
      OR EXISTS (SELECT 1 FROM report WHERE profile->>'icon' = $1::text) \
      OR EXISTS (SELECT 1 FROM message WHERE warning->'profile'->>'icon' = $1::text) AS in_use";
 
+/// Whether anything uses the icon `id` ([`ICON_IN_USE_SQL`]).
+pub async fn in_use(conn: &mut AsyncPgConnection, id: IconId) -> crate::Result<bool> {
+    #[derive(diesel::QueryableByName)]
+    struct InUse {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        in_use: bool,
+    }
+    let InUse { in_use } = diesel::sql_query(ICON_IN_USE_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result(conn)
+        .await?;
+    Ok(in_use)
+}
+
 /// Deletes an icon `caller` uploaded that nothing uses. Anyone else's, or one whose uploader is
 /// not recorded, is not found; one in use is refused as a conflict.
 pub async fn delete_own_icon(
@@ -246,11 +300,6 @@ pub async fn delete_own_icon(
     caller: UserId,
     id: IconId,
 ) -> crate::Result<()> {
-    #[derive(diesel::QueryableByName)]
-    struct InUse {
-        #[diesel(sql_type = diesel::sql_types::Bool)]
-        in_use: bool,
-    }
     let mut conn = state.connection_pool.get().await?;
     let uploader: Option<UserId> = icon::table
         .select(icon::uploaded_by)
@@ -260,20 +309,17 @@ pub async fn delete_own_icon(
     if uploader != Some(caller) {
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
-    let InUse { in_use } = diesel::sql_query(ICON_IN_USE_SQL)
-        .bind::<diesel::sql_types::Uuid, _>(id)
-        .get_result(conn.as_mut())
-        .await?;
-    if in_use {
+    drop(conn);
+    if !delete_if_unused(state, id).await? {
         return Err(crate::Error::Conflict(t!("iconInUse")));
     }
-    drop(conn);
-    delete_icon(state, id).await
+    Ok(())
 }
 
 /// Deletes an icon and its stored picture if nothing uses it ([`ICON_IN_USE_SQL`]), checked
-/// in the statement that deletes it, for the server's own use: a picture it replaced, such as
-/// the copy of a foreign user's avatar their home changed. Returns whether it was deleted.
+/// in the statement that deletes it, so nothing that takes it up meanwhile loses it: a picture
+/// the server replaced (the copy of a foreign user's avatar their home changed), a removed
+/// custom emoji's, or one its uploader deletes. Returns whether it was deleted.
 pub async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> crate::Result<bool> {
     #[derive(diesel::QueryableByName)]
     struct Deleted {
@@ -302,26 +348,33 @@ pub async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> crate:
     Ok(true)
 }
 
-/// Deletes an icon and its stored picture, for the server's own use: the caller has decided it
-/// may go, as when its custom emoji is removed.
-pub async fn delete_icon(state: &GlobalServerContext, id: IconId) -> crate::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
-    let Some(deleted) = diesel::delete(icon::table)
-        .filter(icon::id.eq(id))
-        .returning(Icon::as_returning())
-        .load(conn.as_mut())
-        .await?
-        .into_iter()
-        .next()
-    else {
-        return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
-    };
-    if let Err(e) = state.media_store.delete_upload(&deleted.storage_key).await {
-        warn!(
-            error = e.to_string(),
-            key = deleted.storage_key,
-            "failed to delete icon object from media store after db deletion"
-        );
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The start of a PNG declaring `width` by `height`: its signature and header chunk.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        bytes
     }
-    Ok(())
+
+    #[test]
+    fn pixels_are_read_from_the_header_and_capped() {
+        assert_eq!(
+            size_within(&png_header(640, 480), MAX_PIXELS),
+            Some((640, 480))
+        );
+        assert_eq!(
+            size_within(&png_header(4096, 4096), MAX_PIXELS),
+            Some((4096, 4096))
+        );
+        assert_eq!(size_within(&png_header(65_535, 65_535), MAX_PIXELS), None);
+        assert_eq!(size_within(&png_header(0, 10), MAX_PIXELS), None);
+        assert_eq!(size_within(b"not a picture", MAX_PIXELS), None);
+        assert!(require_pixels(&png_header(100_000, 2), MAX_PIXELS).is_ok());
+        assert!(require_pixels(&png_header(100_000, 1000), MAX_PIXELS).is_err());
+    }
 }

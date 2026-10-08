@@ -302,31 +302,55 @@ async fn renumber(
     community_id: CommunityId,
     order: &[RoleRow],
 ) -> crate::Result<()> {
-    for (position, role) in order.iter().enumerate() {
-        let position = i32::try_from(position).unwrap_or(i32::MAX);
-        if role.position == position {
-            continue;
-        }
-        diesel::update(community_role::table.filter(community_role::id.eq(role.id)))
-            .set(community_role::position.eq(position))
-            .execute(conn)
-            .await?;
-        publish_event(
-            state,
-            conn,
-            EventScope::Community(community_id),
-            &ServerEvent::Role(RoleEvent::Update {
-                id: role.id,
-                name: None,
-                position: Some(position),
-                permissions: None,
-                hue: None,
-                hoist: None,
-            }),
-        )
-        .await?;
+    let moved: Vec<(RoleId, i32)> = order
+        .iter()
+        .enumerate()
+        .map(|(position, role)| (role, i32::try_from(position).unwrap_or(i32::MAX)))
+        .filter(|(role, position)| role.position != *position)
+        .map(|(role, position)| (role.id, position))
+        .collect();
+    if moved.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    // One statement moves them all, and their announcements wait for the stream together.
+    diesel::sql_query(
+        "UPDATE community_role SET position = moved.position \
+         FROM unnest($1::uuid[], $2::int[]) AS moved(id, position) \
+         WHERE community_role.id = moved.id AND community_role.community = $3",
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(
+        moved.iter().map(|(id, _)| id.0).collect::<Vec<_>>(),
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Integer>, _>(
+        moved
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>(),
+    )
+    .bind::<diesel::sql_types::Uuid, _>(community_id.0)
+    .execute(conn)
+    .await?;
+    crate::events::publish_events(
+        state,
+        conn,
+        moved
+            .into_iter()
+            .map(|(id, position)| {
+                (
+                    EventScope::Community(community_id),
+                    ServerEvent::Role(RoleEvent::Update {
+                        id,
+                        name: None,
+                        position: Some(position),
+                        permissions: None,
+                        hue: None,
+                        hoist: None,
+                    }),
+                )
+            })
+            .collect(),
+    )
+    .await
 }
 
 /// Makes a role, placed just above everyone's, with permissions the caller holds.
@@ -367,7 +391,14 @@ pub async fn insert_role(
     community_id: CommunityId,
     role: NewRole,
 ) -> crate::Result<message_enum::Role> {
+    crate::community::hold_for_count(conn, community_id).await?;
     let mut roles = load_roles(conn, community_id).await?;
+    if i64::try_from(roles.len()).unwrap_or(i64::MAX) >= crate::community::MAX_ROLES {
+        return Err(crate::Error::Validation(t!(
+            "roleLimit",
+            max = crate::community::MAX_ROLES
+        )));
+    }
     let row = RoleRow {
         id: RoleId::new(),
         community: community_id,
@@ -460,7 +491,7 @@ pub async fn update_role(
             )?;
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             let permissions = request
                 .permissions
                 .as_deref()
@@ -569,7 +600,7 @@ pub async fn delete_role(
             }
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             // Its holders lose it and its overrides go with it, by the foreign keys. The one
             // event says so: readers of it (the event feed, clients) take the role from its
             // holders and its overrides away themselves, however many there are.
@@ -606,7 +637,7 @@ pub async fn reorder_roles(
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             let roles = load_roles(conn.as_mut(), community_id).await?;
-            let rank = access.rank();
+            let rank = access.role_rank();
             let (everyone, others): (Vec<RoleRow>, Vec<RoleRow>) =
                 roles.into_iter().partition(|r| r.everyone);
             let (movable, fixed): (Vec<RoleRow>, Vec<RoleRow>) =
@@ -708,7 +739,7 @@ pub async fn set_member_role(
             if role.bot.is_some() {
                 return Err(crate::Error::Validation(t!("botRoleFixed")));
             }
-            access.require_above(role.position)?;
+            access.require_role_above(role.position)?;
             // Giving a role gives what it allows, which must be the caller's to give, as for
             // making or editing one; taking it away takes rank alone.
             if held {
@@ -727,7 +758,11 @@ pub async fn set_member_role(
                 .for_no_key_update()
                 .first::<UserId>(conn.as_mut())
                 .await?;
-            member_below(conn.as_mut(), &access, member).await?;
+            let their_rank = member_below(conn.as_mut(), &access, member).await?;
+            // Roles are given and taken by rank in the community alone, as they are managed.
+            if member != caller {
+                access.require_role_above(their_rank)?;
+            }
             let changed = if held {
                 diesel::insert_into(community_member_role::table)
                     .values((
@@ -783,6 +818,7 @@ pub async fn remove_member(
                     .contains(Permissions::REMOVE_MEMBERS)
                     && their_rank < access.role_rank())
             {
+                crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                 log_moderation(
                     conn.as_mut(),
                     caller,
@@ -823,6 +859,7 @@ pub async fn clear_nickname(
                         .contains(Permissions::MANAGE_NICKNAMES)
                         && their_rank < access.role_rank())
                 {
+                    crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                     log_moderation(
                         conn.as_mut(),
                         caller,
@@ -926,7 +963,7 @@ fn check_grantable(
     allow: Permissions,
     deny: Permissions,
 ) -> crate::Result<()> {
-    access.require_above(role.position)?;
+    access.require_role_above(role.position)?;
     access.require_holds(allow | deny)
 }
 

@@ -2,7 +2,18 @@
 
 - Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages/Markdown.tsx`
   with `react-markdown` (no raw HTML, unsafe schemes dropped); element styles are the
-  `message-body` rules in `styles.css`. Only an absolute `http:`, `https:`, or `mailto:` address
+  `message-body` rules in `styles.css`. Parsing and rendering recurse once per level of
+  nesting, so a body nesting more than `MAX_NESTING` (32) levels deep is shown as its plain
+  text (`src/features/messages/markdownLimits.ts`): one whose lines open that many quotes or
+  lists at once is never parsed (`opensTooDeeply`), and any other is caught once parsed, with a
+  walk of its own (`remarkLimits`). A table's rows keep the cells written (`tableRow`, in
+  place of the default handler, which pads every row to the header's width, so a wide header
+  over many short rows would make millions of cells), and a table wider than
+  `MAX_TABLE_COLUMNS` (64) or larger than `MAX_TABLE_CELLS` (5000) shows as its source in a
+  code block. Whatever still fails to render falls back to plain text in
+  an error boundary (`src/features/layout/ErrorBoundary.tsx`) around the Markdown and around
+  each `MessageBody`, and a route that fails to draw shows `RouteError` in its place (the
+  router's `defaultErrorComponent`), so one message cannot blank the app. Only an absolute `http:`, `https:`, or `mailto:` address
   becomes a link (`messageLinkUrl`); a relative or protocol-relative one (`//host/share/file`),
   which on a page loaded from a file (the desktop app's) would be a `file:` link, stays plain
   text. A link is always its own address: one its author named with words of their own
@@ -15,16 +26,24 @@
   highlighted by highlight.js (`src/features/messages/highlighter.ts`), which loads as its own chunk on the first code
   block: its "common" grammars come with that chunk and every other grammar it ships is fetched
   on first use. Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at
-  the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain. Spoilers are
+  the end of `styles.css`. Nothing is auto-detected; an unlabelled fence is plain, and so is a
+  block longer than `MAX_HIGHLIGHT_LENGTH` (4096 code units, `CodeBlock.tsx`), since some
+  grammars take most of a second over a few kilobytes written to slow them. Spoilers are
   `||text||` (Discord) or `>!text!<` (Reddit), wrapped by `remarkSpoilers.ts` and rendered by
   `Spoiler.tsx` as a block the reader activates to reveal; markup inside them is kept. On top of
   GFM's own autolinks, bare domains are linked by
   the tokenizer in `src/features/messages/linkify.ts`: explicit
   `http(s)` URLs, and bare domains whose TLD is on IANA's list (the `tlds` package). A handful
   of TLDs that double as source-file extensions only link with a port, a path, or `www.`; the
-  set is a constant in that file. The server's preview extractor
-  (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rule, so what renders
-  as a link is what gets a preview; change both together.
+  set is a constant in that file. A candidate longer than `MAX_LINK_LENGTH` (2048) stays text,
+  trailing punctuation and unmatched brackets are trimmed in one pass, and the runs of recent
+  texts are kept, so a message drawn again is not scanned again (`Markdown` itself is drawn
+  again only when its content, tags, or community change). The server's preview extractor
+  (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rules, so what renders
+  as a link is what gets a preview; change both together. The system account's notices quote
+  names others chose (a community's, a person's), so `MessageBody` renders its messages with
+  `links` off: every address in them, Markdown or bare, shows as text, and the server fetches
+  no previews for them.
 - A link to a deployment the user uses (`parseSelfLink` in `src/features/messages/selfLinks.ts`:
   the home, at the address the app reaches it at or the page's own, and every deployment signed
   in to from there) is a chip naming what it leads to rather than its address (`SelfLink.tsx`):
@@ -51,7 +70,9 @@
   from the URL's staging key to where readers fetch them, so the URL can change nothing after) and are named by id in
   `sendMessage`. A picture's reservation carries its size, which the composer measures first
   (`measurePicture`), and its record gives it back as `width` and `height`. A message event carries only ids, so `useAttachment` fetches records on
-  demand. Images render inline (`src/features/messages/Attachments.tsx`): image attachments,
+  demand. An attachment's name is shown without format and control characters
+  (`plainFileName`), which could make it read as another name. Images render inline
+  (`src/features/messages/Attachments.tsx`): image attachments,
   and the pictures of link previews, from links whose path has an image extension or that the
   server found to be images (previews with a picture and no text). Every picture is loaded
   from a deployment's storage, never from the address a message links to, which would tell
@@ -112,4 +133,11 @@
   any other address is unavailable, and a preview's picture there is left out. The desktop
   shell checks again: the window navigates only to the app's own `index.html` (or the dev
   server), and hands the system only `http:`, `https:`, and `mailto:` links
-  (`packages/desktop/src/main/navigation.ts`).
+  (`packages/desktop/src/main/navigation.ts`), and its session grants permissions (`permitted`
+  there) only as the app needs them: calls, notifications, the clipboard, choosing where sound
+  plays, and saving files to the app's own page alone, fullscreen to any frame the app let ask
+  for it (a video player), handing a link to the system (`openExternal`) only for what
+  `externalUrl` lets out, and nothing else to anyone. The phone apps do the same with a
+  Capacitor plugin Capacitor asks about each navigation (`AspenNavigationPlugin`, in
+  `android/.../navigation/` and in iOS's `MainViewController.swift`): an address outside the
+  app leaves it only when it is `http:`, `https:`, or `mailto:`, and any other is dropped.

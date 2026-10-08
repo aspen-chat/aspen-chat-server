@@ -118,6 +118,27 @@ describe("AspenClient", () => {
     expect(client.session?.emailVerificationRequired).toBeUndefined();
   });
 
+  it("presses a card's button as it calls a route, refreshing and flagging nothing", async () => {
+    const { fetch, calls } = scriptedFetch([
+      () => new Response(null, { status: 204 }),
+      () => problem(401, "unauthorized"),
+      () => problem(403, "twoFactorEnrollmentRequired"),
+    ]);
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+    const statuses = [];
+    for (let i = 0; i < 3; i++) {
+      statuses.push(await client.pressCardButton(uuid, "join"));
+    }
+    expect(statuses).toEqual([204, 401, 403]);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.url).toBe(`${baseUrl}/api/v1/messages/${uuid}/card/buttons/join`);
+    expect(calls[0]?.authorization).toBe("Bearer session-1");
+    expect(client.session?.sessionToken).toBe("session-1");
+    expect(client.session?.twoFactorEnrollmentRequired).toBeUndefined();
+  });
+
   it("names the languages the user reads in every request", async () => {
     const { fetch, calls } = scriptedFetch([
       () => problem(401, "invalidCredentials"),

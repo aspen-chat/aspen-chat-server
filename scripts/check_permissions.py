@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 import zlib
 from pathlib import Path
 
@@ -178,6 +179,22 @@ def granting_and_revoking(world: World, check: Checks) -> None:
     check("nor hear it", not world.hears_message(secret))
 
 
+def edits_after_send(world: World, check: Checks) -> None:
+    say("editing a message once Send messages is taken away")
+    stack, member = world.stack, world.member
+    quiet = world.channel("quiet")
+    said = stack.api("POST", f"/channels/{quiet}/messages", {"content": "before", "attachments": []},
+                     member["token"])["id"]
+    world.as_owner("PUT", f"/channels/{quiet}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    check("the member cannot put new words in their message",
+          stack.status("PATCH", f"/messages/{said}", {"content": "after"}, member["token"]) == 403)
+    check("but may clear what it said",
+          stack.status("PATCH", f"/messages/{said}", {"content": ""}, member["token"]) == 200)
+    world.as_owner("DELETE", f"/channels/{quiet}/overrides/{world.everyone}")
+    check("and with Send messages back, edits it again",
+          stack.status("PATCH", f"/messages/{said}", {"content": "again"}, member["token"]) == 200)
+
+
 def moves_and_categories(world: World, check: Checks) -> None:
     say("a channel moved into a hidden category and out, and the category deleted")
     hidden = world.as_owner("POST", f"/communities/{world.community}/categories", {"name": "Mods", "sortIndex": 9})["id"]
@@ -268,6 +285,11 @@ def hidden_managers(world: World, check: Checks) -> None:
     open_channel = world.channel("for-managers")
     check("while a channel they may view is theirs to manage",
           world.stack.status("PATCH", f"/channels/{open_channel}", {"name": "managed"}, member) == 200)
+    check("but not to file in a category hidden from them",
+          world.stack.status("PATCH", f"/channels/{open_channel}", {"parentCategory": hidden}, member) == 404)
+    check("nor is a channel made there",
+          world.stack.status("POST", "/channels", {"name": "smuggled", "ty": "text", "community": world.community,
+                                                   "sortIndex": 1, "parentCategory": hidden}, member) == 404)
 
 
 def role_grants(world: World, check: Checks) -> None:
@@ -285,6 +307,26 @@ def role_grants(world: World, check: Checks) -> None:
     world.give(powerful)
     check("and takes one away by rank alone", stack.status("DELETE", f"{mine}/{powerful}", token=member["token"]) == 204)
     stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+    mods = world.as_owner("POST", "/admin/roles", {"name": f"Mods{world.run}",
+                                                   "permissions": ["moderateCommunities"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{mods}")
+    deleters = world.role("Deleters", ["manageMessages"])
+    check("moderating the deployment hands on none of its powers through a role",
+          stack.status("PUT", f"{mine}/{deleters}", token=member["token"]) == 403)
+    third = world.account("third")
+    invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+    stack.api("PUT", f"/communities/{world.community}/members/@me",
+              {"inviteCode": invite.get("code") or invite.get("id")}, third["token"])
+    roles = world.as_owner("GET", f"/communities/{world.community}/roles")
+    moderator = next(r["id"] for r in roles if r["name"] == "Moderator")
+    world.as_owner("PUT", f"/communities/{world.community}/members/{third['id']}/roles/{moderator}")
+    check("nor ranks its holder above roles for taking them away",
+          stack.status("DELETE", f"/communities/{world.community}/members/{third['id']}/roles/{moderator}",
+                       token=member["token"]) == 403)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{mods}")
+    stack.command("admin", "deny", "moderateCommunities")
     keepers = world.as_owner("POST", "/admin/roles", {"name": f"Keepers{world.run}",
                                                       "permissions": ["manageDeploymentRoles"]})["id"]
     settings = world.as_owner("POST", "/admin/roles", {"name": f"Settings{world.run}",
@@ -455,6 +497,35 @@ def calls(world: World, check: Checks) -> None:
               world.owner["token"], expect=(202,))
     lifted = frame_of(call, "participantState")
     check("until the moderator unmutes them", lifted is not None and lifted["muted"] is False, lifted)
+    # A moderator's mute is the community's: it outlasts the call until a moderator lifts it.
+    stack.api("PATCH", f"/channels/{room}/voice/participants/{world.member['id']}", {"muted": True},
+              world.owner["token"], expect=(202,))
+    frame_of(call, "participantState")
+    call.close()
+    wait_for("the member's leaving to be recorded", lambda: not in_call(world), 30)
+    muted_offer = offer()
+    check("the next join offer says the mute stands", muted_offer.get("serverMuted") is True, muted_offer)
+    call = join(muted_offer["token"])
+    check("the member joins again", frame_of(call, "ready") is not None)
+
+    def recorded_muted() -> bool:
+        read = stack.api("GET", f"/communities/{world.community}?include=voice", token=world.owner["token"])
+        return any(p["user"] == world.member["id"] and p["muted"]
+                   for p in read.get("included", {}).get("voiceParticipants", []))
+
+    check("and is recorded muted from the start", soon(recorded_muted, 15))
+    mutes = f"/communities/{world.community}/voice-mutes"
+    check("the community's mutes are not the member's to list",
+          stack.status("GET", mutes, token=world.member["token"]) == 403)
+    listed = stack.api("GET", mutes, token=world.owner["token"])
+    check("its call moderators see the member among them",
+          any(mute["user"] == world.member["id"] for mute in listed), listed)
+    check("a member cannot lift their own mute",
+          stack.status("DELETE", f"{mutes}/{world.member['id']}", token=world.member["token"]) == 403)
+    stack.api("DELETE", f"{mutes}/{world.member['id']}", token=world.owner["token"], expect=(204,))
+    lifted = frame_of(call, "participantState", 10)
+    check("lifting it from the community's list reaches the call",
+          lifted is not None and lifted["muted"] is False, lifted)
     callers = world.role("Call moderators", ["manageCalls"])
     world.give(callers)
     owner_seat = f"/channels/{room}/voice/participants/{world.owner['id']}"
@@ -488,6 +559,25 @@ def calls(world: World, check: Checks) -> None:
     check("and is then told it may not speak", changed is not None and not changed["grants"]["speak"], changed)
     world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
     frame_of(late, "grantsChanged", 5)
+    # A sign-in ending takes the participant that joined on its token out of the call.
+    late.close()
+    second = world.sign_in(world.member["name"])
+    stale = stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])
+    elsewhere = join(stack.api("POST", f"/channels/{room}/voice/join", {}, second["token"])["token"])
+    check("another sign-in of the member joins the call", frame_of(elsewhere, "ready") is not None)
+    stack.api("POST", "/auth/logout", {"refreshToken": second["refresh"]}, second["token"])
+    kicked = frame_of(elsewhere, "kicked", 10)
+    check("signing out takes that sign-in out of the call, saying why",
+          kicked is not None and kicked.get("reason") == "signedOut", kicked)
+    elsewhere.close()
+    after = join(stale["token"])
+    check("a token issued to the sign-in before it ended still joins", frame_of(after, "ready") is not None)
+    kicked = frame_of(after, "kicked", 15)
+    check("but is taken out once its join is recorded",
+          kicked is not None and kicked.get("reason") == "signedOut", kicked)
+    after.close()
+    late = join(offer()["token"])
+    check("the member's own sign-in joins again", frame_of(late, "ready") is not None)
     world.as_owner("PUT", f"/communities/{world.community}/bans/{world.member['id']}", {})
     kicked = frame_of(late, "kicked", 10)
     check("a ban from the community removes them from its calls",
@@ -732,10 +822,25 @@ def deployment_settings(world: World, check: Checks) -> None:
     call = join(stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["token"])
     check("the member joins a call", frame_of(call, "ready") is not None)
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
+    # The owner joins too and takes a file the member offers.
+    owners_call = join(stack.api("POST", f"/channels/{room}/voice/join", {}, world.owner["token"])["token"])
+    check("the owner joins the same call", frame_of(owners_call, "ready") is not None)
+    offer = str(uuid.uuid4())
+    call.send({"type": "offerFile", "offer": offer, "name": "notes.txt", "size": 5, "allowDirect": True,
+               "validForSeconds": 60})
+    check("the member's offer reaches the owner", frame_of(owners_call, "fileOffered") is not None)
+    owners_call.send({"type": "acceptFile", "offer": offer, "mode": "directPreferred"})
+    check("and the owner's acceptance starts a transfer", frame_of(call, "transferStarting") is not None)
     world.as_owner("PATCH", "/admin/settings", {"fileTransfers": False})
     changed = frame_of(call, "grantsChanged", 10)
     check("turning file transfers off reaches a call at once",
           changed is not None and not changed["grants"]["transferFiles"], changed)
+    ended = frame_of(call, "transferEnded", 10)
+    check("and ends the transfers its people are sending, telling the sender",
+          ended is not None and ended.get("reason") == "notPermitted", ended)
+    ended = frame_of(owners_call, "transferEnded", 10)
+    check("and the receiver", ended is not None and ended.get("reason") == "notPermitted", ended)
+    owners_call.close()
     check("and join offers grant them no more",
           not stack.api("POST", f"/channels/{room}/voice/join", {}, world.member["token"])["transferFiles"])
     world.as_owner("PATCH", "/admin/settings", {"fileTransfers": True})
@@ -817,11 +922,27 @@ def presence(world: World, check: Checks) -> None:
     check("someone who shares nothing with them sees them offline",
           status_of(stranger["token"], world.owner["id"]) == "offline"
           and profile_status(stranger["token"], world.owner["id"]) == "offline")
+    counted = world.channel("presence-count")
+    made = world.stack.api("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, world.member["token"])
+    dm = made.get("id") or made["data"]["id"]
+
+    def online_in(channel: str) -> int:
+        return world.stack.api("GET", f"/channels/{channel}/presence", token=world.member["token"])["online"]
+
+    world.as_owner("GET", "/users/@me")
+    owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
+    in_channel, in_dm = online_in(counted), online_in(dm)
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
     check("once the owner blocks the member, the member sees them offline",
           status_of(world.member["token"], world.owner["id"]) == "offline")
+    check("and counted in no channel's presence",
+          online_in(counted) == in_channel - owner_counted and online_in(dm) == in_dm - owner_counted,
+          (in_channel, in_dm, owner_counted, online_in(counted), online_in(dm)))
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
     check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+    # A DM between them shares their presence whatever their communities; the database stands in
+    # for one they never had, so that the community alone is what the removal takes away.
+    psql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'", world.stack.database)
     world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
     world.stream.gather(0.5)
     check("removed from the community, the member sees the owner offline",
@@ -959,6 +1080,17 @@ def device_links(world: World, check: Checks) -> None:
     check("nor one approved before a password change elsewhere", claim(link) == 404)
     stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
               world.member["token"])
+    stale = world.sign_in(world.member["name"])
+    psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'",
+         stack.database)
+    refused = stack.request("POST", "/auth/device-links", {}, stale["token"])
+    check("a sign-in not verified lately cannot offer itself to another device",
+          refused[0] == 403 and "reauthenticationRequired" in refused[1], refused)
+    asked = stack.api("POST", "/auth/device-links", {"deviceName": "Computer", "codeChallenge": challenge})["id"]
+    scanned = stack.request("POST", f"/auth/device-links/{asked}/scan", {}, stale["token"])
+    check("nor give itself to a computer that asks",
+          scanned[0] == 403 and "reauthenticationRequired" in scanned[1], scanned)
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, world.member["token"])
     link = offered(world.member)
     got = stack.api("POST", f"/auth/device-links/{link}/claim", {"codeVerifier": verifier})
     check("one whose giver stands signs in", got.get("status") == "signedIn", got)
@@ -1112,6 +1244,88 @@ REVIEWING = ["reviewReports", "removeContent"]
 MODERATION = ["moderateCommunities", "reviewReports", "removeContent", "banUsers", "messageAnyUser"]
 
 
+def read_url(url: str) -> tuple[int, bytes]:
+    """Reads `url` without credentials, as anyone holding it could."""
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, b""
+
+
+def evidence(world: World, check: Checks) -> None:
+    say("the files of deleted messages and removed attachments are kept for reviewers alone")
+    stack, member = world.stack, world.member
+    channel = world.channel("evidence")
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+
+    def upload(body: bytes) -> dict:
+        handle = stack.api("POST", "/attachments", {"fileName": "kept.txt", "mimeType": "text/plain",
+                                                    "byteSize": len(body)}, member["token"])
+        put = urllib.request.Request(handle["uploadUrl"], data=body, method="PUT",
+                                     headers={"content-type": "text/plain"})
+        urllib.request.urlopen(put, timeout=15).close()
+        return stack.api("POST", f"/attachments/{handle['id']}/confirm", token=member["token"])
+
+    def post(attachments: list[str]) -> str:
+        posted = stack.api("POST", f"/channels/{channel}/messages",
+                           {"content": "kept", "attachments": attachments}, member["token"])["id"]
+        stack.api("POST", f"/messages/{posted}/reports", {"category": category}, world.owner["token"])
+        return posted
+
+    deleted_file = upload(b"deleted message's file")
+    deleted = post([deleted_file["id"]])
+    removed_file, kept_file = upload(b"removed file"), upload(b"file that stays")
+    edited = post([removed_file["id"], kept_file["id"]])
+    stack.api("DELETE", f"/messages/{deleted}", token=member["token"])
+    stack.api("DELETE", f"/messages/{edited}/attachments/{removed_file['id']}", token=member["token"])
+    check("its uploader no longer reads a deleted message's file",
+          stack.status("GET", f"/attachments/{deleted_file['id']}", token=member["token"]) == 404)
+    check("nor one they took off its message",
+          stack.status("GET", f"/attachments/{removed_file['id']}", token=member["token"]) == 404)
+    check("the public read path soon stops serving either",
+          soon(lambda: read_url(deleted_file["downloadUrl"])[0] in (403, 404)
+               and read_url(removed_file["downloadUrl"])[0] in (403, 404), 20))
+    check("while the file that stays is still served", read_url(kept_file["downloadUrl"]) == (200, b"file that stays"))
+    check("nor may a new message take kept evidence up",
+          stack.status("POST", f"/channels/{channel}/messages",
+                       {"content": "again", "attachments": [deleted_file["id"]]}, member["token"]) == 400)
+
+    reviewer = world.account("evidencereviewer")
+    for permission in MODERATION:
+        stack.command("admin", "deny", permission)
+    stack.command("admin", "grant", reviewer["name"])
+    stack.command("admin", "allow", "reviewReports")
+    try:
+        page = stack.api("GET", "/admin/reports?limit=50", token=reviewer["token"])
+        files = {a["id"]: a for a in page["attachments"]}
+        messages = {m["message"]["id"]: m for m in page["messages"]}
+        check("a reviewer reads the deleted message's file at a signed URL",
+              deleted_file["id"] in files
+              and read_url(files[deleted_file["id"]]["downloadUrl"]) == (200, b"deleted message's file"), files)
+        check("and the file taken off the reported message, which the case names",
+              removed_file["id"] in messages.get(edited, {}).get("removedAttachments", [])
+              and removed_file["id"] in files
+              and read_url(files[removed_file["id"]]["downloadUrl"]) == (200, b"removed file"), messages.get(edited))
+        signed = files.get(deleted_file["id"], {}).get("downloadUrl", "")
+        stack.command("attachments", "purge", "--message", deleted)
+        page = stack.api("GET", "/admin/reports?limit=50", token=reviewer["token"])
+        check("purging from the terminal deletes it outright",
+              deleted_file["id"] not in {a["id"] for a in page["attachments"]}
+              and (not signed or read_url(signed)[0] in (403, 404)))
+        log = stack.api("GET", "/admin/moderation-log", token=reviewer["token"])
+        check("and the moderation log records it, with no account as its actor",
+              any(e["action"] == "purgeAttachment" and e.get("actor") is None for e in log), log[:3])
+        try:
+            stack.command("attachments", "purge", "--attachment", kept_file["id"])
+            refused = False
+        except Failed:
+            refused = True
+        check("the terminal refuses to purge a file a message still holds", refused)
+    finally:
+        stop_review_powers(world, reviewer)
+
+
 def review_powers(world: World, check: Checks) -> None:
     say("reviewing reports: what each deployment permission allows on its own")
     stack = world.stack
@@ -1191,6 +1405,12 @@ def review_powers(world: World, check: Checks) -> None:
     cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
     check("a case about the reviewer is not among those they read",
           not any(c["subject"] == reviewer["id"] for c in cases), cases)
+    bot = stack.api("POST", "/users/@me/bots", {"name": f"rbot{world.run}"}, reviewer["token"])["bot"]
+    stack.api("POST", f"/users/{bot['id']}/reports", {"category": category, "aspects": ["username"]},
+              world.member["token"])
+    cases = stack.api("GET", "/admin/reports", token=reviewer["token"])["cases"]
+    check("nor a case about the reviewer's own bot",
+          not any(c["subject"] == bot["id"] for c in cases), cases)
     stop_review_powers(world, reviewer)
 
 
@@ -1218,6 +1438,107 @@ def ban_ranks(world: World, check: Checks) -> None:
     world.as_owner("DELETE", f"/admin/roles/{banners}")
     world.as_owner("DELETE", f"/admin/roles/{senior_role}")
     stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
+def banned_owners_bots(world: World, check: Checks) -> None:
+    say("a ban from the deployment shuts out the banned person's bots until it is lifted")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "banUsers")
+    bot_token = stack.api("POST", "/users/@me/bots", {"name": f"bot{world.run}"}, member["token"])["token"]
+    check("the member's bot works", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_stream = stack.events(bot_token)
+    bot_stream.gather(0.5)
+    world.as_owner("PUT", f"/admin/users/{member['id']}/ban", {"reason": "checking bots"})
+    bot_stream.gather(1.0)
+    check("banning its owner closes the bot's stream as banned", bot_stream.closed == 4410, bot_stream.closed)
+    check("and refuses its token", stack.status("GET", "/users/@me", token=bot_token) == 401)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
+    check("lifting the ban restores it", stack.status("GET", "/users/@me", token=bot_token) == 200)
+    bot_id = stack.api("GET", "/users/@me", token=bot_token)["id"]
+    plain = world.as_owner("POST", "/admin/roles", {"name": f"Plain{world.run}", "permissions": []})["id"]
+    check("a bot is given no deployment role",
+          stack.status("PUT", f"/admin/users/{bot_id}/roles/{plain}", token=world.owner["token"]) == 400)
+    check("and its token never opens the dashboard",
+          stack.status("GET", "/admin/overview", token=bot_token) == 403)
+    world.as_owner("DELETE", f"/admin/roles/{plain}")
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
+def bot_transfers(world: World, check: Checks) -> None:
+    say("a bot changes hands only when its recipient accepts, and its old token ends then")
+    stack = world.stack
+    giver, heir = world.account("giver"), world.account("heir")
+    made = stack.api("POST", "/users/@me/bots", {"name": f"tbot{world.run}"}, giver["token"])
+    bot, old_token = made["bot"]["id"], made["token"]
+
+    def stale() -> None:
+        psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{giver['id']}'",
+             stack.database)
+
+    stale()
+    rotated = stack.request("POST", f"/bots/{bot}/token", token=giver["token"])
+    check("issuing a bot a new token asks for a fresh verification",
+          rotated[0] == 403 and "reauthenticationRequired" in rotated[1], rotated)
+    offered = stack.request("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    check("and so does offering it", offered[0] == 403 and "reauthenticationRequired" in offered[1], offered)
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, giver["token"])
+    stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    check("an offer leaves the bot with its owner",
+          stack.api("GET", f"/users/{bot}", token=giver["token"])["botOwner"] == giver["id"])
+    offers = stack.api("GET", "/users/@me/bot-transfers", token=heir["token"])
+    check("the recipient finds the offer", any(o["bot"]["id"] == bot for o in offers), offers)
+    stack.api("DELETE", f"/bots/{bot}/transfer", token=giver["token"])
+    check("a withdrawn offer cannot be accepted",
+          stack.status("POST", f"/bots/{bot}/transfer/acceptance", token=heir["token"]) == 404)
+    stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
+    bot_stream = stack.events(old_token)
+    bot_stream.gather(0.5)
+    accepted = stack.api("POST", f"/bots/{bot}/transfer/acceptance", token=heir["token"])
+    bot_stream.gather(1.0)
+    check("accepting makes the recipient its owner", accepted["bot"]["botOwner"] == heir["id"], accepted["bot"])
+    check("closes the stream its old token opened", bot_stream.closed == 4401, bot_stream.closed)
+    check("refuses the old token", stack.status("GET", "/users/@me", token=old_token) == 401)
+    check("and takes the new one", stack.status("GET", "/users/@me", token=accepted["token"]) == 200)
+    check("and its old owner can no longer issue it a token",
+          stack.status("POST", f"/bots/{bot}/token", token=giver["token"]) == 403)
+
+
+def moderator_ranks(world: World, check: Checks) -> None:
+    say("moderating the deployment reaches no one ranked at or above the moderator there")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+    # Each role is made below the others, so Senior outranks Mods.
+    senior_role = world.as_owner("POST", "/admin/roles", {"name": f"Senior{world.run}", "permissions": []})["id"]
+    mods = world.as_owner("POST", "/admin/roles", {"name": f"Mods{world.run}",
+                                                   "permissions": ["moderateCommunities"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{member['id']}/roles/{mods}")
+    senior, plain = world.account("senior"), world.account("plain")
+    for person in (senior, plain):
+        invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+        stack.api("PUT", f"/communities/{world.community}/members/@me",
+                  {"inviteCode": invite.get("code") or invite.get("id")}, person["token"])
+    world.as_owner("PUT", f"/admin/users/{senior['id']}/roles/{senior_role}")
+    channel = world.channel("ranked")
+
+    def said(person: dict) -> str:
+        return stack.api("POST", f"/channels/{channel}/messages", {"content": "hello", "attachments": []},
+                         person["token"])["id"]
+
+    check("a moderator does not delete the message of someone who outranks them on the deployment",
+          stack.status("DELETE", f"/messages/{said(senior)}", token=member["token"]) == 403)
+    check("nor remove them from a community",
+          stack.status("DELETE", f"/communities/{world.community}/members/{senior['id']}",
+                       token=member["token"]) == 403)
+    check("but deletes the message of someone with no deployment role",
+          stack.status("DELETE", f"/messages/{said(plain)}", token=member["token"]) == 204)
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{senior_role}")
+    stack.command("admin", "deny", "moderateCommunities")
     stack.command("admin", "revoke", world.owner["name"])
 
 
@@ -1273,6 +1594,10 @@ def dm_reads(world: World, check: Checks) -> None:
     check("and the reading is logged, once", logged() == before + 1)
     status = stack.status("GET", f"/messages/{secret}/reactions/{thumbs}", token=watcher["token"])
     check("reading who reacted in it is logged too", status == 200 and logged() == before + 2, status)
+    listed = stack.status("GET", f"/admin/users/{member['id']}/dms", token=watcher["token"])
+    entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])
+    check("listing someone's DMs is logged, naming them", listed == 200 and any(
+        e.get("action") == "listDms" and e.get("subject") == member["id"] for e in entries), listed)
     check("while what reads no content finds no DM",
           stack.status("GET", f"/channels/{dm}/read-states/@me", token=watcher["token"]) == 404
           and stack.status("GET", f"/channels/{dm}/presence", token=watcher["token"]) == 404)
@@ -1495,6 +1820,18 @@ def calendar_channels(world: World, check: Checks) -> None:
     world.stream.gather(0.5)
     check("given the channel back, their private URL answers again",
           stack.status("GET", f"{stack.base}{feed}") == 200)
+    # A route's actions reach only where its caller may look: hidden from the announcements, a
+    # member's new event is kept, but the plugin's account posts no card there on their behalf.
+    world.as_owner("PUT", f"/channels/{announce}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.5)
+    latest = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    added = stack.status("POST", events, {"title": "Unseen", "start": soon}, world.member["token"])
+    time.sleep(0.5)
+    still = stack.api("GET", f"/channels/{announce}/messages?limit=1", token=world.owner["token"])["data"][0]["id"]
+    check("a member who cannot see where events are announced adds one, and no card is posted there for them",
+          added == 201 and still == latest, added)
+    world.as_owner("DELETE", f"/channels/{announce}/overrides/{world.everyone}")
+    world.stream.gather(0.5)
     stack.command("admin", "grant", world.owner["name"])
     stack.command("admin", "allow", "banUsers")
     world.as_owner("PUT", f"/admin/users/{world.member['id']}/ban", {})
@@ -1503,6 +1840,24 @@ def calendar_channels(world: World, check: Checks) -> None:
     world.as_owner("DELETE", f"/admin/users/{world.member['id']}/ban")
     stack.command("admin", "deny", "banUsers")
     stack.command("admin", "revoke", world.owner["name"])
+
+    # The ban ended the member's sign-ins; they sign in again to go on.
+    member = world.sign_in(world.member["name"])["token"]
+    # An event is deleted by whoever added it, or by someone who may manage messages.
+    mine = stack.api("POST", events, {"title": "Mine", "start": soon}, member)["id"]
+    owners = world.as_owner("POST", events, {"title": "Theirs", "start": soon})["id"]
+    check("a member may not delete someone else's event",
+          stack.status("DELETE", f"{events}/{owners}", token=member) == 403)
+    check("but may delete their own",
+          stack.status("DELETE", f"{events}/{mine}", token=member) == 204)
+    check("and its reminder goes with it",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE key = 'remind:{mine}'", stack.database) == "0")
+    # Deleting the calendar deletes the reminders set in it, with its events.
+    check("an event's reminder is kept in the calendar's scope",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) != "0")
+    world.as_owner("DELETE", f"/channels/{calendar}")
+    check("deleting the calendar deletes its reminders",
+          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) == "0")
     stack.command("plugins", "disable", CALENDAR_ID)
 
 
@@ -1608,6 +1963,49 @@ def invite_previews(world: World, check: Checks) -> None:
     check("nor, once the community is deleted, a working one's", renamed not in preview(later))
 
 
+def deleted_communities(world: World, check: Checks) -> None:
+    say("a deleted community and a deleted message: nothing found, shared, joined, or reacted to")
+    stack, member = world.stack, world.member
+    thumbs = "%F0%9F%91%8D"
+    general = world.channel("doomed")
+    gone = world.post(general, "soon deleted")
+    world.as_owner("DELETE", f"/messages/{gone}")
+    check("a deleted message takes no reaction",
+          stack.status("PUT", f"/messages/{gone}/reactions/{thumbs}/@me", token=member["token"]) == 404)
+    check("and lists no reactors",
+          stack.status("GET", f"/messages/{gone}/reactions/{thumbs}", token=member["token"]) == 404)
+    word = f"doomedword{world.run}"
+    posted = world.post(general, f"{word} in a community about to go")
+    code = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+
+    def found(query: str) -> bool:
+        read = stack.api("GET", f"/messages?filter[text]={word}{query}", token=member["token"])
+        rows = read["data"] if isinstance(read, dict) else read
+        return any(m["id"] == posted for m in rows)
+
+    def status_of(user: str) -> str:
+        return stack.api("GET", f"/users/statuses?ids={user}", token=member["token"])[0]["onlineStatus"]
+
+    check("a member finds its messages while it stands", soon(lambda: found("")))
+    world.as_owner("GET", "/users/@me")
+    check("and sees its owner connected", status_of(world.owner["id"]) != "offline")
+    world.as_owner("DELETE", f"/communities/{world.community}")
+    world.stream.gather(0.5)
+    check("once deleted, its messages are found nowhere", not found(""))
+    check("nor by naming it",
+          stack.status("GET", f"/messages?filter[text]={word}&filter[community]={world.community}",
+                       token=member["token"]) == 404)
+    check("its members share nothing to start a DM over",
+          stack.status("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, member["token"]) == 400)
+    world.as_owner("GET", "/users/@me")
+    check("nor to see each other's presence", status_of(world.owner["id"]) == "offline")
+    check("its invites read as not found", stack.status("GET", f"/invites/{code}", token=member["token"]) == 404)
+    stranger = world.account("stranger")
+    check("and join nobody to it",
+          stack.status("PUT", f"/communities/{world.community}/members/@me", {"inviteCode": code},
+                       stranger["token"]) in (400, 404))
+
+
 def blackjack_tables(world: World, check: Checks) -> None:
     say("a game's table: who may watch and play, and chips kept straight under simultaneous requests")
     from concurrent.futures import ThreadPoolExecutor
@@ -1685,12 +2083,13 @@ def blackjack_tables(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", BLACKJACK_ID)
 
 
-SCENARIOS = [private_channels, granting_and_revoking, moves_and_categories, hidden_categories, hidden_managers,
+SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
-             nicknames, review_powers, ban_ranks, ban_deletions, dm_reads,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews, previews, icons, uploads]
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads,
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
+             deleted_communities, previews, icons, uploads]
 
 
 def main() -> None:

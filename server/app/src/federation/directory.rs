@@ -17,6 +17,52 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+/// Whether the `federated_deployment` row in a query is in use: added by an administrator,
+/// noted, on a list, the home of a user here, or used by one of this deployment's own users.
+/// Only deployments in use have their documents read again at each standing pass, and a
+/// deployment recorded on first contact that is not in use is forgotten once it has gone
+/// uncontacted for [`UNUSED_FORGOTTEN_AFTER_DAYS`] ([`prune_unused`]).
+pub const IN_USE_SQL: &str = "(federated_deployment.origin <> 'firstContact' \
+     OR federated_deployment.note IS NOT NULL \
+     OR EXISTS (SELECT 1 FROM federation_list_entry l \
+         WHERE l.domain = federated_deployment.domain) \
+     OR EXISTS (SELECT 1 FROM \"user\" u \
+         WHERE u.home_domain = federated_deployment.domain AND u.deleted_at IS NULL) \
+     OR EXISTS (SELECT 1 FROM user_foreign_deployment f \
+         WHERE f.domain = federated_deployment.domain))";
+
+/// The SQL condition that the `federated_deployment` row in a query is in use.
+pub fn in_use() -> diesel::expression::SqlLiteral<diesel::sql_types::Bool> {
+    diesel::dsl::sql::<diesel::sql_types::Bool>(IN_USE_SQL)
+}
+
+/// How long a deployment recorded on first contact and not in use is kept after it was last
+/// contacted.
+pub const UNUSED_FORGOTTEN_AFTER_DAYS: i64 = 30;
+
+/// Forgets the deployments recorded on first contact that are not in use ([`IN_USE_SQL`]) and
+/// were last contacted more than [`UNUSED_FORGOTTEN_AFTER_DAYS`] ago, with their pins, so names
+/// that were contacted once and never used do not pile up. One waiting on an administrator to
+/// accept a key it offered is kept, since forgetting it would lift its suspension. Returns how
+/// many were forgotten. A deployment on no list and with no users here admits or refuses no one
+/// differently once forgotten, so no one's sessions change.
+pub async fn prune_unused(conn: &mut AsyncPgConnection) -> crate::Result<usize> {
+    let before = Utc::now() - chrono::Duration::days(UNUSED_FORGOTTEN_AFTER_DAYS);
+    let pruned = diesel::delete(federated_deployment::table)
+        .filter(federated_deployment::origin.eq(Origin::FirstContact))
+        .filter(federated_deployment::offered_key.is_null())
+        .filter(
+            diesel::dsl::sql::<diesel::sql_types::Timestamptz>(
+                "coalesce(federated_deployment.last_contact_at, federated_deployment.created_at)",
+            )
+            .lt(before),
+        )
+        .filter(diesel::dsl::not(in_use()))
+        .execute(conn)
+        .await?;
+    Ok(pruned)
+}
+
 /// How a deployment came to be known.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, FromSqlRow, AsExpression,
@@ -195,7 +241,7 @@ pub async fn list(
         .offset(offset.clamp(0, crate::admin::MAX_OFFSET))
         .limit(limit.clamp(1, crate::admin::MAX_PAGE))
         .into_boxed();
-    if let Some(pattern) = crate::admin::contains_pattern(search) {
+    if let Some(pattern) = crate::admin::contains_pattern(search)? {
         query = query.filter(federated_deployment::domain.like(pattern));
     }
     let deployments: Vec<FederatedDeployment> = query.load(conn).await?;
@@ -387,4 +433,61 @@ pub async fn accept_key(
         });
     }
     get(conn, domain).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn only_unused_deployments_long_uncontacted_are_forgotten() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = AsyncPgConnection::establish(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(
+            "INSERT INTO federated_deployment (domain, origin, created_at, note) VALUES
+             ('unused.prune.test', 'firstContact', now() - interval '60 days', NULL),
+             ('never.prune.test', 'firstContact', now() - interval '60 days', NULL),
+             ('recent.prune.test', 'firstContact', now() - interval '60 days', NULL),
+             ('noted.prune.test', 'firstContact', now() - interval '60 days', 'kept'),
+             ('offered.prune.test', 'firstContact', now() - interval '60 days', NULL),
+             ('added.prune.test', 'administrator', now() - interval '60 days', NULL),
+             ('listed.prune.test', 'firstContact', now() - interval '60 days', NULL);
+             UPDATE federated_deployment SET public_key = decode(repeat('01', 32), 'hex'),
+                 first_contact_at = now() - interval '60 days',
+                 last_contact_at = now() - interval '40 days'
+                 WHERE domain LIKE '%.prune.test' AND domain <> 'never.prune.test';
+             UPDATE federated_deployment SET last_contact_at = now() - interval '2 days'
+                 WHERE domain = 'recent.prune.test';
+             UPDATE federated_deployment SET offered_key = decode(repeat('02', 32), 'hex'), offered_key_at = now()
+                 WHERE domain = 'offered.prune.test';
+             INSERT INTO federation_list_entry (domain, list) VALUES ('listed.prune.test', 'usersImmigrationAllow');",
+        )
+        .await
+        .unwrap();
+        assert!(prune_unused(&mut conn).await.unwrap() >= 2);
+        let left: Vec<String> = federated_deployment::table
+            .select(federated_deployment::domain)
+            .filter(federated_deployment::domain.like("%.prune.test"))
+            .order(federated_deployment::domain)
+            .load(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(
+            left,
+            [
+                "added.prune.test",
+                "listed.prune.test",
+                "noted.prune.test",
+                "offered.prune.test",
+                "recent.prune.test",
+            ]
+        );
+    }
 }

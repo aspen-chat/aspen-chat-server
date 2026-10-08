@@ -44,6 +44,12 @@ by each API server, at the same origin.
 | `[nats] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
 | `valkey_url` | required | Valkey, as `redis://host:6379`. |
 
+`docker-compose.yaml` and the development scripts publish passwords and keys in Aspen's repository
+(`aspen_test`, the storage keys, and `[media.s3]`'s defaults). A server whose `public_url` is
+`https` at a host other than `localhost` (or a name under it) refuses to start with any of them as
+`database_url`'s password, `nats_auth_token`, `[nats] password`, or `[media.s3] access_key` or
+`secret_key`, and says which to change.
+
 ## Event delivery
 
 | Setting | Default | |
@@ -62,8 +68,10 @@ most once a minute. An event stream's connection counts for as long as it is ope
 | --- | --- | --- |
 | `max` | `100000` | The most connections the server holds open at once. Keep it below the process's open file limit (`LimitNOFILE` under systemd, `--ulimit nofile` in Docker), with room for its connections to PostgreSQL, NATS, Valkey, and storage. |
 | `max_per_ip` | `512` | The most one address holds open at once; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network. A browser holds one or two, so this suits a few hundred people behind one address; raise it if a school's or an office's network sends many more. Reverse proxies listed in `[rate_limits] trusted_proxies` count only toward `max`, so when every client arrives through one, limit connections per client there. |
+| `max_per_network` | `4096` | The most one network, an IPv4 /24 or an IPv6 /48, holds open at once, alongside `max_per_ip`, so whoever holds many addresses in one block cannot take the server's connections by spreading over them. Raise it if many of your people share one carrier-grade NAT block. Trusted proxies count only toward `max`. |
 | `handshake_seconds` | `10` | How long a client has to finish its TLS handshake. |
 | `header_read_seconds` | `30` | How long an HTTP/1.1 client has to send a request's headers, which is also how long a kept-alive connection may sit idle. An idle HTTP/2 connection is pinged every 30 seconds and closed when a ping goes 20 seconds unanswered. |
+| `idle_seconds` | `120` | How long a connection may stay open with no request in it before the server closes it (an HTTP/2 connection is sent GOAWAY). Clients open a new one when they next need it. An event stream's WebSocket is not an HTTP connection once it opens, and is not closed by this. |
 
 ## `[media]`
 
@@ -101,10 +109,10 @@ no harm.
 | --- | --- | --- |
 | `endpoint` | `http://127.0.0.1:3900` | The S3 API, as this server reaches it. |
 | `public_endpoint` | `endpoint` | The S3 API as clients reach it; the upload URLs they are handed name it. It must allow uploads by CORS (`PUT`, with `Content-Type`) from `public_url`'s origin and the apps' (`null` for the desktop app, `capacitor://localhost` and `https://localhost` for the mobile apps), or from any origin. Leaving it out suits only clients on the server's own machine. |
-| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: a public read path on the bucket, such as a website endpoint or a CDN. The server itself never needs to reach it. |
+| `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects: an anonymous read path on the bucket, such as a website endpoint or a CDN, that allows reading objects and nothing else (no listing, no writes; never a SeaweedFS filer), at an origin of its own that sends `X-Content-Type-Options: nosniff`. [The storage's read path](installing.md#the-storages-read-path) says how, and how to check it. The server itself never needs to reach it. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
-| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. |
+| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. A server at a public `https` address refuses the development values. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
 
 ## `[media.previews]`
@@ -169,7 +177,6 @@ and `aspen_attachment_preview_duration_seconds` count them, by `kind` (`picture`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `token_secret` | a development value | Signs the tokens that let people into calls; every voice server must have the same. **Set it to a long random string** (`openssl rand -base64 48`): a server whose `public_url` is `https` refuses to start with the development value or with one shorter than 32 bytes, since whoever knows it can let themself into any call. |
 | `failure_threshold` | `5` | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it for `failure_window_seconds`, after which it takes calls again on its own (an administrator enabling it ends the suspension sooner). Only this deployment's people whom a join offer sent to that server within the token's lifetime and a minute count, and not those who joined a call there within the window; bots and people from other deployments never do. The last server taking calls is never suspended. |
 | `failure_window_seconds` | `3600` | How long failures are counted, and how long a suspension lasts. |
 | `join_token_ttl_seconds` | `60` | How long someone has to reach a voice server after asking to join. |
@@ -189,8 +196,8 @@ How plugins run; which are installed, and their settings, are in the database (s
 | `observe_millis` | `10000` | How long a plugin has to handle something that happened, such as checking a new message's pictures with another service. |
 | `route_millis` | `3000` | How long a plugin has to answer a request to one of its routes. |
 | `memory_mib` | `64` | The most memory one call of a plugin may use, all its memories together. |
-| `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. With `memory_mib` it bounds what plugins can take of the server's memory. |
-| `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. |
+| `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. A quarter of the places (at least one, from two up) are kept for deciding messages, which routes and observers cannot take. With `memory_mib` it bounds what plugins can take of the server's memory. |
+| `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. A quarter of them are likewise kept for deciding messages. |
 
 ## `[push]`
 
@@ -214,7 +221,7 @@ and the rest need only `from`. Links in mail, unsubscribing included, go to `pub
 | Setting | Default | |
 | --- | --- | --- |
 | `send` | `true` | Whether this server sends mail and makes daily digests. With it off, the server still takes addresses and queues mail, and tells the senders at once (over NATS) when someone waits for it; at least one server of the deployment must send, or mail waits until one does. |
-| `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
+| `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. The server refuses to start with a user or password in an `smtp://` address without `?tls=required` (`tls=opportunistic` can be stripped by whoever sits between) unless the host is this machine. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
 | `from` | required | Who mail comes from, such as `Example Chat <noreply@chat.example.org>`. Its domain should publish SPF and DKIM records for the SMTP server you use, or mail lands in spam. |
 | `max_per_second` | none | The most mail the whole deployment hands to the SMTP server in a second, however many servers send, counted in Valkey; set it under your provider's sending quota (Amazon SES starts accounts at 14 a second). A second's worth may go back to back. Left out, each sending server sends up to eight at once. |
 
@@ -241,7 +248,24 @@ them, a limit you give replacing the built-in one whole.
 | `trusted_proxies` | `[]` | Reverse proxies, as addresses or networks (`"10.0.0.0/8"`), whose `X-Forwarded-For` names the client: the right-most entry that is not itself a listed proxy, read with or without a port (`192.0.2.1:5678`, `[2001:db8::1]:80`). An entry that is not an address (`unknown`) ends the reading there, and the client counts as the listed proxy that passed it on. **Set it when the server is behind a proxy**, or every client counts as the proxy. |
 | `ipv6_prefix` | `64` | IPv6 clients are counted by their network of this many bits, since one household holds a whole /64. |
 | `max_suspension_seconds` | `86400` | The longest this server honours a suspension of the limits (`aspen-chat-server limits suspend`), counted from when it began. |
-| `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits, rather than let through, so an outage does not allow unlimited guessing of passwords, codes, and invites. Every other endpoint is let through during an outage. The per-username sign-in limit always fails closed. A list given here replaces the built-in one (in `rate_limits.toml`) whole. |
+| `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits, rather than let through, so an outage does not allow unlimited guessing of passwords, codes, and invites. Every other endpoint is let through during an outage. The per-username sign-in limits always fail closed. A list given here replaces the built-in one (in `rate_limits.toml`) whole. |
+
+Password sign-in (`POST /auth/login`) has two limits by username. `username` counts every
+attempt at a name from one network (an IPv4 /24, an IPv6 /48, or the coarser `ipv6_prefix`), so
+guesses from one network cannot lock its owner out from anywhere else. `username_failures` counts
+only wrong passwords for the name, from every network together, so guessing from many networks at
+once is held too; while it is spent, password sign-in for that name is refused (`rateLimited`)
+until it refills, and the owner can still sign in with a passkey or from another device, or reset
+the password by email.
+
+Registration (`POST /users`) is limited per address and for everyone together: 600 accounts
+at once, then twenty a second (72000 an hour). That passes a launch's rush; a deployment expecting
+more at once raises it:
+
+```toml
+[rate_limits.endpoints."POST /users"]
+global = { requests = 6000, per_seconds = 60, burst = 3000 }
+```
 
 Limits for one endpoint go under its method and path:
 
@@ -260,18 +284,20 @@ See [Federation](federation.md) for what these mean together. The deployment's d
 
 | Setting | Default | |
 | --- | --- | --- |
-| `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing, and reads again the documents of the deployments it federates with, which is how soon it notices one replaced its key. |
+| `standing_interval_seconds` | `3600` | How often this deployment asks other deployments whether their users here are still in good standing, and reads again the documents of the deployments it federates with that are in use, which is how soon it notices one replaced its key. |
 | `standing_grace_seconds` | `86400` | How long another deployment may go unreached before its users' sessions here end. |
+| `max_arrivals_per_home_per_day` | `500` | The most people and bots of one other deployment who may sign in here for the first time in one day (UTC), so a deployment that makes accounts in bulk cannot fill yours with them. Those over it are refused with `federationRefused` until the next day. |
 
 ### `[federation.development]`
 
-For running deployments side by side on one machine (`scripts/dev_federation.py`). Leave it out
-of a deployment anyone else uses.
+For running deployments side by side on one machine (`scripts/dev_federation.py`). A server whose
+`public_url` is not at `localhost`, a name under it, or a loopback address refuses to start with
+either setting given.
 
 | Setting | Default | |
 | --- | --- | --- |
 | `extra_root_certificates` | `[]` | PEM files of certificate authorities to trust, besides the system's, when calling other deployments. |
-| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network. |
+| `allow_private_addresses` | `false` | Lets this server call deployments at private and loopback addresses, which it otherwise refuses so that naming a deployment cannot make it reach inside its own network, and push to push services at loopback addresses (`scripts/dev_push.py`). Pushes never go to other private addresses. |
 
 ## Deployment settings
 
@@ -292,6 +318,7 @@ anyone has an account.
 | `bots-max-per-user` | `25` | The most bots one person may own. |
 | `everyone-mention-limit` | `200` | How many members a community gains before its everyone role loses Mention everyone, so one `@everyone` cannot reach that many people by accident. It happens once per community, and the owner is told why by the deployment's own account (which cannot be signed in to, messaged, or blocked) and may turn it back on. `0` never turns it off. |
 | `custom-emoji-limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
+| `upload-quota-gib` | `25` | How many GiB one person may upload, attachments and pictures together, in any 24 hours. Each upload counts with the size it was started for, whether or not it is then sent or deleted; past the limit, an upload is refused with when there will be room. `0` sets no limit. |
 | `email-required` | `false` | Creating an account takes an email address. Needs `[email]`. It binds registration only: accounts made before it was turned on are not asked for one. |
 | `email-verification-required` | `false` | An account that has an email address must verify it, by the code mailed to it, before it can use the deployment; until then it can only verify, change, or resend its address, or sign out. Turned on, the apps of those with an unverified address are asked at once. Accounts without an address are not affected unless `email-required` is on too, and then only once they give one. Needs `[email]`. |
 | `newsletter-enabled` | `false` | The deployment has a newsletter: people may subscribe at registration (unticked by default) and in their account settings, and holders of Send newsletters write and send posts under **Newsletter** in the dashboard. Only verified addresses receive it, and each piece carries an unsubscribe link. Needs `[email]`. |
@@ -309,7 +336,9 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 - `aspen-chat-server voice-servers add NAME --url URL --capacity N` registers one, or gives the
   one already registered by that name this address and capacity, so a deployment script may run
   it every time it deploys. `url` is where clients reach it, as
-  `https://voice-1.chat.example.org`; `capacity` is the most people it carries at once, which
+  `https://voice-1.chat.example.org`, an `http` or `https` address, and `https` wherever
+  `public_url` is (here and in the dashboard; browsers on an `https` page refuse unencrypted
+  WebSockets); `capacity` is the most people it carries at once, which
   `voice_server estimate-capacity` suggests.
 - `voice-servers set NAME [--url URL] [--capacity N] [--enabled true|false]` changes one. A
   disabled server is offered to no one joining a call; calls already on it go on.
@@ -322,12 +351,13 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | Setting | Default | |
 | --- | --- | --- |
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
-| `token_secret` | required | The API servers' `[voice] token_secret`. The server warns at startup when it is the development value or shorter than 32 bytes. |
+| `token_secret` | | Only while upgrading from API servers that signed join tokens with a shared secret ([Upgrading](installing.md#from-shared-secret-join-tokens)): the server then also takes tokens signed with it, and warns at startup. Leave it out otherwise: join tokens are signed with the API servers' key, which the server asks them for over NATS. It refuses to start with the old development value or one shorter than 32 bytes, unless `development` is set. |
+| `development` | `false` | Lets the server start with a development or short `token_secret`. Never on a deployment people use: whoever knows the secret can join any call. |
 | `nats_url` | required | The same NATS as the API servers. |
 | `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
 | `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |
-| `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front. |
-| `workers` | one per CPU | Media worker processes, each using at most one core. |
+| `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front, and list it in `[rate_limits] trusted_proxies`, or every client counts as the proxy's address. The server warns at startup when this is a loopback address and no proxy is trusted. |
+| `workers` | one per CPU | Media worker processes, each using at most one core. If one dies the server stops, sending everyone in its calls to rejoin, and exits with an error: run it under a supervisor that restarts it (`Restart=on-failure`, `restart: unless-stopped`). |
 
 ### `[rtc]`
 
@@ -349,7 +379,7 @@ calls, never to the rest of the internet, and sees only ciphertext.
 | --- | --- | --- |
 | `relay_mbps` | `50` | The most every relayed transfer on this server may carry together, in megabits a second. People are told this limit before they choose the relay. `0` turns relaying off: transfers then go directly between devices or not at all. |
 | `port` | `3478` | The UDP port STUN and TURN answer on; open it to clients. |
-| `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side), inside the server only: they need not be open to clients. |
+| `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side), inside the server only: they need not be open to clients. The server refuses to start when they overlap the media ports or `port`. |
 
 ### `[metrics]` and `[rate_limits]`
 

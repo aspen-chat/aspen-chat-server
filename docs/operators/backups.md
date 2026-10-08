@@ -28,6 +28,15 @@ The database also holds the deployment's push key, which phones' relays know it 
 deployment restored without it makes a new one, and phones then need to be opened once to be
 woken again.
 
+It also holds the key the verification and password reset codes waiting in Valkey are kept
+under (`server_secret`), so that a copy of Valkey alone does not give the codes away. A
+deployment restored without it makes a new one, and codes mailed before then stop working; the
+people waiting on them ask for new ones.
+
+And it holds the key join tokens are signed with (`server_secret`). A deployment restored
+without it makes a new one; voice servers ask for it as they meet a token naming it, so joins go
+on, and only tokens handed out just before the restore stop working.
+
 ## The object storage
 
 Attachments, icons, avatars, and link preview images are objects in the `[media.s3]` bucket;
@@ -35,6 +44,12 @@ the database holds only their names. Back the bucket up with your storage's own 
 (replication, versioning, or copying it elsewhere with `rclone` or `aws s3 sync`). A restored
 database whose bucket was lost shows every picture and file as missing, and the people who
 posted them would have to post them again.
+
+The bucket also holds, under `evidence/`, the files of deleted messages and of attachments taken
+off their messages, kept for reviewing reports. Nothing deletes them but
+`aspen-chat-server attachments purge --message <id>` (or `--attachment <id>`), which deletes them
+from the database and the bucket and writes the purge to the moderation log; a backup made before
+a purge still holds what was purged, so restoring one brings it back until it is purged again.
 
 ## What needs no backup
 
@@ -49,7 +64,7 @@ posted them would have to post them again.
   again; nobody is signed out.
 - **The servers themselves** keep nothing: rebuild or redeploy them.
 - **`aspen.toml` and `voice_server.toml`** are configuration, not data, but they hold secrets
-  (the database password, the storage keys, `token_secret`). Keep them with your other secrets,
+  (the database password, the storage keys). Keep them with your other secrets,
   not in the same place as the backups.
 
 ## Restoring

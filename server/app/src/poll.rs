@@ -839,6 +839,7 @@ pub async fn remove_write_in(
                         &access,
                         crate::moderation_log::ModerationAction::RemoveWriteIn,
                         Some(format!("{}/{option}", id.0)),
+                        writer.flatten(),
                     )
                     .await?;
                 }
@@ -1072,6 +1073,7 @@ pub async fn close_poll(
                         &access,
                         crate::moderation_log::ModerationAction::ClosePoll,
                         Some(poll_id.0.to_string()),
+                        Some(row.created_by),
                     )
                     .await?;
                 }

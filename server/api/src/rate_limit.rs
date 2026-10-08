@@ -317,9 +317,17 @@ pub async fn within_limits(
     )
 }
 
-/// Checks the rules that count by the username given to `POST /auth/login`.
-pub async fn limit_sign_in(state: &GlobalServerContext, username: &str) -> ApiResult<()> {
+/// Checks the rules that count by the username given to `POST /auth/login`, before its
+/// password is checked: counts the attempt against the name from the client's network
+/// (`username`), and refuses without counting when the name's wrong passwords from anywhere
+/// (`username_failures`) are spent.
+pub async fn limit_sign_in(
+    state: &GlobalServerContext,
+    username: &str,
+    ip: Option<IpAddr>,
+) -> ApiResult<()> {
     let identity = Identity {
+        ip,
         username: Some(username),
         ..Identity::default()
     };
@@ -328,7 +336,38 @@ pub async fn limit_sign_in(state: &GlobalServerContext, username: &str) -> ApiRe
             .rate_limiter
             .check(&state.valkey, SIGN_IN_ROUTE, Stage::Username, &identity)
             .await,
+    )?;
+    refuse(
+        state
+            .rate_limiter
+            .peek(
+                &state.valkey,
+                SIGN_IN_ROUTE,
+                Stage::UsernameFailures,
+                &identity,
+            )
+            .await,
     )
+}
+
+/// Counts a wrong password given for `username` at `POST /auth/login` against its
+/// `username_failures` limit. Answers nothing: the wrong password is answered as such, and the
+/// next attempt is refused when the limit is spent.
+pub async fn note_wrong_password(state: &GlobalServerContext, username: &str, ip: Option<IpAddr>) {
+    let identity = Identity {
+        ip,
+        username: Some(username),
+        ..Identity::default()
+    };
+    let _ = state
+        .rate_limiter
+        .check(
+            &state.valkey,
+            SIGN_IN_ROUTE,
+            Stage::UsernameFailures,
+            &identity,
+        )
+        .await;
 }
 
 impl ApiError {

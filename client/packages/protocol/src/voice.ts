@@ -113,6 +113,11 @@ export interface VoiceCallState {
   readonly muted: boolean;
   readonly deafened: boolean;
   /**
+   * Whether a moderator's mute of the user stands in the call's community, which keeps them
+   * muted in every call there, whatever they ask, until a moderator lifts it.
+   */
+  readonly serverMuted: boolean;
+  /**
    * Whether the channel lets the user send their microphone (Speak) and share a screen
    * (Share screen), as the join offer said; without Speak they join to listen.
    */
@@ -153,6 +158,13 @@ export interface VoiceCallState {
   /** Why the last attempt failed, for the UI; cleared on the next join. */
   readonly error: string | null;
   /**
+   * Set when the voice server refused to unmute or undeafen the user (most often for doing it
+   * too often), which leaves them muted or deafened as `muted` and `deafened` say, until they
+   * try again, dismiss it (`clearStateRefusal`), or the call ends. `retryAfterSeconds` is how
+   * long until the server would take it, when it said.
+   */
+  readonly stateRefused: { readonly retryAfterSeconds: number | null } | null;
+  /**
    * Set when the server ended the call for being idle, until `acknowledgeEnd`, so the UI can
    * tell the user why they were dropped.
    */
@@ -192,6 +204,7 @@ const IDLE: VoiceCallState = {
   session: null,
   muted: false,
   deafened: false,
+  serverMuted: false,
   canSpeak: false,
   canShare: false,
   canCamera: false,
@@ -206,6 +219,7 @@ const IDLE: VoiceCallState = {
   errorKind: null,
   retryAfterSeconds: null,
   error: null,
+  stateRefused: null,
   endedReason: null,
 };
 
@@ -286,6 +300,15 @@ export class VoiceCall {
   #sendTransport: VoiceTransport | null = null;
   #recvTransport: VoiceTransport | null = null;
   #microphone: MediaStreamTrack | null = null;
+  /**
+   * The mute and deafen the user last asked for. In a call, `muted` and `deafened` show the
+   * voice server's word, except that they show the user silenced the moment they ask to be:
+   * muting and deafening take effect at once (the microphone's track is disabled here too, and
+   * the server never refuses them), while unmuting and undeafening show only once the server
+   * says it did them, so a refused one never shows the user audible when they are not.
+   * Outside a call it is the state itself.
+   */
+  #asked = { muted: false, deafened: false };
   #screen: ScreenCapture | null = null;
   #screenProducers: { id: string; close(): void }[] = [];
   /** The external sound of the browser screen share, and the RTP producer it feeds. */
@@ -345,6 +368,10 @@ export class VoiceCall {
 
   #set(patch: Partial<VoiceCallState>): void {
     this.#state = { ...this.#state, ...patch };
+    if (this.#state.status !== "connected") {
+      this.#asked = { muted: this.#state.muted, deafened: this.#state.deafened };
+    }
+    this.#holdMicrophone();
     for (const listener of Array.from(this.#listeners)) {
       listener();
     }
@@ -437,13 +464,54 @@ export class VoiceCall {
   }
 
   setMuted(muted: boolean): void {
-    this.#set({ muted });
-    this.#sendState();
+    this.#ask({ ...this.#asked, muted });
   }
 
   setDeafened(deafened: boolean): void {
-    this.#set({ deafened });
+    this.#ask({ ...this.#asked, deafened });
+  }
+
+  /**
+   * Follows a moderator's mute of the user in the call's community being made or lifted, as
+   * its event says; the voice server applies it to the call itself.
+   */
+  setServerMuted(serverMuted: boolean): void {
+    if (this.#state.status !== "idle" && this.#state.serverMuted !== serverMuted) {
+      this.#set({ serverMuted });
+    }
+  }
+
+  /** Forgets a refusal to unmute or undeafen once the user has seen it. */
+  clearStateRefusal(): void {
+    if (this.#state.stateRefused !== null) {
+      this.#set({ stateRefused: null });
+    }
+  }
+
+  /**
+   * Asks for `asked` as the user's mute and deafen. Outside a call it simply is the state; in
+   * one, whatever it silences shows at once and whatever it lifts waits for the voice server.
+   */
+  #ask(asked: { muted: boolean; deafened: boolean }): void {
+    if (this.#state.status !== "connected") {
+      this.#set({ ...asked, stateRefused: null });
+      return;
+    }
+    this.#asked = asked;
+    this.#set({
+      muted: this.#state.muted || asked.muted,
+      deafened: this.#state.deafened || asked.deafened,
+      stateRefused: null,
+    });
     this.#sendState();
+  }
+
+  /** Keeps the microphone's track silent while the user is shown muted. */
+  #holdMicrophone(): void {
+    const enabled = !this.#state.muted;
+    if (this.#microphone !== null && this.#microphone.enabled !== enabled) {
+      this.#microphone.enabled = enabled;
+    }
   }
 
   /**
@@ -752,9 +820,12 @@ export class VoiceCall {
         track.stop();
         return;
       }
+      // Silent from its first sample when the user is muted.
+      track.enabled = !this.#state.muted;
       await producer.replaceTrack({ track });
       this.#microphone?.stop();
       this.#microphone = track;
+      this.#holdMicrophone();
     }
   }
 
@@ -783,8 +854,8 @@ export class VoiceCall {
     if (this.#signal !== null && this.#state.status === "connected") {
       this.#signal.send({
         type: "setState",
-        muted: this.#state.muted,
-        deafened: this.#state.deafened,
+        muted: this.#asked.muted,
+        deafened: this.#asked.deafened,
       });
     }
   }
@@ -883,6 +954,7 @@ export class VoiceCall {
       canShare: offer.shareScreen,
       canCamera: offer.useCamera,
       canTransfer: offer.transferFiles,
+      serverMuted: offer.serverMuted ?? false,
     });
     // The microphone comes first: without it there is nothing to send, and its failure is
     // the browser's or the user's, never a voice server's, so no server is tried or reported.
@@ -904,6 +976,7 @@ export class VoiceCall {
         return;
       }
       this.#microphone = microphone;
+      this.#holdMicrophone();
     }
     const ranked = await this.#rank(offer.candidates);
     let lastError: Error | null = null;
@@ -1271,9 +1344,14 @@ export class VoiceCall {
         void this.#grantsChanged(frame.grants);
         break;
       case "participantState":
-        // A moderator's mute arrives as the server's word on this client's own state.
+        // The server's word on this client's own state, a moderator's mute included. One
+        // answering an earlier request never shows the user less silenced than they have
+        // since asked to be.
         if (frame.user === this.#lastReady?.user) {
-          this.#set({ muted: frame.muted, deafened: frame.deafened });
+          this.#set({
+            muted: frame.muted || this.#asked.muted,
+            deafened: frame.deafened || this.#asked.deafened,
+          });
         }
         break;
       case "error":
@@ -1281,6 +1359,10 @@ export class VoiceCall {
           this.#generation += 1;
           this.#teardown();
           this.#set({ ...IDLE, status: "failed", error: frame.detail });
+        } else if (frame.refused === "setState") {
+          // Only unmuting or undeafening is ever refused: the user stays as they are shown.
+          this.#asked = { muted: this.#state.muted, deafened: this.#state.deafened };
+          this.#set({ stateRefused: { retryAfterSeconds: frame.retryAfterSeconds ?? null } });
         }
         break;
       default:
@@ -1327,6 +1409,7 @@ export class VoiceCall {
         return;
       }
       this.#microphone = microphone;
+      this.#holdMicrophone();
       this.#microphoneProducer = await transport.produce({
         track: microphone,
         appData: { source: "microphone" },

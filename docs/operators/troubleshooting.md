@@ -19,7 +19,6 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `twoFactorEnrollmentRequired` | The deployment setting `require-two-factor` is on and the account has no authenticator app or passkey. | The person adds one; their session allows nothing else meanwhile. |
 | `emailVerificationRequired` | The deployment setting `email-verification-required` is on and the account's email address is not verified. | The person types the code mailed to them, or has a new one sent. If codes never arrive, check the server's log for mail it gave up on and the SMTP server's own log; the mailpit inbox shows what a development server sent. |
 | `passwordResetUnavailable` | A password reset by email could not start: no account has that username, it has no verified address, or the deployment sends no mail (no `[email]`); the detail says which. | Someone without a verified address cannot reset by email. An administrator can help them some other way, such as deleting the account so they can register again. |
-| `emailMismatch` | During a password reset, the address typed is not the account's. Five wrong addresses end the reset. | The person checks it; the reset showed them its first three characters and its domain. |
 | `passwordResetExpired` | The reset is older than half an hour, was used, or ended after too many wrong addresses or codes. | Start again from the sign-in screen. |
 | `lastSecondFactor` | Removing the account's only second factor, where two factors are required. | Add another first. |
 | `reauthenticationRequired` | A security change needs a password or code given within `[auth] reverify_seconds`. | The app asks for it. |
@@ -38,15 +37,16 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | Code | What it means | What to do |
 | --- | --- | --- |
 | `rateLimited` | Too many requests to one endpoint; `Retry-After` says for how long. | If many people share one address (an office, a school, a load test), check `[rate_limits] trusted_proxies` first: behind a proxy that is not listed, everyone counts as the proxy. `aspen-chat-server limits suspend --scope networks --network <cidr> --reason …` lifts the per-address limits for a network for a while. |
-| `serverBusy` | More sign-ins than `[auth] password_hashing_threads` can check within `password_hashing_wait_seconds`, or every database connection stayed taken for `database_pool_wait_seconds` (the server logs "no database connection came free"), or, on sign-in, password reset, registration, and invite endpoints, Valkey cannot be reached to count their rate limits (the server logs "rate limits unavailable"). | Brief bursts are expected (after an outage, everyone signs in again). If sign-ins cause it and it lasts, add API servers or CPU. If database connections do, check NATS first: every write holds its connection until NATS acknowledges its event. Then raise `database_pool_size` within what PostgreSQL's `max_connections` allows, or add API servers. If Valkey is the cause, bring it back: those endpoints are refused until it answers (`[rate_limits] fail_closed`). |
+| `uploadQuotaExceeded` | Someone has uploaded the deployment setting `upload-quota-gib` (25 GiB by default) within the last 24 hours; `detail` and `Retry-After` say when there is room again. | Raise or clear the limit with `aspen-chat-server settings set --upload-quota-gib N` (`0` for none) or in the dashboard, if those uploads are legitimate. |
+| `serverBusy` | More sign-ins than `[auth] password_hashing_threads` can check within `password_hashing_wait_seconds`, or every database connection stayed taken for `database_pool_wait_seconds` (the server logs "no database connection came free"), or, on sign-in, password reset, registration, and invite endpoints, Valkey cannot be reached to count their rate limits, or is full and refusing writes (the server logs "rate limits unavailable"). | Brief bursts are expected (after an outage, everyone signs in again). If sign-ins cause it and it lasts, add API servers or CPU. If database connections do, check NATS first: every write holds its connection until NATS acknowledges its event. Then raise `database_pool_size` within what PostgreSQL's `max_connections` allows, or add API servers. If Valkey is the cause, bring it back, or raise its `maxmemory` when `INFO memory` shows it full: those endpoints are refused until it answers (`[rate_limits] fail_closed`). |
 | `internal` | Something failed on the server. | The log has an `ERROR` line for each, with the cause. Most are the database, NATS, Valkey, or storage being unreachable. |
 
 ### Federation
 
 | Code | What it means | What to do |
 | --- | --- | --- |
-| `deploymentUnreachable` | This deployment could not read another's document. The detail says why: its name has no address, it answered only on private addresses, it refused the connection, it timed out, its certificate is expired, not yet valid, for another name, or not from a public authority, it redirected, or it served something that is not an Aspen document. | Each detail says whose to fix. To check by hand: `curl -v https://<domain>/.well-known/aspen`. |
-| `federationRefused` | A gate does not let this crossing happen: yours or theirs, for this deployment, for this kind of account; or federation is off (an `http` `public_url`); or the two speak no protocol version in common; or the person is banned here. The detail says which. | Change the gate or a list if you mean to allow it. |
+| `deploymentUnreachable` | This deployment could not read another's document. The detail says why: its name has no address, it answered only on private addresses, it refused the connection, it timed out, its certificate is expired, not yet valid, for another name, or not from a public authority, it redirected, or it served something that is not an Aspen document. | Each detail says whose to fix. Someone signing in from another deployment, or a deployment sending a notice, is told only that it could not be reached, since anyone can make this server try any domain that way; the reason is in this server's log, and contacting the deployment from the dashboard's Federation tab shows it too. To check by hand: `curl -v https://<domain>/.well-known/aspen`. |
+| `federationRefused` | A gate does not let this crossing happen: yours or theirs, for this deployment, for this kind of account; or federation is off (an `http` `public_url`); or the two speak no protocol version in common; or the person is banned here; or `[federation] max_arrivals_per_home_per_day` people from that deployment already arrived today. The detail says which. | Change the gate or a list if you mean to allow it. |
 | `assertionInvalid` | A statement from another deployment was refused: its key changed without a handover (until its new key is accepted, everything from it is refused, even what its old key signs), the signature does not match, it was meant for another deployment, it expired or is from the future (a clock is wrong), or it was used before. The detail says which. | For a changed key, see [Keys](federation.md#keys). For clocks, run NTP on every server. |
 | `strongerSignInRequired` | This deployment requires two factors, and the visitor signed in at home with a password alone. | They sign in at home with a second factor or a passkey. |
 
@@ -93,8 +93,9 @@ something other than the API servers.
 reachable from the client, over HTTPS when the page is, and allow the page's origin by CORS for
 `PUT`. The browser's developer tools show the refused request.
 
-**Pictures do not load.** They load from `[media.s3] public_base_url`, which must serve the bucket
-without credentials.
+**Pictures do not load.** They load from `[media.s3] public_base_url`, which must serve the bucket's
+objects without credentials, and only them: [The storage's read path](installing.md#the-storages-read-path)
+gives the checks, which also show whether it lists or takes writes as it must not.
 
 **Videos show as downloads, without a poster.** No server that makes previews can run `ffmpeg`
 and `ffprobe`; each says so in its log as it starts ("makes previews of pictures only"). Install
@@ -127,11 +128,13 @@ not the address clients can reach (behind NAT it must be the public one).
 
 **Phones are not woken.** The app registers each phone when it signs in, and the server then
 calls the phone's relay over HTTPS. Check that `[push] enabled` is on and that the server can
-reach the relay the phones' app names over HTTPS (its address appears in the log beside any
-push that failed). The log warns
+reach the relay the phones' app names over HTTPS (the log warns of any push that failed by its
+subscription, and names the relay's address at `debug`, `ASPEN_LOG=aspen_app::push=debug`). The log warns
 of every push a relay refuses: `quotaExhausted` means the deployment has sent more pushes this
 month than its tier with that relay allows, and pushes resume next month or when its tier is
-raised. Nobody is woken for a message while they are using Aspen on another device, in a muted
+raised. A relay that does not answer within three seconds, or cannot be connected to, five times
+in a row for one phone has that phone skipped for an hour; `aspen_pushes_total` counts pushes by
+outcome (`unanswered`, `suspended`, and `dropped` among them). Nobody is woken for a message while they are using Aspen on another device, in a muted
 channel, or by someone they blocked.
 
 **A voice server was suspended** (the log says `voice server suspended after failures from

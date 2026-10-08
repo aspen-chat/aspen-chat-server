@@ -4,7 +4,7 @@ use crate::events::Publishing;
 use crate::permissions::{Permissions, require_member};
 use crate::t;
 use crate::{CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::invite;
+use aspen_schema::{community, invite};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{InviteEvent, ServerEvent};
 use chrono::Utc;
@@ -17,6 +17,8 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use rand::RngExt;
 
 const INVITE_CODE_LENGTH: usize = 16;
+/// The most invites a community holds that are neither revoked nor expired.
+pub const MAX_ACTIVE_INVITES: i64 = 1000;
 /// How long after it stops working an invite, a community's or a registration invite, is still
 /// listed; after that only the terminal lists it (registration invites) or nothing does.
 pub const STALE_AFTER_DAYS: i64 = 7;
@@ -115,6 +117,24 @@ pub async fn insert(
         }
         None => generate_invite_code(),
     };
+    crate::community::hold_for_count(conn, community).await?;
+    let active: i64 = invite::table
+        .filter(invite::community.eq(community))
+        .filter(invite::deleted_at.is_null())
+        .filter(
+            invite::expires_at
+                .is_null()
+                .or(invite::expires_at.gt(Utc::now())),
+        )
+        .count()
+        .get_result(conn)
+        .await?;
+    if active >= MAX_ACTIVE_INVITES {
+        return Err(crate::Error::Validation(t!(
+            "inviteLimit",
+            max = MAX_ACTIVE_INVITES
+        )));
+    }
 
     let invite = Invite {
         code,
@@ -145,8 +165,10 @@ pub async fn validate_invite(
     code: &str,
 ) -> crate::Result<CommunityId> {
     let inv: Invite = invite::table
+        .inner_join(community::table)
         .select(Invite::as_select())
         .filter(invite::code.eq(code).and(invite::deleted_at.is_null()))
+        .filter(community::deleted_at.is_null())
         .first(conn)
         .await
         .map_err(|e| match e {
@@ -271,12 +293,15 @@ pub async fn delete(
 }
 
 /// The invite with this code, whether or not it has expired, so a caller can tell the user an
-/// expired link is expired rather than unknown. Revoked invites read as not found.
+/// expired link is expired rather than unknown. Revoked invites, and those to a deleted
+/// community, read as not found.
 pub async fn read_invite(state: &GlobalServerContext, code: &str) -> crate::Result<Invite> {
     let mut conn = state.connection_pool.get().await?;
     invite::table
+        .inner_join(community::table)
         .select(Invite::as_select())
         .filter(invite::code.eq(code).and(invite::deleted_at.is_null()))
+        .filter(community::deleted_at.is_null())
         .first(conn.as_mut())
         .await
         .map_err(Into::into)

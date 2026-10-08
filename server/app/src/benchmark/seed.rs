@@ -11,6 +11,8 @@ use aspen_schema::{
     benchmark_community, benchmark_run, benchmark_user, channel, community, community_user,
     message, user,
 };
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -56,8 +58,15 @@ pub async fn seed(
 ) -> crate::Result<Manifest> {
     plan.validate(max_communities_per_user)
         .map_err(|reason| crate::Error::Validation(reason.into()))?;
-    let password_hash = crate::login::hash_password(plan.password.clone()).await?;
-    let plan_json = serde_json::to_value(plan)?;
+    let password = plan.password.clone().unwrap_or_else(|| {
+        BASE64_URL_SAFE_NO_PAD.encode(CHACHA_RNG.with(|rng| rng.borrow_mut().random::<[u8; 18]>()))
+    });
+    let password_hash = crate::login::hash_password(password.clone()).await?;
+    // Kept without the password, which only the manifest carries.
+    let plan_json = serde_json::to_value(SeedPlan {
+        password: None,
+        ..plan.clone()
+    })?;
     let now = Utc::now();
     conn.transaction(|conn| {
         async move {
@@ -204,7 +213,7 @@ pub async fn seed(
             }
             Ok(Manifest {
                 run: plan.run.clone(),
-                password: plan.password.clone(),
+                password: password.clone(),
                 users,
                 communities,
             })

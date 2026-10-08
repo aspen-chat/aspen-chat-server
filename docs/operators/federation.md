@@ -83,7 +83,9 @@ aspen-chat-server federation list-add friends.example.net usersEmigrationAllow
 ```
 
 A deployment is also recorded the first time it is in contact, as when one of its people signs
-in here.
+in here. One recorded that way that nobody uses (no one of yours uses it, none of its people are
+here, it is on no list, and has no note) is forgotten thirty days after it was last contacted,
+unless it is waiting for you to accept a new key; give it a note to keep it.
 
 `aspen-chat-server federation remove <domain>` (or Forget in the dashboard) forgets a deployment,
 its key and the lists it is on. A deployment on a block list cannot be forgotten, since that
@@ -106,8 +108,9 @@ From then on:
   domain.
 
 While any gate is open, this deployment reads again, about every `[federation]
-standing_interval_seconds`, the document of each deployment it federates with, so it notices a
-replaced key within about that long even when nothing else contacts that deployment.
+standing_interval_seconds`, the document of each deployment it federates with and that is in
+use (one you added, noted, or listed, one whose people are here, or one your people use), so it
+notices a replaced key within about that long even when nothing else contacts that deployment.
 
 To replace your own key:
 
@@ -129,7 +132,11 @@ To replace your own key:
 Someone whose home lets them emigrate adds another server from the "Create or join a community"
 dialog, or opens an invite link naming it (`/invite/<code>?at=<domain>`). Their home signs a
 two-minute statement of who they are for that deployment, which signs them in there. Their
-profile stays their home's; their status is theirs to set anywhere.
+profile stays their home's; their status is theirs to set anywhere. Their username must follow
+the same rules as one made here: someone whose name does not (one holding `@`, spaces, or
+invisible characters, or looking like the deployment's own `system` account) cannot sign in here
+for the first time until they change it at home, and a visitor who later changes to such a name
+keeps the name they had here.
 
 Visitors appear in lists as `name@domain`. Moderators with Ban users can ban a visitor from your
 deployment in the dashboard's user directory, as they can your own users: their sessions end

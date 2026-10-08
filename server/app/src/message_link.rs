@@ -132,18 +132,28 @@ pub async fn read_linked(
             .copied()
             .collect();
         let mut conn = state.connection_pool.get().await?;
-        let deleted: Vec<(MessageId, crate::ChannelId)> = message::table
+        let deleted: Vec<(MessageId, ChannelId)> = message::table
             .select((message::id, message::channel))
             .filter(message::id.eq_any(&missing))
             .filter(message::deleted_at.is_not_null())
             .load(conn.as_mut())
             .await?;
+        // Many links may name messages of one channel; each channel is checked once.
+        let mut may_see: HashMap<ChannelId, bool> = HashMap::new();
         let mut seen = Vec::new();
         for (id, channel) in deleted {
-            if crate::permissions::channel_access(state, conn.as_mut(), caller, channel)
-                .await
-                .is_ok()
-            {
+            let visible = match may_see.get(&channel) {
+                Some(visible) => *visible,
+                None => {
+                    let visible =
+                        crate::permissions::channel_access(state, conn.as_mut(), caller, channel)
+                            .await
+                            .is_ok();
+                    may_see.insert(channel, visible);
+                    visible
+                }
+            };
+            if visible {
                 seen.push(id);
             }
         }

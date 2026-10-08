@@ -90,7 +90,7 @@ fn giving_caller(
         (status = CREATED, body = DeviceLink, headers(("Location" = String, description = "URL of the link"))),
         (status = BAD_REQUEST, description = "`validation`: a request without a valid device name or code challenge", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a bot, or a user of another deployment; `twoFactorEnrollmentRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a bot, or a user of another deployment; `twoFactorEnrollmentRequired`; `reauthenticationRequired`: a signed-in giver verifies again first", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -146,7 +146,7 @@ pub struct DeviceLinkScan {
         (status = OK, body = DeviceLinkScan),
         (status = BAD_REQUEST, description = "`validation`: an offer scanned without a valid device name or code challenge, or by a device already signed in", body = Problem),
         (status = UNAUTHORIZED, description = "`unauthorized`: a request scanned without a session", body = Problem),
-        (status = FORBIDDEN, description = "`forbidden`: a bot, or a user of another deployment; `twoFactorEnrollmentRequired`", body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a bot, or a user of another deployment; `twoFactorEnrollmentRequired`; `reauthenticationRequired`: a signed-in giver verifies again first", body = Problem),
         (status = NOT_FOUND, description = "`deviceLinkExpired`", body = Problem),
         (status = CONFLICT, description = "`deviceLinkUsed`: another device scanned it first", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

@@ -2,12 +2,14 @@
 //!
 //! 1. [`start`]: someone names an account by its username and is shown its verified address
 //!    masked (`app::email::mask`): the first three characters before the `@`, and the domain.
-//!    The reset lasts [`LIFETIME`] and is named by a random id, kept in Valkey under its digest.
+//!    The reset lasts [`LIFETIME_SECONDS`] and is named by a random id, kept in Valkey under its
+//!    digest. An account has one reset at a time: starting one ends the one before.
 //! 2. [`send_code`]: they type the whole address. Only when it is the account's (ignoring case)
-//!    is a code of [`CODE_DIGITS`] digits mailed there, ahead of all other mail (`outbox`). Each
-//!    reset takes [`ATTEMPTS`] wrong addresses before it ends, and asking again replaces the code.
-//!    Each address and code is counted before it is checked, so a burst of guesses sent at once
-//!    is checked no more than [`ATTEMPTS`] times, whatever the rate limits allow.
+//!    is a code of [`CODE_DIGITS`] digits mailed there, ahead of all other mail (`outbox`), and
+//!    asking again replaces the code; the answer is the same whether or not it was, so a reset
+//!    tells nobody whether an address is the account's. Each reset takes [`ATTEMPTS`] addresses,
+//!    right or wrong, and each is counted before it is checked, so a burst sent at once is
+//!    checked no more than [`ATTEMPTS`] times, whatever the rate limits allow.
 //! 3. [`complete`]: they type the code and a new password. The password is replaced, every
 //!    sign-in of the account ends, as do its plugin capability URLs, the second factors added and recovery codes issued in the
 //!    last week go (`two_factor::remove_recent`), in case whoever took the account added them,
@@ -17,8 +19,8 @@
 //! Only an account of this deployment with a verified address can be reset this way; bots,
 //! foreign users, and the system account cannot. What `start` shows confirms that the username
 //! exists, which registration does already; the address stays hidden behind its mask. Each step
-//! is rate limited by address and per reset, and one account is mailed at most [`MAX_SENT`]
-//! codes an hour, however many resets ask.
+//! is rate limited by address and per reset, starting one by everyone together too, and one
+//! account is mailed at most [`MAX_SENT`] codes an hour, however many resets ask.
 
 use super::outbox::{self, Mail};
 use crate::UserId;
@@ -70,8 +72,18 @@ fn key(id: &str) -> String {
     )
 }
 
+/// The keys of a reset and of its counts of attempts, given the reset's key.
+fn keys_of(key: String) -> Vec<String> {
+    vec![format!("{key}:address"), format!("{key}:code"), key]
+}
+
 fn misses_key(id: &str, what: &str) -> String {
     format!("{}:{what}", key(id))
+}
+
+/// Where the key of an account's live reset is kept, so a new one can end it.
+fn live_key(user: UserId) -> String {
+    format!("email:reset-live:{}", user.0)
 }
 
 /// Begins resetting the password of the account named `username`.
@@ -126,6 +138,22 @@ pub async fn start(state: &GlobalServerContext, username: &str) -> crate::Result
             false,
         )
         .await?;
+    // One reset per account: this one becomes the live one, in one step, and the one it
+    // replaces ends. Starts racing each other each end the one they replaced, so only the last
+    // to take its place lives.
+    let replaced: Option<String> = state
+        .valkey
+        .set(
+            live_key(user_id),
+            key(&id),
+            Some(Expiration::EX(LIFETIME_SECONDS)),
+            None,
+            true,
+        )
+        .await?;
+    if let Some(replaced) = replaced {
+        let _: i64 = state.valkey.del(keys_of(replaced)).await?;
+    }
     Ok(Started {
         id,
         masked_address: super::mask(&address),
@@ -152,37 +180,28 @@ async fn attempt(state: &GlobalServerContext, id: &str, what: &str) -> crate::Re
     Ok(attempts)
 }
 
-/// The error for a wrong `what` that was attempt number `attempts`, ending the reset at the
-/// last one [`ATTEMPTS`] allows.
-async fn miss(
+/// The error for a wrong code that was attempt number `attempts`, ending the reset at the last
+/// one [`ATTEMPTS`] allows.
+async fn wrong_code(
     state: &GlobalServerContext,
     id: &str,
-    what: &str,
     attempts: i64,
 ) -> crate::Result<crate::Error> {
     if attempts >= ATTEMPTS {
         end(state, id).await?;
         return Ok(crate::Error::TooManyAttempts);
     }
-    Ok(match what {
-        "address" => crate::Error::EmailMismatch,
-        _ => crate::Error::VerificationFailed,
-    })
+    Ok(crate::Error::VerificationFailed)
 }
 
 async fn end(state: &GlobalServerContext, id: &str) -> crate::Result<()> {
-    let _: i64 = state
-        .valkey
-        .del(vec![
-            key(id),
-            misses_key(id, "address"),
-            misses_key(id, "code"),
-        ])
-        .await?;
+    let _: i64 = state.valkey.del(keys_of(key(id))).await?;
     Ok(())
 }
 
-/// Mails a reset code to the account's address, once `address` proves the caller knows it.
+/// Mails a reset code to the account's address when `address` is that address, answering the
+/// same either way, so the answer tells nothing of the address. Every address given counts
+/// toward the reset's [`ATTEMPTS`], the right one too.
 pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> crate::Result<()> {
     let reset = read(state, id).await?;
     let mut conn = state.connection_pool.get().await?;
@@ -197,13 +216,17 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
         end(state, id).await?;
         return Err(crate::Error::PasswordResetExpired);
     };
-    let attempts = attempt(state, id, "address").await?;
-    if !super::same_address(address, &on_file) {
-        return Err(miss(state, id, "address", attempts).await?);
-    }
-    // The right address, which asking again for a code gives each time, counts against nothing.
-    crate::two_factor::uncount_attempt(&state.valkey, &misses_key(id, "address")).await?;
+    attempt(state, id, "address").await?;
+    // Read before the address is compared, so whether the account has been mailed its fill
+    // decides the answer and the address does not.
     let sent_key = format!("email:reset-sent:{}", reset.user.0);
+    let sent: Option<i64> = state.valkey.get(&sent_key).await?;
+    if sent.unwrap_or(0) >= MAX_SENT {
+        return Err(crate::Error::TooManyAttempts);
+    }
+    if !super::same_address(address, &on_file) {
+        return Ok(());
+    }
     let sent: i64 = state.valkey.incr(&sent_key).await?;
     if sent == 1 {
         let _: bool = state
@@ -212,12 +235,13 @@ pub async fn send_code(state: &GlobalServerContext, id: &str, address: &str) -> 
             .await?;
     }
     if sent > MAX_SENT {
-        return Err(crate::Error::TooManyAttempts);
+        // Another reset took the last one between the read and now.
+        return Ok(());
     }
     let code = super::code(CODE_DIGITS);
     let updated = Reset {
         user: reset.user,
-        code: Some(super::code_digest(&code)),
+        code: Some(state.code_key.digest(&code)),
     };
     let ttl: i64 = state.valkey.ttl(key(id)).await?;
     let _: () = state
@@ -254,18 +278,14 @@ pub async fn complete(
         return Err(crate::Error::Validation(t!("passwordResetNoCodeYet")));
     };
     // Refused before the code is tried, so a short password costs no attempt.
-    if new_password.len() < crate::login::PASSWORD_MIN_LENGTH {
-        return Err(crate::Error::PasswordRequirement(
-            crate::PasswordRequirement::Length,
-        ));
-    }
+    crate::login::check_new_password(new_password).map_err(crate::Error::PasswordRequirement)?;
     let attempts = attempt(state, id, "code").await?;
     let matches: bool = expected
         .as_bytes()
-        .ct_eq(super::code_digest(code).as_bytes())
+        .ct_eq(state.code_key.digest(code).as_bytes())
         .into();
     if !matches {
-        return Err(miss(state, id, "code", attempts).await?);
+        return Err(wrong_code(state, id, attempts).await?);
     }
     let password_hash = crate::login::hash_password(new_password.to_string()).await?;
     // Used once, whatever happens next.
@@ -287,12 +307,15 @@ pub async fn complete(
             }
             crate::login::revoke_all_sessions(state, conn, user_id).await?;
             crate::plugin::capability::revoke_all(conn, user_id).await?;
-            let removed_factors = crate::two_factor::remove_recent(conn, user_id).await?;
+            let removed = crate::two_factor::remove_recent(conn, user_id).await?;
             outbox::queue(
                 conn,
                 user_id,
                 None,
-                &Mail::PasswordWasReset { removed_factors },
+                &Mail::PasswordWasReset {
+                    removed_factors: removed.factors,
+                    recovery_codes_gone: removed.recovery_codes_gone,
+                },
             )
             .await
         }

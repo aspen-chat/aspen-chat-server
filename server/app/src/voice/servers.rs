@@ -52,6 +52,26 @@ pub async fn list_servers_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<
         .await?)
 }
 
+/// Refuses a voice server address that is not `http` or `https`, or not `https` where
+/// `public_url` is: a page loaded over `https` may not open an unencrypted WebSocket, and the
+/// join token and media keys would cross the network readable.
+pub fn check_url(config: &crate::aspen_config::AspenConfig, url: &str) -> crate::Result<()> {
+    check_url_at(config.public_url.starts_with("https:"), url)
+}
+
+fn check_url_at(deployment_https: bool, url: &str) -> crate::Result<()> {
+    let parsed = url::Url::parse(url)
+        .ok()
+        .filter(|parsed| matches!(parsed.scheme(), "http" | "https") && parsed.has_host());
+    let Some(parsed) = parsed else {
+        return Err(crate::Error::Validation(t!("voiceServerUrlInvalid")));
+    };
+    if deployment_https && parsed.scheme() != "https" {
+        return Err(crate::Error::Validation(t!("voiceServerUrlInsecure")));
+    }
+    Ok(())
+}
+
 pub async fn create_server(
     state: &GlobalServerContext,
     name: String,
@@ -59,6 +79,7 @@ pub async fn create_server(
     capacity: i32,
 ) -> crate::Result<VoiceServer> {
     create_server_in(
+        &state.config,
         state.connection_pool.get().await?.as_mut(),
         name,
         url,
@@ -67,13 +88,16 @@ pub async fn create_server(
     .await
 }
 
-/// Registers a server, enabled. A name already taken is a unique violation.
+/// Registers a server, enabled, at an address [`check_url`] allows. A name already taken is a
+/// unique violation.
 pub async fn create_server_in(
+    config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
     name: String,
     url: String,
     capacity: i32,
 ) -> crate::Result<VoiceServer> {
+    check_url(config, &url)?;
     let row = VoiceServer {
         id: VoiceServerId::new(),
         name,
@@ -97,16 +121,27 @@ pub async fn update_server(
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> crate::Result<VoiceServer> {
-    update_server_in(state.connection_pool.get().await?.as_mut(), id, changes).await
+    update_server_in(
+        &state.config,
+        state.connection_pool.get().await?.as_mut(),
+        id,
+        changes,
+    )
+    .await
 }
 
 /// Changes a server. Enabling or disabling it is an operator's decision, which lifts any
-/// suspension for failures, and enabling it also forgets the failures that led to one.
+/// suspension for failures, and enabling it also forgets the failures that led to one. A new
+/// address must be one [`check_url`] allows.
 pub async fn update_server_in(
+    config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
     id: VoiceServerId,
     changes: VoiceServerChangeset,
 ) -> crate::Result<VoiceServer> {
+    if let Some(url) = &changes.url {
+        check_url(config, url)?;
+    }
     let enabled = changes.enabled;
     conn.transaction(|conn| {
         async move {
@@ -228,6 +263,9 @@ pub struct JoinOffer {
     pub share_screen: bool,
     pub transfer_files: bool,
     pub camera: bool,
+    /// Whether a moderator's mute of them stands in the channel's community
+    /// (`super::mutes`), which the token carries so they join muted.
+    pub server_muted: bool,
 }
 
 /// Whether a server is offered to a joiner: enabled, not suspended, with room, and heard from
@@ -267,9 +305,10 @@ fn pick_candidates(mut servers: Vec<VoiceServer>, limit: usize) -> Vec<VoiceServ
 
 pub async fn join_offer(
     state: &GlobalServerContext,
-    user: UserId,
+    caller: &crate::two_factor::Caller,
     channel_id: ChannelId,
 ) -> crate::Result<JoinOffer> {
+    let user = caller.user;
     let mut conn = state.connection_pool.get().await?;
     let ty: ChannelType = channel::table
         .select(channel::ty)
@@ -339,13 +378,17 @@ pub async fn join_offer(
     }
     let expires_at =
         now + Duration::seconds(i64::try_from(voice.join_token_ttl_seconds).unwrap_or(60));
-    note_offered(state, user, &candidates).await;
+    note_offered(state, user, channel_id, &candidates).await;
     let Grants {
         speak,
         share_screen,
         camera,
         transfer_files,
     } = grants_of(state.settings().file_transfers, &access);
+    let server_muted = match access.community.as_ref() {
+        Some(community) => super::mutes::is_muted(conn.as_mut(), community.community, user).await?,
+        None => false,
+    };
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,
@@ -356,16 +399,19 @@ pub async fn join_offer(
         share_screen,
         transfer_files,
         camera,
+        sign_in: caller.sign_in_held(),
+        server_muted,
     };
     Ok(JoinOffer {
         session,
         candidates,
-        token: sign(&claims, voice.token_secret.as_bytes()),
+        token: sign(&claims, state.join_token_key.pair()),
         expires_at,
         speak,
         share_screen,
         transfer_files,
         camera,
+        server_muted,
     })
 }
 
@@ -393,34 +439,79 @@ fn offered_key(server: VoiceServerId, user: UserId) -> String {
     format!("voice_offered:{}:{}", server.0, user.0)
 }
 
-/// Notes that `user` was offered `servers`, so their failure reports about them count. A
-/// Valkey outage is logged and the offer goes ahead; reports from it then count for nothing,
-/// which leaves servers enabled rather than letting anyone disable them.
-async fn note_offered(state: &GlobalServerContext, user: UserId, servers: &[VoiceServer]) {
-    let ttl = state
-        .config
-        .voice
-        .join_token_ttl_seconds
-        .saturating_add(OFFER_REPORT_GRACE_SECONDS);
-    let ttl = i64::try_from(ttl).unwrap_or(i64::MAX);
+/// How long after its join token expires a voice server's report of a call it was offered for
+/// is still believed (`offered_for`): a report comes within seconds of the join, and the margin
+/// covers one held up by an outage of the report link and repaired by a snapshot.
+const JOIN_REPORT_GRACE_SECONDS: u64 = 10 * 60;
+
+/// The Valkey key saying `user` was recently offered `server` for a call in `channel`, or with
+/// no user that anyone was.
+fn offered_for_key(server: VoiceServerId, channel: ChannelId, user: Option<UserId>) -> String {
+    match user {
+        Some(user) => format!("voice_offered_for:{}:{}:{}", server.0, channel.0, user.0),
+        None => format!("voice_offered_for:{}:{}", server.0, channel.0),
+    }
+}
+
+/// Notes that `user` was offered `servers` for a call in `channel`: their failure reports about
+/// those servers count, and a server's report of a call in that channel, or of them joining it,
+/// is believed (`offered_for`). A Valkey outage is logged and the offer goes ahead; failure
+/// reports from it then count for nothing, which leaves servers enabled rather than letting
+/// anyone disable them, and the join reports are believed as `offered_for` says.
+async fn note_offered(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel: ChannelId,
+    servers: &[VoiceServer],
+) {
+    let token_ttl = state.config.voice.join_token_ttl_seconds;
+    let seconds = |grace: u64| i64::try_from(token_ttl.saturating_add(grace)).unwrap_or(i64::MAX);
+    let (failures, joins) = (
+        seconds(OFFER_REPORT_GRACE_SECONDS),
+        seconds(JOIN_REPORT_GRACE_SECONDS),
+    );
     let pipeline = state.valkey.pipeline();
     let noted: Result<Vec<fred::types::Value>, fred::error::Error> = async {
         for server in servers {
-            let () = pipeline
-                .set(
-                    offered_key(server.id, user),
-                    1,
-                    Some(Expiration::EX(ttl)),
-                    None,
-                    false,
-                )
-                .await?;
+            for (key, ttl) in [
+                (offered_key(server.id, user), failures),
+                (offered_for_key(server.id, channel, Some(user)), joins),
+                (offered_for_key(server.id, channel, None), joins),
+            ] {
+                let () = pipeline
+                    .set(key, 1, Some(Expiration::EX(ttl)), None, false)
+                    .await?;
+            }
         }
         pipeline.all().await
     }
     .await;
     if let Err(e) = noted {
         warn!(error = %e, "could not note the voice servers offered to a joiner");
+    }
+}
+
+/// Whether `server` was offered for a call in `channel` (to `user`, or with no user to anyone)
+/// recently enough that its report of that call, or of `user` joining it, is believed: a voice
+/// server reports only calls and joins the API server sent people to it for, so one taken over
+/// cannot make up a call in a channel, or someone in one, to ring a DM or show a call that is
+/// not there. A Valkey outage is logged and believes the report, so calls go on through it.
+pub(super) async fn offered_for(
+    state: &GlobalServerContext,
+    server: VoiceServerId,
+    channel: ChannelId,
+    user: Option<UserId>,
+) -> bool {
+    match state
+        .valkey
+        .exists::<i64, _>(offered_for_key(server, channel, user))
+        .await
+    {
+        Ok(found) => found > 0,
+        Err(e) => {
+            warn!(error = %e, "could not read whether a voice server was offered for a call");
+            true
+        }
     }
 }
 
@@ -647,6 +738,17 @@ pub(super) async fn reap_silent_servers(state: &GlobalServerContext) -> crate::R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A voice server is at an http or https address, and an https deployment's at https.
+    #[test]
+    fn voice_server_addresses_are_checked() {
+        assert!(check_url_at(true, "https://voice-1.example.org").is_ok());
+        assert!(check_url_at(true, "http://voice-1.example.org").is_err());
+        assert!(check_url_at(true, "http://127.0.0.1:9000").is_err());
+        assert!(check_url_at(false, "http://127.0.0.1:9000").is_ok());
+        assert!(check_url_at(false, "wss://voice-1.example.org").is_err());
+        assert!(check_url_at(false, "voice-1.example.org").is_err());
+    }
 
     fn server(
         enabled: bool,

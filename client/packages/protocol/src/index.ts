@@ -41,6 +41,7 @@ export {
   type PasskeyPurpose,
   type PasskeyTransport,
 } from "./passkeys";
+export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,
   isProblem,
@@ -165,6 +166,7 @@ export {
   type InviteLookup,
   type SyncListener,
   type SyncStatus,
+  type BotTransfer,
   type MessageHolding,
   type Sent,
   type MessageSearch,
@@ -189,6 +191,7 @@ export type {
   PollOptionResult,
   PollWriteIn,
   CommunityBan,
+  VoiceMute,
   CommunityPlugin,
   CustomEmoji,
   MessageAnnotation,

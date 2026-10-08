@@ -1,4 +1,4 @@
-import type { Attachment } from "@aspen/protocol";
+import { plainFileName, type Attachment } from "@aspen/protocol";
 import { PaperclipIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
 import { useLayoutEffect, useState } from "react";
 import { flushSync } from "react-dom";
@@ -69,7 +69,8 @@ export function MessageMedia({
       unavailable.push(id);
       return;
     }
-    const attachment = { ...record, downloadUrl };
+    // The name is the uploader's, shown without what would change how it reads.
+    const attachment = { ...record, downloadUrl, fileName: plainFileName(record.fileName) };
     if (isImageType(attachment.mimeType)) {
       pictures.push({
         src: attachment.downloadUrl,

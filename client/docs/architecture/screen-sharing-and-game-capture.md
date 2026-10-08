@@ -57,7 +57,10 @@
   Node addon, because x264's aligned allocations trip Chromium's allocator in every Electron
   process and because native capture code must not be able to take the app down; its request
   protocol is documented at the top of its `main.rs`. `packages/desktop/src/main/gameCapture.ts`
-  spawns it on first use; the preload exposes it as `window.aspenDesktop.gameCapture`. In the
+  spawns it on first use, and starts a capture only of a kind the helper's last listing offered
+  (`captureKinds.ts`; the test pattern only playing the very clip offered), so the renderer
+  cannot have libobs open a source of any other kind; the preload exposes it as
+  `window.aspenDesktop.gameCapture`. In the
   renderer, `src/features/voice/gameCapture.ts` wraps it as an `ExternalShare` for
   `VoiceCall.startExternalScreenShare`, which asks the voice server for the producers
   (`produceRtp`, answered by `rtpProduced`), hands the targets to the helper, and shows the

@@ -24,6 +24,7 @@ import type {
   TransferLink,
   TransferMode,
 } from "./generated/voiceSignal";
+import { plainFileName } from "./fileNames";
 
 export type { TransferLink, TransferMode };
 
@@ -365,7 +366,7 @@ export class FileTransfers {
     return {
       id: offer.id,
       from: offer.from,
-      name: offer.name,
+      name: plainFileName(offer.name),
       size: offer.size,
       allowDirect: offer.allowDirect,
       expiresAt: this.#now() + offer.expiresInMs,
@@ -399,7 +400,7 @@ export class FileTransfers {
         peer: frame.peer,
         role: frame.role,
         mode: frame.mode,
-        name: frame.name,
+        name: plainFileName(frame.name),
         size: sending ? (file?.size ?? frame.size) : frame.size,
         bytes: 0,
         status: "connecting",

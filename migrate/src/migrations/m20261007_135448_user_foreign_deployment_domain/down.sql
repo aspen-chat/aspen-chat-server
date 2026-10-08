@@ -1,0 +1,1 @@
+DROP INDEX user_foreign_deployment_domain;

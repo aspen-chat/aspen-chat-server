@@ -10,6 +10,7 @@ import { useNow } from "@/features/layout/useNow";
 import { deviceLinkPath } from "@/features/qr/aspenLinks";
 import { QrCode } from "@/features/qr/QrCode";
 import { useShareUrl } from "@/features/qr/shareLinks";
+import { useOptionalReauth } from "@/features/security/reauthContext";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { thisDeviceName } from "./deviceName";
@@ -32,13 +33,15 @@ type Phase =
  * out, it asks for a sign-in, and the computer is signed in once the phone confirms. Signed in, it
  * offers this account to a phone that is not, and this computer confirms the phone by its name.
  * The code lasts a minute; then it blurs and offers a new one. Whatever it ends with, a code left
- * behind is cancelled.
+ * behind is cancelled. Offering takes a recent verification, which it asks for where a
+ * `ReauthProvider` holds it (the security settings).
  */
 export function DeviceLinkCode() {
   const m = useMessages();
   const client = useAspenClient();
   const share = useShareUrl();
   const offering = client.session !== null;
+  const withReauth = useOptionalReauth();
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
   const now = useNow(1_000, phase.kind === "showing");
   const live = useRef<string | null>(null);
@@ -49,12 +52,15 @@ export function DeviceLinkCode() {
       const name = thisDeviceName((app, system) =>
         system === null ? app : format(m.deviceLink.deviceName, { app, system }),
       );
-      const { link, verifier } = await client.startDeviceLink(name);
-      return { kind: "showing", link, verifier };
+      const made = await withReauth(() => client.startDeviceLink(name));
+      if (made === undefined) {
+        return { kind: "failed", message: m.deviceLink.notVerified };
+      }
+      return { kind: "showing", link: made.link, verifier: made.verifier };
     } catch (e) {
       return { kind: "failed", message: e instanceof ApiProblemError ? e.message : String(e) };
     }
-  }, [client, m]);
+  }, [client, m, withReauth]);
 
   /** Shows a code just made, which is the one to cancel if the screen goes. */
   const show = useCallback((made: Phase) => {

@@ -23,7 +23,9 @@
 //! connects. Membership changes arrive as `userCommunity` events on the user's own subject; each
 //! shard applies them to its connections of that user as it routes them, in stream order, so a
 //! join brings the community's events from that point and a leave ends them. A catch-up replay
-//! applies the ones it passes over the same way.
+//! applies the ones it passes over the same way, and judges a community's events from before
+//! the user's own changes as they stood then rather than as the database shows them
+//! (`Retained::catch_up`).
 //!
 //! What happens in a community channel, and the channel's own events, reach only those who may
 //! view it. Publishers name the channel that decides it in the `Aspen-Channel` header (a
@@ -54,6 +56,7 @@ use crate::{ASPEN_NATS_STREAM_NAME, CategoryId, ChannelId, CommunityId, RoleId, 
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
 use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -125,6 +128,9 @@ pub struct FeedEvent {
     /// On a user's own subject, the sign-ins of theirs that ended: only their connections
     /// receive the event.
     sign_ins: Option<EndedSignIns>,
+    /// For an end of sign-ins or a ban, when it was made (its `at`): it does not reach a
+    /// sign-in begun at or after then.
+    ends_at: Option<DateTime<Utc>>,
     /// That what was announced on its subject may not have happened (`app::events::settle`):
     /// on a community's, the model is dropped and its readers resume; on a user's, their
     /// connections resume.
@@ -153,11 +159,19 @@ impl FeedEvent {
     }
 
     /// Whether a connection of `sign_in` receives this event: every connection of its user does,
-    /// except that an end of sign-ins reaches only theirs.
-    fn reaches(&self, sign_in: &str) -> bool {
-        self.sign_ins
-            .as_ref()
-            .is_none_or(|ended| ended.covers(sign_in))
+    /// except that an end of sign-ins reaches only theirs, and neither it nor a ban reaches a
+    /// sign-in begun at or after it was made, as one retained from before a sign-in began, and
+    /// replayed to its first connection, would otherwise.
+    fn reaches(&self, sign_in: &SignIn) -> bool {
+        let began_after = matches!(
+            (self.ends_at, sign_in.began),
+            (Some(at), Some(began)) if began >= at
+        );
+        !began_after
+            && self
+                .sign_ins
+                .as_ref()
+                .is_none_or(|ended| ended.covers(&sign_in.id))
     }
 
     /// An event from outside the stream, for `owner`'s readers who may view `channel` (when it
@@ -181,6 +195,7 @@ impl FeedEvent {
             requires: None,
             creator: None,
             change: None,
+            ends_at: None,
             access: OnceLock::new(),
             before: OnceLock::new(),
             published: Instant::now(),
@@ -192,6 +207,16 @@ impl FeedEvent {
             unseen_by: Some(unseen_by),
         }
     }
+}
+
+/// The sign-in a connection belongs to.
+#[derive(Debug, Clone, Default)]
+pub struct SignIn {
+    /// `app::login::sign_in_id`; empty for a bot's token.
+    pub id: String,
+    /// When it began (`refresh_token.created_at`, or a bot's `bot_token.created_at`); `None`
+    /// when unknown, which every end of sign-ins and ban covers.
+    pub began: Option<DateTime<Utc>>,
 }
 
 /// Why a connection closes after an event.
@@ -350,8 +375,8 @@ impl Drop for StreamHold {
 struct Register {
     id: u64,
     user: UserId,
-    /// The sign-in the connection belongs to (`app::login::sign_in_id`).
-    sign_in: String,
+    /// The sign-in the connection belongs to.
+    sign_in: SignIn,
     communities: Vec<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
     moderator: bool,
@@ -435,12 +460,12 @@ impl EventFeed {
     }
 }
 
-/// Registers a connection of `user`'s, of the sign-in `sign_in` (`app::login::sign_in_id`),
-/// resuming after `resume_after` when that is still retained.
+/// Registers a connection of `user`'s, of the sign-in `sign_in`, resuming after `resume_after`
+/// when that is still retained.
 pub async fn subscribe(
     state: &GlobalServerContext,
     user: UserId,
-    sign_in: String,
+    sign_in: SignIn,
     resume_after: Option<u64>,
 ) -> Result<Subscription, Refused> {
     let mut conn = state
@@ -695,6 +720,16 @@ impl Retained {
     /// events are kept by the model attached to each, or `models`' for one routed before the
     /// dispatcher held its community's.
     ///
+    /// The database may as well have been read after changes retained beyond `after` were
+    /// committed, so a community's events from before the user's own changes there are judged
+    /// as they stood then, not by what the database shows: before a join retained beyond
+    /// `after`, the user was not a member and reads nothing of the community; before a change
+    /// of their roles there, the roles they held are not known, so nothing of the community is
+    /// read; before a change of whether they moderate the deployment, they are taken not to.
+    /// What the last two leave out that the database's reading would have shown makes the
+    /// catch-up incomplete (the `bool`), and a resumed connection is then told it did not
+    /// resume, so that its client reads its state again.
+    ///
     /// The session was checked against the database just as possibly before an end of the
     /// sign-in or a ban was committed, so a retained event at or before `after` that ends the
     /// connection refuses it, with why: resuming past it is not a way around it. One after
@@ -702,11 +737,11 @@ impl Retained {
     fn catch_up(
         &self,
         user: UserId,
-        sign_in: &str,
+        sign_in: &SignIn,
         reading: Reading,
         after: u64,
         models: &HashMap<CommunityId, Arc<CommunityModel>>,
-    ) -> Result<(Vec<Arc<FeedEvent>>, Reading), StreamEnd> {
+    ) -> Result<(Vec<Arc<FeedEvent>>, Reading, bool), StreamEnd> {
         let own = SubjectOwner::User(user);
         let Reading {
             communities: mut reading,
@@ -722,6 +757,32 @@ impl Retained {
             apply_membership(&mut reading, &mut roles, e);
             moderator = e.moderator.unwrap_or(moderator);
         }
+        // The user's own changes beyond `after`, each community's and the deployment's first.
+        let mut joins_ahead = HashSet::new();
+        let mut roles_ahead = HashSet::new();
+        let mut moderation_ahead = false;
+        let mut memberships_seen = HashSet::new();
+        let mut roles_seen = HashSet::new();
+        for e in self.since(own, after) {
+            if let Some((community, joined)) = e.membership
+                && memberships_seen.insert(community)
+                && joined
+            {
+                joins_ahead.insert(community);
+            }
+            if let Some((community, _)) = &e.roles
+                && roles_seen.insert(*community)
+                && !joins_ahead.contains(community)
+            {
+                roles_ahead.insert(*community);
+            }
+            moderation_ahead |= e.moderator.is_some();
+        }
+        for community in &joins_ahead {
+            reading.remove(community);
+            roles.remove(community);
+        }
+        let mut complete = true;
         let mut owners = reading.clone();
         owners.extend(
             self.since(own, after)
@@ -740,12 +801,21 @@ impl Retained {
         events.retain(|e| match e.owner {
             SubjectOwner::User(_) => {
                 apply_membership(&mut reading, &mut roles, e);
-                moderator = e.moderator.unwrap_or(moderator);
+                if let Some((community, _)) = &e.roles {
+                    roles_ahead.remove(community);
+                }
+                if let Some(now) = e.moderator {
+                    moderator = now;
+                    moderation_ahead = false;
+                }
                 e.reaches(sign_in)
             }
             SubjectOwner::Community(community) => {
-                reading.contains(&community)
-                    && may_read(
+                if !reading.contains(&community) {
+                    return false;
+                }
+                let judged = |moderator| {
+                    may_read(
                         e,
                         e.access
                             .get()
@@ -755,6 +825,16 @@ impl Retained {
                         roles.get(&community),
                         moderator,
                     )
+                };
+                let as_read = judged(moderator);
+                let as_then = !roles_ahead.contains(&community)
+                    && if moderation_ahead {
+                        judged(false)
+                    } else {
+                        as_read
+                    };
+                complete &= as_then || !as_read;
+                as_then
             }
         });
         let caught_up = Reading {
@@ -762,7 +842,7 @@ impl Retained {
             roles,
             moderator,
         };
-        Ok((events, caught_up))
+        Ok((events, caught_up, complete))
     }
 }
 
@@ -797,7 +877,7 @@ fn apply_membership(
 
 struct Connection {
     user: UserId,
-    sign_in: String,
+    sign_in: SignIn,
     communities: HashSet<CommunityId>,
     /// The roles the user holds in each community besides everyone's.
     roles: HashMap<CommunityId, Vec<RoleId>>,
@@ -1089,6 +1169,16 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     let sign_ins = (own && kind == Some("signInsEnded"))
         .then(|| serde_json::from_str::<EndedSignIns>(payload.get()).ok())
         .flatten();
+    let ends_at = (own && matches!(kind, Some("signInsEnded" | "accountBanned")))
+        .then(|| {
+            #[derive(Deserialize)]
+            struct Ending {
+                at: Option<DateTime<Utc>>,
+            }
+            serde_json::from_str::<Ending>(payload.get()).ok()
+        })
+        .flatten()
+        .and_then(|ending| ending.at);
     let ends = if own && kind == Some("accountBanned") {
         Some(StreamEnd::Banned)
     } else if sign_ins.is_some() {
@@ -1166,6 +1256,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             published,
             ends,
             sign_ins,
+            ends_at,
             resync,
             email_unverified,
             ephemeral: false,
@@ -1489,7 +1580,7 @@ async fn dispatch(
                     after,
                     &models.models,
                 );
-                let (missed, Reading { communities, roles, moderator }) = match caught_up {
+                let (missed, Reading { communities, roles, moderator }, complete) = match caught_up {
                     Ok(caught_up) => caught_up,
                     Err(end) => {
                         models.release_unread();
@@ -1513,7 +1604,11 @@ async fn dispatch(
                     models.release_unread();
                     continue;
                 }
-                if registration.outcome.send(Outcome::Registered(resumed)).is_err() {
+                if registration
+                    .outcome
+                    .send(Outcome::Registered(resumed && complete))
+                    .is_err()
+                {
                     models.release_unread();
                     continue;
                 }
@@ -1579,6 +1674,7 @@ mod tests {
             published: Instant::now(),
             ends: None,
             sign_ins: None,
+            ends_at: None,
             resync: false,
             email_unverified: None,
             ephemeral: false,
@@ -1676,14 +1772,119 @@ mod tests {
             roles: HashMap::new(),
             moderator: false,
         };
-        let (missed, caught_up) = retained.catch_up(user, "", reading(), 0, &none).unwrap();
+        let (missed, caught_up, _) = retained
+            .catch_up(user, &SignIn::default(), reading(), 0, &none)
+            .unwrap();
         assert_eq!(sequences(&missed), vec![2, 3, 4, 5, 6]);
         assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
         // Resuming after the join, with a database read from before it was committed, still
         // reads the community joined.
-        let (missed, caught_up) = retained.catch_up(user, "", reading(), 4, &none).unwrap();
+        let (missed, caught_up, _) = retained
+            .catch_up(user, &SignIn::default(), reading(), 4, &none)
+            .unwrap();
         assert_eq!(sequences(&missed), vec![5, 6]);
         assert_eq!(caught_up.communities, HashSet::from([kept, joined]));
+    }
+
+    #[test]
+    fn catch_up_reads_nothing_of_a_community_from_before_the_users_join() {
+        let user = UserId::new();
+        let joined = CommunityId::new();
+        let own = SubjectOwner::User(user);
+        let mut retained = Retained::default();
+        for e in [
+            event(1, SubjectOwner::Community(joined), None),
+            event(2, own, Some((joined, true))),
+            event(3, SubjectOwner::Community(joined), None),
+        ] {
+            retained.push(e);
+        }
+        // The database, read at connect, already showed the join.
+        let reading = || Reading {
+            communities: HashSet::from([joined]),
+            roles: HashMap::new(),
+            moderator: false,
+        };
+        let none = HashMap::new();
+        let (missed, caught_up, complete) = retained
+            .catch_up(user, &SignIn::default(), reading(), 0, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![2, 3]);
+        assert_eq!(caught_up.communities, HashSet::from([joined]));
+        assert!(complete);
+    }
+
+    #[test]
+    fn catch_up_reads_nothing_of_a_community_from_before_the_users_roles_changed() {
+        let user = UserId::new();
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let model = Arc::new(two_channels(community, open, hidden, moderator));
+        let own = SubjectOwner::User(user);
+        let mut granted = plain(3, own, None);
+        granted.roles = Some((community, vec![moderator]));
+        let mut retained = Retained::default();
+        for e in [
+            in_channel(1, community, open, &model),
+            in_channel(2, community, hidden, &model),
+            Arc::new(granted),
+            in_channel(4, community, hidden, &model),
+            in_channel(5, community, open, &model),
+        ] {
+            retained.push(e);
+        }
+        // The database, read at connect, already showed the role given.
+        let reading = || Reading {
+            communities: HashSet::from([community]),
+            roles: HashMap::from([(community, vec![moderator])]),
+            moderator: false,
+        };
+        let none = HashMap::new();
+        let (missed, _, complete) = retained
+            .catch_up(user, &SignIn::default(), reading(), 0, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![3, 4, 5]);
+        // The open channel's event before it was theirs to read either way, so a resumed
+        // connection is told to read its state again.
+        assert!(!complete);
+        // Resuming past the change judges the rest by the roles it gave.
+        let (missed, _, complete) = retained
+            .catch_up(user, &SignIn::default(), reading(), 3, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![4, 5]);
+        assert!(complete);
+    }
+
+    #[test]
+    fn catch_up_judges_what_came_before_moderating_the_deployment_without_it() {
+        let user = UserId::new();
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let model = Arc::new(two_channels(community, open, hidden, moderator));
+        let own = SubjectOwner::User(user);
+        let mut promoted = plain(3, own, None);
+        promoted.moderator = Some(true);
+        let mut retained = Retained::default();
+        for e in [
+            in_channel(1, community, open, &model),
+            in_channel(2, community, hidden, &model),
+            Arc::new(promoted),
+            in_channel(4, community, hidden, &model),
+        ] {
+            retained.push(e);
+        }
+        let reading = || Reading {
+            communities: HashSet::from([community]),
+            roles: HashMap::new(),
+            moderator: true,
+        };
+        let none = HashMap::new();
+        let (missed, caught_up, complete) = retained
+            .catch_up(user, &SignIn::default(), reading(), 0, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![1, 3, 4]);
+        assert!(caught_up.moderator);
+        assert!(!complete);
     }
 
     #[test]
@@ -1739,7 +1940,7 @@ mod tests {
             1,
             Connection {
                 user,
-                sign_in: String::new(),
+                sign_in: SignIn::default(),
                 communities: HashSet::new(),
                 roles: HashMap::new(),
                 moderator: false,
@@ -1827,7 +2028,7 @@ mod tests {
                 id,
                 Connection {
                     user,
-                    sign_in: sign_in.to_string(),
+                    sign_in: named(sign_in),
                     communities: HashSet::new(),
                     roles: HashMap::new(),
                     moderator: false,
@@ -1882,22 +2083,76 @@ mod tests {
             roles: HashMap::new(),
             moderator: false,
         };
-        let refused = |sign_in, after| retained.catch_up(user, sign_in, reading(), after, &none);
+        let refused =
+            |sign_in, after| retained.catch_up(user, &named(sign_in), reading(), after, &none);
         assert_eq!(refused("b", 2).err(), Some(StreamEnd::SignedOut));
         assert_eq!(refused("b", 3).err(), Some(StreamEnd::SignedOut));
         // Before it, the end is in the catch-up, which closes the connection.
-        let (missed, _) = refused("b", 1).unwrap();
+        let (missed, _, _) = refused("b", 1).unwrap();
         assert_eq!(sequences(&missed), vec![2, 3]);
         // Another sign-in's end does not concern this one.
-        let (missed, _) = refused("a", 2).unwrap();
+        let (missed, _, _) = refused("a", 2).unwrap();
         assert_eq!(sequences(&missed), vec![3]);
         let mut banned = plain(4, own, None);
         banned.ends = Some(StreamEnd::Banned);
         retained.push(Arc::new(banned));
         assert_eq!(
-            retained.catch_up(user, "a", reading(), 4, &none).err(),
+            retained
+                .catch_up(user, &named("a"), reading(), 4, &none)
+                .err(),
             Some(StreamEnd::Banned)
         );
+    }
+
+    /// A sign-in named `id`, of unknown beginning.
+    fn named(id: &str) -> SignIn {
+        SignIn {
+            id: id.to_string(),
+            began: None,
+        }
+    }
+
+    #[test]
+    fn an_end_or_a_ban_made_before_a_sign_in_began_does_not_end_it() {
+        let user = UserId::new();
+        let own = SubjectOwner::User(user);
+        let at = Utc::now();
+        let mut retained = Retained::default();
+        let mut others_ended = plain(1, own, None);
+        others_ended.sign_ins = Some(EndedSignIns {
+            ended: None,
+            kept: Some("a".to_string()),
+        });
+        others_ended.ends = Some(StreamEnd::SignedOut);
+        others_ended.ends_at = Some(at);
+        retained.push(Arc::new(others_ended));
+        let mut banned = plain(2, own, None);
+        banned.ends = Some(StreamEnd::Banned);
+        banned.ends_at = Some(at);
+        retained.push(Arc::new(banned));
+        retained.push(event(3, own, None));
+        let none = HashMap::new();
+        let reading = || Reading {
+            communities: HashSet::new(),
+            roles: HashMap::new(),
+            moderator: false,
+        };
+        let since = |began, after| {
+            let sign_in = SignIn {
+                id: "b".to_string(),
+                began,
+            };
+            retained.catch_up(user, &sign_in, reading(), after, &none)
+        };
+        // A sign-in begun after them replays neither, whether resuming past them or not.
+        let later = Some(at + chrono::Duration::seconds(1));
+        assert_eq!(sequences(&since(later, 0).unwrap().0), vec![3]);
+        assert_eq!(sequences(&since(later, 2).unwrap().0), vec![3]);
+        // One begun before, or not known to have begun after, is ended by them.
+        let earlier = Some(at - chrono::Duration::seconds(1));
+        assert_eq!(since(earlier, 2).err(), Some(StreamEnd::SignedOut));
+        assert_eq!(since(None, 2).err(), Some(StreamEnd::SignedOut));
+        assert_eq!(sequences(&since(earlier, 0).unwrap().0), vec![1, 2, 3]);
     }
 
     #[test]
@@ -1963,7 +2218,7 @@ mod tests {
             1,
             Connection {
                 user: member,
-                sign_in: String::new(),
+                sign_in: SignIn::default(),
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
@@ -2057,7 +2312,7 @@ mod tests {
             1,
             Connection {
                 user: member,
-                sign_in: String::new(),
+                sign_in: SignIn::default(),
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
@@ -2115,7 +2370,7 @@ mod tests {
             1,
             Connection {
                 user: member,
-                sign_in: String::new(),
+                sign_in: SignIn::default(),
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
@@ -2126,7 +2381,7 @@ mod tests {
             2,
             Connection {
                 user: moderator_user,
-                sign_in: String::new(),
+                sign_in: SignIn::default(),
                 communities: HashSet::from([community]),
                 roles: HashMap::from([(community, vec![moderator])]),
                 moderator: false,
@@ -2184,7 +2439,7 @@ mod tests {
                 id,
                 Connection {
                     user,
-                    sign_in: String::new(),
+                    sign_in: SignIn::default(),
                     communities: HashSet::from([community]),
                     roles,
                     moderator: false,
@@ -2308,7 +2563,7 @@ mod tests {
                 id,
                 Connection {
                     user,
-                    sign_in: String::new(),
+                    sign_in: SignIn::default(),
                     communities: HashSet::from([community]),
                     roles: HashMap::from([(community, roles)]),
                     moderator: false,

@@ -270,16 +270,7 @@ pub async fn sign_in(
     if settings.require_two_factor && !claims.profile.bot && !claims.method.strong() {
         return Err(crate::Error::StrongerSignInRequired);
     }
-    check_profile(&claims.profile).map_err(|error| {
-        let detail = match error {
-            crate::Error::Validation(reason) => reason,
-            other => other.to_string().into(),
-        };
-        invalid(
-            Some(&home),
-            t!("statementProfile", domain = home.as_str(), detail = detail),
-        )
-    })?;
+    check_profile(&claims.profile).map_err(|error| profile_refused(&home, error))?;
     let rules = policy.rules(subject);
     let mut conn = state.connection_pool.get().await?;
     let (user, previous_icon, joined) = arrive(
@@ -307,9 +298,53 @@ pub async fn sign_in(
     Ok(session)
 }
 
-/// The same checks a profile edited here passes.
+/// Counts a first arrival from `home` toward today's (UTC) share of
+/// `[federation] max_arrivals_per_home_per_day`, refusing it once that is spent. The count is
+/// kept in Valkey, shared by every server, for two days; an arrival refused later still counts,
+/// which errs toward fewer.
+async fn count_arrival(state: &GlobalServerContext, home: &Domain) -> crate::Result<()> {
+    use fred::prelude::KeysInterface as _;
+    let max = state.config.federation.max_arrivals_per_home_per_day;
+    let key = format!(
+        "federation:arrivals:{home}:{}",
+        Utc::now().format("%Y-%m-%d")
+    );
+    let arrived: u64 = state.valkey.incr(&key).await?;
+    let _: bool = state
+        .valkey
+        .expire(&key, ARRIVALS_KEPT_SECONDS, None)
+        .await?;
+    if arrived > max {
+        tracing::warn!(%home, max, "refused a first arrival over the day's limit for its home");
+        return Err(crate::Error::FederationRefused(t!(
+            "federationArrivalsLimit",
+            domain = home.as_str(),
+            max = max
+        )));
+    }
+    Ok(())
+}
+
+/// How long a day's count of first arrivals is kept: past the end of the day it counts, in any
+/// time zone.
+const ARRIVALS_KEPT_SECONDS: i64 = 2 * 24 * 60 * 60;
+
+/// The refusal of a profile `home` sent that does not fit here, saying what is wrong with it.
+fn profile_refused(home: &Domain, error: crate::Error) -> crate::Error {
+    let detail = match error {
+        crate::Error::Validation(reason) => reason,
+        other => other.to_string().into(),
+    };
+    invalid(
+        Some(home),
+        t!("statementProfile", domain = home.as_str(), detail = detail),
+    )
+}
+
+/// The same checks a profile edited here passes, but for its name, which [`arrive`] checks: a
+/// first arrival's must be one a new account here could take, and a later name that could not
+/// leaves the name held here as it is.
 fn check_profile(profile: &Profile) -> crate::Result<()> {
-    crate::user::validate_username(&profile.name)?;
     crate::user::validate_profile(&UserUpdateRequest {
         display_name: Some(profile.display_name.clone()),
         pronouns: Some(profile.pronouns.clone()),
@@ -355,9 +390,14 @@ async fn arrive(
                 .optional()?;
             let profile = &claims.profile;
             let Some(existing) = existing else {
+                // A name no account made here could take, such as one that looks like the
+                // system account's, makes no account here either.
+                crate::user::validate_new_username(&profile.name)
+                    .map_err(|error| profile_refused(home, error))?;
                 if invite_required && invite_code.is_none() {
                     return Err(crate::Error::RegistrationInviteRequired);
                 }
+                count_arrival(state, home).await?;
                 // As at registration, an invite that works is recorded, and where invites are
                 // optional one that does not is ignored.
                 let (registered_with, community_invite) = match invite_code {
@@ -432,7 +472,7 @@ async fn arrive(
                 ));
             }
             let banned: bool = user::table
-                .select(user::banned_at.is_not_null())
+                .select(crate::user_ban::banned())
                 .find(existing.id)
                 .first(conn)
                 .await?;
@@ -443,11 +483,22 @@ async fn arrive(
                 .set(user::home_confirmed_at.eq(diesel::dsl::now))
                 .execute(conn)
                 .await?;
+            // A name the home changed to that no account made here could take is not taken:
+            // the one held here stays, and the rest of the profile is still brought up to date.
+            let name = match crate::user::validate_new_username(&profile.name) {
+                Ok(()) => &profile.name,
+                Err(error) => {
+                    if profile.name != existing.name {
+                        tracing::info!(%home, user = %existing.id.0, %error, "kept a foreign user's name, since the one their home gave breaks this deployment's rule");
+                    }
+                    &existing.name
+                }
+            };
             let changed =
                 |now: &Option<String>, then: &Option<String>| (now != then).then(|| now.clone());
             let event = UserEvent::Update {
                 id: existing.id,
-                name: (profile.name != existing.name).then(|| profile.name.clone()),
+                name: (*name != existing.name).then(|| name.clone()),
                 icon: None,
                 display_name: changed(&profile.display_name, &existing.display_name),
                 pronouns: changed(&profile.pronouns, &existing.pronouns),
@@ -472,7 +523,7 @@ async fn arrive(
             }
             diesel::update(user::table.find(existing.id))
                 .set((
-                    user::name.eq(&profile.name),
+                    user::name.eq(name),
                     user::display_name.eq(&profile.display_name),
                     user::pronouns.eq(&profile.pronouns),
                     user::bio.eq(&profile.bio),
@@ -516,6 +567,10 @@ async fn copy_avatar(
         Some(home_icon) => Some(fetch_avatar(state, home, home_icon).await?),
         None => None,
     };
+    // A picture of more pixels than an icon may have, or none its header gives, is not copied:
+    // the user goes without an avatar here until their home gives them another.
+    let copied = copied
+        .filter(|(bytes, _)| crate::icon::size_within(bytes, crate::icon::MAX_PIXELS).is_some());
     let local = match copied {
         Some((bytes, mime_type)) => {
             let id = IconId::new();

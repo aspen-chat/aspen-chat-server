@@ -17,10 +17,16 @@
 #   global            everyone's
 #   ip                one client address (an IPv6 address's /ipv6_prefix network)
 #   user              one signed-in user (authenticated endpoints only)
-#   username          one username given to `POST /auth/login`
+#   username          one username given to `POST /auth/login`, from one network (an IPv4
+#                     /24, an IPv6 /48 or the coarser ipv6_prefix)
+#   username_failures one username's wrong passwords at `POST /auth/login`, from anywhere:
+#                     looked at before the password is checked, counted after a wrong one
 #   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
 #   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
 #   ip_per_<param>    one address's, per value of the path parameter
+# A path parameter's value is counted as its endpoint reads it: an id in any spelling the API
+# accepts (with or without hyphens, braces, `urn:uuid:`, any case) is one value. Valkey holds
+# each value, and each username, only as its SHA-256.
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
 # document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,
@@ -28,7 +34,9 @@
 # for the page unsubscribe links open, and `GET /invite/{code}` and `GET /{*path}` for the web
 # client's pages (all but the first served at those paths, outside `/api/v1`). The pages
 # check their own limits and are served, over them, without what they preview as; the web
-# client's files are not limited.
+# client's files are not limited. A request using a method its path does not have, which is
+# refused, still counts toward the `default` limits that need no session or path parameter;
+# a method that is not a standard HTTP one is named `OTHER`.
 
 [rate_limits]
 enabled = true
@@ -40,7 +48,7 @@ ipv6_prefix = 64
 max_suspension_seconds = 86400
 # Endpoints refused (`503` `serverBusy`) rather than let through while Valkey cannot be reached
 # to count their limits: everything that guesses a password, a code, or an invite. Every other
-# endpoint is let through then. The username limit of `POST /auth/login` is always refused so.
+# endpoint is let through then. The username limits of `POST /auth/login` are always refused so.
 fail_closed = [
   "GET /auth/passkey",
   "POST /auth/login",
@@ -62,6 +70,7 @@ fail_closed = [
   "GET /invites/{code}",
   "GET /invite/{code}",
   "PUT /communities/{community}/members/@me",
+  "POST /communities/{community}/invites",
 ]
 
 # Applies to every endpoint, beneath any group or endpoint setting.
@@ -197,6 +206,8 @@ endpoints = [
   "DELETE /invites/{code}",
   "PATCH /channels/{channel}/voice/participants/{user}",
   "DELETE /channels/{channel}/voice/participants/{user}",
+  "PUT /communities/{community}/voice-mutes/{user}",
+  "DELETE /communities/{community}/voice-mutes/{user}",
   "POST /voice-servers",
   "PATCH /voice-servers/{server}",
   "DELETE /voice-servers/{server}",
@@ -255,17 +266,39 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 per_secret = { requests = 30, per_seconds = 60, burst = 10 }
 
 [rate_limits.endpoints."POST /auth/login"]
-# Guessing one account's password from many addresses.
+# Attempts at one username from one network (an IPv4 /24, an IPv6 /48), counted before the
+# password is checked, so guesses from one network cannot lock the name out everywhere else.
 username = { requests = 10, per_seconds = 600, burst = 5 }
+# Wrong passwords for one username from anywhere, guessed from many networks at once: looked
+# at before the password is checked and counted only once it proves wrong, so the owner's own
+# right passwords never spend it. Spent, password sign-in for the name is refused until it
+# refills; passkeys, device links, and password resets still reach the account.
+username_failures = { requests = 30, per_seconds = 600, burst = 20 }
 
 [rate_limits.endpoints."POST /users"]
 ip = { requests = 5, per_seconds = 3600, burst = 3 }
+# Every account made, from everyone together: enough for a launch's rush (600 at once, then
+# twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
+# A deployment expecting more raises it in aspen.toml.
+global = { requests = 1200, per_seconds = 60, burst = 600 }
 
 # Each sends mail: a code to an address the caller says is theirs.
 [rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
 user = { requests = 5, per_seconds = 3600, burst = 3 }
 
-# Each mails the reset code again, to an address its asker proved they know; the account's mail
+# Starting a reset, a passkey ceremony, or a device link each keeps a little state in Valkey
+# until it expires (half an hour, five minutes, a minute), so everyone's starts together are
+# limited too, generously, to bound what a crowd of addresses can store there.
+[rate_limits.endpoints."POST /auth/password-resets"]
+global = { requests = 600, per_seconds = 60, burst = 300 }
+
+[rate_limits.endpoints."POST /auth/passkey-ceremonies"]
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
+
+[rate_limits.endpoints."POST /auth/device-links"]
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
+
+# Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).
 [rate_limits.endpoints."POST /auth/password-resets/{reset}/codes"]
 per_reset = { requests = 5, per_seconds = 1800, burst = 3 }
@@ -413,7 +446,8 @@ user = { requests = 30, per_seconds = 3600, burst = 5 }
 [rate_limits.endpoints."POST /bots/{bot}/token"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
-[rate_limits.endpoints."PUT /bots/{bot}/owner"]
+# Each offer of a bot sends its recipient a notice from the system account.
+[rate_limits.endpoints."PUT /bots/{bot}/transfer"]
 user = { requests = 10, per_seconds = 600, burst = 3 }
 
 # Reporting a message, a profile, or a nickname: ten back to back, and fifty a day, across all
@@ -472,8 +506,12 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 user = { requests = 20, per_seconds = 3600, burst = 5 }
 
 [rate_limits.endpoints."GET /invites/{code}"]
-# Guessing invite codes.
-user = { requests = 30, per_seconds = 60, burst = 10 }
+# Guessing invite codes. Making an invite with a code of one's own choosing says whether that
+# code is taken, so it counts in the same budget.
+user = { requests = 30, per_seconds = 60, burst = 10, bucket = "inviteLookup" }
+
+[rate_limits.endpoints."POST /communities/{community}/invites"]
+user = { requests = 30, per_seconds = 60, burst = 10, bucket = "inviteLookup" }
 
 [rate_limits.endpoints."GET /invite/{code}"]
 # The web client's invite page, which shows the invite's community to anyone: guessing invite

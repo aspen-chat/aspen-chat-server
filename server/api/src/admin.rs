@@ -32,6 +32,10 @@ impl FromRequestParts<GlobalServerContext> for AdminUser {
             parts, state,
         )
         .await?;
+        // A bot holds no deployment role, and its token never opens the dashboard.
+        if session.caller.bot {
+            return Err(ApiError::new(ProblemCode::AdminRequired));
+        }
         let access = app::deployment::access_of(state, session.user.id).await?;
         if access.permissions == DeploymentPermissions::empty() {
             Err(ApiError::new(ProblemCode::AdminRequired))
@@ -183,7 +187,8 @@ pub enum CommunitySort {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct UserListQuery {
-    /// Only those whose username or display name contains this, ignoring case.
+    /// Only those whose username or display name contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
@@ -207,7 +212,8 @@ pub struct UserListQuery {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct CommunityListQuery {
-    /// Only those whose name contains this, ignoring case.
+    /// Only those whose name contains this, ignoring case; at most
+    /// 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
@@ -670,7 +676,7 @@ pub async fn create_registration_invite(
     let communities =
         app::registration_invite::invited_communities(conn.as_mut(), std::slice::from_ref(&invite))
             .await?;
-    tracing::info!(code = %invite.code, admin = %session.user.id.0, community = ?request.community, "made a registration invite");
+    tracing::info!(code = app::registration_invite::logged_code(&invite.code), admin = %session.user.id.0, community = ?request.community, "made a registration invite");
     let community = communities.into_values().next();
     Ok(Created::new(
         format!("{API_PREFIX}/admin/registration-invites/{}", invite.code),
@@ -706,7 +712,7 @@ pub async fn revoke_registration_invite(
         .await
         .map_err(app::Error::from)?;
     app::registration_invite::revoke(&state, conn.as_mut(), &code).await?;
-    tracing::info!(%code, admin = %session.user.id.0, "revoked a registration invite");
+    tracing::info!(code = app::registration_invite::logged_code(&code), admin = %session.user.id.0, "revoked a registration invite");
     Ok(NoContent)
 }
 

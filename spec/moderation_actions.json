@@ -20,6 +20,8 @@
         "warnUser",
         "resetProfile",
         "clearNickname",
-        "readReportContext"
+        "readReportContext",
+        "listDms",
+        "purgeAttachment"
     ]
 }

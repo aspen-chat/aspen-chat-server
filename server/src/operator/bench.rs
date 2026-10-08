@@ -52,6 +52,8 @@ pub async fn bench(config: &AspenConfig, command: BenchCommand) -> Result<()> {
                 started.elapsed().as_secs_f64(),
                 out.display()
             );
+            // Drawn for the run unless the plan gave one; the manifest holds it too.
+            println!("password of every user of the run: {}", manifest.password);
         }
         BenchCommand::Purge { run } => {
             let media = aspen_app::media_store::MediaStore::new(config)

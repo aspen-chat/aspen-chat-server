@@ -72,10 +72,13 @@ pub enum Mail {
     /// The code that resets the password, asked for at the sign-in screen.
     PasswordReset { code: String },
     /// The password was reset with a code mailed here. `removed_factors` second factors added in
-    /// the week before went with it (`reset::complete`).
+    /// the week before went with it (`reset::complete`), and with `recovery_codes_gone` every
+    /// recovery code too, while factors remain, so the owner is asked to make new ones.
     PasswordWasReset {
         #[serde(default)]
         removed_factors: u32,
+        #[serde(default)]
+        recovery_codes_gone: bool,
     },
     /// The password was changed by one of the account's sign-ins.
     PasswordChanged,
@@ -482,7 +485,10 @@ mod tests {
             Mail::Verification {
                 code: "123456".to_string(),
             },
-            Mail::PasswordWasReset { removed_factors: 0 },
+            Mail::PasswordWasReset {
+                removed_factors: 0,
+                recovery_codes_gone: false,
+            },
             Mail::AddressChanged { new_address: None },
             Mail::Newsletter {
                 post: super::super::newsletter::NewsletterPostId::new(),
@@ -534,7 +540,10 @@ mod tests {
         let queued = serde_json::json!({ "kind": "passwordWasReset" });
         assert_eq!(
             serde_json::from_value::<Mail>(queued).unwrap(),
-            Mail::PasswordWasReset { removed_factors: 0 }
+            Mail::PasswordWasReset {
+                removed_factors: 0,
+                recovery_codes_gone: false,
+            }
         );
         let mail = Mail::SecondFactorRemoved {
             factor: Factor::Passkey {

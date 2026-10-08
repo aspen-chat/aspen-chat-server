@@ -13,8 +13,16 @@ pub struct VoiceServerConfig {
     /// This server's row in the API server's `voice_server` table. Join tokens name the servers
     /// they are good for by this id, and every report carries it.
     pub id: Uuid,
-    /// Shared with the API server; verifies join tokens.
-    pub token_secret: String,
+    /// Join tokens are signed by the API servers' key, whose public half this server asks them
+    /// for (`signalling::TokenKeys`). Given this too, it also takes tokens of the shared-secret
+    /// form under it (`voice_protocol::token::verify_shared`), which API servers that do not
+    /// sign with a key of their own make; it refuses to start with the development value or one
+    /// shorter than `MIN_TOKEN_SECRET_BYTES` unless `development`.
+    #[serde(default)]
+    pub token_secret: Option<String>,
+    /// Lets the server start with a token secret anyone may know, for a development machine.
+    #[serde(default)]
+    pub development: bool,
     pub nats_url: String,
     /// How this server signs in to NATS: a user of its own (`[nats]`), allowed only this
     /// server's subjects, or the deployment's token, which lets it do anything the API servers
@@ -217,6 +225,28 @@ pub struct TransferConfig {
     pub relay_max_port: u16,
 }
 
+impl TransferConfig {
+    /// Refuses relay ports that overlap the media range or the STUN and TURN port: the relay
+    /// would then take ports media needs, or relay to them.
+    pub fn check(&self, rtc: &RtcConfig) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.relay_min_port <= self.relay_max_port,
+            "transfer.relay_min_port is above transfer.relay_max_port"
+        );
+        let relay = self.relay_min_port..=self.relay_max_port;
+        anyhow::ensure!(
+            self.relay_max_port < rtc.min_port || rtc.max_port < self.relay_min_port,
+            "transfer.relay_min_port to relay_max_port overlaps rtc.min_port to max_port; give \
+             relayed transfers ports of their own"
+        );
+        anyhow::ensure!(
+            !relay.contains(&self.port) && !(rtc.min_port..=rtc.max_port).contains(&self.port),
+            "transfer.port is inside the relay or media port range"
+        );
+        Ok(())
+    }
+}
+
 fn default_workers() -> usize {
     num_cpus::get().max(1)
 }
@@ -270,6 +300,32 @@ pub struct MediaConfig {
 
 pub fn load_media_config() -> Result<MediaConfig, config::ConfigError> {
     sources()?.try_deserialize::<MediaConfig>()
+}
+
+/// The API server's development `[voice] token_secret`, which is in its source.
+const DEVELOPMENT_TOKEN_SECRET: &str = "aspen_dev_voice_secret";
+/// The shortest token secret a server not in `development` accepts, as the API server's
+/// `https` deployments do: as long as the HMAC-SHA256 key it signs with.
+const MIN_TOKEN_SECRET_BYTES: usize = 32;
+
+impl VoiceServerConfig {
+    /// Refuses a token secret anyone may know or guess, which lets whoever does sign their own
+    /// way into any call, unless the server is in `development`.
+    pub fn check_secret(&self) -> anyhow::Result<()> {
+        let Some(secret) = &self.token_secret else {
+            return Ok(());
+        };
+        let weak = secret == DEVELOPMENT_TOKEN_SECRET || secret.len() < MIN_TOKEN_SECRET_BYTES;
+        if weak && !self.development {
+            anyhow::bail!(
+                "token_secret is the development value or shorter than {MIN_TOKEN_SECRET_BYTES} \
+                 bytes, so whoever knows or guesses it can join any call; leave it out once every \
+                 API server signs join tokens with its key, give it a long random one meanwhile, or \
+                 set development = true on a development machine"
+            );
+        }
+        Ok(())
+    }
 }
 
 pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {

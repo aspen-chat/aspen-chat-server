@@ -120,6 +120,9 @@ pub enum TransferEnd {
     Failed,
     /// The other side left the call. Only the server says this.
     Left,
+    /// The sender may no longer offer files in the call (Transfer files). Only the server says
+    /// this, to both sides.
+    NotPermitted,
 }
 
 /// Why an offer stopped standing. Transfers it started go on.
@@ -451,6 +454,11 @@ pub enum ServerMessage {
         /// same request would be taken.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_seconds: Option<u64>,
+        /// The `type` of the client frame this answers, when it answers one: a client tells
+        /// by it which of its requests was refused (a `setState` unmuting, for instance, so it
+        /// goes on showing itself muted).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
     },
 }
 
@@ -468,6 +476,9 @@ pub enum KickReason {
     /// The user may no longer be in the call: they lost access to its channel, or left or were
     /// removed from where it is.
     AccessLost,
+    /// The sign-in the user joined with ended: they signed out there, or ended it from another
+    /// device, changed their password, or (for a bot) had its token replaced.
+    SignedOut,
 }
 
 /// The whole protocol, the root of `voice_signal_schema.json`.

@@ -8,6 +8,7 @@
 
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::rate_limit::ClientIp;
 use crate::{API_PREFIX, TAG_AUTH};
 use aspen_app as app;
 use aspen_app::UserId;
@@ -16,6 +17,7 @@ use aspen_app::login::{LoginOutcome, SecondFactorOutcome, TokenRefreshOutcome};
 use aspen_app::passkey::{CeremonyResult, Completion, Purpose};
 use aspen_app::two_factor::{Caller, PasskeySummary, Proof, SecondFactor};
 use aspen_app::user::UserPg;
+use axum::Extension;
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, State};
 use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
@@ -104,9 +106,11 @@ pub enum LoginResult {
 )]
 pub async fn login(
     State(state): State<GlobalServerContext>,
+    client: Option<Extension<ClientIp>>,
     Json(request): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResult>> {
-    crate::rate_limit::limit_sign_in(&state, &request.username).await?;
+    let ip = client.and_then(|Extension(ClientIp(ip))| ip);
+    crate::rate_limit::limit_sign_in(&state, &request.username, ip).await?;
     match app::login::try_login(&state, &request.username, &request.password).await? {
         LoginOutcome::SignedIn(session) => Ok(Json(LoginResult::SignedIn(session.into()))),
         LoginOutcome::SecondFactorRequired { ticket, methods } => {
@@ -127,7 +131,10 @@ pub async fn login(
                 },
             )))
         }
-        LoginOutcome::InvalidCredentials => Err(ApiError::new(ProblemCode::InvalidCredentials)),
+        LoginOutcome::InvalidCredentials => {
+            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
+            Err(ApiError::new(ProblemCode::InvalidCredentials))
+        }
     }
 }
 

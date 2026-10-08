@@ -352,6 +352,9 @@ def check_abroad(admin: str) -> None:
            "after alpha hands over to a new key, beta follows the handover on its own")
     abroad = again["sessionToken"]
     compromised = terminal(ALPHA, "federation", "rotate-key", "--compromised").split()[-1]
+    # Beta contacts a statement's sender at most every fifteen seconds
+    # (`received::CONTACT_INTERVAL_SECONDS`), and it just contacted alpha for the handover.
+    time.sleep(16)
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "401 assertionInvalid"
            and f"offers a new key {compromised}" in terminal(BETA, "federation", "list"),
            "after alpha replaces a compromised key, beta refuses it and holds it as offered")

@@ -56,8 +56,9 @@ user = { requests = 30, per_seconds = 60, burst = 12 }
 [rate_limits.frames.setCapabilities]
 user = { requests = 30, per_seconds = 60, burst = 12 }
 
-# Each transport takes ports from the media range. A participant holds one in each direction,
-# a new one replacing the last, and leaving closes both, so moving between calls churns
+# Each transport takes ports from the media range. A participant holds one in each direction
+# (a second send transport is refused; a new receive transport replaces the last), and leaving
+# closes both, so moving between calls churns
 # transports rather than piling them up.
 [rate_limits.frames.createTransport]
 user = { requests = 60, per_seconds = 60, burst = 24 }
@@ -86,11 +87,13 @@ global = { requests = 1200, per_seconds = 60, burst = 300 }
 [rate_limits.frames.closeProducer]
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+# Only a `setState` that unmutes or undeafens counts: one that mutes or deafens, and lifts
+# neither, always goes through (`Rooms::quietens`), so no one can be kept audible. Each is
+# reported to the API server and announced to everyone who can see the call; since every mute
+# must be undone by a limited frame before it can be repeated, this limit bounds both. There is
+# no `channel` limit: others' frames must never spend someone's own.
 [rate_limits.frames.setState]
 user = { requests = 40, per_seconds = 60, burst = 20 }
-# Every mute and deafen is reported to the API server and announced to everyone who can see
-# the call.
-channel = { requests = 120, per_seconds = 60, burst = 30 }
 
 # File transfers. An offer and an acceptance are announced to everyone in the call.
 [rate_limits.frames.offerFile]
@@ -104,9 +107,10 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 user = { requests = 30, per_seconds = 60, burst = 10 }
 channel = { requests = 120, per_seconds = 60, burst = 30 }
 
-# A peer connection's offer, answer, and candidates: a few dozen frames per transfer.
+# A peer connection's offer, answer, and candidates: a few dozen frames per transfer, each at
+# most 32 KiB, so a burst stays far inside the other side's 8 MiB outbox.
 [rate_limits.frames.transferSignal]
-user = { requests = 600, per_seconds = 60, burst = 100 }
+user = { requests = 600, per_seconds = 60, burst = 60 }
 
 [rate_limits.frames.endTransfer]
 user = { requests = 60, per_seconds = 60, burst = 20 }

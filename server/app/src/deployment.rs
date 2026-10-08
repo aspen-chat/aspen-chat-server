@@ -86,15 +86,36 @@ impl DeploymentAccess {
     }
 }
 
-/// What `user` may do across the deployment.
+/// Refuses `actor`'s use of moderating the deployment on `target` unless `actor`'s highest
+/// deployment role ranks above `target`'s, as a ban from the deployment ranks: what Moderate any
+/// community takes away in a community does not reach anyone who holds a deployment role at or
+/// above the moderator's. Acting on oneself is not moderation and is never refused.
+pub async fn require_outranks(
+    conn: &mut AsyncPgConnection,
+    actor: UserId,
+    target: UserId,
+) -> crate::Result<()> {
+    if actor == target {
+        return Ok(());
+    }
+    let theirs = deployment_access(conn, target).await?.rank();
+    deployment_access(conn, actor).await?.require_above(theirs)
+}
+
+/// What `user` may do across the deployment. Only this deployment's own people hold deployment
+/// roles (`deployment_role::ensure_may_hold`); a bot or a user of another deployment holds none,
+/// whatever rows say.
 pub async fn deployment_access(
     mut conn: &AsyncPgConnection,
     user: UserId,
 ) -> crate::Result<DeploymentAccess> {
     let rows: Vec<(i32, DeploymentPermissions)> = user_deployment_role::table
         .inner_join(deployment_role::table)
+        .inner_join(aspen_schema::user::table)
         .select((deployment_role::position, deployment_role::permissions))
         .filter(user_deployment_role::user.eq(user))
+        .filter(aspen_schema::user::bot.eq(false))
+        .filter(aspen_schema::user::home_domain.is_null())
         .load(&mut conn)
         .await?;
     Ok(DeploymentAccess {

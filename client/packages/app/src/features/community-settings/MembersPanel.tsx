@@ -25,6 +25,7 @@ import {
 import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/features/auth/styles";
 import { BanDialog } from "@/features/community-settings/BanDialog";
 import { BannedList } from "@/features/community-settings/BannedList";
+import { VoiceMutedList } from "@/features/community-settings/VoiceMutedList";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
@@ -54,6 +55,7 @@ export function MembersPanel({ communityId }: { communityId: string }) {
   const { members, searching, error, canSearch } = useMemberSearch(communityId, query);
   const access = useAccess(communityId);
   const mayBan = access?.has("banMembers") ?? false;
+  const mayMute = access?.has("manageCalls") ?? false;
   return (
     <div className="flex flex-col gap-2">
       {canSearch && (
@@ -78,6 +80,7 @@ export function MembersPanel({ communityId }: { communityId: string }) {
         ))}
       </ul>
       {mayBan && <BannedList communityId={communityId} />}
+      {mayMute && <VoiceMutedList communityId={communityId} />}
     </div>
   );
 }

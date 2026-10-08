@@ -3,7 +3,7 @@
 
 use crate::fetch::{MAX_METADATA_BYTES, http_client, read_capped};
 use aspen_wire::link_preview::VideoEmbed;
-use tracing::warn;
+use tracing::debug;
 use url::Url;
 
 /// How a provider's player URL is obtained.
@@ -398,7 +398,7 @@ async fn fetch_oembed(endpoint: &str, url: &Url) -> Option<OembedResponse> {
     let response = match http_client().get(endpoint.as_str()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!(
+            debug!(
                 url = url.as_str(),
                 error = e.to_string(),
                 "oEmbed fetch failed"

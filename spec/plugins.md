@@ -60,7 +60,8 @@ together with a manifest, a JSON file beside it:
 - `settings` and `communitySettings`: the fields the operator, and each community that turns it
   on, configures (below).
 - `hosts`: the hosts it may call over HTTPS, when it holds `network`.
-- `storageQuota`: the bytes of storage it may keep, when it holds `storage`.
+- `storageQuota`: the bytes of storage it may keep for each community, each DM or group DM, each
+  person, and itself, when it holds `storage` (see Storage).
 - `attachmentLimit`: the largest attachment it may read, when it holds `attachments.read`.
 - `principal`: its own account (below), when it holds `act`: the account's username, display
   name key, and the community permissions it asks for where it is turned on.
@@ -251,7 +252,10 @@ and return nothing.
 ### Storage
 
 A key-value store per plugin (`storage`), in the database so every API server sees the same,
-within `storageQuota`. Each value lives in a scope: the deployment, a community, a channel, or a
+within `storageQuota` for each owner: a community's scope, its channels', and their threads'
+share one quota, as do a DM's or group DM's channel and its threads, each user's scope has one,
+and the deployment's scope one, so no one community can fill what a plugin may keep for every
+other. Each value lives in a scope: the deployment, a community, a channel, or a
 user, so that what a plugin keeps about a place goes with it: deleting a channel, community, or
 account deletes what plugins kept in its scope, and removing a plugin deletes all of its data
 once the operator purges it. Every API server may be answering the plugin at once, so besides
@@ -269,6 +273,11 @@ a message the caller may not read is not found, and storage in a channel's or co
 is readable only by those who may view the channel or belong to the community, and in a user's
 scope only by that user. So it is with what it sends: an event published, or a notice sent, while
 answering goes only to a channel the caller may view, a community they belong to, or themself.
+And so it is with what its principal does while answering: it sends a message or a card only to a
+channel the caller may view, deletes or reacts to only a message the caller may read, and removes
+or bans only in a community the caller belongs to, so no one can have a plugin act where they
+cannot see. Changing the card of a message the principal posted is not limited so, since it shows
+nothing new to the caller and is how a card stays current wherever it is read.
 
 ### Events
 
@@ -331,7 +340,13 @@ it loads the view again, in a new frame, with a new port.
 A plugin holding `timers` sets a timer by key (`set-timer`), due at a time with a payload of its
 own, and cancels it (`cancel-timer`); setting a key again replaces it. When it falls due, any one
 API server calls the plugin's `observe` with `timer-fired`, at least once: a call that fails is
-tried again a minute later, three times at most. A plugin keeps at most 10,000 timers.
+tried again a minute later, three times at most. A plugin keeps at most 1,000 timers for each
+owner, counted as storage is: a timer set in a community's scope or one of its channels counts
+for the community, one in a DM for the DM, one in a user's scope for the user, and one set with
+`set-timer` for the plugin itself. A timer
+set in a scope (`set-timer-in`: a community, a channel, or a user, checked as storage's scopes
+are) goes when that scope does, with what the plugin keeps there, so a reminder about a deleted
+channel's event neither fires nor counts against the plugin's timers.
 
 ### Notices
 

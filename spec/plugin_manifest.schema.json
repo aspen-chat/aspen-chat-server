@@ -132,7 +132,7 @@
       }
     },
     "storageQuota": {
-      "description": "The bytes of storage it may keep, with `storage`.",
+      "description": "The bytes of storage it may keep, with `storage`, in each owner's share: each community\n(with its channels), each DM or group DM, each user's own scope, and its own.",
       "type": [
         "integer",
         "null"

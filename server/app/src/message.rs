@@ -120,13 +120,17 @@ pub struct MessageAttachment {
     attachment_id: AttachmentId,
 }
 
+/// The most attachments one message may carry, whoever sends it.
+pub const MAX_ATTACHMENTS: usize = 50;
+
 /// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
 /// NOT NULL`) row that `author` uploaded, or that is already in `message`,
 /// before linking it to a message. The `attachment` table admits
 /// half-uploaded reservations, and exposing them through a message would let
 /// a client publish a card pointing at bytes that may never arrive; and an
 /// upload is its uploader's to send. Returns [`app::Error::Validation`] if
-/// any id is missing, pending, or someone else's.
+/// any id is missing, pending, or someone else's, or if there are more than
+/// [`MAX_ATTACHMENTS`].
 async fn ensure_attachments_ready(
     conn: &mut AsyncPgConnection,
     author: UserId,
@@ -136,22 +140,33 @@ async fn ensure_attachments_ready(
     if attachments.is_empty() {
         return Ok(());
     }
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(crate::Error::Validation(t!(
+            "messageTooManyAttachments",
+            max = MAX_ATTACHMENTS
+        )));
+    }
     use diesel::NullableExpressionMethods;
     let kept = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.nullable().eq(message));
+    // Locked until the message is saved, so the sweep of unsent attachments
+    // (`attachment::sweep_unsent`) passes them by.
     let ready: Vec<AttachmentId> = attachment::table
         .select(attachment::id)
         .filter(
             attachment::id
                 .eq_any(attachments)
                 .and(attachment::ready_at.is_not_null())
+                // Evidence is no one's to post again (`attachment::evidence`).
+                .and(attachment::evidence_at.is_null())
                 .and(
                     attachment::uploader
                         .eq(author)
                         .or(attachment::id.eq_any(kept)),
                 ),
         )
+        .for_key_share()
         .load(conn)
         .await?;
     if ready.len() != attachments.len() {
@@ -228,7 +243,37 @@ pub fn check_content(content: &str) -> crate::Result<()> {
             max = MAX_CONTENT_CHARS
         )));
     }
+    if nesting_depth(content) > MAX_NESTING {
+        return Err(crate::Error::Validation(t!(
+            "messageNestingTooDeep",
+            max = MAX_NESTING
+        )));
+    }
     Ok(())
+}
+
+/// How deeply a message's Markdown may nest (quotes in quotes, lists in lists, and what they
+/// hold), as the client's `MAX_NESTING` counts it: readers' apps render the tree recursively, so
+/// a short message of thousands of levels (`>>>>…`, `1. 1. 1. …`) would overflow their stack,
+/// and no message a person writes to be read comes near it.
+pub const MAX_NESTING: usize = 32;
+
+/// The deepest nesting of `content`'s Markdown elements, counted on the parser's events with no
+/// recursion.
+fn nesting_depth(content: &str) -> usize {
+    let mut depth: usize = 0;
+    let mut deepest = 0;
+    for event in crate::markdown::parser(content) {
+        match event {
+            pulldown_cmark::Event::Start(_) => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            pulldown_cmark::Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
 }
 
 /// What `create_message` posts besides its text.
@@ -477,6 +522,7 @@ async fn post(
                         .execute(conn.as_mut())
                         .await?;
                 }
+                crate::attachment::mark_sent(conn.as_mut(), &attachments).await?;
                 // The new message goes out with no link previews; the fetcher spawned below
                 // publishes an `Update` with them once it has settled (see `app::link_preview`).
                 publish_event(
@@ -526,7 +572,9 @@ async fn post(
             .scope_boxed()
         })
         .await?;
-    if message.kind == MessageKind::Standard {
+    // The system account's notices quote names others chose, so nothing in them is fetched and
+    // shown as a card under its name.
+    if message.kind == MessageKind::Standard && !system_account::is(conn.as_mut(), author).await? {
         spawn_preview_fetch(state.clone(), author, message.id, &message.content);
     }
     Ok(message)
@@ -676,7 +724,32 @@ pub async fn update_message(
         return Err(crate::Error::Forbidden(t!("editOthersMessage")));
     }
     access.ensure_unblocked()?;
-    if command.attachments.as_ref().is_some_and(|a| !a.is_empty()) {
+    // Adding to a message is posting, so it takes what posting here takes: Send messages (Send
+    // messages in threads in a thread) for new text, and Attach files besides for a new file.
+    // An edit that only takes away does not: clearing the text (`content` given as empty),
+    // removing attachments (`attachments` naming only some of those it has), or both, so
+    // someone who may no longer post can still withdraw what they said.
+    let adds_files = match &command.attachments {
+        None => false,
+        Some(wanted) => {
+            let held: std::collections::HashSet<AttachmentId> = message_attachment::table
+                .select(message_attachment::attachment_id)
+                .filter(message_attachment::message_id.eq(id))
+                .load::<AttachmentId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .collect();
+            wanted.iter().any(|attachment| !held.contains(attachment))
+        }
+    };
+    let adds_text = command
+        .content
+        .as_deref()
+        .is_some_and(|text| !text.is_empty());
+    if adds_text || adds_files {
+        access.require(access.send_permission())?;
+    }
+    if adds_files {
         access.require(Permissions::ATTACH_FILES)?;
     }
     // Only text its author wrote is theirs to edit. An echo shows its reply's content; a
@@ -818,9 +891,10 @@ pub async fn update_message(
                 if let Some(ref new_attachments) = command.attachments {
                     ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments)
                         .await?;
-                    diesel::delete(message_attachment::table)
+                    let before: Vec<AttachmentId> = diesel::delete(message_attachment::table)
                         .filter(message_attachment::message_id.eq(id))
-                        .execute(conn.as_mut())
+                        .returning(message_attachment::attachment_id)
+                        .load(conn.as_mut())
                         .await?;
                     for attachment_id in new_attachments {
                         diesel::insert_into(message_attachment::table)
@@ -831,6 +905,13 @@ pub async fn update_message(
                             .execute(conn.as_mut())
                             .await?;
                     }
+                    crate::attachment::mark_sent(conn.as_mut(), new_attachments).await?;
+                    // What the edit took off is kept for reviewing reports.
+                    let removed: Vec<AttachmentId> = before
+                        .into_iter()
+                        .filter(|kept| !new_attachments.contains(kept))
+                        .collect();
+                    crate::attachment::evidence::keep_removed(conn.as_mut(), id, &removed).await?;
                 }
 
                 let attachments: Vec<AttachmentId> = message_attachment::table
@@ -925,6 +1006,7 @@ pub async fn delete_message(
             &access,
             ModerationAction::DeleteMessage,
             Some(id.0.to_string()),
+            Some(author),
         )
         .await?;
     }
@@ -959,6 +1041,8 @@ pub async fn soft_delete(
     if deleted.kind != MessageKind::ThreadEcho {
         thread::delete_echo_of(state, conn, id).await?;
     }
+    // Its files leave the public read path, kept for reviewing reports.
+    crate::attachment::evidence::keep_deleted(conn, id).await?;
     publish_event(
         state,
         conn,
@@ -1128,7 +1212,11 @@ pub async fn note_moderation(
     access: &crate::permissions::ChannelAccess,
     action: ModerationAction,
     subject: Option<String>,
+    target: Option<UserId>,
 ) -> crate::Result<()> {
+    if let Some(target) = target {
+        crate::deployment::require_outranks(conn, actor, target).await?;
+    }
     log_moderation(
         conn,
         actor,
@@ -1172,6 +1260,8 @@ pub async fn remove_attachment(
             if removed == 0 {
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
             }
+            // Kept for reviewing reports, off the public read path.
+            crate::attachment::evidence::keep_removed(conn.as_mut(), id, &[attachment_id]).await?;
             if author != caller && access.moderating(Permissions::MANAGE_MESSAGES) {
                 note_moderation(
                     conn.as_mut(),
@@ -1179,6 +1269,7 @@ pub async fn remove_attachment(
                     &access,
                     ModerationAction::RemoveAttachment,
                     Some(format!("{}/{}", id.0, attachment_id.0)),
+                    Some(author),
                 )
                 .await?;
             }
@@ -1216,5 +1307,19 @@ pub async fn remove_attachment(
 impl From<MessageWithRelations> for aspen_wire::message_enum::Message {
     fn from(m: MessageWithRelations) -> Self {
         record(&m.message, m.attachments, m.link_previews)
+    }
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::*;
+
+    #[test]
+    fn deep_quotes_and_lists_are_refused() {
+        assert!(check_content("> a quote\n\n- a\n  - list").is_ok());
+        assert!(check_content(&format!("{} deep", ">".repeat(20))).is_ok());
+        assert!(check_content(&format!("{} deep", ">".repeat(40))).is_err());
+        assert!(check_content(&format!("{}deep", "1. ".repeat(40))).is_err());
+        assert!(check_content(&format!("{}x", ">".repeat(MAX_CONTENT_CHARS - 1))).is_err());
     }
 }

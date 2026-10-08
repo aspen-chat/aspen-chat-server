@@ -2,7 +2,8 @@
 //!
 //! Every endpoint has a set of rules, each a limit counted along one dimension: everyone's
 //! requests together (`global`), one client address's (`ip`), one user's (`user`), one
-//! username's at sign-in (`username`), or any of the last three per value of a path parameter
+//! username's at sign-in from one network (`username`), one username's wrong passwords from
+//! anywhere (`username_failures`), or any of the first three per value of a path parameter
 //! (`per_channel`, `user_per_channel`, `ip_per_channel`, ...). A request passes only if every
 //! rule of its endpoint allows it. An endpoint's rules are the configured defaults, which apply
 //! to every endpoint, plus those of the groups that list it, with the endpoint's own settings
@@ -22,7 +23,7 @@
 //! request, so hammering past one limit also spends the wider ones. When Valkey cannot be
 //! reached the limiter lets requests through and logs, since most of the API does not otherwise
 //! need Valkey, except on the endpoints listed in `fail_closed` (those that guess a secret: a
-//! password, a code, an invite) and for the username limit of sign-in, which it refuses
+//! password, a code, an invite) and for the username limits of sign-in, which it refuses
 //! (`Decision::Unavailable`) so an outage does not open them to unlimited guessing.
 //!
 //! An operator may suspend the limits for a while (`aspen_limits::suspension`): for requests
@@ -32,7 +33,10 @@
 //! Rules are checked at three points of a request, depending on what they need to know:
 //! `Stage::Request` (global, address, and path parameter rules) before the handler runs,
 //! `Stage::Session` (user rules) once the session token has been resolved, and
-//! `Stage::Username` inside the sign-in handler, which alone knows the username.
+//! `Stage::Username` inside the sign-in handler, which alone knows the username. The sign-in
+//! handler also looks at `Stage::UsernameFailures` before checking the password ([`RateLimiter::peek`],
+//! which counts nothing) and counts it only once a password proves wrong, so a person's own
+//! right passwords never spend it.
 
 use crate::UserId;
 use crate::aspen_config::{Limit, LimitSetting, RateLimitConfig};
@@ -68,6 +72,22 @@ if now < allow_at then
 end
 local next_tat = tat + emission
 redis.call('SET', KEYS[1], next_tat, 'PX', next_tat - now)
+return 0
+";
+
+/// As [`GCRA`], but only answers whether a request would be allowed, counting nothing.
+const GCRA_PEEK: &str = r"
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local tolerance = tonumber(ARGV[2])
+local tat = tonumber(redis.call('GET', KEYS[1]) or now)
+if tat < now then
+  tat = now
+end
+local allow_at = tat - tolerance
+if now < allow_at then
+  return allow_at - now
+end
 return 0
 ";
 
@@ -125,8 +145,24 @@ impl Route {
     }
 }
 
+/// The methods a route key names as they are. Any other method token a client sends is named
+/// `OTHER` (`OTHER_METHOD`), so made-up methods cannot make new keys, and with them new metric
+/// series and buckets.
+const METHODS: [&str; 9] = [
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
+];
+
+/// What a route key calls a method that is none of `METHODS`.
+pub const OTHER_METHOD: &str = "OTHER";
+
+/// The key a request's limits and metrics go by: its method and its path template.
 pub fn route_key(method: &str, template: &str) -> String {
-    format!("{} {template}", method.to_ascii_uppercase())
+    let method = METHODS
+        .iter()
+        .find(|known| known.eq_ignore_ascii_case(method))
+        .copied()
+        .unwrap_or(OTHER_METHOD);
+    format!("{method} {template}")
 }
 
 /// Whose requests a rule counts together.
@@ -136,6 +172,7 @@ pub enum Dimension {
     Ip,
     User,
     Username,
+    UsernameFailures,
     Per(String),
     UserPer(String),
     IpPer(String),
@@ -148,6 +185,7 @@ impl Dimension {
             "ip" => Dimension::Ip,
             "user" => Dimension::User,
             "username" => Dimension::Username,
+            "username_failures" => Dimension::UsernameFailures,
             _ => {
                 if let Some(param) = name.strip_prefix("user_per_") {
                     Dimension::UserPer(param.to_string())
@@ -167,6 +205,7 @@ impl Dimension {
             Dimension::Ip => "ip".into(),
             Dimension::User => "user".into(),
             Dimension::Username => "username".into(),
+            Dimension::UsernameFailures => "username_failures".into(),
             Dimension::Per(param) => format!("per_{param}"),
             Dimension::UserPer(param) => format!("user_per_{param}"),
             Dimension::IpPer(param) => format!("ip_per_{param}"),
@@ -180,6 +219,7 @@ impl Dimension {
             }
             Dimension::User | Dimension::UserPer(_) => Stage::Session,
             Dimension::Username => Stage::Username,
+            Dimension::UsernameFailures => Stage::UsernameFailures,
         }
     }
 
@@ -203,6 +243,9 @@ pub enum Stage {
     Request,
     Session,
     Username,
+    /// Wrong passwords given for a username: looked at before the password is checked, counted
+    /// after it proves wrong.
+    UsernameFailures,
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +282,10 @@ pub struct RateLimiter {
     addresses: ClientAddresses,
     suspension: SuspensionState,
     rules: HashMap<String, Vec<Rule>>,
+    /// The rules of a request whose route key has none of its own (a method the route does not
+    /// have, refused by the router): the default ones that need neither a session nor a path
+    /// parameter, so such requests are counted too.
+    unknown: Vec<Rule>,
     /// The routes refused while the limits cannot be counted.
     fail_closed: HashSet<String>,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
@@ -248,13 +295,14 @@ pub struct RateLimiter {
 
 /// How often an unreachable Valkey is logged.
 const FAILURE_LOG_INTERVAL_MS: u64 = 30_000;
-/// Longer key parts are hashed, keeping keys short whatever a path parameter holds.
-const MAX_KEY_PART: usize = 64;
 
 impl RateLimiter {
     /// The names of the dimensions `route` is counted along, sorted.
     pub fn dimensions(&self, route: &str) -> Vec<String> {
-        let mut names: Vec<String> = self.rules[route]
+        let mut names: Vec<String> = self
+            .rules
+            .get(route)
+            .unwrap_or(&self.unknown)
             .iter()
             .map(|rule| rule.dimension.name())
             .collect();
@@ -313,17 +361,7 @@ impl RateLimiter {
                     route.key
                 )
             };
-            // The defaults apply wherever they can: a user limit where users sign in, a
-            // per-parameter limit where the path has the parameter.
-            let mut defaults: HashMap<Dimension, Limit> = HashMap::new();
-            for (dimension, setting) in &config.default {
-                let parsed = parse_dimension(dimension, "default")?;
-                if let Some(limit) = limit_of(setting, "default", dimension)?
-                    && applies(&parsed, route)
-                {
-                    defaults.insert(parsed, limit);
-                }
-            }
+            let defaults = defaults_for(config, route)?;
             // An endpoint's own setting replaces its group's, dimension by dimension; `false`
             // (a `None` here) also removes the default of that dimension.
             let mut merged: HashMap<Dimension, Option<Limit>> = HashMap::new();
@@ -366,11 +404,19 @@ impl RateLimiter {
             }));
             rules.insert(route.key.clone(), compiled);
         }
+        let unknown_route = Route::new(OTHER_METHOD, "/*", Access::Anonymous);
+        let unknown = defaults_for(config, &unknown_route)?
+            .into_iter()
+            .map(|(dimension, limit)| {
+                compile_rule(dimension, &limit, &format!("default:{}", unknown_route.key))
+            })
+            .collect();
         Ok(Self {
             enabled: config.enabled,
             addresses,
             suspension: SuspensionState::new(Duration::from_secs(config.max_suspension_seconds)),
             rules,
+            unknown,
             fail_closed,
             last_failure_log: AtomicU64::new(0),
         })
@@ -395,12 +441,33 @@ impl RateLimiter {
         stage: Stage,
         identity: &Identity<'_>,
     ) -> Decision {
+        self.run(valkey, route, stage, identity, GCRA).await
+    }
+
+    /// Whether the rules of `route` that belong to `stage` would allow a request, counting
+    /// nothing; [`check`](Self::check) counts it once it should.
+    pub async fn peek(
+        &self,
+        valkey: &Client,
+        route: &str,
+        stage: Stage,
+        identity: &Identity<'_>,
+    ) -> Decision {
+        self.run(valkey, route, stage, identity, GCRA_PEEK).await
+    }
+
+    async fn run(
+        &self,
+        valkey: &Client,
+        route: &str,
+        stage: Stage,
+        identity: &Identity<'_>,
+        script: &'static str,
+    ) -> Decision {
         if !self.enabled {
             return Decision::Allowed;
         }
-        let Some(rules) = self.rules.get(route) else {
-            return Decision::Allowed;
-        };
+        let rules = self.rules.get(route).unwrap_or(&self.unknown);
         let exemption = self.suspension.exemption(identity.ip);
         if exemption == Exemption::All {
             return Decision::Allowed;
@@ -421,7 +488,7 @@ impl RateLimiter {
         // Sent concurrently, which the client pipelines on its connection: one round trip.
         let waits = futures_util::future::join_all(keyed.iter().map(|(rule, key)| {
             valkey.eval::<i64, _, _, _>(
-                GCRA,
+                script,
                 key.clone(),
                 vec![rule.emission_ms, rule.tolerance_ms],
             )
@@ -432,7 +499,8 @@ impl RateLimiter {
             match wait {
                 Ok(wait) => longest = longest.max(wait),
                 Err(e) => {
-                    let refused = stage == Stage::Username || self.fail_closed.contains(route);
+                    let refused = matches!(stage, Stage::Username | Stage::UsernameFailures)
+                        || self.fail_closed.contains(route);
                     self.log_failure(&e);
                     return if refused {
                         Decision::Unavailable
@@ -463,7 +531,7 @@ impl RateLimiter {
                 .params
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map(|(_, value)| key_part(value))
+                .map(|(_, value)| key_part(&canonical_param(value)))
         };
         let ip = || identity.ip.map(|ip| self.addresses.key(ip));
         let user = || identity.user.map(|user| user.0.to_string());
@@ -471,8 +539,18 @@ impl RateLimiter {
             Dimension::Global => "all".to_string(),
             Dimension::Ip => ip()?,
             Dimension::User => user()?,
-            // One account answers to its name in any case, so every case of it shares a bucket.
-            Dimension::Username => key_part(&identity.username?.to_lowercase()),
+            // One account answers to its name in any case, so every case of it shares a bucket;
+            // each network counts apart, so guesses from one cannot lock the name out from
+            // every other.
+            Dimension::Username => format!(
+                "{}:{}",
+                key_part(&identity.username?.to_lowercase()),
+                identity.ip.map_or_else(
+                    || "unknown".to_string(),
+                    |ip| self.addresses.network_key(ip)
+                )
+            ),
+            Dimension::UsernameFailures => key_part(&identity.username?.to_lowercase()),
             Dimension::Per(name) => param(name)?,
             Dimension::UserPer(name) => format!("{}:{}", user()?, param(name)?),
             Dimension::IpPer(name) => format!("{}:{}", ip()?, param(name)?),
@@ -503,18 +581,27 @@ impl RateLimiter {
     }
 }
 
-fn key_part(value: &str) -> String {
-    if value.len() <= MAX_KEY_PART && !value.contains(':') {
-        value.to_string()
-    } else {
-        data_encoding::HEXLOWER.encode(&Sha256::digest(value.as_bytes()))
+/// A path parameter as its endpoint reads it: a UUID in its one hyphenated lowercase spelling,
+/// since the id extractors accept several (braced, `urn:uuid:`, without hyphens, any case) and
+/// each would otherwise count in a bucket of its own; anything else as given.
+fn canonical_param(value: &str) -> std::borrow::Cow<'_, str> {
+    match uuid::Uuid::try_parse(value) {
+        Ok(id) => id.hyphenated().to_string().into(),
+        Err(_) => value.into(),
     }
+}
+
+/// A path parameter's value or a username as a bucket's key holds it: its SHA-256, so the keys
+/// stay short whatever a value holds, and what a value is (a capability URL's secret, an invite
+/// code, someone's name) is not written to Valkey in the clear.
+fn key_part(value: &str) -> String {
+    data_encoding::HEXLOWER.encode(&Sha256::digest(value.as_bytes()))
 }
 
 fn parse_dimension(name: &str, source: &str) -> Result<Dimension, String> {
     Dimension::parse(name).ok_or_else(|| {
         format!(
-            "rate_limits.{source}: {name:?} is not a dimension (global, ip, user, username, per_<param>, user_per_<param>, ip_per_<param>)"
+            "rate_limits.{source}: {name:?} is not a dimension (global, ip, user, username, username_failures, per_<param>, user_per_<param>, ip_per_<param>)"
         )
     })
 }
@@ -530,12 +617,31 @@ fn limit_of(
 }
 
 /// Whether a dimension can count requests to `route` at all.
+/// The default limits that apply to `route`, which is wherever they can: a user limit where
+/// users sign in, a per-parameter limit where the path has the parameter.
+fn defaults_for(
+    config: &RateLimitConfig,
+    route: &Route,
+) -> Result<HashMap<Dimension, Limit>, String> {
+    let mut defaults = HashMap::new();
+    for (dimension, setting) in &config.default {
+        let parsed = parse_dimension(dimension, "default")?;
+        if let Some(limit) = limit_of(setting, "default", dimension)?
+            && applies(&parsed, route)
+        {
+            defaults.insert(parsed, limit);
+        }
+    }
+    Ok(defaults)
+}
+
 fn applies(dimension: &Dimension, route: &Route) -> bool {
     (!dimension.needs_user() || route.access != Access::Anonymous)
         && dimension
             .param()
             .is_none_or(|param| route.params.iter().any(|p| p == param))
-        && (*dimension != Dimension::Username || route.key == SIGN_IN_ROUTE)
+        && (!matches!(dimension, Dimension::Username | Dimension::UsernameFailures)
+            || route.key == SIGN_IN_ROUTE)
 }
 
 /// As `applies`, but an explicit setting that can never apply is an error.
@@ -643,6 +749,20 @@ mod tests {
             dimensions(&limiter, "POST /auth/passkey-ceremonies"),
             ["ip", "user"]
         );
+    }
+
+    #[test]
+    fn made_up_methods_share_one_key() {
+        assert_eq!(route_key("post", "/users"), "POST /users");
+        assert_eq!(route_key("FROBNICATE", "/users"), "OTHER /users");
+        assert_eq!(route_key("x1", "/users"), route_key("x2", "/users"));
+    }
+
+    #[test]
+    fn a_route_without_rules_of_its_own_gets_the_defaults_that_need_nothing() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        assert_eq!(dimensions(&limiter, "OTHER /channels/{channel}"), ["ip"]);
+        assert_eq!(dimensions(&limiter, "DELETE /users"), ["ip"]);
     }
 
     fn rules_of<'a>(limiter: &'a RateLimiter, route: &str, dimension: &Dimension) -> Vec<&'a Rule> {
@@ -883,9 +1003,37 @@ mod tests {
             limiter
                 .key(&rule(Dimension::UserPer("channel".into())), &identity)
                 .unwrap(),
-            format!("rl:b:user_per_channel:{}:c1", user.0)
+            format!("rl:b:user_per_channel:{}:{}", user.0, key_part("c1"))
         );
         assert!(limiter.key(&rule(Dimension::Username), &identity).is_none());
+        let signing_in = Identity {
+            ip: Some("192.0.2.77".parse().unwrap()),
+            username: Some("Alice"),
+            ..Identity::default()
+        };
+        // Every case of a name and every address of a network share the username bucket.
+        assert_eq!(
+            limiter
+                .key(&rule(Dimension::Username), &signing_in)
+                .unwrap(),
+            format!("rl:b:username:{}:192.0.2.0/24", key_part("alice"))
+        );
+        // Wrong passwords count by the name alone, from wherever they come.
+        assert_eq!(
+            limiter
+                .key(&rule(Dimension::UsernameFailures), &signing_in)
+                .unwrap(),
+            format!("rl:b:username_failures:{}", key_part("alice"))
+        );
+        // A secret in a path never reaches Valkey as it is.
+        let secret = Identity {
+            params: vec![("secret", "capability-secret")],
+            ..Identity::default()
+        };
+        let key = limiter
+            .key(&rule(Dimension::Per("secret".into())), &secret)
+            .unwrap();
+        assert!(!key.contains("capability-secret"));
         let mapped = Identity {
             ip: Some("::ffff:192.0.2.7".parse().unwrap()),
             ..Identity::default()
@@ -894,6 +1042,21 @@ mod tests {
             limiter.key(&rule(Dimension::Ip), &mapped).unwrap(),
             "rl:b:ip:192.0.2.7"
         );
+    }
+
+    #[test]
+    fn every_spelling_of_one_uuid_shares_a_bucket() {
+        let id = "0190a4b2-7c1d-7e3f-8a9b-0c1d2e3f4a5b";
+        for spelling in [
+            id.to_string(),
+            id.to_uppercase(),
+            id.replace('-', ""),
+            format!("{{{id}}}"),
+            format!("urn:uuid:{id}"),
+        ] {
+            assert_eq!(canonical_param(&spelling), id);
+        }
+        assert_eq!(canonical_param("SomeInviteCode"), "SomeInviteCode");
     }
 
     #[test]

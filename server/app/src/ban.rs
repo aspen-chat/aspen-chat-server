@@ -187,6 +187,7 @@ pub async fn ban_member(
             if access.moderator
                 && !(access.member_permissions.contains(Permissions::BAN_MEMBERS) && by_rank)
             {
+                crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                 log_moderation(
                     conn.as_mut(),
                     caller,
@@ -204,6 +205,7 @@ pub async fn ban_member(
                         return Err(crate::permissions::missing(Permissions::MANAGE_MESSAGES));
                     }
                     if access.moderating(Permissions::MANAGE_MESSAGES) {
+                        crate::deployment::require_outranks(conn.as_mut(), caller, member).await?;
                         log_moderation(
                             conn.as_mut(),
                             caller,
